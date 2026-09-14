@@ -1,4 +1,8 @@
-﻿"""CLI for AI Video Factory v2.
+﻿"""Compatibility CLI for the Edit Factory v3 production stack.
+
+The canonical V3 creative planner is exposed separately as ``aivf-v3``.
+This compatibility launcher keeps the existing production command surface
+stable for integrations that still invoke this module directly.
 
 Usage examples:
     python cli_v2.py "Minecraft betrayal on SMP" --raw-video clip.mp4 --production
@@ -18,7 +22,7 @@ from ai_video_factory.production_pipeline import run_production_pipeline
 from ai_video_factory.quality_control_v2 import run_enhanced_qc
 from ai_video_factory.subtitle_renderer import burn_subtitles
 
-logger = logging.getLogger("ai_video_factory.cli_v2")
+logger = logging.getLogger("edit_factory_v3.cli_compat")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
@@ -33,7 +37,7 @@ def _safe_package_name(topic: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="AI Video Factory v2 — generate upload-ready short video packages",
+        description="Edit Factory v3 — generate upload-ready short video packages",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("topic", help="Video topic or title")
@@ -43,7 +47,7 @@ def main():
     parser.add_argument("--ocr", action="store_true", help="Enable optional OCR during scene analysis")
     parser.add_argument("--diarization", action="store_true", help="Enable pyannote speaker diarization (requires Hugging Face token)")
     parser.add_argument("--download-assets", action="store_true", help="Download missing external runtime model assets")
-    parser.add_argument("--director", action="store_true", help="Use the legacy director pipeline")
+    parser.add_argument("--director", action="store_true", help="Use the compatibility director pipeline")
     parser.add_argument("--pipeline", default="default", choices=["default", "fast", "package_only"], help="Pipeline preset to use")
     parser.add_argument("--template", default=None, help="Use a template (skips research)")
     parser.add_argument("--style", default="gaming_fast", choices=["gaming_fast", "gaming_cinematic", "tutorial"], help="Style profile")
@@ -163,7 +167,7 @@ def main():
     if not args.skip_qc and ctx.package_dir:
         try:
             qc = run_enhanced_qc(ctx.package_dir, research=ctx.research, script=ctx.script)
-            logger.info("QC report: %s", os.path.join(ctx.package_dir, "qc_report_v2.json"))
+            logger.info("QC report: %s", os.path.join(ctx.package_dir, "qc_report_v3.json"))
             if qc.get("warnings"):
                 logger.warning("Warnings: %s", len(qc["warnings"]))
         except Exception as exc:
