@@ -6,7 +6,7 @@ Before merging a production/hardening branch, all of the following automated che
 
 - Python 3.9–3.12 CI test matrix
 - repository-wide Ruff checks for production Python
-- `python cli.py --help`, `python cli_v2.py --help`, and `aivf --help`
+- `python cli.py --help`, `python cli_v3.py --help`, and `aivf --help`
 - dependency audit
 - Docker build and dashboard import smoke test
 - dashboard authentication test
