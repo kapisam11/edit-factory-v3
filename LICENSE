@@ -1,11 +1,11 @@
-Edit Factory v2 — Source-Available License
+Edit Factory v3 — Source-Available License
 
 Copyright (c) 2026 kapisam11
 
 1. Scope
 
 This license applies only to the original code and other materials in the
-Edit Factory v2 repository that are owned by kapisam11. Third-party software,
+Edit Factory v3 repository that are owned by kapisam11. Third-party software,
 packages, libraries, models, media, and other materials remain subject to their
 respective licenses and terms.
 
@@ -14,7 +14,7 @@ respective licenses and terms.
 The official distribution source for this project is the GitHub repository
 owned by kapisam11 at:
 
-https://github.com/kapisam11/edit-factory-v2
+https://github.com/kapisam11/edit-factory-v3
 
 The project is made available from that repository at no charge. No separate
 paid copy, download service, mirror, re-host, or other distribution channel is
@@ -37,7 +37,7 @@ You may NOT, without prior written permission from kapisam11:
 - make the software available through another repository, hosting service,
   marketplace, package index, or download platform;
 - remove or replace this license or copyright notices from distributed copies;
-- represent a modified version as an official release of Edit Factory v2.
+- represent a modified version as an official release of Edit Factory v3.
 
 In other words, the project may be obtained from the official GitHub repository
 for free, but redistribution is not granted. A person who wants the project
