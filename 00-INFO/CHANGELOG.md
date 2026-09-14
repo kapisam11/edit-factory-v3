@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.0.0 — 2026-09-14
+
+### V3 creative system
+- Added the emotion-first V3 blueprint engine and `aivf-v3` CLI.
+- Added exactly 40 tracked V3 creative, retention, quality, platform, and packaging capabilities.
+- Added core emotional idea analysis, single edit-type locking, ranked hooks, adaptive clip planning, overlay rules, music/beat/drop planning, retention events, human-editor QC, platform variants, and upload metadata generation.
+- Added V3 production integration that persists `v3_blueprint.json` before handing the brief to the existing media renderer.
+- Added deterministic, offline-safe V3 planning so creative planning does not require an external AI provider.
+
+### Verification
+- Added V3 engine and CLI regression tests while preserving the existing production test suite.
+- CI verification covers the supported Python matrix, Windows smoke coverage, Ruff, compile checks, CLI smoke tests, wheel/install checks, full pytest/coverage, dependency auditing, and Docker.
+
+### Branding and documentation
+- Updated the primary README, installation guide, start-here guide, architecture, project map, upgrade guide, license notes, security policy, contributing guide, and web/main-code documentation to identify the supported product as Edit Factory v3.
+- Compatibility modules with historical versioned filenames remain available only where their import paths are part of the compatibility surface; they do not define the current product version.
+
 ## Unreleased — final audit cleanup
 
 ### Reliability and security
@@ -13,11 +30,11 @@
 - Docker contains exactly the modules required by the production WSGI entrypoint.
 - CI validates Python 3.9–3.12, Windows-sensitive modules, dependency security, CLI entry points, and the production Docker image.
 - Local/generated state, media, models, and tool bundles remain excluded from source control.
-- `aivf` points to the canonical `cli.py` entry point; `cli_v2.py` remains legacy compatibility code.
+- `aivf` points to the canonical `cli.py` entry point; legacy compatibility launchers remain available where required.
 
 ### Documentation
-- Production architecture documentation now names one canonical CLI and one supported dashboard runtime path.
-- Historical documents and code remain explicitly separated from the supported runtime; they are not imported or packaged as production modules.
+- Production architecture documentation now names the V3 planner and one supported dashboard runtime path.
+- Historical documents and compatibility code remain explicitly separated from the supported runtime; they are not the product version.
 - The remaining release gate is target-host deployment acceptance.
 
 ## 2.3.0 — 2026-09-03
