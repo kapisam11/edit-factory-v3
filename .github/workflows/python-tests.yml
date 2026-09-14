@@ -41,7 +41,7 @@ jobs:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
       run: |
         uv run python 01-MAIN-CODE/cli.py --help
-        uv run python 01-MAIN-CODE/cli_v2.py --help
+        uv run python 01-MAIN-CODE/cli_v3.py --help
         uv run aivf --help
     - name: Verify roadmap runtime contracts
       env:

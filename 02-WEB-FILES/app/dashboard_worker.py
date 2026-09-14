@@ -9,5 +9,5 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
             os.setsid()
         except OSError:
             pass
-    from app import web_app_v2
-    web_app_v2._run_job_worker_impl(job_id, params, secrets, output_root, db_path)
+    from app import web_app_v3
+    web_app_v3._run_job_worker_impl(job_id, params, secrets, output_root, db_path)

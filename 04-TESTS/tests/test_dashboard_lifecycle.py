@@ -10,9 +10,9 @@ def _load_dashboard(monkeypatch, tmp_path):
     monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("AIVF_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("AIVF_OUTPUT_DIR", str(tmp_path / "output"))
-    import web_app_v2
-    importlib.reload(web_app_v2)
-    return web_app_v2
+    import web_app_v3
+    importlib.reload(web_app_v3)
+    return web_app_v3
 
 
 def test_sqlite_concurrent_log_writes(monkeypatch, tmp_path):

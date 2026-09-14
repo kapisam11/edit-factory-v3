@@ -142,7 +142,7 @@ def install_runtime_assets(*, root: Optional[Path] = None, download_missing: boo
         if not verify_runtime_asset(spec, root) and download_missing:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".part")
-            request = urllib.request.Request(spec.url, headers={"User-Agent": "edit-factory-v2"})
+            request = urllib.request.Request(spec.url, headers={"User-Agent": "edit-factory-v3"})
             try:
                 with urllib.request.urlopen(request, timeout=timeout) as response, tmp.open("wb") as handle:
                     shutil.copyfileobj(response, handle, length=1024 * 1024)

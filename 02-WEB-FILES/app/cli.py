@@ -1,4 +1,4 @@
-"""Command-line entry point for AI Video Factory v2."""
+"""Command-line entry point for AI Video Factory v3."""
 import argparse
 import csv
 import json
@@ -10,9 +10,9 @@ from typing import Dict, List, Optional
 from uuid import uuid4
 
 from ai_video_factory.config import AIVFConfig
-from ai_video_factory.nle_export_v2 import export_all_nle_formats
+from ai_video_factory.nle_export_v3 import export_all_nle_formats
 from ai_video_factory.pipeline import PipelineContext, build_director_pipeline
-from ai_video_factory.quality_control_v2 import run_enhanced_qc
+from ai_video_factory.quality_control_v3 import run_enhanced_qc
 from ai_video_factory.subtitle_renderer import burn_subtitles
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds
 from ai_video_factory.upload_package import OUTPUT_PROFILES, finalize_upload_package
@@ -254,7 +254,7 @@ def _run_one(args: argparse.Namespace, topic: str, overrides: Optional[Dict[str,
     learn = bool(overrides.get("learn", args.learn))
     if learn and engagement_score is not None and ctx.package_dir:
         try:
-            from ai_video_factory.knowledge_v2 import RealKnowledgeBase, VideoFeatures
+            from ai_video_factory.knowledge_v3 import RealKnowledgeBase, VideoFeatures
 
             kb = RealKnowledgeBase(root_dir=config.knowledge_root)
             features = VideoFeatures(
@@ -278,7 +278,7 @@ def _run_one(args: argparse.Namespace, topic: str, overrides: Optional[Dict[str,
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="AI Video Factory v2 — generate upload-ready short video packages",
+        description="AI Video Factory v3 — generate upload-ready short video packages",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   %(prog)s "Minecraft betrayal on SMP" --raw-video gameplay.mp4 --director

@@ -54,7 +54,7 @@ Everything in `01-MAIN-CODE/ai_video_factory/` is core application code. Useful 
 | `model_adapter.py` | AI/model provider adapters |
 | `config.py` | Configuration models and safe persistence |
 | `asset_manager.py` | Runtime assets and metadata |
-| `knowledge.py` / `knowledge_v2.py` | Knowledge and learning data compatibility layers |
+| `knowledge.py` / `knowledge_v3.py` | Knowledge and learning data compatibility layers |
 | `learning.py` | Learning and feedback logic |
 | `learning_recommender.py` | Recommendations from learned results |
 | `edit_planner.py` | Editing plans |

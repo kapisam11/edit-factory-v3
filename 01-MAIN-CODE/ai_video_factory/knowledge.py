@@ -1,4 +1,4 @@
-"""AI Video Factory — Real Learning System v2.
+"""AI Video Factory — Real Learning System v3.
 
 This replaces the fake "hardcoded JSON config" with actual statistical learning:
 - Bayesian updating for filter effectiveness
@@ -336,7 +336,7 @@ class RealKnowledgeBase:
     and exposes simple recommendations for future packages.
     """
 
-    def __init__(self, root_dir: str = "knowledge_base_v2"):
+    def __init__(self, root_dir: str = "knowledge_base_v3"):
         self.root = Path(root_dir)
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -483,7 +483,7 @@ class KnowledgeBase:
     """Compatibility wrapper exposing the legacy API backed by RealKnowledgeBase."""
 
     def __init__(self, knowledge_dir: Optional[str] = None):
-        root = knowledge_dir or "knowledge_base_v2"
+        root = knowledge_dir or "knowledge_base_v3"
         self._real = RealKnowledgeBase(root_dir=root)
 
     def get_topic_expertise(self, topic: str) -> Dict[str, Any]:

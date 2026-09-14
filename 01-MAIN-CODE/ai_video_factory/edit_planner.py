@@ -1,6 +1,6 @@
 """Convert a short-form script into a footage-aware edit timeline.
 
-The planner remains backward compatible with the v2 API, while accepting the
+The planner remains backward compatible with the v3 API, while accepting the
 v3 creative contract so the selected edit style and retention plan affect the
 actual render timeline.
 """

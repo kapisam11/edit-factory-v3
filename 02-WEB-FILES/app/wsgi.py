@@ -2,7 +2,7 @@
 import os
 import sys
 
-from app import web_app_v2 as _web_app_v2
+from app import web_app_v3 as _web_app_v3
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Production must use a stable explicitly configured session secret. The
@@ -13,12 +13,12 @@ if not flask_secret_key:
     raise RuntimeError(
         "FLASK_SECRET_KEY must be set for the production dashboard; refusing to use a per-process random key."
     )
-_web_app_v2.app.config["SECRET_KEY"] = flask_secret_key
+_web_app_v3.app.config["SECRET_KEY"] = flask_secret_key
 
-# Legacy modules import web_app_v2; point that name at the canonical implementation.
-sys.modules.setdefault("web_app_v2", _web_app_v2)
+# Dashboard modules use the canonical V3 application implementation.
+sys.modules.setdefault("web_app_v3", _web_app_v3)
 
-app = _web_app_v2.app
+app = _web_app_v3.app
 
 if os.environ.get("AIVF_TRUST_PROXY", "0") == "1":
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_host=1, x_proto=1)
@@ -40,9 +40,9 @@ def prune_runtime_secrets():
     jobs on normal requests prevents the parent process dictionary from growing
     forever on long-running dashboard instances.
     """
-    runtime_secrets = getattr(_web_app_v2, "_runtime_secrets", None)
-    db_get_job = getattr(_web_app_v2, "db_get_job", None)
-    terminal_statuses = getattr(_web_app_v2, "TERMINAL_STATUSES", set())
+    runtime_secrets = getattr(_web_app_v3, "_runtime_secrets", None)
+    db_get_job = getattr(_web_app_v3, "db_get_job", None)
+    terminal_statuses = getattr(_web_app_v3, "TERMINAL_STATUSES", set())
     if not isinstance(runtime_secrets, dict) or not callable(db_get_job):
         return
 

@@ -22,7 +22,7 @@ def test_shutdown_imports_canonical_dashboard_module(monkeypatch):
             calls.append(process)
 
     def fake_import(name):
-        if name == "app.web_app_v2":
+        if name == "app.web_app_v3":
             return web
         if name == "dashboard_compat":
             return Compat

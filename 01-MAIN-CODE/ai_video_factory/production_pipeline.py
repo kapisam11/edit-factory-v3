@@ -1,4 +1,4 @@
-"""Single-source end-to-end production orchestration for Edit Factory v2/v3."""
+"""Single-source end-to-end production orchestration for Edit Factory v3/v3."""
 from __future__ import annotations
 
 import json
