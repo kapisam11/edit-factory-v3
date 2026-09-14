@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-video-factory"
-version = "2.2.0"
-description = "Generate research-backed short video packages with AI planning and auto-edit support."
+version = "3.0.0"
+description = "Emotion-first AI short-form video planning, production, retention, and packaging."
 requires-python = ">=3.9"
 license = "LicenseRef-Edit-Factory-Source-Available"
 license-files = ["LICENSE"]
@@ -19,6 +19,7 @@ dependencies = [
 [project.scripts]
 aivf = "app.cli:main"
 aivf-content = "app.content_factory_cli:main"
+aivf-v3 = "ai_video_factory.v3_cli:main"
 
 [project.optional-dependencies]
 web = ["flask>=2.3.0", "gunicorn>=22.0.0; platform_system != 'Windows'"]
