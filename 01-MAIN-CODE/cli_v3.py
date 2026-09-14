@@ -1,12 +1,11 @@
 ﻿"""Compatibility CLI for the Edit Factory v3 production stack.
 
 The canonical V3 creative planner is exposed separately as ``aivf-v3``.
-This compatibility launcher keeps the existing production command surface
-stable for integrations that still invoke this module directly.
+This launcher keeps the existing production command surface stable for integrations.
 
 Usage examples:
-    python cli_v2.py "Minecraft betrayal on SMP" --raw-video clip.mp4 --production
-    python cli_v2.py "Minecraft betrayal" --template minecraft_betrayal
+    python cli_v3.py "Minecraft betrayal on SMP" --raw-video clip.mp4 --production
+    python cli_v3.py "Minecraft betrayal" --template minecraft_betrayal
 """
 
 import argparse
@@ -16,13 +15,13 @@ import re
 import sys
 
 from ai_video_factory.config import AIVFConfig
-from ai_video_factory.nle_export_v2 import export_all_nle_formats
+from ai_video_factory.nle_export_v3 import export_all_nle_formats
 from ai_video_factory.pipeline import PipelineContext, build_director_pipeline
 from ai_video_factory.production_pipeline import run_production_pipeline
-from ai_video_factory.quality_control_v2 import run_enhanced_qc
+from ai_video_factory.quality_control_v3 import run_enhanced_qc
 from ai_video_factory.subtitle_renderer import burn_subtitles
 
-logger = logging.getLogger("edit_factory_v3.cli_compat")
+logger = logging.getLogger("edit_factory_v3.cli")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
@@ -175,7 +174,7 @@ def main():
 
     if args.learn and ctx.package_dir:
         try:
-            from ai_video_factory.knowledge_v2 import RealKnowledgeBase, VideoFeatures
+            from ai_video_factory.knowledge_v3 import RealKnowledgeBase, VideoFeatures
             kb = RealKnowledgeBase(root_dir=config.knowledge_root)
             metrics = _safe_dict(getattr(ctx, "metrics", None))
             qc_report = _safe_dict(getattr(ctx, "qc_report", None))
