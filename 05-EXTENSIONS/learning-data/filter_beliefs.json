@@ -1,0 +1,12 @@
+{
+  "cinematic": {
+    "alpha": 3.0,
+    "beta": 2.0,
+    "mean": 0.6
+  },
+  "vibrant": {
+    "alpha": 2.0,
+    "beta": 3.0,
+    "mean": 0.4
+  }
+}

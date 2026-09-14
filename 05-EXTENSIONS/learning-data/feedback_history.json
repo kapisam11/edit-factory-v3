@@ -1,0 +1,28 @@
+[
+  {
+    "package_id": "demo",
+    "timestamp": "2026-08-29T19:32:36.595704",
+    "engagement_score": 0.85,
+    "features": {
+      "topic": "test topic",
+      "filter_count": 2,
+      "avg_shot_duration": 1.7,
+      "cuts_per_minute": 12.0,
+      "music_bpm": 0.0,
+      "voiceover_wpm": 0.0,
+      "render_time_seconds": 0.0,
+      "has_voiceover": true,
+      "has_music": true,
+      "thumbnail_style": "default",
+      "shot_variety_ratio": 0.8,
+      "filters_used": {
+        "cinematic": true,
+        "vibrant": false
+      }
+    },
+    "watch_time_ratio": 0.0,
+    "share_rate": 0.0,
+    "comment_rate": 0.0,
+    "ctr": 0.0
+  }
+]

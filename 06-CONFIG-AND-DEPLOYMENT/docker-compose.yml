@@ -1,0 +1,27 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:?set FLASK_SECRET_KEY}
+      AIVF_DASHBOARD_TOKEN: ${AIVF_DASHBOARD_TOKEN:?set AIVF_DASHBOARD_TOKEN}
+      AIVF_STATE_DIR: /app/state
+      AIVF_RETENTION_DAYS: ${AIVF_RETENTION_DAYS:-7}
+      AIVF_CLEANUP_INTERVAL_SECONDS: ${AIVF_CLEANUP_INTERVAL_SECONDS:-21600}
+      AIVF_MAX_CONCURRENT_JOBS: ${AIVF_MAX_CONCURRENT_JOBS:-2}
+    volumes:
+      - aivf-output:/app/output
+      - aivf-uploads:/app/uploads
+      - aivf-knowledge:/app/knowledge_base_v2
+      - aivf-state:/app/state
+
+volumes:
+  aivf-output:
+  aivf-uploads:
+  aivf-knowledge:
+  aivf-state:

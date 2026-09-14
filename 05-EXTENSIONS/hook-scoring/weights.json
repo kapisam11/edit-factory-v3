@@ -1,0 +1,7 @@
+{
+  "faces_weight": 3.4,
+  "motion_weight": 1.6,
+  "match_weight": 0.9,
+  "label_boost": 2.2,
+  "center_boost": 3.0
+}

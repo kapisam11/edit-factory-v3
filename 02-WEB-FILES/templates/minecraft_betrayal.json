@@ -1,0 +1,44 @@
+{
+  "name": "minecraft_betrayal",
+  "description": "Minecraft SMP betrayal story arc",
+  "plan_template": {
+    "beats": ["Hook", "Setup", "Betrayal", "Reaction", "Climax", "Payoff"],
+    "default_filters": ["jump_cut", "impact_frame", "speed_ramp", "cinematic_transition", "zoom"],
+    "music_mood": "dramatic",
+    "target_seconds": 42,
+    "style_profile": "gaming_cinematic",
+    "subtitle_style": "elegant_white",
+    "thumbnail_style": "high_contrast"
+  },
+  "script_template": {
+    "tone": "dramatic, community-focused",
+    "hook_examples": [
+      "Nobody expected him to do this...",
+      "The betrayal that broke the server",
+      "They were friends until this happened"
+    ],
+    "climax_at_pct": 0.70
+  }
+}
+{
+  "name": "minecraft_betrayal",
+  "description": "Minecraft SMP betrayal story arc",
+  "plan_template": {
+    "beats": ["Hook", "Setup", "Betrayal", "Reaction", "Climax", "Payoff"],
+    "default_filters": ["jump_cut", "impact_frame", "speed_ramp", "cinematic_transition", "zoom"],
+    "music_mood": "dramatic",
+    "target_seconds": 42,
+    "style_profile": "gaming_cinematic",
+    "subtitle_style": "elegant_white",
+    "thumbnail_style": "high_contrast"
+  },
+  "script_template": {
+    "tone": "dramatic, community-focused",
+    "hook_examples": [
+      "Nobody expected him to do this...",
+      "The betrayal that broke the server",
+      "They were friends until this happened"
+    ],
+    "climax_at_pct": 0.70
+  }
+}

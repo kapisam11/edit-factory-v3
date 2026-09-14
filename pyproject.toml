@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-video-factory"
+version = "2.2.0"
+description = "Generate research-backed short video packages with AI planning and auto-edit support."
+requires-python = ">=3.9"
+license = "LicenseRef-Edit-Factory-Source-Available"
+license-files = ["LICENSE"]
+dependencies = [
+    "pillow>=9.0.0",
+    "requests>=2.28.0",
+    "edge-tts>=6.1.0",
+    "numpy>=1.23.0",
+]
+
+[project.scripts]
+aivf = "app.cli:main"
+aivf-content = "app.content_factory_cli:main"
+
+[project.optional-dependencies]
+web = ["flask>=2.3.0", "gunicorn>=22.0.0; platform_system != 'Windows'"]
+dev = ["pytest>=7.0", "pytest-cov>=5.0", "mypy>=1.0", "ruff>=0.6.0", "build>=1.2.0"]
+audit = ["pip-audit>=2.9.0"]
+beats = ["librosa>=0.10.0"]
+vision = ["opencv-python-headless>=4.8.0"]
+ocr = ["pytesseract>=0.3.10", "opencv-python-headless>=4.8.0"]
+diarization = ["pyannote.audio>=3.1.0"]
+intelligence = ["sentence-transformers>=3.0.0"]
+full = [
+    "librosa>=0.10.0",
+    "opencv-python-headless>=4.8.0",
+    "pytesseract>=0.3.10",
+    "pyannote.audio>=3.1.0",
+    "sentence-transformers>=3.0.0",
+]
+groq = ["groq>=0.4.0"]
+elevenlabs = ["elevenlabs>=0.2.0"]
+youtube = [
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.30.0",
+    "google-auth-oauthlib>=1.2.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "01-MAIN-CODE", "app" = "02-WEB-FILES/app", "tools" = "03-SIDE-CODE/tools"}
+packages = ["ai_video_factory", "app", "tools"]
+py-modules = [
+    "cli",
+    "cli_v2",
+    "dashboard_auth",
+    "dashboard_compat",
+    "dashboard_shutdown",
+    "dashboard_worker",
+    "wsgi",
+]
+
+[tool.setuptools.data-files]
+"share/ai-video-factory/templates" = [
+    "02-WEB-FILES/templates/index.html",
+    "02-WEB-FILES/templates/login.html",
+    "02-WEB-FILES/templates/minecraft_betrayal.json",
+]
+"share/ai-video-factory/static/css" = [
+    "02-WEB-FILES/static/css/style.css",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that execute external media/runtime components such as FFmpeg",
+]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+exclude = [".tools", ".models", "output", "uploads"]

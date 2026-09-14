@@ -1,0 +1,89 @@
+Edit Factory v2 — Source-Available License
+
+Copyright (c) 2026 kapisam11
+
+1. Scope
+
+This license applies only to the original code and other materials in the
+Edit Factory v2 repository that are owned by kapisam11. Third-party software,
+packages, libraries, models, media, and other materials remain subject to their
+respective licenses and terms.
+
+2. Authorized source
+
+The official distribution source for this project is the GitHub repository
+owned by kapisam11 at:
+
+https://github.com/kapisam11/edit-factory-v2
+
+The project is made available from that repository at no charge. No separate
+paid copy, download service, mirror, re-host, or other distribution channel is
+authorized by this license.
+
+3. Permission to use
+
+Subject to the restrictions below, you may download the project directly from
+the official GitHub repository and use it for lawful purposes. You may inspect
+and modify your local copy for your own use.
+
+4. Redistribution restrictions
+
+You may NOT, without prior written permission from kapisam11:
+
+- sell, rent, lease, sublicense, or charge a fee for the software;
+- redistribute or re-host the software or modified versions of it;
+- publish mirrors, alternative download sites, package releases, installers,
+  archives, or other copies intended to distribute the project;
+- make the software available through another repository, hosting service,
+  marketplace, package index, or download platform;
+- remove or replace this license or copyright notices from distributed copies;
+- represent a modified version as an official release of Edit Factory v2.
+
+In other words, the project may be obtained from the official GitHub repository
+for free, but redistribution is not granted. A person who wants the project
+must obtain it from that official repository unless kapisam11 gives separate
+written permission.
+
+5. Misuse and responsibility
+
+The software is provided for lawful use. You are solely responsible for your
+use of the software, including any modifications, content generated with it,
+third-party services or APIs used with it, and compliance with applicable laws,
+licenses, terms of service, and platform rules.
+
+kapisam11 is not responsible for misuse, illegal use, abuse, loss of data,
+security incidents caused by user configuration, or consequences arising from
+use or modification of the software.
+
+6. No warranty
+
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT,
+ACCURACY, RELIABILITY, OR AVAILABILITY.
+
+7. Limitation of liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, KAPISAM11 AND CONTRIBUTORS
+SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+CONSEQUENTIAL, OR OTHER DAMAGES, INCLUDING LOSS OF DATA, PROFITS, REVENUE,
+BUSINESS, CONTENT, OR SERVICE, ARISING FROM OR RELATED TO THE SOFTWARE OR ITS
+USE, MISUSE, MODIFICATION, DISTRIBUTION, OR INABILITY TO USE IT, EVEN IF
+ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+Nothing in this license excludes or limits liability to the extent that such
+liability cannot lawfully be excluded or limited under applicable law.
+
+8. Termination
+
+Any rights granted by this license terminate automatically if you violate its
+terms. You must stop using and delete copies that you are not otherwise
+licensed to retain, subject to any rights that cannot legally be terminated.
+
+9. Acceptance
+
+By downloading, using, or modifying the project, you agree to the terms of this
+license.
+
+This is a source-available license and is not intended to grant the broad
+redistribution rights of an open-source license such as MIT.

@@ -1,0 +1,35 @@
+{
+  "version": "2.0",
+  "active_pipeline": "default",
+  "active_style": "gaming_fast",
+  "output_root": "output",
+  "upload_root": "uploads",
+  "asset_root": "assets",
+  "templates_root": "02-WEB-FILES/templates",
+  "knowledge_root": "01-MAIN-CODE/knowledge_base_v2",
+  "pipelines": {
+    "default": {
+      "name": "default",
+      "stages": ["research", "plan", "script", "thumbnail", "auto_edit", "voiceover", "music", "qc", "metadata", "metrics"],
+      "description": "Full pipeline with everything"
+    },
+    "fast": {
+      "name": "fast",
+      "stages": ["plan", "script", "auto_edit", "metadata"],
+      "description": "Skip research and extras for speed"
+    },
+    "package_only": {
+      "name": "package_only",
+      "stages": ["research", "plan", "script", "thumbnail", "metadata"],
+      "description": "Generate plan + script, no video editing"
+    }
+  },
+  "style_profiles": {
+    "gaming_fast": {"name": "gaming_fast", "cuts_per_minute": 20.0, "zoom_intensity": 1.1, "avg_shot_seconds": 1.5, "hook_placement_seconds": 0.4, "preferred_filters": ["jump_cut", "impact_frame", "speed_ramp"], "music_mood": "intense", "subtitle_style": "bold_yellow", "thumbnail_style": "high_contrast", "note": "Fast-paced gaming content (Fortnite, COD, Valorant)"},
+    "gaming_cinematic": {"name": "gaming_cinematic", "cuts_per_minute": 8.0, "zoom_intensity": 1.04, "avg_shot_seconds": 2.5, "hook_placement_seconds": 0.4, "preferred_filters": ["cinematic_transition", "soft_settle", "camera_move"], "music_mood": "emotional", "subtitle_style": "elegant_white", "thumbnail_style": "cinematic", "note": "Slow, story-driven gaming content (Minecraft SMP, RP)"},
+    "tutorial": {"name": "tutorial", "cuts_per_minute": 10.0, "zoom_intensity": 1.02, "avg_shot_seconds": 2.0, "hook_placement_seconds": 0.4, "preferred_filters": ["zoom", "cinematic_transition"], "music_mood": "calm", "subtitle_style": "clear_white", "thumbnail_style": "clean_text", "note": "Educational / how-to content"}
+  },
+  "hardware": {"encoder": "libx264", "gpu_memory_mb": 0, "max_parallel_jobs": 2, "use_gpu_for_filters": false},
+  "api_keys": {"groq": "", "elevenlabs": "", "openai": "", "freesound": ""},
+  "heuristics": {"viral_length_range": [30, 60], "optimal_length_seconds": 42, "cuts_per_minute": 15.0, "avg_shot_seconds": 1.8, "hook_placement_seconds": [0.3, 0.5], "climax_position_pct": [0.6, 0.75], "note": "Default heuristics. Tune for your niche via config or feedback."}
+}

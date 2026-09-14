@@ -1,0 +1,123 @@
+name: Python package
+
+on:
+  push:
+    branches: [ main, production-hardening-10-of-10 ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install FFmpeg for media integration tests
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+    - name: Install locked development environment
+      run: uv sync --frozen --python "${{ matrix.python-version }}" --extra web --extra dev
+    - name: Verify locked environment
+      run: uv pip check
+    - name: Compile Python sources
+      run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
+    - name: Lint production Python for correctness
+      run: uv run ruff check 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE --select E9,F --ignore F401,F811,F841
+    - name: Smoke-test command entry points
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: |
+        uv run python 01-MAIN-CODE/cli.py --help
+        uv run python 01-MAIN-CODE/cli_v2.py --help
+        uv run aivf --help
+    - name: Verify roadmap runtime contracts
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: |
+        uv run python -c "from ai_video_factory import content_factory; assert abs(sum(content_factory.adaptive_pacing([0.1,0.9,0.8], total_seconds=9))-9) < 0.01; assert 4 <= content_factory.choose_clip_count(20,0.1,45) <= 12; assert content_factory.detect_emotion('what really happened behind the hidden truth')['emotion'] == 'curious'"
+    - name: Build and validate isolated wheel install
+      env:
+        FLASK_SECRET_KEY: ci-wheel-smoke-secret
+        AIVF_DASHBOARD_TOKEN: ci-wheel-test-token
+        AIVF_STATE_DIR: /tmp/aivf-wheel-state
+        AIVF_UPLOAD_DIR: /tmp/aivf-wheel-uploads
+        AIVF_OUTPUT_DIR: /tmp/aivf-wheel-output
+      run: |
+        rm -rf dist /tmp/aivf-wheel-test
+        uv run python -m build --wheel --outdir dist
+        uv run python -m venv /tmp/aivf-wheel-test
+        WHEEL=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
+        test -n "$WHEEL"
+        /tmp/aivf-wheel-test/bin/python -m pip install "${WHEEL}[web]"
+        /tmp/aivf-wheel-test/bin/python -c "import ai_video_factory; import app.cli; import app.wsgi; import tools.enforce_hook; print('isolated wheel import ok')"
+        /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); assert next(ep.value for ep in group if ep.name=='aivf')=='app.cli:main'"
+    - name: Run tests with coverage
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: uv run pytest -q 04-TESTS/tests --cov=ai_video_factory --cov=app --cov=tools --cov-report=term-missing --cov-report=xml --cov-fail-under=30
+
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v6
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+    - name: Install locked development environment
+      shell: pwsh
+      run: uv sync --frozen --python 3.12 --extra web --extra dev
+    - name: Verify locked environment
+      shell: pwsh
+      run: uv pip check
+    - name: Compile spawn-sensitive modules
+      shell: pwsh
+      run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
+    - name: Verify dashboard support modules
+      shell: pwsh
+      env:
+        PYTHONPATH: 01-MAIN-CODE;02-WEB-FILES;03-SIDE-CODE
+      run: uv run python -c "from app import upload_cleanup; assert callable(upload_cleanup.cleanup_orphan_uploads)"
+
+    - name: Run Windows-safe hardening tests
+      shell: pwsh
+      env:
+        PYTHONPATH: 01-MAIN-CODE;02-WEB-FILES;03-SIDE-CODE
+      run: uv run pytest -q 04-TESTS/tests/test_dashboard_auth.py 04-TESTS/tests/test_dashboard_security.py 04-TESTS/tests/test_dashboard_lifecycle.py 04-TESTS/tests/test_config_roundtrip.py 04-TESTS/tests/test_model_adapter_security.py 04-TESTS/tests/test_pipeline_retry_policy.py 04-TESTS/tests/test_upload_cleanup.py
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+    - uses: actions/checkout@v6
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+    - name: Install locked audit environment
+      run: uv sync --frozen --python 3.12 --extra web --extra dev --extra audit
+    - name: Verify locked environment
+      run: uv pip check
+    - name: Audit dependencies
+      run: uv run pip-audit

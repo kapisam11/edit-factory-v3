@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Video Factory — Control Panel</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI VIDEO FACTORY</h1>
+            <p class="subtitle">Production control panel — create, monitor, cancel, and review jobs from your browser</p>
+        </header>
+
+        <div class="main-layout">
+            <aside class="sidebar">
+                <div class="panel">
+                    <h2>Job Queue</h2>
+                    <div id="queueStatus" class="queue-badge">Loading…</div>
+                    <div id="queueList" class="queue-list"></div>
+                </div>
+                <div class="panel">
+                    <h2>Quick Actions</h2>
+                    <button class="btn-sm w-full" onclick="loadPackages()">Refresh Packages</button>
+                    <button class="btn-sm w-full" onclick="openSettings()">Control Settings</button>
+                </div>
+            </aside>
+
+            <div class="center-content">
+                <div class="grid">
+                    <div class="panel controls">
+                        <div class="panel-header">
+                            <h2>New Production</h2>
+                            <select id="presetSelect" class="preset-select" onchange="applyPreset()">
+                                <option value="">Load Preset...</option>
+                            </select>
+                        </div>
+
+                        <form id="runForm" enctype="multipart/form-data">
+                            <div class="form-group">
+                                <label for="topic">Topic / Title</label>
+                                <input type="text" id="topic" name="topic" maxlength="500" placeholder="e.g. Minecraft betrayal on SMP" required>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="raw_video">Raw Video (optional)</label>
+                                <div class="file-dropzone" id="dropzone">
+                                    <input type="file" id="raw_video" name="raw_video" accept="video/*">
+                                    <span class="dropzone-text">Drop video here or click to browse</span>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="target_seconds">Target Length (15–120s)</label>
+                                    <input type="number" id="target_seconds" name="target_seconds" value="45" min="15" max="120" step="0.5">
+                                </div>
+                                <div class="form-group">
+                                    <label for="workflow">Workflow</label>
+                                    <select id="workflow" name="workflow">
+                                        <option value="default">Default / Director</option>
+                                        <option value="fast">Fast</option>
+                                        <option value="package_only">Package only</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="toggles">
+                                <label class="toggle">
+                                    <input type="checkbox" name="use_groq" id="use_groq">
+                                    <span class="toggle-slider"></span>
+                                    <span class="toggle-label">Groq Enrichment</span>
+                                </label>
+                                <label class="toggle">
+                                    <input type="checkbox" name="skip_qc" id="skip_qc">
+                                    <span class="toggle-slider"></span>
+                                    <span class="toggle-label">Skip QC (Fast)</span>
+                                </label>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="button" class="btn-secondary" onclick="savePresetPrompt()">Save Preset</button>
+                                <button type="submit" class="btn-primary" id="runBtn">
+                                    <span class="btn-icon">▶</span> Start Production
+                                </button>
+                                <button type="button" class="btn-secondary" id="cancelBtn" onclick="cancelCurrentJob()" disabled>
+                                    Cancel Job
+                                </button>
+                            </div>
+                        </form>
+                        <div id="panelMessage" class="log-status" aria-live="polite"></div>
+                    </div>
+
+                    <div class="panel logs-panel">
+                        <h2>Live Output</h2>
+                        <div class="progress-steps" id="progressSteps">
+                            <div class="step" data-step="Research">Research</div>
+                            <div class="step" data-step="Plan">Plan</div>
+                            <div class="step" data-step="Script">Script</div>
+                            <div class="step" data-step="Thumbnail">Thumbnail</div>
+                            <div class="step" data-step="Render">Render</div>
+                            <div class="step" data-step="Complete">Done</div>
+                        </div>
+                        <div id="logContainer" class="log-box">
+                            <div class="log-placeholder">Waiting to start...</div>
+                        </div>
+                        <div class="log-status" id="logStatus">Idle</div>
+                    </div>
+                </div>
+
+                <div class="panel packages-panel">
+                    <div class="panel-header">
+                        <h2>Generated Packages</h2>
+                        <button class="btn-sm" onclick="loadPackages()">Refresh</button>
+                    </div>
+                    <div id="packagesGrid" class="packages-grid">
+                        <div class="empty-state">No packages yet. Start your first production.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeSettings()">&times;</span>
+            <h3>Control Settings</h3>
+            <p class="subtitle">These values control new jobs. API keys stay in memory and are never returned by the settings API.</p>
+
+            <div class="form-group">
+                <label for="setting_target">Default Target Length</label>
+                <input type="number" id="setting_target" value="45" min="15" max="120" step="0.5">
+            </div>
+            <div class="form-group">
+                <label for="setting_workflow">Default Workflow</label>
+                <select id="setting_workflow">
+                    <option value="default">Default / Director</option>
+                    <option value="fast">Fast</option>
+                    <option value="package_only">Package only</option>
+                </select>
+            </div>
+            <div class="toggles">
+                <label class="toggle">
+                    <input type="checkbox" id="setting_skip_qc">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Default: Skip QC</span>
+                </label>
+                <label class="toggle">
+                    <input type="checkbox" id="setting_use_groq">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Default: Use Groq</span>
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="setting_concurrency">Maximum Concurrent Jobs</label>
+                <input type="number" id="setting_concurrency" value="2" min="1" max="8" step="1">
+            </div>
+            <div class="form-group">
+                <label>Configured Upload Limit</label>
+                <input type="text" id="setting_upload_limit" value="500 MB" readonly>
+                <small>Change AIVF_MAX_UPLOAD_MB in the server environment to change this limit.</small>
+            </div>
+            <hr>
+            <div class="form-group">
+                <label for="setting_groq_key">Groq API Key</label>
+                <input type="password" id="setting_groq_key" autocomplete="off" placeholder="Leave blank to keep current key">
+            </div>
+            <div class="form-group">
+                <label for="setting_model_key">Model API Key</label>
+                <input type="password" id="setting_model_key" autocomplete="off" placeholder="Leave blank to keep current key">
+            </div>
+            <div class="form-group">
+                <label for="setting_elevenlabs_key">ElevenLabs Key</label>
+                <input type="password" id="setting_elevenlabs_key" autocomplete="off" placeholder="Leave blank to keep current key">
+            </div>
+            <div id="secretStatus" class="log-status">Loading…</div>
+            <button class="btn-primary" onclick="saveSettings()">Save Settings</button>
+        </div>
+    </div>
+
+    <div id="packageModal" class="modal">
+        <div class="modal-content modal-large">
+            <span class="modal-close" onclick="closePackageModal()">&times;</span>
+            <h3 id="pkgModalTitle">Package</h3>
+            <div class="pkg-tabs">
+                <button class="tab-btn active" onclick="switchTab('preview')">Preview</button>
+                <button class="tab-btn" onclick="switchTab('script')">Script</button>
+                <button class="tab-btn" onclick="switchTab('thumbnails')">Thumbnails</button>
+                <button class="tab-btn" onclick="switchTab('files')">Files</button>
+            </div>
+            <div id="tabPreview" class="tab-content active">
+                <div id="videoPlayerWrap"></div>
+                <div id="pkgInfo"></div>
+            </div>
+            <div id="tabScript" class="tab-content">
+                <textarea id="scriptEditor" class="script-editor"></textarea>
+                <button class="btn-primary" onclick="saveScript()">Save Script</button>
+            </div>
+            <div id="tabThumbnails" class="tab-content">
+                <div id="thumbnailsGrid" class="thumbnails-grid"></div>
+            </div>
+            <div id="tabFiles" class="tab-content">
+                <div id="fileList" class="file-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentJobId = null;
+        let eventSource = null;
+        let currentPkg = null;
+        let currentPackageFiles = [];
+        let presets = {};
+        let settings = {};
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadSettings();
+            loadPresets();
+            loadPackages();
+            refreshQueue();
+            setInterval(refreshQueue, 3000);
+            setInterval(loadPackages, 10000);
+            setupDropzone();
+        });
+
+        function setupDropzone() {
+            const dz = document.getElementById('dropzone');
+            const input = document.getElementById('raw_video');
+            dz.addEventListener('click', () => input.click());
+            dz.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dz.classList.add('dragover');
+            });
+            dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+            dz.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dz.classList.remove('dragover');
+                if (e.dataTransfer.files.length) {
+                    input.files = e.dataTransfer.files;
+                    updateFileName();
+                }
+            });
+            input.addEventListener('change', updateFileName);
+        }
+
+        function updateFileName() {
+            const input = document.getElementById('raw_video');
+            document.querySelector('#dropzone .dropzone-text').textContent =
+                input.files.length ? input.files[0].name : 'Drop video here or click to browse';
+        }
+
+        const runForm = document.getElementById('runForm');
+        const runBtn = document.getElementById('runBtn');
+        const cancelBtn = document.getElementById('cancelBtn');
+
+        runForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (runBtn.disabled) return;
+
+            const formData = new FormData(runForm);
+            const topic = String(formData.get('topic') || '').trim();
+            if (topic.length < 2 || topic.length > 500) {
+                setPanelMessage('Topic must be between 2 and 500 characters', 'error');
+                return;
+            }
+
+            runBtn.disabled = true;
+            cancelBtn.disabled = true;
+            runBtn.innerHTML = '<span class="btn-icon spinning">⟳</span> Queuing...';
+            setPanelMessage('', '');
+            document.getElementById('logContainer').innerHTML = '';
+            document.getElementById('logStatus').textContent = 'Queued';
+            document.getElementById('logStatus').className = 'log-status running';
+            resetSteps();
+
+            try {
+                const res = await fetch('/api/run', { method: 'POST', body: formData });
+                const data = await safeJson(res);
+                if (!res.ok || data.error) throw new Error(data.error || `Request failed (${res.status})`);
+                currentJobId = data.job_id;
+                cancelBtn.disabled = false;
+                connectToLogs(currentJobId);
+                refreshQueue();
+            } catch (err) {
+                currentJobId = null;
+                setPanelMessage(err.message, 'error');
+                resetRunButton();
+            }
+        });
+
+        function connectToLogs(jobId) {
+            if (eventSource) eventSource.close();
+            eventSource = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/logs/stream`);
+            eventSource.onmessage = (e) => {
+                const log = JSON.parse(e.data);
+                appendLog(log);
+                if (log.msg && log.msg.startsWith('→')) updateStep(log.msg.slice(2).trim());
+            };
+            eventSource.onerror = () => {
+                eventSource.close();
+                eventSource = null;
+                checkJobStatus(jobId);
+            };
+        }
+
+        function appendLog(log) {
+            const container = document.getElementById('logContainer');
+            if (container.querySelector('.log-placeholder')) container.innerHTML = '';
+            const div = document.createElement('div');
+            div.className = `log-line log-${String(log.level || 'info').toLowerCase()}`;
+            div.innerHTML = `<span class="log-time">${escapeHtml(log.time || '')}</span> <span class="log-level">${escapeHtml(log.level || '')}</span> ${escapeHtml(log.msg || '')}`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function resetSteps() {
+            document.querySelectorAll('.step').forEach((s) => s.classList.remove('active', 'done'));
+        }
+
+        function updateStep(stepName) {
+            const steps = ['Research', 'Plan', 'Script', 'Thumbnail', 'Render', 'Complete'];
+            const lower = String(stepName).toLowerCase();
+            const idx = steps.findIndex((step) => lower === step.toLowerCase());
+            if (idx === -1) return;
+            document.querySelectorAll('.step').forEach((s, i) => {
+                s.classList.remove('active');
+                if (i < idx) s.classList.add('done');
+                if (i === idx) s.classList.add('active');
+            });
+        }
+
+        async function checkJobStatus(jobId) {
+            try {
+                const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/status`, { cache: 'no-store' });
+                const data = await safeJson(res);
+                if (!res.ok) throw new Error(data.error || `Status request failed (${res.status})`);
+                const statusEl = document.getElementById('logStatus');
+                const status = data.status;
+                if (status === 'done') {
+                    statusEl.textContent = 'Complete!';
+                    statusEl.className = 'log-status done';
+                    updateStep('Complete');
+                    notifyBrowser('Production Complete', 'Your package is ready to review.');
+                    loadPackages();
+                    finishCurrentJob();
+                } else if (status === 'error') {
+                    statusEl.textContent = 'Failed: ' + (data.error || 'Unknown error');
+                    statusEl.className = 'log-status error';
+                    finishCurrentJob();
+                } else if (status === 'cancelled') {
+                    statusEl.textContent = 'Cancelled';
+                    statusEl.className = 'log-status error';
+                    finishCurrentJob();
+                } else if (status === 'interrupted') {
+                    statusEl.textContent = 'Interrupted by server restart';
+                    statusEl.className = 'log-status error';
+                    finishCurrentJob();
+                } else {
+                    cancelBtn.disabled = false;
+                }
+                refreshQueue();
+            } catch (e) {
+                setPanelMessage('Connection lost while checking job status', 'error');
+            }
+        }
+
+        function finishCurrentJob() {
+            cancelBtn.disabled = true;
+            resetRunButton();
+        }
+
+        async function cancelCurrentJob() {
+            if (!currentJobId) return;
+            cancelBtn.disabled = true;
+            cancelBtn.textContent = 'Cancelling…';
+            try {
+                const res = await fetch(`/api/jobs/${encodeURIComponent(currentJobId)}/cancel`, { method: 'POST' });
+                const data = await safeJson(res);
+                if (!res.ok && res.status !== 409) throw new Error(data.error || `Cancellation failed (${res.status})`);
+                document.getElementById('logStatus').textContent = data.status === 'cancelled' ? 'Cancelled' : (data.status || 'Cancellation requested');
+                document.getElementById('logStatus').className = 'log-status error';
+                finishCurrentJob();
+                refreshQueue();
+            } catch (e) {
+                cancelBtn.disabled = false;
+                cancelBtn.textContent = 'Cancel Job';
+                setPanelMessage(e.message, 'error');
+            }
+        }
+
+        function resetRunButton() {
+            runBtn.disabled = false;
+            runBtn.innerHTML = '<span class="btn-icon">▶</span> Start Production';
+            cancelBtn.textContent = 'Cancel Job';
+        }
+
+        async function refreshQueue() {
+            try {
+                const [queueRes, jobsRes] = await Promise.all([
+                    fetch('/api/queue/status', { cache: 'no-store' }),
+                    fetch('/api/jobs', { cache: 'no-store' }),
+                ]);
+                const queue = await safeJson(queueRes);
+                const allJobs = await safeJson(jobsRes);
+                if (!queueRes.ok || !jobsRes.ok) throw new Error('Queue request failed');
+                const jobs = Array.isArray(allJobs) ? allJobs : Object.values(allJobs || {});
+                const badge = document.getElementById('queueStatus');
+                const list = document.getElementById('queueList');
+                const running = jobs.filter((j) => j.status === 'running').length;
+                const pending = jobs.filter((j) => j.status === 'queued').length;
+                badge.textContent = running ? `Running ${running} · Queued ${pending}` : (pending ? `${pending} Queued` : 'Idle');
+                badge.className = running ? 'queue-badge running' : (pending ? 'queue-badge pending' : 'queue-badge');
+                list.innerHTML = jobs.slice(0, 10).map((j) => `
+                    <div class="queue-item ${escapeHtml(j.status || '')}">
+                        <div class="queue-topic">${escapeHtml(j.topic)}</div>
+                        <div class="queue-meta">
+                            <span class="queue-step">${escapeHtml(j.step || j.status || '')}</span>
+                            <span class="queue-status ${escapeHtml(j.status || '')}">${escapeHtml(j.status || '')}</span>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                document.getElementById('queueStatus').textContent = 'Unavailable';
+            }
+        }
+
+        async function loadPackages() {
+            try {
+                const res = await fetch('/api/packages', { cache: 'no-store' });
+                const packages = await safeJson(res);
+                if (!res.ok) throw new Error(packages.error || 'Failed to load packages');
+                renderPackages(Array.isArray(packages) ? packages : []);
+            } catch (e) {
+                document.getElementById('packagesGrid').innerHTML = `<div class="empty-state">Failed to load packages: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function renderPackages(packages) {
+            const grid = document.getElementById('packagesGrid');
+            if (!packages.length) {
+                grid.innerHTML = '<div class="empty-state">No packages yet. Start your first production.</div>';
+                return;
+            }
+            grid.innerHTML = packages.map((pkg) => {
+                const safeName = encodeURIComponent(String(pkg.name || ''));
+                return `
+                    <div class="package-card" onclick="openPackage(decodeURIComponent('${safeName}'))">
+                        <div class="package-thumb">
+                            ${pkg.thumbnail ? `<img src="${encodeURI(pkg.thumbnail)}" alt="thumbnail">` : '<div class="no-thumb">No thumbnail</div>'}
+                        </div>
+                        <div class="package-info">
+                            <h4>${escapeHtml(pkg.name)}</h4>
+                            <div class="package-meta">
+                                <span>${escapeHtml(pkg.created || '')}</span>
+                                ${pkg.has_video ? '<span class="badge video">Video</span>' : '<span class="badge">Package</span>'}
+                            </div>
+                            <p class="package-script">${escapeHtml(pkg.script_preview || '')}${pkg.script_preview ? '…' : ''}</p>
+                        </div>
+                    </div>`;
+            }).join('');
+        }
+
+        async function openPackage(name) {
+            currentPkg = name;
+            document.getElementById('pkgModalTitle').textContent = name;
+            document.getElementById('scriptEditor').value = '';
+            document.getElementById('thumbnailsGrid').innerHTML = '<div class="empty-state">Loading…</div>';
+            document.getElementById('fileList').innerHTML = '<div class="empty-state">Loading…</div>';
+
+            try {
+                const res = await fetch(`/api/package/${encodeURIComponent(name)}/script`, { cache: 'no-store' });
+                const data = await safeJson(res);
+                if (!res.ok) throw new Error(data.error || 'Could not load script');
+                document.getElementById('scriptEditor').value = data.script || '';
+            } catch (e) {
+                document.getElementById('scriptEditor').value = '';
+            }
+
+            try {
+                const res = await fetch(`/api/package/${encodeURIComponent(name)}/files`, { cache: 'no-store' });
+                currentPackageFiles = await safeJson(res);
+                if (!res.ok) throw new Error(currentPackageFiles.error || 'Could not load files');
+                showPackageFiles(name, currentPackageFiles);
+                showPackageThumbnails(name, currentPackageFiles);
+                const videos = currentPackageFiles.filter((f) => /\.(mp4|webm|mov)$/i.test(f.path));
+                const preferred = ['final_with_music.mp4', 'final_short.mp4', 'final_short_vo.mp4'];
+                const selected = preferred.find((p) => videos.some((f) => f.path === p)) || (videos[0] && videos[0].path);
+                const videoWrap = document.getElementById('videoPlayerWrap');
+                videoWrap.innerHTML = selected
+                    ? `<video controls class="pkg-video"><source src="/api/package/${encodeURIComponent(name)}/file/${encodeURIComponent(selected)}" type="video/mp4">Your browser does not support the video tag.</video>`
+                    : '<div class="empty-state">No rendered video in this package.</div>';
+            } catch (e) {
+                document.getElementById('fileList').innerHTML = `<div class="empty-state">Failed to load package files: ${escapeHtml(e.message)}</div>`;
+            }
+
+            document.getElementById('packageModal').style.display = 'block';
+            switchTab('preview');
+        }
+
+        function showPackageThumbnails(name, files) {
+            const thumbs = files.filter((f) => /(^|\/)(thumbnail[^/]*\.(png|jpg|jpeg|webp))$/i.test(f.path));
+            const grid = document.getElementById('thumbnailsGrid');
+            grid.innerHTML = thumbs.length
+                ? thumbs.map((t) => `<div class="thumb-variant"><img src="/api/package/${encodeURIComponent(name)}/file/${encodeURIComponent(t.path)}" alt="thumbnail"></div>`).join('')
+                : '<div class="empty-state">No thumbnail variants in this package.</div>';
+        }
+
+        function showPackageFiles(name, files) {
+            const list = document.getElementById('fileList');
+            list.innerHTML = files.map((f) => `
+                <div class="file-item">
+                    <span class="file-name">${escapeHtml(f.path)}</span>
+                    <span class="file-size">${(Number(f.size || 0) / 1024).toFixed(1)} KB</span>
+                    <a href="/api/package/${encodeURIComponent(name)}/file/${encodeURIComponent(f.path)}" target="_blank" rel="noopener" class="btn-sm">Open</a>
+                </div>
+            `).join('') || '<div class="empty-state">No files.</div>';
+        }
+
+        function closePackageModal() {
+            document.getElementById('packageModal').style.display = 'none';
+            currentPkg = null;
+            currentPackageFiles = [];
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach((c) => c.classList.remove('active'));
+            const target = document.querySelector(`.tab-btn[onclick="switchTab('${tab}')"]`);
+            if (target) target.classList.add('active');
+            const panel = document.getElementById(`tab${tab.charAt(0).toUpperCase() + tab.slice(1)}`);
+            if (panel) panel.classList.add('active');
+        }
+
+        async function saveScript() {
+            if (!currentPkg) return;
+            const script = document.getElementById('scriptEditor').value;
+            try {
+                const res = await fetch(`/api/package/${encodeURIComponent(currentPkg)}/script`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ script }),
+                });
+                const data = await safeJson(res);
+                if (!res.ok || data.error) throw new Error(data.error || 'Failed to save script');
+                setPanelMessage('Script saved.', 'done');
+            } catch (e) {
+                setPanelMessage(e.message, 'error');
+            }
+        }
+
+        async function loadPresets() {
+            try {
+                const res = await fetch('/api/presets', { cache: 'no-store' });
+                presets = await safeJson(res);
+                if (!res.ok) throw new Error(presets.error || 'Failed to load presets');
+                const select = document.getElementById('presetSelect');
+                select.innerHTML = '<option value="">Load Preset...</option>';
+                Object.keys(presets || {}).forEach((name) => {
+                    const option = document.createElement('option');
+                    option.value = name;
+                    option.textContent = name;
+                    select.appendChild(option);
+                });
+            } catch (e) {}
+        }
+
+        function applyPreset() {
+            const name = document.getElementById('presetSelect').value;
+            if (!name || !presets[name]) return;
+            const p = presets[name] || {};
+            if (p.target_seconds !== undefined) document.getElementById('target_seconds').value = p.target_seconds;
+            if (p.workflow) document.getElementById('workflow').value = canonicalWorkflow(p.workflow);
+            if (p.use_groq !== undefined) document.getElementById('use_groq').checked = Boolean(p.use_groq);
+            if (p.skip_qc !== undefined) document.getElementById('skip_qc').checked = Boolean(p.skip_qc);
+        }
+
+        async function savePresetPrompt() {
+            const name = prompt('Preset name:');
+            if (!name) return;
+            const config = {
+                target_seconds: parseFloat(document.getElementById('target_seconds').value),
+                workflow: document.getElementById('workflow').value,
+                use_groq: document.getElementById('use_groq').checked,
+                skip_qc: document.getElementById('skip_qc').checked,
+            };
+            try {
+                const res = await fetch('/api/presets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name.trim(), config }),
+                });
+                const data = await safeJson(res);
+                if (!res.ok || data.error) throw new Error(data.error || 'Failed to save preset');
+                await loadPresets();
+                document.getElementById('presetSelect').value = name.trim();
+                setPanelMessage('Preset saved.', 'done');
+            } catch (e) {
+                setPanelMessage(e.message, 'error');
+            }
+        }
+
+        async function loadSettings() {
+            try {
+                const res = await fetch('/api/settings', { cache: 'no-store' });
+                settings = await safeJson(res);
+                if (!res.ok) throw new Error(settings.error || 'Failed to load settings');
+                document.getElementById('setting_target').value = settings.default_target_seconds ?? 45;
+                document.getElementById('setting_workflow').value = canonicalWorkflow(settings.default_workflow || 'default');
+                document.getElementById('setting_skip_qc').checked = Boolean(settings.default_skip_qc);
+                document.getElementById('setting_use_groq').checked = Boolean(settings.default_use_groq);
+                document.getElementById('setting_concurrency').value = settings.max_concurrent_jobs ?? 2;
+                document.getElementById('setting_upload_limit').value = `${settings.max_upload_mb ?? 500} MB`;
+                const configured = ['groq_key', 'model_key', 'elevenlabs_key'].filter((key) => settings[`${key}_configured`]);
+                document.getElementById('secretStatus').textContent = configured.length ? `${configured.length} API key(s) configured.` : 'No API keys configured.';
+            } catch (e) {
+                document.getElementById('secretStatus').textContent = 'Settings unavailable.';
+            }
+        }
+
+        function openSettings() {
+            loadSettings();
+            document.getElementById('settingsModal').style.display = 'block';
+        }
+
+        function closeSettings() {
+            document.getElementById('settingsModal').style.display = 'none';
+        }
+
+        async function saveSettings() {
+            const newSettings = {
+                default_target_seconds: parseFloat(document.getElementById('setting_target').value),
+                default_workflow: document.getElementById('setting_workflow').value,
+                default_skip_qc: document.getElementById('setting_skip_qc').checked,
+                default_use_groq: document.getElementById('setting_use_groq').checked,
+                max_concurrent_jobs: parseInt(document.getElementById('setting_concurrency').value, 10),
+            };
+            for (const [id, key] of [['setting_groq_key', 'groq_key'], ['setting_model_key', 'model_key'], ['setting_elevenlabs_key', 'elevenlabs_key']]) {
+                const value = document.getElementById(id).value.trim();
+                if (value) newSettings[key] = value;
+            }
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newSettings),
+                });
+                const data = await safeJson(res);
+                if (!res.ok || data.error) throw new Error(data.error || 'Failed to save settings');
+                ['setting_groq_key', 'setting_model_key', 'setting_elevenlabs_key'].forEach((id) => { document.getElementById(id).value = ''; });
+                await loadSettings();
+                applyDefaultsToForm();
+                closeSettings();
+                setPanelMessage('Settings saved.', 'done');
+            } catch (e) {
+                document.getElementById('secretStatus').textContent = e.message;
+                document.getElementById('secretStatus').className = 'log-status error';
+            }
+        }
+
+        function applyDefaultsToForm() {
+            if (!settings || !Object.keys(settings).length) return;
+            document.getElementById('target_seconds').value = settings.default_target_seconds ?? 45;
+            document.getElementById('workflow').value = canonicalWorkflow(settings.default_workflow || 'default');
+            document.getElementById('skip_qc').checked = Boolean(settings.default_skip_qc);
+            document.getElementById('use_groq').checked = Boolean(settings.default_use_groq);
+        }
+
+        function canonicalWorkflow(value) {
+            const normalized = String(value || 'default').trim().toLowerCase();
+            if (normalized === 'fast') return 'fast';
+            if (normalized === 'package_only') return 'package_only';
+            return 'default';
+        }
+
+        function notifyBrowser(title, body) {
+            if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body });
+        }
+
+        function setPanelMessage(message, kind) {
+            const el = document.getElementById('panelMessage');
+            el.textContent = message || '';
+            el.className = `log-status ${kind || ''}`;
+        }
+
+        async function safeJson(res) {
+            const text = await res.text();
+            if (!text) return {};
+            try { return JSON.parse(text); } catch (_) { return { error: text.slice(0, 500) }; }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = String(text ?? '');
+            return div.innerHTML;
+        }
+
+        window.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) e.target.style.display = 'none';
+        });
+
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission().catch(() => {});
+        }
+
+        applyDefaultsToForm();
+    </script>
+</body>
+</html>
