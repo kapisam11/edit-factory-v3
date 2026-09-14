@@ -13,7 +13,7 @@ Browser
   ↓
 02-WEB-FILES/templates/index.html
   ↓
-02-WEB-FILES/app/web_app_v2.py (compatibility module path)
+02-WEB-FILES/app/web_app_v3.py
   ↓
 01-MAIN-CODE/dashboard_compat.py
   ↓
