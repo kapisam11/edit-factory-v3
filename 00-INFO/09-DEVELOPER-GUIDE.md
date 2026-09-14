@@ -19,7 +19,7 @@ Start with `ai_video_factory/pipeline.py` and the related stage/module instead o
 
 ### Dashboard behavior
 
-Start with `web_app_v2.py` and the dashboard support modules. Heavy work should continue to run through the dedicated worker boundary.
+Start with `web_app_v3.py` and the dashboard support modules. Heavy work should continue to run through the dedicated worker boundary.
 
 ### AI provider behavior
 
