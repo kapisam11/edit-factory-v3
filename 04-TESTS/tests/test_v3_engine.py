@@ -55,8 +55,8 @@ def test_each_edit_type_has_a_real_strategy():
     assert [b.purpose for b in funny.clip_plan[:6]] != [b.purpose for b in documentary.clip_plan[:6]]
     assert funny.clip_plan[0].camera_motion != documentary.clip_plan[0].camera_motion
     assert tribute.clip_plan[1].transition == "match cut"
-    assert any("Punchline" == b.purpose for b in funny.clip_plan)
-    assert any("Evidence" == b.purpose for b in documentary.clip_plan)
+    assert any(b.purpose == "Punchline" for b in funny.clip_plan)
+    assert any(b.purpose == "Evidence" for b in documentary.clip_plan)
 
 
 def test_platform_limits_are_enforced():
@@ -70,8 +70,8 @@ def test_v3_directives_reach_real_timeline():
     scenes = [
         Scene(
             id=f"scene_{i}",
-            start=float(i * 2),
-            end=float((i + 1) * 2),
+            start=float(i * 3),
+            end=float((i + 1) * 3),
             description=f"Scene {i} with a person and action",
             transcript=f"Line {i}",
             motion_score=0.6,
@@ -79,7 +79,9 @@ def test_v3_directives_reach_real_timeline():
         )
         for i in range(6)
     ]
-    blueprint = create_v3_blueprint("A comeback", edit_type="Motivational", config=V3Config(target_seconds=12))
+    blueprint = create_v3_blueprint(
+        "A comeback", edit_type="Motivational", config=V3Config(target_seconds=12)
+    )
     plan = blueprint.to_dict()
     timeline = build_timeline(
         "One\ntwo\nthree\nfour\nfive\nsix",
@@ -93,6 +95,7 @@ def test_v3_directives_reach_real_timeline():
     assert timeline.segments[3].role == "climax"
     assert "punch-in" in timeline.segments[0].label or "micro-zoom" in timeline.segments[0].label
     assert timeline.segments[0].effects
+    assert abs(timeline.duration - 12.0) < 0.02
 
 
 def test_blueprint_is_json_serializable_and_has_platform_profiles():
