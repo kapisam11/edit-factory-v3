@@ -1,7 +1,7 @@
 """Edit Factory v3 production wrapper.
 
-This module preserves the proven v2 renderer while making the v3 emotion-first
-blueprint a required planning artifact for the v3 entry point.
+This module makes the v3 creative blueprint a first-class input to the single
+production renderer instead of treating the blueprint as reporting metadata.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ def _research_summary_from_blueprint(payload: Dict[str, Any]) -> Dict[str, Any]:
     clip_plan = payload.get("clip_plan", [])
     total_seconds = clip_plan[-1]["end"] if clip_plan else 30.0
     avg_shot = total_seconds / max(1, len(clip_plan))
+    profile = payload.get("platform_variants", {}).get(payload.get("platform", "youtube_shorts"), {})
     return {
         "topic": core["topic"],
         "emotion": core["target_emotion"],
@@ -39,6 +40,17 @@ def _research_summary_from_blueprint(payload: Dict[str, Any]) -> Dict[str, Any]:
         "v3_edit_type": payload["edit_type"],
         "v3_quality_score": payload["quality"]["score"],
         "v3_retention_score": payload["metrics"]["retention_score"],
+        "thumbnail": payload.get("thumbnail_concept", ""),
+        "platform": payload.get("platform", "youtube_shorts"),
+        "platform_profile": profile,
+        "v3_directives": {
+            "edit_type": payload["edit_type"],
+            "clip_plan": clip_plan,
+            "retention_map": payload.get("retention_map", []),
+            "hooks": payload.get("hooks", []),
+            "platform": payload.get("platform", "youtube_shorts"),
+            "platform_profile": profile,
+        },
     }
 
 
@@ -61,11 +73,7 @@ def run_v3_pipeline(
     enable_diarization: bool = False,
     diarization_token: Optional[str] = None,
 ) -> ProductionResult:
-    """Plan emotion first, persist the v3 blueprint, then run the renderer.
-
-    The existing renderer stays the single source of truth for media execution;
-    v3 supplies the creative brief and retention-aware planning contract.
-    """
+    """Plan emotion first, persist the blueprint, then execute the shared renderer."""
     config = V3Config(
         target_seconds=target_seconds,
         platform=platform,
@@ -79,6 +87,7 @@ def run_v3_pipeline(
     package.mkdir(parents=True, exist_ok=True)
     blueprint_path = package / "v3_blueprint.json"
     payload = blueprint.to_dict()
+    payload["platform"] = platform
     blueprint_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     result = run_production_pipeline(
