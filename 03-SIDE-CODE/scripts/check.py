@@ -4,9 +4,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = [
-    "cli_v2.py",
-    "web_app_v2.py",
-    "ai_video_factory/knowledge_v2.py",
+    "cli_v3.py",
+    "web_app_v3.py",
+    "ai_video_factory/knowledge_v3.py",
 ]
 
 
