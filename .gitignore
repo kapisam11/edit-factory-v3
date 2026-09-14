@@ -10,7 +10,7 @@ jobs.db
 uploads/
 output/
 output_*/
-knowledge_base_v2/
+knowledge_base_v3/
 .models/
 .tools/
 *.mp4

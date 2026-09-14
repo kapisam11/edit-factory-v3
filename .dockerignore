@@ -15,7 +15,7 @@ uploads
 ok
 .tools
 .models
-knowledge_base_v2
+knowledge_base_v3
 .env
 *.mp4
 *.mp3

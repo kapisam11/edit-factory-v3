@@ -26,7 +26,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 
 RUN groupadd --system aivf \
     && useradd --system --gid aivf --create-home aivf \
-    && mkdir -p /app/output /app/uploads /app/knowledge_base_v2 /app/state \
+    && mkdir -p /app/output /app/uploads /app/knowledge_base_v3 /app/state \
     && chown -R aivf:aivf /app
 
 USER aivf

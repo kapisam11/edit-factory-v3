@@ -1,4 +1,4 @@
-"""Optional, production-oriented intelligence layers for Edit Factory v2.
+"""Optional, production-oriented intelligence layers for Edit Factory v3.
 
 Heavy integrations are lazy-loaded. When available, this module provides
 model-backed object detection, word-level Edge TTS timing, speaker diarization,

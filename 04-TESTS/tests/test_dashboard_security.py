@@ -7,10 +7,10 @@ def _app(monkeypatch, tmp_path):
     monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("AIVF_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("AIVF_OUTPUT_DIR", str(tmp_path / "output"))
-    import web_app_v2
-    importlib.reload(web_app_v2)
-    web_app_v2.app.config["TESTING"] = True
-    return web_app_v2
+    import web_app_v3
+    importlib.reload(web_app_v3)
+    web_app_v3.app.config["TESTING"] = True
+    return web_app_v3
 
 
 def test_job_params_never_persist_secret_keys(monkeypatch, tmp_path):

@@ -6,7 +6,7 @@
   "upload_root": "uploads",
   "asset_root": "assets",
   "templates_root": "02-WEB-FILES/templates",
-  "knowledge_root": "01-MAIN-CODE/knowledge_base_v2",
+  "knowledge_root": "01-MAIN-CODE/knowledge_base_v3",
   "pipelines": {
     "default": {
       "name": "default",

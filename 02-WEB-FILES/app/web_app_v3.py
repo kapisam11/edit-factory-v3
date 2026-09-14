@@ -51,7 +51,7 @@ app.config.update(
     SECRET_KEY=configured_secret or None,
 )
 
-logger = logging.getLogger("web_app_v2")
+logger = logging.getLogger("web_app_v3")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}

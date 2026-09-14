@@ -17,7 +17,7 @@ services:
     volumes:
       - aivf-output:/app/output
       - aivf-uploads:/app/uploads
-      - aivf-knowledge:/app/knowledge_base_v2
+      - aivf-knowledge:/app/knowledge_base_v3
       - aivf-state:/app/state
 
 volumes:
