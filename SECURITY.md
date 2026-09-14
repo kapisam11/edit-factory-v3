@@ -13,6 +13,6 @@ a report.
 
 ## Important
 
-Edit Factory v2 is provided on an as-is basis under the terms in [LICENSE](LICENSE).
+Edit Factory v3 is provided on an as-is basis under the terms in [LICENSE](LICENSE).
 Users are responsible for securing their own deployments, credentials, input
 files, generated content, and third-party service integrations.

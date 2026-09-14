@@ -1,12 +1,12 @@
 # License notes
 
-Edit Factory v2 uses the source-available license in the repository root
+Edit Factory v3 uses the source-available license in the repository root
 [`LICENSE`](../LICENSE).
 
 The important rules are:
 
 - The official free source is the GitHub repository owned by `kapisam11`:
-  `https://github.com/kapisam11/edit-factory-v2`
+  `https://github.com/kapisam11/edit-factory-v3`
 - The license does not grant permission to mirror, re-host, redistribute,
   resell, sublicense, or publish the project elsewhere.
 - Local use and modification are permitted for lawful purposes, subject to the

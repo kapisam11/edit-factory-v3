@@ -11,7 +11,7 @@ You normally do not need to edit most files directly.
 | `README.md` | The front door: what the project is and where to go next |
 | `00-INFO/` | Beginner guides, architecture, operations, deployment, and history |
 | `01-MAIN-CODE/` | Core Python application, CLI launchers, package metadata, and dependency lockfile |
-| `01-MAIN-CODE/ai_video_factory/` | Core video-production pipeline and supporting Python code |
+| `01-MAIN-CODE/ai_video_factory/` | Core video-production pipeline, V3 planning, and supporting Python code |
 | `02-WEB-FILES/` | Dashboard runtime, HTML templates, and browser assets |
 | `02-WEB-FILES/app/` | Canonical Flask dashboard and WSGI implementation |
 | `02-WEB-FILES/templates/` | Flask dashboard HTML/templates |
@@ -27,16 +27,18 @@ You normally do not need to edit most files directly.
 
 The important files are grouped under the numbered folders instead of being scattered across the repository root:
 
-- `01-MAIN-CODE/cli.py` → main Python CLI launcher
-- `01-MAIN-CODE/cli_v2.py` → older CLI compatibility path
+- `01-MAIN-CODE/cli.py` → main production CLI launcher
+- `01-MAIN-CODE/v3_cli.py` → V3 emotion-first planning CLI
 - `01-MAIN-CODE/dashboard_auth.py` → dashboard authentication support
 - `01-MAIN-CODE/dashboard_compat.py` → compatibility dashboard routes
 - `01-MAIN-CODE/dashboard_shutdown.py` → active-worker shutdown handling
 - `01-MAIN-CODE/dashboard_worker.py` → spawn-safe worker launcher
-- `01-MAIN-CODE/web_app_v2.py` → compatibility dashboard import
 - `01-MAIN-CODE/wsgi.py` → production WSGI launcher
 
-The canonical web implementation lives under `02-WEB-FILES/app/`. The numbered layout is primarily for human navigation; the package names and runtime paths are preserved so the application and existing integrations keep working.
+The canonical web implementation lives under `02-WEB-FILES/app/`. Compatibility modules remain
+available where existing integrations depend on their historical import paths. The numbered layout
+is primarily for human navigation; the package names and runtime paths are preserved so the
+application and existing integrations keep working.
 
 ## Core application
 
@@ -44,13 +46,15 @@ Everything in `01-MAIN-CODE/ai_video_factory/` is core application code. Useful 
 
 | File | Responsibility |
 |---|---|
-| `pipeline.py` | Orchestrates production stages |
+| `v3_engine.py` | Emotion-first V3 planning, retention, QC, and packaging blueprint |
+| `v3_pipeline.py` | V3 blueprint persistence and handoff to the production renderer |
+| `pipeline.py` | Production stage orchestration |
 | `director.py` | High-level video production workflow |
 | `composer.py` | Combines media into a finished composition |
 | `model_adapter.py` | AI/model provider adapters |
 | `config.py` | Configuration models and safe persistence |
 | `asset_manager.py` | Runtime assets and metadata |
-| `knowledge.py` / `knowledge_v2.py` | Knowledge and learning data |
+| `knowledge.py` / `knowledge_v2.py` | Knowledge and learning data compatibility layers |
 | `learning.py` | Learning and feedback logic |
 | `learning_recommender.py` | Recommendations from learned results |
 | `edit_planner.py` | Editing plans |

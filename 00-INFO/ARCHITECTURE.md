@@ -1,9 +1,10 @@
 # Architecture
 
-Edit Factory v2 is a single-host production application with one canonical CLI (`cli.py`, exposed
-as `aivf`) and one production dashboard entry point (`wsgi.py`). The implementations for these
-entry points now live in `app/`; the root files are compatibility launchers. `cli_v2.py` is retained
-only for legacy scripts that still invoke the older command surface. The web dashboard is served
+Edit Factory v3 is a single-host production application with one canonical CLI (`cli.py`, exposed
+as `aivf`) and one V3 emotion-first planner/CLI (`v3_cli.py`, exposed as `aivf-v3`) plus one
+production dashboard entry point (`wsgi.py`). The implementations for the web entry points now
+live in `app/`; the root files are compatibility launchers. Legacy compatibility modules remain
+available where existing integrations depend on their import paths. The web dashboard is served
 by Flask through one Gunicorn worker.
 
 ## Dashboard execution
@@ -17,6 +18,9 @@ Browser -> Gunicorn (1 worker) -> Flask
                                   |
                                   +-> SQLite (WAL/busy timeout)
                                   +-> spawned job process -> pipeline -> FFmpeg/FFprobe
+
+V3 planner -> emotion/core -> edit type -> hooks -> clip plan -> music -> retention -> QC
+          -> packaging -> existing production renderer
 ```
 
 ## Lifecycle and recovery
@@ -38,10 +42,12 @@ Generated package paths are slugged and explicitly contained inside the configur
 
 ## Pipelines
 
-`ai_video_factory/pipeline.py` is the canonical stage orchestration layer. Historical engineering
-notes are retained under `00-INFO/history/`; they are not part of the supported runtime path. The
-canonical installed command is `aivf` -> `cli.py`; `cli_v2.py` is deprecated compatibility code
-and should not receive new features.
+`ai_video_factory/pipeline.py` remains the canonical legacy-compatible stage orchestration layer.
+The V3 entry point adds `ai_video_factory/v3_pipeline.py`, which creates and persists the
+emotion-first V3 blueprint before handing the production brief to the existing renderer. This
+keeps one media execution path instead of maintaining two competing FFmpeg/rendering stacks.
+Historical engineering notes are retained under `00-INFO/history/`; they are not part of the
+supported runtime path.
 
 ## Deployment
 

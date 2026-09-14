@@ -1,4 +1,4 @@
-# 01 — Install Edit Factory v2
+# 01 — Install Edit Factory v3
 
 This is the easiest installation path for someone seeing the project for the first time.
 
@@ -52,6 +52,12 @@ The installed command is also available as:
 aivf --help
 ```
 
+For the V3 emotion-first planner, use:
+
+```bash
+aivf-v3 --help
+```
+
 Also check FFmpeg:
 
 ```bash
@@ -75,10 +81,11 @@ The production dashboard also expects a dashboard token and a Flask secret. See 
 
 ## First test
 
-Start with the help command; it does not run a production workload:
+Start with the help commands; they do not run a production workload:
 
 ```bash
 python 01-MAIN-CODE/cli.py --help
+aivf-v3 --help
 ```
 
 Then use [03 — Using the CLI](03-USING-THE-CLI.md) for an actual job.

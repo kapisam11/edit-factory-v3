@@ -1,6 +1,6 @@
-# Contributing to Edit Factory v2
+# Contributing to Edit Factory v3
 
-Thanks for contributing to Edit Factory v2.
+Thanks for contributing to Edit Factory v3.
 
 ## Development setup
 
