@@ -1,4 +1,4 @@
-"""Single-source end-to-end production orchestration for Edit Factory v2."""
+"""Single-source end-to-end production orchestration for Edit Factory v2/v3."""
 from __future__ import annotations
 
 import json
@@ -57,9 +57,10 @@ def _normalize_model_script(response: str) -> str:
 def _generate_script(topic: str, summary: Dict[str, Any], target_seconds: float, model_key: Optional[str]) -> tuple[str, str]:
     if model_key:
         response = call_model(
-            "Write a punchy vertical short-video script. Return JSON only as {\"lines\":[\"...\"]}. "
+            'Write a punchy vertical short-video script. Return JSON only as {"lines":["..."]}. '
             "Start with a strong hook, use concise visual lines, avoid greetings/filler, and end with a payoff.\n"
-            f"Topic: {topic}\nTarget duration: {target_seconds:.1f}s\nSummary: {json.dumps(summary, ensure_ascii=False, default=str)}",
+            f"Topic: {topic}\nTarget duration: {target_seconds:.1f}s\n"
+            f"Summary: {json.dumps(summary, ensure_ascii=False, default=str)}",
             api_key=model_key,
             timeout=30,
         )
@@ -95,12 +96,7 @@ def run_production_pipeline(
     diarization_token: Optional[str] = None,
     platform: str = "youtube_shorts",
 ) -> ProductionResult:
-    """Run script planning → CV → speech intelligence → music timing → render → upload package.
-
-    Optional intelligence failures are recorded as warnings, while timeline and
-    rendering failures remain hard production errors. The final step always
-    builds copy/paste metadata when media production succeeds.
-    """
+    """Run the production pipeline and honor the v3 creative contract when supplied."""
     os.makedirs(package_dir, exist_ok=True)
     result = ProductionResult(package_dir=package_dir)
     source = os.path.abspath(input_video)
@@ -116,6 +112,9 @@ def run_production_pipeline(
     summary.setdefault("main_conflict", f"Something important happened involving {topic}.")
     summary.setdefault("why_care", "The outcome changed what happened next.")
     summary.setdefault("platform", platform)
+    v3_directives = summary.get("v3_directives")
+    if not isinstance(v3_directives, dict):
+        v3_directives = {}
 
     experiments = load_experiments(experiment_history_path) if experiment_history_path else []
     recommendation = recommend(
@@ -161,12 +160,7 @@ def run_production_pipeline(
         try:
             from .advanced_intelligence import detect_video_objects, save_json
             object_detections = detect_video_objects(source, sample_seconds=2.5)
-            intelligence["object_detection"] = {
-                "enabled": True,
-                "available": True,
-                "count": len(object_detections),
-                "path": save_json(os.path.join(package_dir, "object_detections.json"), object_detections),
-            }
+            intelligence["object_detection"] = {"enabled": True, "available": True, "count": len(object_detections), "path": save_json(os.path.join(package_dir, "object_detections.json"), object_detections)}
         except Exception as exc:
             result.warnings.append(f"Object detection unavailable: {exc}")
 
@@ -187,12 +181,7 @@ def run_production_pipeline(
         from .advanced_intelligence import generate_word_timestamps, build_choreographed_captions, write_ass_captions, save_json
         audio_path = os.path.join(package_dir, "voiceover.mp3")
         word_path = os.path.join(package_dir, "word_timestamps.json")
-        speech_words = generate_word_timestamps(
-            script,
-            audio_path,
-            voice=str(recommendation.settings.get("voice", "en-US-GuyNeural")),
-            timestamps_path=word_path,
-        )
+        speech_words = generate_word_timestamps(script, audio_path, voice=str(recommendation.settings.get("voice", "en-US-GuyNeural")), timestamps_path=word_path)
         intelligence["word_timestamps"] = {"available": True, "count": len(speech_words), "path": word_path}
 
         diarization = []
@@ -222,11 +211,7 @@ def run_production_pipeline(
         except Exception as exc:
             result.warnings.append(f"Face analysis unavailable: {exc}")
         object_boxes = _safe_boxes(object_detections)
-        captions = build_choreographed_captions(
-            speech_words,
-            face_boxes_by_time=faces_by_time,
-            object_boxes_by_time=object_boxes,
-        )
+        captions = build_choreographed_captions(speech_words, face_boxes_by_time=faces_by_time, object_boxes_by_time=object_boxes)
         choreography_path = save_json(os.path.join(package_dir, "caption_choreography.json"), [cue.__dict__ for cue in captions])
         ass_path = write_ass_captions(captions, os.path.join(package_dir, "captions.ass"))
         intelligence["caption_choreography"] = {"available": True, "count": len(captions), "path": ass_path, "json_path": choreography_path}
@@ -234,10 +219,15 @@ def run_production_pipeline(
         result.warnings.append(f"Speech intelligence unavailable: {exc}")
 
     try:
-        timeline = build_timeline(script, scenes, total_seconds=float(target_seconds), aspect_ratio="9:16", source_video=source)
+        timeline = build_timeline(script, scenes, total_seconds=float(target_seconds), aspect_ratio="9:16", source_video=source, creative_directives=v3_directives)
     except Exception as exc:
         result.errors.append(f"Timeline planning failed: {exc}")
         return result
+
+    if v3_directives:
+        planned_clips = v3_directives.get("clip_plan", [])
+        if isinstance(planned_clips, list) and planned_clips:
+            result.warnings.append(f"V3 creative contract applied: {v3_directives.get('edit_type', 'unknown')} strategy, {len(planned_clips)} planned beats.")
 
     if music_profile and music_profile.get("beats"):
         try:
@@ -270,19 +260,12 @@ def run_production_pipeline(
         "recommendation": recommendation.settings,
         "intelligence": intelligence,
         "platform": platform,
+        "v3_directives": v3_directives,
     })
     result.plan_path = _write_json(os.path.join(package_dir, "plan.json"), plan_payload)
 
     try:
-        rendered = compose_short_from_video(
-            source,
-            package_dir,
-            out_file=os.path.join(package_dir, "final.mp4"),
-            review=not skip_qc,
-            auto_fix=True,
-            model_key=model_key,
-            skip_qc=skip_qc,
-        )
+        rendered = compose_short_from_video(source, package_dir, out_file=os.path.join(package_dir, "final.mp4"), review=not skip_qc, auto_fix=True, model_key=model_key, skip_qc=skip_qc)
         final_path = os.path.join(package_dir, "final.mp4")
         if rendered and os.path.exists(rendered) and os.path.abspath(rendered) != os.path.abspath(final_path):
             shutil.copy2(rendered, final_path)
@@ -302,7 +285,7 @@ def run_production_pipeline(
     qc_path = os.path.join(package_dir, "qc_report.json")
     result.qc_report_path = qc_path if os.path.exists(qc_path) else None
     result.metadata_path = _write_json(os.path.join(package_dir, "metadata.json"), {
-        "version": 6,
+        "version": 7,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "topic": topic,
         "input_video": source,
@@ -317,6 +300,8 @@ def run_production_pipeline(
         "intelligence": intelligence,
         "platform": platform,
         "rendered": result.final_video is not None,
+        "v3_edit_type": v3_directives.get("edit_type"),
+        "v3_retention_events": len(v3_directives.get("retention_map", [])),
         "warnings": result.warnings,
         "errors": result.errors,
     })
@@ -330,6 +315,7 @@ def run_production_pipeline(
         "word_timestamps": intelligence["word_timestamps"].get("count", 0),
         "diarized_segments": intelligence["diarization"].get("count", 0),
         "rendered": result.final_video is not None,
+        "v3_retention_events": len(v3_directives.get("retention_map", [])),
     })
 
     if result.final_video and not result.errors:
@@ -345,14 +331,13 @@ def run_production_pipeline(
                 thumbnail=summary.get("thumbnail") or None,
                 caption_path=os.path.join(package_dir, "captions.ass") if os.path.exists(os.path.join(package_dir, "captions.ass")) else None,
             )
-            _write_json(os.path.join(package_dir, "metadata.json"), {
-                **json.loads(open(result.metadata_path, "r", encoding="utf-8").read()),
-                "upload_package": {
-                    "selected_title": upload_manifest.get("selected_title"),
-                    "files": upload_manifest.get("files"),
-                    "tag_count": len(upload_manifest.get("tags", [])),
-                },
-            })
+            metadata_payload = json.loads(open(result.metadata_path, "r", encoding="utf-8").read())
+            metadata_payload["upload_package"] = {
+                "selected_title": upload_manifest.get("selected_title"),
+                "files": upload_manifest.get("files"),
+                "tag_count": len(upload_manifest.get("tags", [])),
+            }
+            _write_json(os.path.join(package_dir, "metadata.json"), metadata_payload)
         except Exception as exc:
             result.warnings.append(f"Upload package finalization unavailable: {exc}")
     return result
