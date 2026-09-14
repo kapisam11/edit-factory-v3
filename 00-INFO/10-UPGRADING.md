@@ -1,4 +1,4 @@
-# 10 — Upgrading
+# 10 — Upgrading to Edit Factory v3
 
 Use this guide when you already have an older Edit Factory checkout.
 
@@ -8,9 +8,9 @@ Back up generated outputs and persistent state before replacing the application.
 
 ## 2. Update the source
 
-Fetch the new repository version and use the current `README.md` and numbered documentation as the source of truth.
+Fetch the Edit Factory v3 repository version and use the current `README.md` and numbered documentation as the source of truth.
 
-Do not blindly copy old commands or old dashboard files from earlier versions. The project has moved through compatibility launchers and the browser dashboard has also gained queue management, package browsing, cancellation, validated settings, upload validation, and production hardening.
+Do not blindly copy old commands or old dashboard files from earlier versions. V3 adds the emotion-first planning layer, retention architecture, human-editor QC, platform packaging, and the `aivf-v3` entry point while preserving the hardened production media path.
 
 The browser dashboard is the application's **control panel**. The current UI lives in:
 
@@ -18,10 +18,11 @@ The browser dashboard is the application's **control panel**. The current UI liv
 02-WEB-FILES/templates/index.html
 ```
 
-The current Flask dashboard/API implementation lives in:
+The dashboard implementation is kept behind a compatibility module path so existing integrations continue to work. New V3 planning is provided by:
 
 ```text
-02-WEB-FILES/app/web_app_v2.py
+01-MAIN-CODE/ai_video_factory/v3_engine.py
+01-MAIN-CODE/ai_video_factory/v3_pipeline.py
 ```
 
 Compatibility routes and lifecycle management live in:
@@ -42,16 +43,18 @@ Optional development tooling should be provisioned before runtime. Application c
 
 ## 4. Check the CLI
 
-The canonical CLI remains:
+The existing production CLI remains:
 
 ```bash
 python 01-MAIN-CODE/cli.py --help
+aivf --help
 ```
 
-The installed entry point can also be checked with:
+The V3 creative planner is:
 
 ```bash
-aivf --help
+python 01-MAIN-CODE/v3_cli.py --help
+aivf-v3 --help
 ```
 
 ## 5. Check the dashboard control panel
@@ -82,7 +85,21 @@ The current browser control panel supports:
 
 The upload request limit is controlled by the server environment variable `AIVF_MAX_UPLOAD_MB`. It is displayed by the control panel but is not a runtime-editable dashboard setting.
 
-## 6. Runtime behavior to expect after an upgrade
+## 6. Use the V3 creative contract
+
+For new content, prefer the V3 planner before production:
+
+```bash
+aivf-v3 "The friend everyone could trust" \
+  --context "He stayed loyal when everyone else left" \
+  --seconds 30 \
+  --platform youtube_shorts \
+  --output output/v3_blueprint.json
+```
+
+The blueprint establishes the emotional core, one edit type, hooks, clip timeline, overlays, music timing, retention events, quality checks, platform variants, and upload metadata before the existing renderer executes the media work.
+
+## 7. Runtime behavior to expect after an upgrade
 
 Jobs are persisted in SQLite. Heavy media work runs in a spawned worker process, while the browser control panel controls the queue and job lifecycle.
 
@@ -90,7 +107,7 @@ A server restart cannot resume an in-memory worker. Outstanding `queued`, `runni
 
 The production web deployment is intentionally single-host/single-worker at the process level. Do not increase the Gunicorn process count unless job ownership and lifecycle coordination are redesigned for multiple web processes.
 
-## 7. Run the dashboard smoke test
+## 8. Run the dashboard smoke test
 
 Before trusting the upgrade, verify the **control panel itself**, not just the Python import:
 
