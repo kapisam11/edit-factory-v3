@@ -1,23 +1,27 @@
-# Edit Factory v2 — Start Here
+# Edit Factory v3 — Start Here
 
-Welcome. This project turns a topic and optional raw video into an edited short-video package.
+Welcome. Edit Factory v3 turns a topic and optional raw video into an emotion-first, edited short-video package.
 
-You do **not** need to understand every Python file before using it. Follow the three-step path below, then use the project map when you need more detail.
+You do **not** need to understand every Python file before using it. Follow the path below, then use the project map when you need more detail.
 
 ## What this project does
 
 ```text
-Topic + optional video
+Topic + context + optional video
         ↓
- AI planning/research
+ V3 emotion-first analysis
         ↓
- script + hooks
+ one edit type + hook system
         ↓
- editing decisions
+ clip plan + overlays + music timing
         ↓
- FFmpeg processing
+ retention map + human-editor QC
         ↓
- final video package
+ FFmpeg production
+        ↓
+ titles + thumbnail + metadata
+        ↓
+ final upload-ready package
 ```
 
 The web dashboard adds a browser interface for creating jobs and watching progress.
@@ -28,28 +32,29 @@ The web dashboard adds a browser interface for creating jobs and watching progre
 
 Follow [01 — Install](01-INSTALL.md).
 
-### 2. Confirm the CLI works
+### 2. Confirm the CLIs work
 
 From the repository root:
 
 ```bash
 python 01-MAIN-CODE/cli.py --help
 aivf --help
+aivf-v3 --help
 ```
 
-Both commands should print help without starting a production job.
+These commands should print help without starting a production job.
 
-### 3. Make your first small job
-
-Follow [Make Your First Video](FIRST-VIDEO.md) for the complete first-run path.
-
-A simple test topic is:
+### 3. Generate your first V3 blueprint
 
 ```bash
-python 01-MAIN-CODE/cli.py "Minecraft betrayal on SMP"
+aivf-v3 "The friend everyone could trust" \
+  --context "He stayed loyal when everyone else left" \
+  --seconds 30 \
+  --platform youtube_shorts \
+  --output output/v3_blueprint.json
 ```
 
-For the exact options available in your installed version, run `aivf --help` first.
+For a full rendered video from raw footage, use [Make Your First Video](FIRST-VIDEO.md).
 
 ## Important: what is safe to change?
 
@@ -63,17 +68,20 @@ For a first-time user, the safest approach is:
 
 ## The important entry points
 
-### `aivf`
-The normal installed command-line interface.
+### `aivf-v3`
+The V3 emotion-first planning CLI.
+
+### `01-MAIN-CODE/v3_cli.py`
+The direct Python entry point for generating and validating V3 creative blueprints.
 
 ### `01-MAIN-CODE/cli.py`
-The main direct Python CLI launcher. Run it from the repository root with `python 01-MAIN-CODE/cli.py ...`.
+The main production CLI launcher for the existing end-to-end media pipeline.
 
 ### `02-WEB-FILES/app/wsgi.py`
 The production WSGI implementation used by Gunicorn.
 
-### `02-WEB-FILES/app/web_app_v2.py`
-The main Flask dashboard implementation.
+### Dashboard application
+The Flask dashboard under `02-WEB-FILES/app/` is the browser-facing control plane for production jobs.
 
 ### `01-MAIN-CODE/dashboard_worker.py`
 The spawn-safe worker launcher used by the dashboard runtime.
@@ -91,11 +99,11 @@ The spawn-safe worker launcher used by the dashboard runtime.
 99-ARCHIVE/                 ← retired material
 ```
 
-The repository root intentionally contains only `README.md` plus hidden Git/editor configuration files. Runtime source code and resources are inside the numbered folders so the GitHub front page stays easy to understand.
+The repository root intentionally contains only the main project documents plus hidden Git/editor configuration files. Runtime source code and resources are inside the numbered folders so the GitHub front page stays easy to understand.
 
 ## What is inside the main folders?
 
-`01-MAIN-CODE/` contains the core `ai_video_factory/` package plus the Python launchers and package metadata needed to install and run the project.
+`01-MAIN-CODE/` contains the core `ai_video_factory/` package, the V3 planner/pipeline, launchers, and package metadata needed to install and run the project.
 
 `02-WEB-FILES/` contains the Flask dashboard implementation in `app/`, plus `templates/` and `static/` for the browser UI.
 
@@ -119,6 +127,7 @@ Generated videos and job state live in runtime directories such as `output/`, `u
 |---|---|
 | Install and run it | `01-INSTALL.md` |
 | Make my first video | `FIRST-VIDEO.md` |
+| Generate a V3 creative blueprint | `V3-MAJOR-UPGRADE.md` |
 | Understand the pipeline | `02-HOW-IT-WORKS.md` |
 | Use the CLI | `03-USING-THE-CLI.md` |
 | Run the dashboard | `04-USING-THE-DASHBOARD.md` |
