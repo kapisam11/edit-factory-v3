@@ -1,8 +1,10 @@
-"""AI Video Factory — automated short video production system.
+"""AI Video Factory v3 — emotion-first automated short video production.
 
 Main entry points:
     VideoDirector              — compatibility director; footage runs through the production path
-    run_production_pipeline    — footage-aware end-to-end production path
+    run_production_pipeline    — proven footage-aware production path
+    run_v3_pipeline            — v3 emotion-first planning + production wrapper
+    create_v3_blueprint        — deterministic pre-render creative/retention plan
     compose_short_from_video   — low-level composition helper
 """
 import builtins
@@ -27,6 +29,8 @@ from .factory import create_package
 from .composer import compose_short_from_video
 from .production_pipeline import run_production_pipeline
 from .production_models import EditTimeline, Scene, TimelineSegment
+from .v3_engine import EditType, V3Blueprint, V3Config, create_v3_blueprint, validate_blueprint
+from .v3_pipeline import run_v3_pipeline
 
 
 class VideoDirector(_LegacyVideoDirector):
@@ -79,20 +83,26 @@ class VideoDirector(_LegacyVideoDirector):
         return value[:70] or "video"
 
 
-# The roadmap runtime adapter is deliberately loaded from the package entry
-# point so all public imports see the same pacing and upload-package contracts.
+# Runtime adapters are loaded from the package entry point so public imports
+# see the same pacing, resilience and upload-package contracts.
 from .roadmap_runtime import install as _install_roadmap_runtime
 _install_roadmap_runtime()
 from .roadmap_runtime_bindings import install as _install_roadmap_bindings
 _install_roadmap_bindings()
 
 
-__version__ = "2.2.0"
+__version__ = "3.0.0"
 __all__ = [
     "VideoDirector",
     "create_package",
     "compose_short_from_video",
     "run_production_pipeline",
+    "run_v3_pipeline",
+    "create_v3_blueprint",
+    "validate_blueprint",
+    "V3Blueprint",
+    "V3Config",
+    "EditType",
     "Scene",
     "TimelineSegment",
     "EditTimeline",
