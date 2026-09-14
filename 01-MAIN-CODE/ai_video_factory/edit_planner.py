@@ -7,6 +7,7 @@ actual render timeline.
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -128,6 +129,21 @@ def _directive_effects(directive: Mapping[str, Any], role: str) -> List[str]:
     return list(dict.fromkeys(effects))
 
 
+def _validate_v3_target_seconds(value: float, field_name: str = "total_seconds", platform_profile: Optional[Mapping[str, Any]] = None) -> float:
+    """Validate the wider V3 duration contract without changing legacy callers."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a number") from exc
+    if not math.isfinite(result) or not 8.0 <= result <= 180.0:
+        raise ValueError(f"{field_name} must be between 8 and 180 seconds")
+    if platform_profile:
+        maximum = platform_profile.get("max_seconds")
+        if maximum is not None and result > float(maximum):
+            raise ValueError(f"{field_name} exceeds the selected platform limit of {maximum:g} seconds")
+    return result
+
+
 def build_timeline(
     script: str,
     scenes: Sequence[Scene],
@@ -144,11 +160,15 @@ def build_timeline(
     if not scenes:
         raise ValueError("Scene index is empty")
 
-    target = validate_target_seconds(
-        sum(s.duration for s in scenes[: max(1, len(lines))]), "total_seconds"
-    ) if total_seconds is None else validate_target_seconds(total_seconds, "total_seconds")
-
     directives = creative_directives if isinstance(creative_directives, Mapping) else {}
+    if total_seconds is None:
+        target = validate_target_seconds(sum(s.duration for s in scenes[: max(1, len(lines))]), "total_seconds")
+    elif directives:
+        profile = directives.get("platform_profile")
+        target = _validate_v3_target_seconds(total_seconds, "total_seconds", profile if isinstance(profile, Mapping) else None)
+    else:
+        target = validate_target_seconds(total_seconds, "total_seconds")
+
     cursor = 0.0
     used: List[str] = []
     segments: List[TimelineSegment] = []
