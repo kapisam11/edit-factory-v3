@@ -1,8 +1,7 @@
-"""AI Video Factory — Enhanced Quality Control v2."""
+"""AI Video Factory — Enhanced Quality Control v3."""
 import json
 import os
 import subprocess
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 import re
 
@@ -12,21 +11,13 @@ from .render_engine import run_ffmpeg
 def _parse_filter_ranges(stderr: str, start_token: str, end_token: str) -> List[Dict]:
     starts = [float(x) for x in re.findall(rf"{re.escape(start_token)}\s*:?\s*([0-9.]+)", stderr)]
     ends = [float(x) for x in re.findall(rf"{re.escape(end_token)}\s*:?\s*([0-9.]+)", stderr)]
-    return [
-        {"start": start, "end": end, "duration": end - start}
-        for start, end in zip(starts, ends)
-        if end >= start
-    ]
+    return [{"start": start, "end": end, "duration": end - start} for start, end in zip(starts, ends) if end >= start]
 
 
 def check_black_frames(video_path: str, threshold: float = 0.95, min_duration: float = 0.5) -> List[Dict]:
     if not os.path.exists(video_path):
         return []
-    cmd = [
-        "ffmpeg", "-i", video_path,
-        "-vf", f"blackdetect=d={min_duration}:pic_th={threshold}",
-        "-an", "-f", "null", "-"
-    ]
+    cmd = ["ffmpeg", "-i", video_path, "-vf", f"blackdetect=d={min_duration}:pic_th={threshold}", "-an", "-f", "null", "-"]
     try:
         result = run_ffmpeg(cmd, capture_output=True)
         stderr = result.stderr or ""
@@ -38,11 +29,7 @@ def check_black_frames(video_path: str, threshold: float = 0.95, min_duration: f
 def check_frozen_frames(video_path: str, min_duration: float = 1.0) -> List[Dict]:
     if not os.path.exists(video_path):
         return []
-    cmd = [
-        "ffmpeg", "-i", video_path,
-        "-vf", f"freezedetect=n=-60dB:d={min_duration}",
-        "-an", "-f", "null", "-"
-    ]
+    cmd = ["ffmpeg", "-i", video_path, "-vf", f"freezedetect=n=-60dB:d={min_duration}", "-an", "-f", "null", "-"]
     try:
         result = run_ffmpeg(cmd, capture_output=True)
         stderr = result.stderr or ""
@@ -82,14 +69,7 @@ def check_audio_levels(video_path: str) -> Dict[str, Any]:
                     silence_segments[-1]["duration"] = end - silence_segments[-1]["start"]
             except (ValueError, IndexError):
                 continue
-    return {
-        "integrated_lufs": lufs_data.get("input_i", "unknown"),
-        "true_peak": lufs_data.get("input_tp", "unknown"),
-        "loudness_range": lufs_data.get("input_lra", "unknown"),
-        "silence_segments": silence_segments,
-        "silence_count": len(silence_segments),
-        "recommendation": _audio_recommendation(lufs_data, silence_segments),
-    }
+    return {"integrated_lufs": lufs_data.get("input_i", "unknown"), "true_peak": lufs_data.get("input_tp", "unknown"), "loudness_range": lufs_data.get("input_lra", "unknown"), "silence_segments": silence_segments, "silence_count": len(silence_segments), "recommendation": _audio_recommendation(lufs_data, silence_segments)}
 
 
 def _audio_recommendation(lufs_data: Dict, silence_segments: List) -> str:
@@ -109,12 +89,7 @@ def _audio_recommendation(lufs_data: Dict, silence_segments: List) -> str:
 def check_flashing_lights(video_path: str, threshold: float = 0.3) -> Dict[str, Any]:
     if not os.path.exists(video_path):
         return {"error": "Video not found"}
-    return {
-        "note": "Flashing light detection requires frame-by-frame analysis. "
-                "For production, integrate with a proper photosensitive analysis tool "
-                "or manually review high-contrast segments.",
-        "threshold_used": threshold,
-    }
+    return {"note": "Flashing light detection requires frame-by-frame analysis. For production, integrate with a proper photosensitive analysis tool or manually review high-contrast segments.", "threshold_used": threshold}
 
 
 def check_factual_consistency(research: Dict, script: str) -> Dict[str, Any]:
@@ -131,13 +106,7 @@ def check_factual_consistency(research: Dict, script: str) -> Dict[str, Any]:
         words = fact_key.split()
         match_score = sum(1 for w in words if w in script_lower) / max(len(words), 1)
         (matched if match_score > 0.5 else unmatched).append(fact)
-    return {
-        "facts_checked": len(key_facts),
-        "matched": matched,
-        "unmatched": unmatched,
-        "consistency_score": len(matched) / max(len(matched) + len(unmatched), 1),
-        "recommendation": "Review unmatched facts for accuracy." if unmatched else "Factual consistency looks good.",
-    }
+    return {"facts_checked": len(key_facts), "matched": matched, "unmatched": unmatched, "consistency_score": len(matched) / max(len(matched) + len(unmatched), 1), "recommendation": "Review unmatched facts for accuracy." if unmatched else "Factual consistency looks good."}
 
 
 def run_enhanced_qc(package_dir: str, research: Optional[Dict] = None, script: Optional[str] = None) -> Dict[str, Any]:
@@ -178,6 +147,6 @@ def run_enhanced_qc(package_dir: str, research: Optional[Dict] = None, script: O
     result["ok"] = len(result["errors"]) == 0
     result["warning_count"] = len(result["warnings"])
     if package_dir:
-        with open(os.path.join(package_dir, "qc_report_v2.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(package_dir, "qc_report_v3.json"), "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
     return result
