@@ -50,14 +50,14 @@ class APIKeys:
 
 @dataclass
 class AIVFConfig:
-    version: str = "2.0"
+    version: str = "3.0"
     active_pipeline: str = "default"
     active_style: str = "gaming_fast"
     output_root: str = "output"
     upload_root: str = "uploads"
     asset_root: str = "assets"
     templates_root: str = "templates"
-    knowledge_root: str = "knowledge_base_v2"
+    knowledge_root: str = "knowledge_base_v3"
 
     pipelines: Dict[str, PipelineConfig] = field(default_factory=lambda: {
         "default": PipelineConfig("default", description="Full pipeline with everything"),
