@@ -1,0 +1,70 @@
+name: Complete V3 reference migration
+
+on:
+  push:
+    branches: [chore/v3-reference-cleanup]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Replace active V2 references
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+
+          root = Path('.').resolve()
+          excluded = {'.git', '.github/workflows/v3-reference-migration.yml'}
+          skip_dirs = {'00-INFO/history', '.git'}
+          skip_names = {'all-MiniLM-L6-v2'}
+          changed = []
+
+          for path in root.rglob('*'):
+              if not path.is_file():
+                  continue
+              rel = path.relative_to(root).as_posix()
+              if any(rel == d or rel.startswith(d + '/') for d in skip_dirs):
+                  continue
+              if rel in excluded or path.suffix in {'.png', '.jpg', '.jpeg', '.gif', '.mp4', '.mov', '.zip', '.whl', '.pyc'}:
+                  continue
+              try:
+                  text = path.read_text(encoding='utf-8')
+              except (UnicodeDecodeError, OSError):
+                  continue
+              original = text
+              text = text.replace('edit-factory-v2', 'edit-factory-v3')
+              text = text.replace('Edit Factory v2', 'Edit Factory v3')
+              text = text.replace('AI Video Factory v2', 'AI Video Factory v3')
+              text = text.replace('knowledge_base_v2', 'knowledge_base_v3')
+              text = text.replace('knowledge_v2', 'knowledge_v3')
+              text = text.replace('nle_export_v2', 'nle_export_v3')
+              text = text.replace('quality_control_v2', 'quality_control_v3')
+              text = text.replace('web_app_v2', 'web_app_v3')
+              text = text.replace('cli_v2.py', 'cli_v3.py')
+              text = text.replace('qc_report_v2.json', 'qc_report_v3.json')
+              if path.name.endswith('_v2.py'):
+                  text = text.replace('_v2.py', '_v3.py')
+              text = text.replace(' v2.', ' v3.').replace(' v2 ', ' v3 ')
+              text = text.replace('v2 → v3', 'v3 → v3')
+              text = text.replace('all-MiniLM-L6-v3', 'all-MiniLM-L6-v2')
+              for marker in skip_names:
+                  text = text.replace(marker.replace('-v2', '-v3'), marker)
+              if text != original:
+                  path.write_text(text, encoding='utf-8')
+                  changed.append(rel)
+
+          if changed:
+              subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+              subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
+              subprocess.run(['git', 'add', '-A'], check=True)
+              subprocess.run(['git', 'commit', '-m', 'chore: normalize remaining active v2 references'], check=True)
+              subprocess.run(['git', 'push'], check=True)
+          else:
+              print('No active V2 references required migration.')
