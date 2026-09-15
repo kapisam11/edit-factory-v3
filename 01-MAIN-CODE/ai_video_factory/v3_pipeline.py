@@ -1,8 +1,4 @@
-"""Edit Factory v3 production wrapper.
-
-This module makes the v3 creative blueprint a first-class input to the single
-production renderer instead of treating the blueprint as reporting metadata.
-"""
+"""Edit Factory v3 production wrapper."""
 from __future__ import annotations
 
 import json
@@ -20,7 +16,7 @@ def _research_summary_from_blueprint(payload: Dict[str, Any]) -> Dict[str, Any]:
     core = payload["core_idea"]
     best_hook = payload["hooks"][0] if payload.get("hooks") else {}
     clip_plan = payload.get("clip_plan", [])
-    total_seconds = clip_plan[-1]["end"] if clip_plan else 30.0
+    total_seconds = float(clip_plan[-1]["end"]) if clip_plan else 30.0
     avg_shot = total_seconds / max(1, len(clip_plan))
     profile = payload.get("platform_variants", {}).get(payload.get("platform", "youtube_shorts"), {})
     return {
@@ -52,6 +48,9 @@ def _research_summary_from_blueprint(payload: Dict[str, Any]) -> Dict[str, Any]:
             "hooks": payload.get("hooks", []),
             "platform": payload.get("platform", "youtube_shorts"),
             "platform_profile": profile,
+            "min_scene_match_score": 0.05,
+            "disable_templates": True,
+            "blueprint_contract": "3.0.0",
         },
     }
 
@@ -75,13 +74,7 @@ def run_v3_pipeline(
     enable_diarization: bool = False,
     diarization_token: Optional[str] = None,
 ) -> ProductionResult:
-    """Plan emotion first, persist the blueprint, then execute the shared renderer."""
-    config = V3Config(
-        target_seconds=target_seconds,
-        platform=platform,
-        audience=audience,
-        bpm=bpm,
-    )
+    config = V3Config(target_seconds=target_seconds, platform=platform, audience=audience, bpm=bpm)
     blueprint = create_v3_blueprint(topic, context=context, config=config, edit_type=edit_type)
     validate_blueprint(blueprint)
 
@@ -110,6 +103,7 @@ def run_v3_pipeline(
         diarization_token=diarization_token,
         platform=platform,
     )
+
     if result.final_video and not result.errors:
         try:
             profile = payload["platform_variants"][platform]
@@ -122,9 +116,7 @@ def run_v3_pipeline(
                 platform_profile=profile,
                 retention_events=payload.get("retention_map", []),
             )
-            (package / "v3_render_qc.json").write_text(
-                json.dumps(render_report, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
+            (package / "v3_render_qc.json").write_text(json.dumps(render_report, indent=2, ensure_ascii=False), encoding="utf-8")
             if not render_report["ok"]:
                 result.errors.extend("V3 render QC: " + error for error in render_report["errors"])
             result.warnings.extend("V3 render QC: " + warning for warning in render_report["warnings"])
@@ -134,13 +126,12 @@ def run_v3_pipeline(
                 metadata["v3_render_qc"] = render_report
                 metadata["warnings"] = result.warnings
                 metadata["errors"] = result.errors
-                metadata_path.write_text(
-                    json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
-                )
+                metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
         except RenderContractError as exc:
             result.errors.append(f"V3 render contract failed: {exc}")
 
     result.artifacts = getattr(result, "artifacts", {}) or {}
     if isinstance(result.artifacts, dict):
         result.artifacts["v3_blueprint"] = str(blueprint_path)
+        result.artifacts["v3_render_qc"] = str(package / "v3_render_qc.json")
     return result
