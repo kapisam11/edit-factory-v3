@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ai-video-factory"
 version = "3.0.0"
 description = "Emotion-first AI short-form video planning, production, retention, and packaging."
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = "LicenseRef-Edit-Factory-Source-Available"
 license-files = ["LICENSE"]
 dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "edge-tts>=6.1.0", "numpy>=1.23.0"]
@@ -43,6 +43,6 @@ py-modules = ["cli", "dashboard_auth", "dashboard_compat", "dashboard_shutdown",
 markers = ["integration: tests that execute external media/runtime components such as FFmpeg"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py39"
 line-length = 100
 exclude = [".tools", ".models", "output", "uploads"]
