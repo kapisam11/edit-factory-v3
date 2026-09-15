@@ -50,7 +50,6 @@ package-dir = {"" = "01-MAIN-CODE", "app" = "02-WEB-FILES/app", "tools" = "03-SI
 packages = ["ai_video_factory", "app", "tools"]
 py-modules = [
     "cli",
-    "cli_v2",
     "dashboard_auth",
     "dashboard_compat",
     "dashboard_shutdown",
