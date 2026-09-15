@@ -72,6 +72,15 @@ def _load_filter_effectiveness(package_dir: str) -> Dict[str, Any]:
 
 
 def _apply_templates(seq_files: List[str], package_dir: str):
+    """Apply templates only when the active plan explicitly permits them; never cycle blindly for V3."""
+    try:
+        with open(os.path.join(package_dir, "plan.json"), "r", encoding="utf-8") as handle:
+            plan = json.load(handle)
+        directives = plan.get("v3_directives") if isinstance(plan, dict) else {}
+        if isinstance(directives, dict) and directives.get("disable_templates", False):
+            return seq_files
+    except Exception:
+        pass
     try:
         from .templates import find_templates, apply_overlay
         templates = find_templates()
@@ -103,6 +112,19 @@ def _load_source_segments(package_dir: str, fallback_count: int, input_video: st
     return get_segments(input_video, fallback_count)
 
 
+def _target_size_from_plan(plan: Dict[str, Any]) -> tuple[int, int]:
+    directives = plan.get("v3_directives") if isinstance(plan, dict) else {}
+    profile = directives.get("platform_profile") if isinstance(directives, dict) else {}
+    try:
+        width = int(profile.get("width", 1080))
+        height = int(profile.get("height", 1920))
+        if width <= 0 or height <= 0:
+            raise ValueError
+        return width, height
+    except (TypeError, ValueError, AttributeError):
+        return (1080, 1920)
+
+
 def compose_short_from_video(
     input_video: str,
     package_dir: str,
@@ -118,6 +140,7 @@ def compose_short_from_video(
 
     edit_plan = [(6, "segment")]
     script = ""
+    plan: Dict[str, Any] = {}
     if not skip_qc:
         try:
             from .quality_control import run_final_checks
@@ -163,7 +186,7 @@ def compose_short_from_video(
         raise RuntimeError("No clips could be generated from input video.")
 
     filter_effectiveness = _load_filter_effectiveness(package_dir)
-    target_size = (1080, 1920)
+    target_size = _target_size_from_plan(plan)
     seq_files = []
     durations = []
     for i, seg in enumerate(edit_plan):
@@ -177,11 +200,9 @@ def compose_short_from_video(
         to = snap_to_beat(seg_start, seg_end, duration, beats)
         clip_dur = _get_duration_safe(src_clip)
         if clip_dur > 0:
-            to = min(to, seg_start + clip_dur)
-        actual_dur = to - seg_start
-        if actual_dur <= 0:
-            logger.warning("Segment %d has zero/negative duration, skipping", i)
-            continue
+            # The segment renderer itself pads to the requested V3 duration when the source is shorter.
+            to = min(max(to, seg_start + min(duration, clip_dur)), seg_start + clip_dur)
+        actual_dur = max(0.01, duration if plan.get("v3_directives") else (to - seg_start))
         try:
             render_segment(src_clip, seg_start, actual_dur, vf, dst)
             seq_files.append(dst)
@@ -190,6 +211,11 @@ def compose_short_from_video(
 
     if not seq_files:
         raise RuntimeError("No segments could be rendered.")
+    if isinstance(plan.get("v3_directives"), dict):
+        plan["rendered_segment_count"] = len(seq_files)
+        plan["rendered_target_size"] = list(target_size)
+        with open(os.path.join(package_dir, "plan.json"), "w", encoding="utf-8") as handle:
+            json.dump(plan, handle, indent=2, ensure_ascii=False)
     seq_files = _apply_templates(seq_files, package_dir)
 
     subtitle_path = os.path.join(package_dir, "captions.ass")
@@ -219,7 +245,10 @@ def compose_short_from_video(
         mixed = os.path.join(package_dir, "final_short_vo.mp4")
         try:
             mix_voiceover(out_file, vo_path, mixed)
-            return mixed
+            os.replace(mixed, out_file)
         except Exception as e:
-            logger.error("Voiceover mix failed: %s", e)
+            logger.warning("voiceover mix failed: %s", e)
+
+    if not os.path.exists(out_file):
+        raise RuntimeError(f"Final output missing: {out_file}")
     return out_file
