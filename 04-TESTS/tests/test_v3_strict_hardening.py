@@ -79,17 +79,17 @@ def test_v3_timeline_uses_exact_blueprint_boundaries(monkeypatch):
     ]
     directives = {
         "clip_plan": [
-            {"start": 0.0, "end": 1.5, "purpose": "Hook", "visual_style": "subject"},
-            {"start": 1.5, "end": 3.5, "purpose": "Context", "visual_style": "action"},
-            {"start": 3.5, "end": 5.0, "purpose": "Payoff", "visual_style": "scene"},
+            {"start": 0.0, "end": 3.0, "purpose": "Hook", "visual_style": "subject action"},
+            {"start": 3.0, "end": 7.0, "purpose": "Context", "visual_style": "action scene"},
+            {"start": 7.0, "end": 12.0, "purpose": "Payoff", "visual_style": "subject action"},
         ],
         "platform_profile": {"max_seconds": 60},
         "min_scene_match_score": 0.05,
         "retention_map": [{"time": 0.0, "kind": "zoom"}, {"time": 3.0, "kind": "motion"}],
     }
-    timeline = build_timeline("subject starts moving then action reaches the payoff", scenes, total_seconds=5.0, creative_directives=directives)
-    assert [(round(s.start, 3), round(s.end, 3)) for s in timeline.segments] == [(0.0, 1.5), (1.5, 3.5), (3.5, 5.0)]
-    assert timeline.duration == 5.0
+    timeline = build_timeline("subject starts moving then action reaches the payoff", scenes, total_seconds=12.0, creative_directives=directives)
+    assert [(round(s.start, 3), round(s.end, 3)) for s in timeline.segments] == [(0.0, 3.0), (3.0, 7.0), (7.0, 12.0)]
+    assert timeline.duration == 12.0
 
 
 @pytest.mark.integration
@@ -100,7 +100,7 @@ def test_render_contract_normalizes_enforces_and_validates_duration(tmp_path):
     subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "color=c=black:s=1080x1920:r=30",
+            "-f", "lavfi", "-i", "testsrc=size=1080x1920:rate=30",
             "-t", "3", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
             "-t", "3", "-shortest", "-c:v", "libx264", "-c:a", "aac",
             str(source),
