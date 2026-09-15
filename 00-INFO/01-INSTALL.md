@@ -4,7 +4,7 @@ This is the easiest installation path for someone seeing the project for the fir
 
 ## What you need
 
-- Python 3.9 or newer
+- Python 3.10 or newer
 - FFmpeg and FFprobe installed and available on your PATH
 - Git, if you are cloning the project
 
@@ -12,7 +12,7 @@ Optional AI/media features may need extra packages or API keys. Those are explai
 
 ## Install
 
-From the repository folder:
+From the repository root:
 
 ```bash
 python -m venv .venv
@@ -32,10 +32,10 @@ Activate the environment.
 source .venv/bin/activate
 ```
 
-Install the project from its organized application folder:
+Install the project from the repository root, where `pyproject.toml` lives:
 
 ```bash
-python -m pip install -e './01-MAIN-CODE[web,dev]'
+python -m pip install -e '.[web,dev]'
 ```
 
 ## Check that it installed
@@ -46,15 +46,10 @@ Run the main CLI launcher from the repository root:
 python 01-MAIN-CODE/cli.py --help
 ```
 
-The installed command is also available as:
+The installed commands are also available as:
 
 ```bash
 aivf --help
-```
-
-For the V3 emotion-first planner, use:
-
-```bash
 aivf-v3 --help
 ```
 
