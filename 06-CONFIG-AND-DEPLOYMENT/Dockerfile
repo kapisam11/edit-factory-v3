@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AIVF_OUTPUT_DIR=/app/output
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr ca-certificates fonts-dejavu \
+    && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr ca-certificates fonts-dejavu curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -31,5 +31,6 @@ RUN groupadd --system aivf \
 
 USER aivf
 EXPOSE 5000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD curl --fail --silent http://127.0.0.1:5000/api/health || exit 1
 
 CMD ["gunicorn", "-c", "/app/06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py", "app.wsgi:app"]
