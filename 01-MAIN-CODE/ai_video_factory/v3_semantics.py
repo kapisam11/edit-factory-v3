@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional, Sequence
+from functools import lru_cache
+from typing import Dict, Optional
 
 EMOTIONS = ("trust", "dramatic", "inspiring", "nostalgic", "funny", "curious")
 PROTOTYPES = {
@@ -28,12 +29,19 @@ def lexical_scores(text: str) -> Dict[str, float]:
     return {emotion: float(sum(source.count(term) for term in values)) for emotion, values in terms.items()}
 
 
+@lru_cache(maxsize=2)
+def _load_model(model_name: str):
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer(model_name)
+
+
 def semantic_scores(text: str, model_name: Optional[str] = None) -> Dict[str, float]:
-    """Use sentence-transformers when installed; fall back without changing callers."""
+    """Use sentence-transformers when enabled; always retain a deterministic fallback."""
+    if os.environ.get("AIVF_DISABLE_SEMANTIC", "").lower() in {"1", "true", "yes"}:
+        return lexical_scores(text)
     requested = model_name or os.environ.get("AIVF_SEMANTIC_MODEL", "all-MiniLM-L6-v2")
     try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(requested)
+        model = _load_model(requested)
         vectors = model.encode([str(text), *PROTOTYPES.values()], normalize_embeddings=True)
         target = vectors[0]
         scores = vectors[1:] @ target
