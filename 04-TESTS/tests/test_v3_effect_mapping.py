@@ -4,6 +4,7 @@ import subprocess
 import pytest
 
 from ai_video_factory.effects_engine import build_cinematic_filter
+from ai_video_factory import render_engine
 
 
 def test_v3_motion_directives_map_to_real_ffmpeg_video_effects():
@@ -32,6 +33,21 @@ def test_v3_filter_rejects_invalid_inputs():
         build_cinematic_filter(0, "Hook", 0.0)
     with pytest.raises(ValueError):
         build_cinematic_filter(0, "Hook", 2.0, target_size=(0, 1920))
+
+
+def test_trimmed_clips_are_rendered_from_zero_offset(monkeypatch, tmp_path):
+    commands = []
+    monkeypatch.setattr(render_engine, "choose_encoder", lambda: "libx264")
+    monkeypatch.setattr(render_engine, "run_ffmpeg", lambda command, **_: commands.append(command))
+    monkeypatch.setattr(render_engine, "validate_media_output", lambda _: {"format": {"duration": 2.0}})
+
+    trimmed = tmp_path / "_clips" / "clip_000.mp4"
+    trimmed.parent.mkdir()
+    trimmed.write_bytes(b"placeholder")
+    render_engine.render_segment(str(trimmed), ss=17.5, duration=2.0, vf="null", dst=str(tmp_path / "out.mp4"))
+
+    assert commands
+    assert commands[0][commands[0].index("-ss") + 1] == "0.0"
 
 
 @pytest.mark.integration
