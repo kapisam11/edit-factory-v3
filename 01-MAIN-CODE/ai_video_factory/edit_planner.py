@@ -47,7 +47,7 @@ def _sentences(script: str) -> List[str]:
 
 
 def _fit_script_to_beats(script: str, count: int) -> List[str]:
-    """Map model prose onto the immutable V3 beat count without dropping content."""
+    """Map model prose onto the immutable V3 beat count without changing beat boundaries."""
     if count <= 0:
         return []
     words = str(script).split()
@@ -131,10 +131,46 @@ def _directive_for_index(directives: Mapping[str, Any], index: int) -> Mapping[s
     return {}
 
 
-def _directive_effects(directive: Mapping[str, Any], role: str) -> List[str]:
+def _adaptive_motion_transition(
+    scene: Scene,
+    role: str,
+    purpose: str,
+    requested_motion: str,
+    requested_transition: str,
+) -> Tuple[str, str]:
+    """Choose renderable motion/transition from the selected shot, not list position alone."""
+    motion = requested_motion.strip().lower()
+    transition = requested_transition.strip().lower()
+    if scene.motion_score >= 0.72:
+        motion = "tracking" if role in {"conflict", "climax"} else "reframe"
+    elif scene.face_count > 0 and role in {"hook", "payoff"}:
+        motion = "punch-in" if role == "hook" else "slow push"
+    elif scene.importance_score >= 0.72:
+        motion = "micro-zoom"
+    else:
+        motion = "subtle-parallax"
+
+    if purpose in {"Climax", "Escalation", "Punchline"} and scene.motion_score >= 0.55:
+        transition = "speed ramp"
+    elif scene.motion_score < 0.25 and purpose in {"Memory", "Tribute", "Final impact", "Payoff"}:
+        transition = "dissolve"
+    elif purpose in {"Hook", "Threat", "Question"}:
+        transition = "hard cut"
+    elif transition not in {"hard cut", "match cut", "dissolve", "j-cut", "speed ramp"}:
+        transition = "match cut"
+    return motion, transition
+
+
+def _directive_effects(directive: Mapping[str, Any], role: str, scene: Optional[Scene] = None) -> List[str]:
     effects = list(ROLE_EFFECTS.get(role, []))
-    motion = str(directive.get("camera_motion", "")).lower()
-    transition = str(directive.get("transition", "")).lower()
+    requested_motion = str(directive.get("camera_motion", ""))
+    requested_transition = str(directive.get("transition", ""))
+    purpose = str(directive.get("purpose", ""))
+    if scene is not None:
+        motion, transition = _adaptive_motion_transition(scene, role, purpose, requested_motion, requested_transition)
+    else:
+        motion, transition = requested_motion.lower(), requested_transition.lower()
+
     if motion in {"punch-in", "micro-zoom"}:
         effects.append("quick_zoom")
     elif motion in {"tracking", "reframe", "slow push"}:
@@ -148,7 +184,41 @@ def _directive_effects(directive: Mapping[str, Any], role: str) -> List[str]:
     return list(dict.fromkeys(effects))
 
 
-def _validate_v3_target_seconds(value: float, field_name: str = "total_seconds", platform_profile: Optional[Mapping[str, Any]] = None) -> float:
+def _retention_effects_for_window(
+    retention_map: Sequence[Mapping[str, Any]],
+    start: float,
+    end: float,
+) -> Tuple[List[str], List[str]]:
+    """Convert retention events falling inside a beat into real renderer directives."""
+    effects: List[str] = []
+    labels: List[str] = []
+    for event in retention_map:
+        if not isinstance(event, Mapping):
+            continue
+        try:
+            timestamp = float(event.get("time", -1.0))
+        except (TypeError, ValueError):
+            continue
+        if not start - 1e-6 <= timestamp < end - 1e-6:
+            continue
+        kind = str(event.get("kind", "motion")).strip().lower()
+        labels.append(f"retention:{kind}")
+        if kind == "zoom":
+            effects.append("quick_zoom")
+        elif kind in {"motion", "angle", "clip"}:
+            effects.append("camera move")
+        elif kind == "beat drop":
+            effects.append("speed ramp")
+        elif kind == "text":
+            effects.append("retention accent")
+    return list(dict.fromkeys(effects)), labels
+
+
+def _validate_v3_target_seconds(
+    value: float,
+    field_name: str = "total_seconds",
+    platform_profile: Optional[Mapping[str, Any]] = None,
+) -> float:
     try:
         result = float(value)
     except (TypeError, ValueError) as exc:
@@ -178,6 +248,7 @@ def build_timeline(
         raise ValueError("Scene index is empty")
     directives = creative_directives if isinstance(creative_directives, Mapping) else {}
     clip_plan = directives.get("clip_plan") if isinstance(directives.get("clip_plan"), list) else []
+    retention_map = directives.get("retention_map") if isinstance(directives.get("retention_map"), list) else []
     if clip_plan:
         target = _validate_v3_target_seconds(
             total_seconds if total_seconds is not None else clip_plan[-1].get("end", 30.0),
@@ -201,12 +272,27 @@ def build_timeline(
         purpose = str(directive.get("purpose", "")).strip()
         role = V3_PURPOSE_ROLE.get(purpose) or _role_for_index(index, len(lines))
         desired = _desired_duration(target, index, len(lines))
-        try:
-            planned = float(directive.get("end", 0.0)) - float(directive.get("start", 0.0))
-            if planned > 0.0:
-                desired = planned
-        except (TypeError, ValueError):
-            pass
+        planned_start: Optional[float] = None
+        planned_end: Optional[float] = None
+        if clip_plan:
+            try:
+                planned_start = float(directive["start"])
+                planned_end = float(directive["end"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"V3 clip {index + 1} has invalid start/end") from exc
+            if planned_start < -0.001 or planned_end <= planned_start:
+                raise ValueError(f"V3 clip {index + 1} has invalid interval")
+            if abs(planned_start - cursor) > 0.01:
+                raise ValueError(f"V3 clip {index + 1} does not start at the previous blueprint boundary")
+            desired = planned_end - planned_start
+        else:
+            try:
+                planned = float(directive.get("end", 0.0)) - float(directive.get("start", 0.0))
+                if planned > 0.0:
+                    desired = planned
+            except (TypeError, ValueError):
+                pass
+
         query = " ".join(part for part in (sentence, str(directive.get("visual_style", "")), purpose) if part)
         scene, score = choose_scene(query, scenes, used, desired, role, min_match_score=min_match)
         used.append(scene.id)
@@ -215,12 +301,15 @@ def build_timeline(
         source_start = scene.start
         source_end = min(scene.end, source_start + source_duration)
         actual_duration = source_end - source_start
-        target_start = cursor
-        target_end = cursor + actual_duration
-        effects = _directive_effects(directive, role)
-        motion = str(directive.get("camera_motion", "")).strip()
-        transition = str(directive.get("transition", "")).strip()
-        directive_label = " ".join(part for part in (motion, transition) if part)
+        target_start = planned_start if planned_start is not None else cursor
+        target_end = planned_end if planned_end is not None else cursor + actual_duration
+        effects = _directive_effects(directive, role, scene)
+        retention_effects, retention_labels = _retention_effects_for_window(retention_map, target_start, target_end)
+        effects = list(dict.fromkeys(effects + retention_effects))
+        effective_motion, effective_transition = _adaptive_motion_transition(
+            scene, role, purpose, str(directive.get("camera_motion", "")), str(directive.get("transition", ""))
+        )
+        directive_label = " ".join(part for part in (effective_motion, effective_transition, *retention_labels) if part)
         label = f"{role.title()} - {sentence[:70]}"
         if directive_label:
             label += f" [{directive_label}]"
@@ -233,9 +322,8 @@ def build_timeline(
         cursor = target_end
 
     if clip_plan:
-        segments[-1].end = round(segments[-1].end + (target - cursor), 3)
-        cursor = target
-
+        if abs(cursor - target) > 0.01:
+            raise ValueError(f"V3 blueprint duration mismatch: {cursor:.3f} != {target:.3f}")
     timeline = EditTimeline(duration=round(cursor, 3), aspect_ratio=aspect_ratio, segments=segments, source_video=source_video)
     errors = timeline.validate()
     if errors:
