@@ -72,15 +72,23 @@ def _load_filter_effectiveness(package_dir: str) -> Dict[str, Any]:
 
 
 def _apply_templates(seq_files: List[str], package_dir: str):
-    """Apply templates only when the active plan explicitly permits them; never cycle blindly for V3."""
+    """Apply templates only when the active plan explicitly permits them; fail closed for V3."""
+    plan_path = os.path.join(package_dir, "plan.json")
     try:
-        with open(os.path.join(package_dir, "plan.json"), "r", encoding="utf-8") as handle:
+        with open(plan_path, "r", encoding="utf-8") as handle:
             plan = json.load(handle)
-        directives = plan.get("v3_directives") if isinstance(plan, dict) else {}
-        if isinstance(directives, dict) and directives.get("disable_templates", False):
+    except Exception as exc:
+        if os.path.exists(plan_path):
+            raise RuntimeError("Unable to read plan.json while deciding whether legacy templates are permitted") from exc
+        plan = {}
+
+    directives = plan.get("v3_directives") if isinstance(plan, dict) else {}
+    if isinstance(directives, dict):
+        if directives.get("blueprint_contract") and not directives.get("disable_templates", False):
+            raise RuntimeError("V3 plan does not explicitly disable legacy templates")
+        if directives.get("disable_templates", False):
             return seq_files
-    except Exception:
-        pass
+
     try:
         from .templates import find_templates, apply_overlay
         templates = find_templates()
@@ -107,7 +115,15 @@ def _load_source_segments(package_dir: str, fallback_count: int, input_video: st
             timeline = load_timeline(timeline_path)
             if timeline.segments:
                 return [(float(segment.source_start), float(segment.source_end)) for segment in timeline.segments]
+            raise ValueError("timeline.json contains no segments")
         except Exception as exc:
+            try:
+                with open(os.path.join(package_dir, "plan.json"), "r", encoding="utf-8") as handle:
+                    plan = json.load(handle)
+            except Exception:
+                plan = {}
+            if isinstance(plan, dict) and isinstance(plan.get("v3_directives"), dict) and plan["v3_directives"].get("blueprint_contract"):
+                raise RuntimeError("V3 timeline exists but could not be loaded safely") from exc
             logger.warning("Could not load timeline.json; falling back to generic segments: %s", exc)
     return get_segments(input_video, fallback_count)
 
@@ -169,21 +185,34 @@ def compose_short_from_video(
         except Exception as e:
             logger.warning("Review step failed: %s", e)
 
+    plan_path = os.path.join(package_dir, "plan.json")
     try:
-        with open(os.path.join(package_dir, "plan.json"), "r", encoding="utf-8") as f:
+        with open(plan_path, "r", encoding="utf-8") as f:
             plan = json.load(f)
         edit_plan = plan.get("edit_plan", edit_plan)
         script = plan.get("script", script)
     except Exception as e:
+        if os.path.exists(plan_path):
+            raise RuntimeError("Could not load required plan.json") from e
         logger.warning("Could not load plan.json: %s", e)
 
+    v3_directives = plan.get("v3_directives") if isinstance(plan, dict) else {}
+    is_v3 = isinstance(v3_directives, dict) and bool(v3_directives.get("blueprint_contract"))
+    if is_v3 and not isinstance(edit_plan, list):
+        raise RuntimeError("V3 edit_plan is missing or invalid")
+
     segments = _load_source_segments(package_dir, len(edit_plan), input_video)
+    if is_v3 and len(segments) != len(edit_plan):
+        raise RuntimeError(f"V3 source-segment count {len(segments)} != edit-plan count {len(edit_plan)}")
+
     temp_dir = os.path.join(package_dir, "_clips")
     _ensure_dir(temp_dir)
     beats = detect_beats(input_video)
     clip_paths = generate_clip_paths(input_video, segments, len(edit_plan), temp_dir)
     if not clip_paths:
         raise RuntimeError("No clips could be generated from input video.")
+    if is_v3 and len(clip_paths) != len(edit_plan):
+        raise RuntimeError(f"V3 rendered source clip count {len(clip_paths)} != edit-plan count {len(edit_plan)}")
 
     filter_effectiveness = _load_filter_effectiveness(package_dir)
     target_size = _target_size_from_plan(plan)
@@ -193,16 +222,17 @@ def compose_short_from_video(
         duration = float(seg[0]) if isinstance(seg, (list, tuple)) else float(seg)
         label = seg[1] if isinstance(seg, (list, tuple)) and len(seg) > 1 else "segment"
         durations.append(duration)
-        src_clip = clip_paths[i % len(clip_paths)]
+        src_index = i if is_v3 else i % len(clip_paths)
+        segment_index = i if is_v3 else i % len(segments)
+        src_clip = clip_paths[src_index]
         dst = os.path.join(temp_dir, f"segment_{i:02d}.mp4")
         vf = build_cinematic_filter(i, label, duration, filter_effectiveness or None, target_size=target_size)
-        seg_start, seg_end = segments[i % len(segments)]
+        seg_start, seg_end = segments[segment_index]
         to = snap_to_beat(seg_start, seg_end, duration, beats)
         clip_dur = _get_duration_safe(src_clip)
         if clip_dur > 0:
-            # The segment renderer itself pads to the requested V3 duration when the source is shorter.
             to = min(max(to, seg_start + min(duration, clip_dur)), seg_start + clip_dur)
-        actual_dur = max(0.01, duration if plan.get("v3_directives") else (to - seg_start))
+        actual_dur = max(0.01, duration if is_v3 else (to - seg_start))
         try:
             render_segment(src_clip, seg_start, actual_dur, vf, dst)
             seq_files.append(dst)
@@ -211,6 +241,8 @@ def compose_short_from_video(
 
     if not seq_files:
         raise RuntimeError("No segments could be rendered.")
+    if is_v3 and len(seq_files) != len(edit_plan):
+        raise RuntimeError(f"V3 rendered segment count {len(seq_files)} != edit-plan count {len(edit_plan)}")
     if isinstance(plan.get("v3_directives"), dict):
         plan["rendered_segment_count"] = len(seq_files)
         plan["rendered_target_size"] = list(target_size)
