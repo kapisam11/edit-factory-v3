@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
     - uses: actions/checkout@v6
     - name: Install FFmpeg for media integration tests
@@ -28,9 +28,9 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-    - name: Install locked development environment
-      run: uv sync --frozen --python "${{ matrix.python-version }}" --extra web --extra dev
-    - name: Verify locked environment
+    - name: Resolve and install development environment
+      run: uv sync --python "${{ matrix.python-version }}" --extra web --extra dev
+    - name: Verify environment
       run: uv pip check
     - name: Compile Python sources
       run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
@@ -43,6 +43,7 @@ jobs:
         uv run python 01-MAIN-CODE/cli.py --help
         uv run python 01-MAIN-CODE/cli_v3.py --help
         uv run aivf --help
+        uv run aivf-v3 --help
     - name: Verify roadmap runtime contracts
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
@@ -78,7 +79,8 @@ jobs:
         --cov=ai_video_factory.effects_engine
         --cov=ai_video_factory.render_engine
         --cov=ai_video_factory.composer
-        --cov-report=term-missing --cov-report=xml --cov-fail-under=50
+        --cov=ai_video_factory.production_pipeline
+        --cov-report=term-missing --cov-report=xml --cov-fail-under=60
 
   windows-smoke:
     runs-on: windows-latest
@@ -92,10 +94,10 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-    - name: Install locked development environment
+    - name: Resolve and install development environment
       shell: pwsh
-      run: uv sync --frozen --python 3.12 --extra web --extra dev
-    - name: Verify locked environment
+      run: uv sync --python 3.12 --extra web --extra dev
+    - name: Verify environment
       shell: pwsh
       run: uv pip check
     - name: Compile spawn-sensitive modules
@@ -106,7 +108,6 @@ jobs:
       env:
         PYTHONPATH: 01-MAIN-CODE;02-WEB-FILES;03-SIDE-CODE
       run: uv run python -c "from app import upload_cleanup; assert callable(upload_cleanup.cleanup_orphan_uploads)"
-
     - name: Run Windows-safe hardening tests
       shell: pwsh
       env:
@@ -126,9 +127,9 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-    - name: Install locked audit environment
-      run: uv sync --frozen --python 3.12 --extra web --extra dev --extra audit
-    - name: Verify locked environment
+    - name: Resolve and install audit environment
+      run: uv sync --python 3.12 --extra web --extra dev --extra audit
+    - name: Verify environment
       run: uv pip check
     - name: Audit dependencies
       run: uv run pip-audit
