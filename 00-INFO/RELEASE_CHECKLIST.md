@@ -7,7 +7,8 @@ Before merging a production/hardening branch, all of the following automated che
 - Python 3.10–3.13 CI test matrix
 - repository-wide Ruff checks for production Python
 - `python 01-MAIN-CODE/cli.py --help`, `python 01-MAIN-CODE/cli_v3.py --help`, `aivf --help`, and `aivf-v3 --help`
-- dependency audit with the same resolved environment used by CI
+- dependency audit against the committed `uv.lock`
+- locked-environment verification with `uv sync --frozen`
 - Docker build and dashboard health/import smoke test
 - dashboard authentication test
 - secret persistence/API redaction tests
@@ -16,7 +17,7 @@ Before merging a production/hardening branch, all of the following automated che
 - SQLite concurrent-write test
 - final documentation review against implemented code
 
-The repository currently does **not** claim a committed dependency lockfile. Do not describe CI as using a frozen lock until a real lockfile is generated, reviewed, committed, and consumed with `--frozen`.
+The repository contains a committed dependency lockfile, and the release CI consumes it with `--frozen`. Dependency changes must update `uv.lock` in the same change set.
 
 ## Deployment acceptance gates
 
