@@ -12,20 +12,20 @@ This document records the current evidence state of Edit Factory v3. It intentio
 - V3 blueprint/QC and production JSON/text artifacts use atomic temp-file replacement in the hardened paths.
 - Subtitle drawtext text escapes FFmpeg filter metacharacters and subtitle probing fails closed instead of inventing a duration.
 - Real render integration tests and adversarial V3 contract tests exist, with the repository's existing V3 coverage gate retained at 50%.
-- Python support remains 3.9+ and the locked CI matrix exercises Python 3.9–3.12.
+- Python support is 3.10+ and the locked CI matrix exercises Python 3.10–3.12.
 - A committed `uv.lock` is present and release CI consumes it with `uv sync --frozen`.
 - Model-provider failures use bounded retries for transient HTTP/transport failures and degrade to deterministic planning when the provider remains unavailable.
 - Docker runs the production WSGI service as the dedicated non-root `aivf` user.
 
 ## Current limitations that block release certification
 
-- A fresh pull-request CI run must finish green on the final hardening head before automated verification can be certified.
+- The fresh pull-request CI run must finish green on the latest hardening head before automated verification can be certified.
 - Repository-only inspection cannot certify artistic quality. A real rendered video still requires human visual acceptance.
 - Target-host cancellation, restart/reconciliation, persistent-volume, and production-secret checks remain deployment acceptance gates.
 
 ## Historical notes
 
-Some historical hardening notes temporarily described Python 3.10+ support or a higher coverage gate. Those were intermediate remediation states and are not the current release contract.
+The earlier branch advertised Python 3.9 support, but the frozen dependency environment does not install successfully on Python 3.9. The package metadata, CI matrix, and operational documentation now consistently declare the verified Python 3.10–3.12 support floor.
 
 ## Release rule
 
