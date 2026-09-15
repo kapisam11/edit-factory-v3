@@ -9,7 +9,7 @@ from ai_video_factory.production_models import Scene
 from ai_video_factory.production_pipeline import _platform_aspect_ratio
 from ai_video_factory.v3_engine import EditType, V3Config, create_v3_blueprint
 from ai_video_factory.v3_quality import enforce_retention_events, normalize_duration, strict_render_check
-from ai_video_factory.v3_semantics import combined_scores, lexical_scores
+from ai_video_factory.v3_semantics import combined_scores, lexical_scores, semantic_similarity
 
 
 def test_all_supported_edit_types_produce_distinct_editorial_strategies():
@@ -50,8 +50,19 @@ def test_semantic_module_has_deterministic_fallback():
     assert all(value == value for value in combined.values())
 
 
+def test_semantic_similarity_score_is_not_centered_at_half(monkeypatch):
+    import ai_video_factory.v3_semantics as semantics
+
+    monkeypatch.setattr(semantics, "_semantic_vector_scores", lambda *args, **kwargs: [0.0])
+    monkeypatch.delenv("AIVF_DISABLE_SEMANTIC", raising=False)
+    assert semantic_similarity("completely unrelated query", "different content") == 0.0
+
+
 def test_scene_match_fails_closed_when_semantic_relevance_is_too_low(monkeypatch):
-    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    import ai_video_factory.v3_semantics as semantics
+
+    monkeypatch.setattr(semantics, "_semantic_vector_scores", lambda *args, **kwargs: [0.0])
+    monkeypatch.delenv("AIVF_DISABLE_SEMANTIC", raising=False)
     scenes = [
         Scene("a", 0, 2, description="green grass field", importance_score=0.99),
         Scene("b", 2, 4, description="blue ocean waves", importance_score=0.01),
