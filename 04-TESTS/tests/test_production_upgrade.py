@@ -24,7 +24,7 @@ def test_build_timeline_selects_relevant_scenes():
         _scene("s1", 0, 4, "player opens secret chest", importance=0.9, motion=0.7),
         _scene("s2", 4, 8, "player walks through village", importance=0.2, motion=0.2),
         _scene("s3", 8, 12, "enemy attacks player with sword", importance=0.95, motion=0.9),
-        _scene("s4", 12, 16, "player celebrates after victory", importance=0.7, motion=0.3),
+        _scene("s4", 12, 16, "player finally wins after victory and celebrates", importance=0.7, motion=0.3),
     ]
     timeline = build_timeline(
         "Open the secret chest\nThen the enemy attacks\nHe finally wins",

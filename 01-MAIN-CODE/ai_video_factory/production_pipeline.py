@@ -57,8 +57,8 @@ def _normalize_model_script(response: str) -> str:
 def _generate_script(topic: str, summary: Dict[str, Any], target_seconds: float, model_key: Optional[str]) -> tuple[str, str]:
     if model_key:
         response = call_model(
-            'Write a punchy vertical short-video script. Return JSON only as {"lines":["..."]}. '
-            "Start with a strong hook, use concise visual lines, avoid greetings/filler, and end with a payoff.\n"
+            'Write a punchy short-video script matched to the available footage. Return JSON only as {"lines":["..."]}. '
+            "Start with a strong hook, use concise visual lines grounded in the footage evidence, avoid greetings/filler, and end with a payoff.\n"
             f"Topic: {topic}\nTarget duration: {target_seconds:.1f}s\n"
             f"Summary: {json.dumps(summary, ensure_ascii=False, default=str)}",
             api_key=model_key,
@@ -77,6 +77,49 @@ def _safe_boxes(detections: Sequence[Dict[str, Any]]) -> list[Tuple[float, Seque
         t = float(detection.get("time", 0.0))
         grouped.setdefault(t, []).append((float(detection.get("x1", 0.0)), float(detection.get("y1", 0.0)), float(detection.get("x2", 0.0)), float(detection.get("y2", 0.0))))
     return sorted(grouped.items())
+
+
+def _platform_aspect_ratio(platform_profile: Any) -> str:
+    """Convert a validated platform width/height pair into the timeline aspect-ratio contract."""
+    if not isinstance(platform_profile, dict):
+        return "9:16"
+    try:
+        width = int(platform_profile.get("width", 1080))
+        height = int(platform_profile.get("height", 1920))
+        if width <= 0 or height <= 0:
+            raise ValueError
+        from math import gcd
+        divisor = gcd(width, height)
+        return f"{width // divisor}:{height // divisor}"
+    except (TypeError, ValueError, AttributeError):
+        return "9:16"
+
+
+def _footage_evidence_from_scenes(scenes: Sequence[Any]) -> Dict[str, Any]:
+    ranked = sorted(
+        scenes,
+        key=lambda scene: (scene.importance_score, scene.motion_score, scene.audio_energy),
+        reverse=True,
+    )
+    return {
+        "scene_count": len(scenes),
+        "top_scenes": [
+            {
+                "id": scene.id,
+                "start": round(scene.start, 3),
+                "end": round(scene.end, 3),
+                "description": scene.description,
+                "transcript": scene.transcript,
+                "objects": scene.objects,
+                "text": scene.text,
+                "motion_score": round(scene.motion_score, 3),
+                "audio_energy": round(scene.audio_energy, 3),
+                "face_count": scene.face_count,
+                "importance_score": round(scene.importance_score, 3),
+            }
+            for scene in ranked[:12]
+        ],
+    }
 
 
 def run_production_pipeline(
@@ -115,6 +158,7 @@ def run_production_pipeline(
     v3_directives = summary.get("v3_directives")
     if not isinstance(v3_directives, dict):
         v3_directives = {}
+    is_v3 = bool(v3_directives.get("blueprint_contract"))
 
     experiments = load_experiments(experiment_history_path) if experiment_history_path else []
     recommendation = recommend(
@@ -134,18 +178,22 @@ def run_production_pipeline(
         result.warnings.append(f"Learning: {recommendation.reason}")
     _write_json(os.path.join(package_dir, "recommendation.json"), recommendation.__dict__)
 
-    script, script_source = _generate_script(topic, summary, target_seconds, model_key)
-    if not script:
-        result.errors.append("Planner returned an empty script")
-        return result
-    result.script_path = _write_text(os.path.join(package_dir, "script.txt"), script)
-
+    # Source footage is analyzed before script generation so the script can be grounded in
+    # actual scenes rather than inventing visuals first and forcing them onto the footage.
     try:
         scenes = analyze_video(source, sample_seconds=2.5, enable_ocr=enable_ocr)
     except Exception as exc:
         result.errors.append(f"Scene analysis failed: {exc}")
         return result
+    if not summary.get("footage_evidence"):
+        summary["footage_evidence"] = _footage_evidence_from_scenes(scenes)
     result.scenes_path = save_scene_index(scenes, os.path.join(package_dir, "scenes.json"), source)
+
+    script, script_source = _generate_script(topic, summary, target_seconds, model_key)
+    if not script:
+        result.errors.append("Planner returned an empty script")
+        return result
+    result.script_path = _write_text(os.path.join(package_dir, "script.txt"), script)
 
     intelligence: Dict[str, Any] = {
         "object_detection": {"enabled": enable_object_detection, "available": False, "count": 0},
@@ -218,8 +266,17 @@ def run_production_pipeline(
     except Exception as exc:
         result.warnings.append(f"Speech intelligence unavailable: {exc}")
 
+    platform_profile = v3_directives.get("platform_profile") if isinstance(v3_directives.get("platform_profile"), dict) else summary.get("platform_profile", {})
+    aspect_ratio = _platform_aspect_ratio(platform_profile)
     try:
-        timeline = build_timeline(script, scenes, total_seconds=float(target_seconds), aspect_ratio="9:16", source_video=source, creative_directives=v3_directives)
+        timeline = build_timeline(
+            script,
+            scenes,
+            total_seconds=float(target_seconds),
+            aspect_ratio=aspect_ratio,
+            source_video=source,
+            creative_directives=v3_directives,
+        )
     except Exception as exc:
         result.errors.append(f"Timeline planning failed: {exc}")
         return result
@@ -229,7 +286,9 @@ def run_production_pipeline(
         if isinstance(planned_clips, list) and planned_clips:
             result.warnings.append(f"V3 creative contract applied: {v3_directives.get('edit_type', 'unknown')} strategy, {len(planned_clips)} planned beats.")
 
-    if music_profile and music_profile.get("beats"):
+    # V3 beat boundaries are immutable. Music can still be analyzed and consumed by
+    # downstream audio/effect layers, but it must never rewrite the blueprint timeline.
+    if music_profile and music_profile.get("beats") and not is_v3:
         try:
             from .advanced_intelligence import music_aware_cut_plan
             target_durations = [segment.duration for segment in timeline.segments]
@@ -242,6 +301,8 @@ def run_production_pipeline(
             timeline.duration = max((s.end for s in timeline.segments), default=timeline.duration)
         except Exception as exc:
             result.warnings.append(f"Music-aware timing could not be applied: {exc}")
+    elif music_profile and music_profile.get("beats") and is_v3:
+        result.warnings.append("V3 blueprint boundaries preserved; music beat data retained without retiming timeline segments.")
 
     validation_errors = timeline.validate()
     if validation_errors:
@@ -299,6 +360,7 @@ def run_production_pipeline(
         "recommendation": recommendation.__dict__,
         "intelligence": intelligence,
         "platform": platform,
+        "platform_aspect_ratio": aspect_ratio,
         "rendered": result.final_video is not None,
         "v3_edit_type": v3_directives.get("edit_type"),
         "v3_retention_events": len(v3_directives.get("retention_map", [])),
@@ -331,7 +393,8 @@ def run_production_pipeline(
                 thumbnail=summary.get("thumbnail") or None,
                 caption_path=os.path.join(package_dir, "captions.ass") if os.path.exists(os.path.join(package_dir, "captions.ass")) else None,
             )
-            metadata_payload = json.loads(open(result.metadata_path, "r", encoding="utf-8").read())
+            with open(result.metadata_path, "r", encoding="utf-8") as metadata_file:
+                metadata_payload = json.load(metadata_file)
             metadata_payload["upload_package"] = {
                 "selected_title": upload_manifest.get("selected_title"),
                 "files": upload_manifest.get("files"),

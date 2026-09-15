@@ -1,8 +1,4 @@
-"""Typed data models for the production editing pipeline.
-
-The models are deliberately dependency-free so the core planner remains usable
-on machines that do not have OpenCV, OCR, or ML packages installed.
-"""
+"""Typed data models for the production editing pipeline."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -81,23 +77,44 @@ class EditTimeline:
         errors: List[str] = []
         if self.duration <= 0:
             errors.append("Timeline duration must be positive")
+        try:
+            expected_ratio = {
+                "9:16": 9 / 16,
+                "16:9": 16 / 9,
+                "1:1": 1.0,
+            }[str(self.aspect_ratio)]
+        except KeyError:
+            errors.append(f"Unsupported aspect ratio: {self.aspect_ratio}")
+            expected_ratio = None
 
         previous_end = 0.0
-        for segment in self.segments:
+        for index, segment in enumerate(self.segments):
             if segment.end <= segment.start:
                 errors.append(f"{segment.id}: target end must be greater than start")
             if segment.source_end <= segment.source_start:
                 errors.append(f"{segment.id}: source end must be greater than start")
             if segment.start < -1e-6:
                 errors.append(f"{segment.id}: target start is negative")
+            if segment.start > previous_end + 0.01:
+                errors.append(f"{segment.id}: unfilled target gap before segment")
+            if segment.start + 0.01 < previous_end:
+                errors.append(f"{segment.id}: target segments overlap or are out of order")
             if segment.end > self.duration + 0.05:
                 errors.append(f"{segment.id}: target end exceeds timeline duration")
-            if segment.start + 0.05 < previous_end:
-                errors.append(f"{segment.id}: target segments overlap or are out of order")
-            previous_end = max(previous_end, segment.end)
+            if segment.source_start < -1e-6 or segment.source_end < -1e-6:
+                errors.append(f"{segment.id}: source interval is negative")
+            if segment.source_end <= segment.source_start:
+                errors.append(f"{segment.id}: source interval is empty")
+            if index > 0 and segment.start < previous_end - 0.01:
+                errors.append(f"{segment.id}: target segments overlap")
+            previous_end = segment.end
 
-        if self.segments and previous_end < self.duration - 0.20:
-            errors.append("Timeline contains a large unfilled gap at the end")
+        if self.segments and abs(previous_end - self.duration) > 0.05:
+            errors.append("Timeline does not exactly cover its declared duration")
+        if expected_ratio is not None:
+            # A ratio is stored as a contract label; numeric dimensions are validated by render QC.
+            if expected_ratio <= 0:
+                errors.append("Timeline aspect ratio is invalid")
         return errors
 
     def to_dict(self) -> Dict[str, Any]:

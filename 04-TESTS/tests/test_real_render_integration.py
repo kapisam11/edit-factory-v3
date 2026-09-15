@@ -26,6 +26,10 @@ def test_production_pipeline_renders_real_mp4(tmp_path, monkeypatch):
         stderr=subprocess.DEVNULL,
     )
 
+    # This is a legacy end-to-end render smoke test. V3 semantic rejection is covered
+    # independently by V3 planner tests and must not make this renderer smoke fixture fail.
+    monkeypatch.setattr("ai_video_factory.edit_planner.semantic_similarity", lambda *args, **kwargs: 1.0)
+
     # Keep this test offline/deterministic while still exercising the real media path.
     def fake_words(text, output_audio, **kwargs):
         subprocess.run(

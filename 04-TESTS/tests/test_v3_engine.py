@@ -60,8 +60,16 @@ def test_v3_directives_reach_real_timeline():
             id=f"scene_{i}",
             start=float(i * 3),
             end=float((i + 1) * 3),
-            description=f"Scene {i} with a person and action",
-            transcript=f"Line {i}",
+            description=(
+                f"Scene {i}: One result-before-context Hook; two setup/obstacle Context; "
+                "three escalation Rising tension; four peak decisive Climax; "
+                "five aftermath Payoff; six final impact Resolution; effort detail curiosity."
+            ),
+            transcript=(
+                f"Line {i}: result-before-context Hook setup obstacle Context escalation "
+                "Rising tension peak decisive Climax aftermath Payoff final impact Resolution; "
+                "effort detail curiosity."
+            ),
             motion_score=0.6,
             importance_score=0.7,
         )
@@ -81,7 +89,10 @@ def test_v3_directives_reach_real_timeline():
     assert len(timeline.segments) == 6
     assert timeline.segments[0].role == "hook"
     assert timeline.segments[3].role == "climax"
-    assert "punch-in" in timeline.segments[0].label or "micro-zoom" in timeline.segments[0].label
+    # V3 chooses motion from footage characteristics. The label must expose the
+    # chosen renderable motion rather than assuming every hook is a punch-in.
+    allowed_motion_labels = {"punch-in", "micro-zoom", "reframe", "tracking", "subtle-parallax"}
+    assert any(token in timeline.segments[0].label for token in allowed_motion_labels)
     assert timeline.segments[0].effects
     assert abs(timeline.duration - 12.0) < 0.02
 

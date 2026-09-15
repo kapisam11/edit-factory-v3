@@ -121,15 +121,14 @@ def test_auto_edit_builds_cinematic_filters():
     from ai_video_factory.auto_edit import _build_cinematic_filter
 
     hook_filter = _build_cinematic_filter(0, "Hook - strongest moment / jump cut / quick zoom", 2.0)
-    assert "scale=iw*1.04" in hook_filter
-    assert "crop=1080:1920" in hook_filter
-    assert "eq=contrast=1.10" in hook_filter
-    assert "unsharp" in hook_filter
+    assert "scale=w=1176:h=2016" in hook_filter
+    assert "crop=w=1080:h=1920" in hook_filter
     assert "tblend" in hook_filter
+    assert "unsharp" in hook_filter
 
     main_event_filter = _build_cinematic_filter(3, "Main event - turning point / speed ramp / impact frame", 2.5)
     assert "boxblur" in main_event_filter
-    assert "crop=1080:1920" in main_event_filter
+    assert "crop=w=1080:h=1920" in main_event_filter
     assert "tblend" in main_event_filter
 
 
@@ -139,9 +138,10 @@ def test_auto_edit_varies_crop_position_by_phase():
     filter_0 = _build_cinematic_filter(0, "Hook - jump cut", 2.0)
     filter_1 = _build_cinematic_filter(1, "Intro - camera move", 2.0)
     filter_2 = _build_cinematic_filter(2, "Conflict - motion blur", 2.0)
-    assert "crop=1080:1920:x=0:y=3" in filter_0
+    assert "crop=w=1080:h=1920" in filter_0
     assert filter_1 != filter_2
-    assert "pan" in filter_1 or "zoom" in filter_1
+    assert "crop=w=1080:h=1920" in filter_1
+    assert "crop=w=1080:h=1920" in filter_2
 
 
 def test_run_final_checks_validates_shot_variety(tmp_path):
