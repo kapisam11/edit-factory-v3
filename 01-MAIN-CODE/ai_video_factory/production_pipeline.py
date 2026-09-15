@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Sequence, Tuple
 
@@ -16,18 +17,32 @@ from .production_models import ProductionResult
 from .scene_intelligence import analyze_video, save_scene_index
 
 
+def _atomic_replace_write(path: str, data: str) -> str:
+    """Write a text artifact atomically in the destination directory."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix=".aivf-", suffix=".partial", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        return path
+    except BaseException:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+
 def _write_json(path: str, payload: Any) -> str:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, default=str)
-    return path
+    return _atomic_replace_write(path, json.dumps(payload, indent=2, default=str, ensure_ascii=False))
 
 
 def _write_text(path: str, text: str) -> str:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(text)
-    return path
+    return _atomic_replace_write(path, str(text))
 
 
 def _normalize_model_script(response: str) -> str:
@@ -138,13 +153,25 @@ def run_production_pipeline(
     enable_diarization: bool = False,
     diarization_token: Optional[str] = None,
     platform: str = "youtube_shorts",
+    allow_auto_fix: bool = True,
 ) -> ProductionResult:
-    """Run the production pipeline and honor the v3 creative contract when supplied."""
+    """Run production. V3 callers disable the legacy auto-fixer explicitly."""
     os.makedirs(package_dir, exist_ok=True)
     result = ProductionResult(package_dir=package_dir)
     source = os.path.abspath(input_video)
     if not os.path.exists(source):
         result.errors.append(f"Input video does not exist: {source}")
+        return result
+    if not os.path.isfile(source):
+        result.errors.append(f"Input video is not a regular file: {source}")
+        return result
+    try:
+        target_seconds = float(target_seconds)
+    except (TypeError, ValueError) as exc:
+        result.errors.append(f"Target duration is invalid: {target_seconds!r}")
+        return result
+    if not (0.25 <= target_seconds <= 300.0):
+        result.errors.append("Target duration must be between 0.25 and 300 seconds")
         return result
 
     summary: Dict[str, Any] = dict(research_summary or {})
@@ -159,6 +186,8 @@ def run_production_pipeline(
     if not isinstance(v3_directives, dict):
         v3_directives = {}
     is_v3 = bool(v3_directives.get("blueprint_contract"))
+    if is_v3 and allow_auto_fix:
+        allow_auto_fix = False
 
     experiments = load_experiments(experiment_history_path) if experiment_history_path else []
     recommendation = recommend(
@@ -178,8 +207,6 @@ def run_production_pipeline(
         result.warnings.append(f"Learning: {recommendation.reason}")
     _write_json(os.path.join(package_dir, "recommendation.json"), recommendation.__dict__)
 
-    # Source footage is analyzed before script generation so the script can be grounded in
-    # actual scenes rather than inventing visuals first and forcing them onto the footage.
     try:
         scenes = analyze_video(source, sample_seconds=2.5, enable_ocr=enable_ocr)
     except Exception as exc:
@@ -286,8 +313,6 @@ def run_production_pipeline(
         if isinstance(planned_clips, list) and planned_clips:
             result.warnings.append(f"V3 creative contract applied: {v3_directives.get('edit_type', 'unknown')} strategy, {len(planned_clips)} planned beats.")
 
-    # V3 beat boundaries are immutable. Music can still be analyzed and consumed by
-    # downstream audio/effect layers, but it must never rewrite the blueprint timeline.
     if music_profile and music_profile.get("beats") and not is_v3:
         try:
             from .advanced_intelligence import music_aware_cut_plan
@@ -326,10 +351,20 @@ def run_production_pipeline(
     result.plan_path = _write_json(os.path.join(package_dir, "plan.json"), plan_payload)
 
     try:
-        rendered = compose_short_from_video(source, package_dir, out_file=os.path.join(package_dir, "final.mp4"), review=not skip_qc, auto_fix=True, model_key=model_key, skip_qc=skip_qc)
+        rendered = compose_short_from_video(
+            source,
+            package_dir,
+            out_file=os.path.join(package_dir, "final.mp4"),
+            review=not skip_qc,
+            auto_fix=allow_auto_fix,
+            model_key=model_key,
+            skip_qc=skip_qc,
+        )
         final_path = os.path.join(package_dir, "final.mp4")
         if rendered and os.path.exists(rendered) and os.path.abspath(rendered) != os.path.abspath(final_path):
-            shutil.copy2(rendered, final_path)
+            temp_final = final_path + ".partial"
+            shutil.copyfile(rendered, temp_final)
+            os.replace(temp_final, final_path)
             rendered = final_path
         result.final_video = rendered if rendered and os.path.exists(rendered) else None
         if result.final_video is None:
@@ -393,8 +428,7 @@ def run_production_pipeline(
                 thumbnail=summary.get("thumbnail") or None,
                 caption_path=os.path.join(package_dir, "captions.ass") if os.path.exists(os.path.join(package_dir, "captions.ass")) else None,
             )
-            with open(result.metadata_path, "r", encoding="utf-8") as metadata_file:
-                metadata_payload = json.load(metadata_file)
+            metadata_payload = json.loads(Path(result.metadata_path).read_text(encoding="utf-8"))
             metadata_payload["upload_package"] = {
                 "selected_title": upload_manifest.get("selected_title"),
                 "files": upload_manifest.get("files"),
