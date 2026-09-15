@@ -1,4 +1,4 @@
-"""Convert a short-form script and V3 blueprint into a footage-aware edit timeline.""
+"""Convert a short-form script and V3 blueprint into a footage-aware edit timeline."""
 from __future__ import annotations
 
 import json
@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from .production_models import EditTimeline, Scene, TimelineSegment
 from .scene_intelligence import score_scene
 from .validation import validate_target_seconds
+from .v3_semantics import semantic_similarity
 
 
 ROLE_EFFECTS = {
@@ -102,7 +103,8 @@ def choose_scene(
         raise ValueError("No scenes are available for planning")
     ranked: List[Tuple[float, Scene]] = []
     for scene in candidates:
-        relevance = _overlap_score(query, scene.searchable_text)
+        lexical = _overlap_score(query, scene.searchable_text)
+        semantic = semantic_similarity(query, scene.searchable_text)
         salience = score_scene(scene, query)
         duration_fit = min(scene.duration, desired_seconds) / max(scene.duration, desired_seconds, 0.01)
         role_bonus = 0.0
@@ -113,12 +115,12 @@ def choose_scene(
         elif role == "hook":
             role_bonus = 0.20 * scene.importance_score
         freshness = 0.10 if scene.id not in used else -0.15
-        value = 0.35 * relevance + 0.30 * salience + 0.15 * duration_fit + role_bonus + freshness
+        value = 0.20 * lexical + 0.25 * semantic + 0.25 * salience + 0.15 * duration_fit + role_bonus + freshness
         ranked.append((value, scene))
     ranked.sort(key=lambda item: item[0], reverse=True)
     best_score, best_scene = ranked[0]
     if best_score < min_match_score and len(candidates) > 1:
-        raise ValueError(f"No scene meets semantic/relevance threshold for query: {query[:120]}")
+        raise ValueError(f"No scene meets relevance threshold for query: {query[:120]}")
     return best_scene, round(float(best_score), 4)
 
 
@@ -177,11 +179,17 @@ def build_timeline(
     directives = creative_directives if isinstance(creative_directives, Mapping) else {}
     clip_plan = directives.get("clip_plan") if isinstance(directives.get("clip_plan"), list) else []
     if clip_plan:
-        target = _validate_v3_target_seconds(total_seconds if total_seconds is not None else clip_plan[-1].get("end", 30.0), "total_seconds", directives.get("platform_profile") if isinstance(directives.get("platform_profile"), Mapping) else None)
+        target = _validate_v3_target_seconds(
+            total_seconds if total_seconds is not None else clip_plan[-1].get("end", 30.0),
+            "total_seconds",
+            directives.get("platform_profile") if isinstance(directives.get("platform_profile"), Mapping) else None,
+        )
         lines = _fit_script_to_beats(script, len(clip_plan))
     else:
         lines = _sentences(script)
-        target = validate_target_seconds(sum(s.duration for s in scenes[: max(1, len(lines))]), "total_seconds") if total_seconds is None else validate_target_seconds(total_seconds, "total_seconds")
+        target = validate_target_seconds(
+            sum(s.duration for s in scenes[: max(1, len(lines))]), "total_seconds"
+        ) if total_seconds is None else validate_target_seconds(total_seconds, "total_seconds")
 
     cursor = 0.0
     used: List[str] = []
@@ -224,8 +232,6 @@ def build_timeline(
         ))
         cursor = target_end
 
-    # The V3 planner has an immutable exact target. If a source shot is shorter than a beat,
-    # preserve the requested beat duration and let the renderer's padding/stretch contract fulfill it.
     if clip_plan:
         segments[-1].end = round(segments[-1].end + (target - cursor), 3)
         cursor = target
