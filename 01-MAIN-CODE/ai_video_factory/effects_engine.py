@@ -1,4 +1,4 @@
-"""Cinematic filter chain builder with effectiveness-aware selection."""
+"""Cinematic video filter chain builder with effectiveness-aware selection."""
 from typing import Dict, Any, Optional
 
 
@@ -48,7 +48,7 @@ def build_cinematic_filter(
         or "punch-in" in label_lower
         or "micro-zoom" in label_lower
     ) and should_apply("zoom_effect"):
-        vf += ",zoompan=z='if(lte(on,1),1.1,1.05)':d=1"
+        vf += ",zoompan=z='if(lte(on,1),1.1,1.05)':d=1:s={}x{}".format(target_w, target_h)
     if "motion blur" in label_lower and should_apply("motion_blur", 0.70):
         vf += ",tblend=all_mode='average':all_opacity=0.55"
     if "subtle shake" in label_lower and should_apply("subtle_shake", 0.80):
@@ -63,12 +63,17 @@ def build_cinematic_filter(
         vf += ",eq=gamma=1.04"
     if (
         "camera move" in label_lower
-        or "pan" in label_lower
         or "tracking" in label_lower
         or "reframe" in label_lower
         or "slow push" in label_lower
     ) and should_apply("pan_effect"):
-        vf += ",pan=x='1920/2+(iw/2-1920/2)*if(lte(t,{:.1f}),t/{:.1f},1)':y='1080/2'".format(duration, duration)
+        # `pan` is an audio filter; use a time-varying crop for real video motion.
+        period = max(float(duration), 0.25)
+        x_expr = f"({x_crop})+({max(1, target_w // 90)})*sin(2*PI*t/{period:.3f})"
+        y_expr = f"({y_crop})+({max(1, target_h // 180)})*cos(2*PI*t/{period:.3f})"
+        vf += f",crop={target_w}:{target_h}:x='{x_expr}':y='{y_expr}'"
+    if "retention accent" in label_lower and should_apply("retention_accent", 0.60):
+        vf += ",eq=brightness=0.035:contrast=1.035"
     if ("hook" in label_lower or "payoff" in label_lower) and should_apply("unsharp_effect"):
         vf += ",unsharp=3:3:0.5"
     if "Main event" in label and duration > 1.5 and should_apply("boxblur"):
