@@ -4,7 +4,7 @@ This is the easiest installation path for someone seeing the project for the fir
 
 ## What you need
 
-- Python 3.9 or newer
+- Python 3.10 or newer
 - FFmpeg and FFprobe installed and available on your PATH
 - Git, if you are cloning the project
 
