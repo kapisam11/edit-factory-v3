@@ -1,9 +1,9 @@
-"""Optional semantic scoring with a deterministic fallback."""
+"""Semantic scoring utilities with deterministic fallbacks."""
 from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
 EMOTIONS = ("trust", "dramatic", "inspiring", "nostalgic", "funny", "curious")
 PROTOTYPES = {
@@ -35,19 +35,38 @@ def _load_model(model_name: str):
     return SentenceTransformer(model_name)
 
 
+def _semantic_vector_scores(text: str, prototypes: Sequence[str], model_name: Optional[str] = None) -> list[float]:
+    requested = model_name or os.environ.get("AIVF_SEMANTIC_MODEL", "all-MiniLM-L6-v2")
+    model = _load_model(requested)
+    vectors = model.encode([str(text), *prototypes], normalize_embeddings=True)
+    target = vectors[0]
+    return [float(value) for value in (vectors[1:] @ target)]
+
+
 def semantic_scores(text: str, model_name: Optional[str] = None) -> Dict[str, float]:
-    """Use sentence-transformers when enabled; always retain a deterministic fallback."""
+    """Use sentence-transformers when available, otherwise deterministic lexical scoring."""
     if os.environ.get("AIVF_DISABLE_SEMANTIC", "").lower() in {"1", "true", "yes"}:
         return lexical_scores(text)
-    requested = model_name or os.environ.get("AIVF_SEMANTIC_MODEL", "all-MiniLM-L6-v2")
     try:
-        model = _load_model(requested)
-        vectors = model.encode([str(text), *PROTOTYPES.values()], normalize_embeddings=True)
-        target = vectors[0]
-        scores = vectors[1:] @ target
-        return {emotion: float(score) for emotion, score in zip(EMOTIONS, scores)}
+        scores = _semantic_vector_scores(text, list(PROTOTYPES.values()), model_name)
+        return {emotion: score for emotion, score in zip(EMOTIONS, scores)}
     except Exception:
         return lexical_scores(text)
+
+
+def semantic_similarity(query: str, document: str, model_name: Optional[str] = None) -> float:
+    """Return cosine similarity when the optional semantic model exists, else lexical recall."""
+    if not str(query).strip() or not str(document).strip():
+        return 0.0
+    if os.environ.get("AIVF_DISABLE_SEMANTIC", "").lower() in {"1", "true", "yes"}:
+        return lexical_scores(f"{query} {document}").get("curious", 0.0)
+    try:
+        score = _semantic_vector_scores(str(query), [str(document)], model_name)
+        return max(0.0, min(1.0, (score[0] + 1.0) / 2.0))
+    except Exception:
+        q = set(str(query).lower().split())
+        d = set(str(document).lower().split())
+        return len(q & d) / max(1, len(q))
 
 
 def combined_scores(topic: str, context: str = "", *, semantic_weight: float = 0.65) -> Dict[str, float]:
