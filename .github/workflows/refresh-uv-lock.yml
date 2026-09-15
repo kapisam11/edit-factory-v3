@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - hardening/v3-true-10-10
       - production-hardening-10-of-10
       - final-10-of-10-verification
 
