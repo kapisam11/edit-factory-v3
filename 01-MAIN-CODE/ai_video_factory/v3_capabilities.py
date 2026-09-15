@@ -15,59 +15,55 @@ class CapabilitySpec:
     status: str = "implemented"
 
 
-# Each entry names a concrete code symbol rather than merely asserting that the
-# capability exists somewhere in the V3 engine.
+_TEST_STRICT = "test_v3_strict_hardening.py"
+_TEST_EFFECTS = "test_v3_effect_mapping.py"
+
 _EVIDENCE = {
-    "emotion-first core idea": ("v3_engine.analyze_core_idea", "v3_engine.analyze_core_idea"),
-    "single edit-type lock": ("v3_engine.choose_edit_type", "v3_engine.choose_edit_type"),
-    "visual hook": ("v3_engine.generate_hooks", "v3_engine.generate_hooks"),
-    "text hook": ("v3_engine.generate_hooks", "v3_engine.generate_hooks"),
-    "emotional hook": ("v3_engine.generate_hooks", "v3_engine.generate_hooks"),
-    "hook A/B ranking": ("v3_engine.generate_hooks", "v3_engine.generate_hooks"),
-    "purpose-driven clip plan": ("v3_engine.build_clip_plan", "v3_engine.build_clip_plan"),
-    "adaptive clip count": ("v3_engine.build_clip_plan", "v3_engine.build_clip_plan"),
-    "exact duration allocation": ("v3_engine._allocate_durations", "v3_engine._allocate_durations"),
-    "2-6 word overlays": ("v3_engine._overlay_for_purpose", "v3_engine._human_editor_checks"),
-    "overlay de-duplication": ("v3_engine._unique_overlay", "v3_engine._human_editor_checks"),
-    "music energy plan": ("v3_engine.analyze_music", "v3_engine.analyze_music"),
-    "beat-grid sync": ("v3_engine.analyze_music", "v3_engine.analyze_music"),
-    "drop-aware payoff": ("v3_engine.analyze_music", "v3_engine.build_retention_map"),
-    "retention event map": ("v3_engine.build_retention_map", "v3_engine.build_retention_map"),
-    "1-3 second visual change rule": ("v3_quality.strict_render_check", "v3_quality.strict_render_check"),
-    "camera motion planning": ("edit_planner._adaptive_motion_transition", "test_v3_effect_mapping.py"),
-    "transition restraint": ("edit_planner._adaptive_motion_transition", "test_v3_effect_mapping.py"),
-    "human-editor reject pass": ("edit_planner.choose_scene", "test_v3_strict_hardening.py"),
-    "dead-moment detection": ("v3_quality.strict_render_check", "test_v3_strict_hardening.py"),
-    "repetition detection": ("v3_engine._human_editor_checks", "test_v3_strict_hardening.py"),
-    "AI-slideshow guard": ("v3_quality.strict_render_check", "test_v3_strict_hardening.py"),
-    "payoff validation": ("v3_engine._human_editor_checks", "test_v3_strict_hardening.py"),
-    "hook-payoff continuity": ("v3_engine._human_editor_checks", "test_v3_strict_hardening.py"),
-    "platform-safe variants": ("v3_engine.platform_variants", "test_v3_strict_hardening.py"),
-    "9:16 Shorts profile": ("v3_engine.PLATFORM_PROFILES", "test_v3_strict_hardening.py"),
-    "9:16 TikTok profile": ("v3_engine.PLATFORM_PROFILES", "test_v3_strict_hardening.py"),
-    "9:16 Reels profile": ("v3_engine.PLATFORM_PROFILES", "test_v3_strict_hardening.py"),
-    "1:1 social profile": ("v3_engine.PLATFORM_PROFILES", "test_v3_strict_hardening.py"),
-    "16:9 long-form profile": ("v3_engine.PLATFORM_PROFILES", "test_v3_strict_hardening.py"),
-    "thumbnail concept": ("v3_engine._metadata", "v3_engine._metadata"),
-    "title laboratory": ("v3_engine._metadata", "v3_engine._metadata"),
-    "description generator": ("v3_engine._metadata", "v3_engine._metadata"),
-    "hashtag pack": ("v3_engine._metadata", "v3_engine._metadata"),
-    "silent-viewing readability": ("v3_engine._overlay_for_purpose", "v3_engine._human_editor_checks"),
-    "safe-area awareness": ("v3_engine.PLATFORM_PROFILES", "test_v3_strict_hardening.py"),
-    "retention heuristic score": ("v3_engine._heuristic_metrics", "00-INFO/V3-METRICS.md"),
-    "completion heuristic score": ("v3_engine._heuristic_metrics", "00-INFO/V3-METRICS.md"),
-    "rewatch heuristic score": ("v3_engine._heuristic_metrics", "00-INFO/V3-METRICS.md"),
-    "shareability heuristic score": ("v3_engine._heuristic_metrics", "00-INFO/V3-METRICS.md"),
+    "emotion-first core idea": ("v3_engine.analyze_core_idea", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "single edit-type lock": ("v3_engine.choose_edit_type", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "visual hook": ("v3_engine.generate_hooks", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "text hook": ("v3_engine.generate_hooks", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "emotional hook": ("v3_engine.generate_hooks", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "hook A/B ranking": ("v3_engine.generate_hooks", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "purpose-driven clip plan": ("v3_engine.build_clip_plan", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "adaptive clip count": ("v3_engine.build_clip_plan", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "exact duration allocation": ("v3_engine._allocate_durations", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "2-6 word overlays": ("v3_engine._overlay_for_purpose", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "overlay de-duplication": ("v3_engine._unique_overlay", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "music energy plan": ("v3_engine.analyze_music", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "beat-grid sync": ("v3_engine.analyze_music", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
+    "drop-aware payoff": ("v3_engine.analyze_music", "v3_engine.build_retention_map", (_TEST_STRICT,)),
+    "retention event map": ("v3_engine.build_retention_map", "v3_quality.strict_render_check", (_TEST_STRICT,)),
+    "1-3 second visual change rule": ("v3_quality.strict_render_check", "v3_quality.strict_render_check", (_TEST_STRICT,)),
+    "camera motion planning": ("edit_planner._adaptive_motion_transition", "effects_engine.build_cinematic_filter", (_TEST_EFFECTS,)),
+    "transition restraint": ("edit_planner._adaptive_motion_transition", "effects_engine.build_cinematic_filter", (_TEST_EFFECTS,)),
+    "human-editor reject pass": ("edit_planner.choose_scene", "edit_planner.choose_scene", (_TEST_STRICT,)),
+    "dead-moment detection": ("v3_quality.strict_render_check", "v3_quality.strict_render_check", (_TEST_STRICT,)),
+    "repetition detection": ("v3_engine._human_editor_checks", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "AI-slideshow guard": ("v3_quality.strict_render_check", "v3_quality.strict_render_check", (_TEST_STRICT,)),
+    "payoff validation": ("v3_engine._human_editor_checks", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "hook-payoff continuity": ("v3_engine._human_editor_checks", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "platform-safe variants": ("v3_engine.platform_variants", "v3_engine.platform_variants", (_TEST_STRICT,)),
+    "9:16 Shorts profile": ("v3_engine.PLATFORM_PROFILES", "v3_engine.platform_variants", (_TEST_STRICT,)),
+    "9:16 TikTok profile": ("v3_engine.PLATFORM_PROFILES", "v3_engine.platform_variants", (_TEST_STRICT,)),
+    "9:16 Reels profile": ("v3_engine.PLATFORM_PROFILES", "v3_engine.platform_variants", (_TEST_STRICT,)),
+    "1:1 social profile": ("v3_engine.PLATFORM_PROFILES", "v3_engine.platform_variants", (_TEST_STRICT,)),
+    "16:9 long-form profile": ("v3_engine.PLATFORM_PROFILES", "v3_engine.platform_variants", (_TEST_STRICT,)),
+    "thumbnail concept": ("v3_engine._metadata", "v3_engine._metadata", (_TEST_STRICT,)),
+    "title laboratory": ("v3_engine._metadata", "v3_engine._metadata", (_TEST_STRICT,)),
+    "description generator": ("v3_engine._metadata", "v3_engine._metadata", (_TEST_STRICT,)),
+    "hashtag pack": ("v3_engine._metadata", "v3_engine._metadata", (_TEST_STRICT,)),
+    "silent-viewing readability": ("v3_engine._overlay_for_purpose", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "safe-area awareness": ("v3_engine.PLATFORM_PROFILES", "v3_engine.platform_variants", (_TEST_STRICT,)),
+    "retention heuristic score": ("v3_engine._heuristic_metrics", "v3_engine._heuristic_metrics", (_TEST_STRICT,)),
+    "completion heuristic score": ("v3_engine._heuristic_metrics", "v3_engine._heuristic_metrics", (_TEST_STRICT,)),
+    "rewatch heuristic score": ("v3_engine._heuristic_metrics", "v3_engine._heuristic_metrics", (_TEST_STRICT,)),
+    "shareability heuristic score": ("v3_engine._heuristic_metrics", "v3_engine._heuristic_metrics", (_TEST_STRICT,)),
 }
 
 CAPABILITIES: Mapping[str, CapabilitySpec] = {
-    key: CapabilitySpec(
-        key=key,
-        implementation=implementation,
-        validator=validator,
-        tests=(validator,),
-    )
-    for key, (implementation, validator) in _EVIDENCE.items()
+    key: CapabilitySpec(key=key, implementation=implementation, validator=validator, tests=tests)
+    for key, (implementation, validator, tests) in _EVIDENCE.items()
 }
 
 
@@ -95,5 +91,5 @@ def validate_capabilities() -> None:
             raise ValueError(f"V3 capability missing evidence: {spec.key}")
         if spec.status != "implemented":
             raise ValueError(f"V3 capability is not release-ready: {spec.key}")
-        if "." in spec.implementation and "+" not in spec.implementation:
-            _resolve_symbol(spec.implementation)
+        _resolve_symbol(spec.implementation)
+        _resolve_symbol(spec.validator)
