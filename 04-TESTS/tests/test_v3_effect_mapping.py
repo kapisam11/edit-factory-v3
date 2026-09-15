@@ -1,3 +1,6 @@
+import shutil
+import subprocess
+
 import pytest
 
 from ai_video_factory.effects_engine import build_cinematic_filter
@@ -29,6 +32,27 @@ def test_v3_filter_rejects_invalid_inputs():
         build_cinematic_filter(0, "Hook", 0.0)
     with pytest.raises(ValueError):
         build_cinematic_filter(0, "Hook", 2.0, target_size=(0, 1920))
+
+
+@pytest.mark.integration
+def test_v3_motion_filter_executes_in_ffmpeg(tmp_path):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is unavailable")
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "output.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24",
+            "-t", "1", "-c:v", "libx264", str(source),
+        ],
+        check=True,
+    )
+    graph = build_cinematic_filter(1, "Climax [tracking]", 1.0, target_size=(360, 640))
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-vf", graph, "-t", "0.5", "-f", "null", "-"],
+        check=True,
+    )
 
 
 def test_v3_unknown_directive_does_not_corrupt_filter_chain():
