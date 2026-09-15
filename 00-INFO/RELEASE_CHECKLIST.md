@@ -4,17 +4,19 @@
 
 Before merging a production/hardening branch, all of the following automated checks must be green:
 
-- Python 3.9–3.12 CI test matrix
+- Python 3.10–3.13 CI test matrix
 - repository-wide Ruff checks for production Python
-- `python cli.py --help`, `python cli_v3.py --help`, and `aivf --help`
-- dependency audit
-- Docker build and dashboard import smoke test
+- `python 01-MAIN-CODE/cli.py --help`, `python 01-MAIN-CODE/cli_v3.py --help`, `aivf --help`, and `aivf-v3 --help`
+- dependency audit with the same resolved environment used by CI
+- Docker build and dashboard health/import smoke test
 - dashboard authentication test
 - secret persistence/API redaction tests
 - malicious upload/path tests
 - real FFmpeg render integration test
 - SQLite concurrent-write test
 - final documentation review against implemented code
+
+The repository currently does **not** claim a committed dependency lockfile. Do not describe CI as using a frozen lock until a real lockfile is generated, reviewed, committed, and consumed with `--frozen`.
 
 ## Deployment acceptance gates
 
@@ -25,6 +27,6 @@ These require the actual deployment target and cannot be certified by source ins
 - one real end-to-end render using the target host's FFmpeg/FFprobe installation
 - verification of persistent `/app/state` storage (or the equivalent configured state directory)
 - verification that production secrets are supplied through the deployment environment
+- human visual acceptance of the rendered result for framing, readability, pacing, synchronization, and artistic quality
 
-Do not label a deployment "10/10 verified" until both the automated release gates and the target-host
-acceptance gates have actually passed. Source changes alone are not evidence that the runtime is healthy.
+Do not label a deployment "10/10 verified" until both the automated release gates and the target-host acceptance gates have actually passed. Source changes alone are not evidence that the runtime is healthy.
