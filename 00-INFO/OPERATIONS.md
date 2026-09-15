@@ -3,7 +3,7 @@
 ## Local development
 
 Install from the repository-root `pyproject.toml` with the extras required for the features you use. The supported
-Python floor is 3.9. FFmpeg and optional model/OCR assets are runtime dependencies; generated
+Python floor is 3.10. FFmpeg and optional model/OCR assets are runtime dependencies; generated
 media, uploads, knowledge data, SQLite state, and local tool bundles are not source artifacts.
 
 The repository contains a committed `uv.lock`, and CI consumes it with `uv sync --frozen` for reproducible dependency resolution.
