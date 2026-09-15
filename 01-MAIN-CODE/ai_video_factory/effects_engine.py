@@ -11,24 +11,26 @@ def build_cinematic_filter(
 ) -> str:
     if filter_effectiveness is None:
         filter_effectiveness = {}
+    if duration <= 0:
+        raise ValueError("duration must be positive")
 
     target_w, target_h = target_size
+    if target_w <= 0 or target_h <= 0:
+        raise ValueError("target_size must be positive")
     zoom_base = 1.04 + ((index % 4) * 0.01)
     pattern = index % 3
-    if pattern == 0:
-        x_crop = (index % 2) * 8
-        y_crop = ((index + 1) % 3) * 3
-    elif pattern == 1:
-        x_crop = ((index + 1) % 2) * 12
-        y_crop = ((index) % 3) * 4
-    else:
-        x_crop = ((index + 2) % 2) * 10
-        y_crop = ((index + 2) % 3) * 3
+    base_x = 0.5 + (0.01 * (pattern - 1))
+    base_y = 0.5 + (0.01 * ((index % 2) - 0.5))
 
+    # Always create an input larger than the output, then crop into the target.
+    # This keeps every motion directive valid across portrait, square and landscape inputs.
+    scale_w = max(target_w + 64, int(target_w * zoom_base))
+    scale_h = max(target_h + 64, int(target_h * zoom_base))
     vf = (
-        f"scale=iw*{zoom_base}:ih*{zoom_base},"
-        f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black,"
-        f"crop={target_w}:{target_h}:x={x_crop}:y={y_crop},"
+        f"scale=w={scale_w}:h={scale_h}:force_original_aspect_ratio=increase,"
+        f"crop=w={target_w}:h={target_h}:"
+        f"x='max(0,min(iw-ow,(iw-ow)*{base_x:.4f}))':"
+        f"y='max(0,min(ih-oh,(ih-oh)*{base_y:.4f}))',"
         f"eq=contrast=1.10:brightness=0.00:saturation=1.10"
     )
     label_lower = label.lower()
@@ -36,8 +38,8 @@ def build_cinematic_filter(
     def should_apply(effect_name: str, default_threshold: float = 0.75) -> bool:
         if effect_name in filter_effectiveness:
             eff = filter_effectiveness[effect_name]
-            effectiveness = eff.get("effectiveness", 0.5) if isinstance(eff, dict) else eff
-            return effectiveness >= default_threshold
+            effectiveness = eff.get("effectiveness", 0.5) if isinstance(eff, dict) else float(eff)
+            return float(effectiveness) >= default_threshold
         return True
 
     if ("jump cut" in label_lower or "impact frame" in label_lower) and should_apply("jump_cut", 0.85):
@@ -48,11 +50,14 @@ def build_cinematic_filter(
         or "punch-in" in label_lower
         or "micro-zoom" in label_lower
     ) and should_apply("zoom_effect"):
-        vf += ",zoompan=z='if(lte(on,1),1.1,1.05)':d=1:s={}x{}".format(target_w, target_h)
+        vf += f",scale=w={int(target_w*1.08)}:h={int(target_h*1.08)}:force_original_aspect_ratio=increase"
+        vf += f",crop=w={target_w}:h={target_h}:x='(iw-ow)/2':y='(ih-oh)/2'"
     if "motion blur" in label_lower and should_apply("motion_blur", 0.70):
         vf += ",tblend=all_mode='average':all_opacity=0.55"
     if "subtle shake" in label_lower and should_apply("subtle_shake", 0.80):
-        vf += f",crop={target_w}:{target_h}:x='if(gt(mod(t,0.12),0.06),{x_crop+1},{x_crop})':y='if(gt(mod(t,0.12),0.06),{y_crop+1},{y_crop})'"
+        amplitude_x = max(2, target_w // 120)
+        amplitude_y = max(2, target_h // 240)
+        vf += f",crop=w={target_w}:h={target_h}:x='max(0,min(iw-ow,(iw-ow)/2+{amplitude_x}*sin(2*PI*t/{duration:.3f})))':y='max(0,min(ih-oh,(ih-oh)/2+{amplitude_y}*cos(2*PI*t/{duration:.3f})))'"
     if "speed ramp" in label_lower and should_apply("speed_ramp", 0.82):
         vf += ",tblend=all_mode='add':all_opacity=0.18"
     if ("dissolve" in label_lower or "match cut" in label_lower or "j-cut" in label_lower) and should_apply("cinematic_transition", 0.80):
@@ -67,11 +72,9 @@ def build_cinematic_filter(
         or "reframe" in label_lower
         or "slow push" in label_lower
     ) and should_apply("pan_effect"):
-        # `pan` is an audio filter; use a time-varying crop for real video motion.
-        period = max(float(duration), 0.25)
-        x_expr = f"({x_crop})+({max(1, target_w // 90)})*sin(2*PI*t/{period:.3f})"
-        y_expr = f"({y_crop})+({max(1, target_h // 180)})*cos(2*PI*t/{period:.3f})"
-        vf += f",crop={target_w}:{target_h}:x='{x_expr}':y='{y_expr}'"
+        amplitude_x = max(4, target_w // 80)
+        amplitude_y = max(4, target_h // 160)
+        vf += f",crop=w={target_w}:h={target_h}:x='max(0,min(iw-ow,(iw-ow)/2+{amplitude_x}*sin(2*PI*t/{duration:.3f})))':y='max(0,min(ih-oh,(ih-oh)/2+{amplitude_y}*cos(2*PI*t/{duration:.3f})))'"
     if "retention accent" in label_lower and should_apply("retention_accent", 0.60):
         vf += ",eq=brightness=0.035:contrast=1.035"
     if ("hook" in label_lower or "payoff" in label_lower) and should_apply("unsharp_effect"):
