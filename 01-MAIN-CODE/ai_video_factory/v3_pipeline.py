@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from . import production_pipeline as _production_pipeline_module
 from .production_models import ProductionResult
 from .production_pipeline import run_production_pipeline
 from .scene_intelligence import analyze_video
@@ -127,6 +128,21 @@ def _validate_timeline_contract(package: Path, blueprint_payload: Dict[str, Any]
         raise RenderContractError("timeline duration diverges from V3 target")
 
 
+def _run_immutable_v3_production(*args: Any, **kwargs: Any) -> ProductionResult:
+    """Invoke the legacy orchestration without permitting its review auto-fixer to rewrite V3 plans."""
+    original_compose = _production_pipeline_module.compose_short_from_video
+
+    def compose_without_auto_fix(*compose_args: Any, **compose_kwargs: Any) -> str:
+        compose_kwargs["auto_fix"] = False
+        return original_compose(*compose_args, **compose_kwargs)
+
+    _production_pipeline_module.compose_short_from_video = compose_without_auto_fix
+    try:
+        return run_production_pipeline(*args, **kwargs)
+    finally:
+        _production_pipeline_module.compose_short_from_video = original_compose
+
+
 def run_v3_pipeline(
     input_video: str,
     topic: str,
@@ -167,7 +183,7 @@ def run_v3_pipeline(
     except Exception as exc:
         raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
 
-    result = run_production_pipeline(
+    result = _run_immutable_v3_production(
         input_video,
         topic,
         package_dir,
