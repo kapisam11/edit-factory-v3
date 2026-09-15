@@ -28,8 +28,8 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-    - name: Resolve and install development environment
-      run: uv sync --python "${{ matrix.python-version }}" --extra web --extra dev
+    - name: Install locked development environment
+      run: uv sync --frozen --python "${{ matrix.python-version }}" --extra web --extra dev
     - name: Verify environment
       run: uv pip check
     - name: Compile Python sources
@@ -94,9 +94,9 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-    - name: Resolve and install development environment
+    - name: Install locked development environment
       shell: pwsh
-      run: uv sync --python 3.12 --extra web --extra dev
+      run: uv sync --frozen --python 3.12 --extra web --extra dev
     - name: Verify environment
       shell: pwsh
       run: uv pip check
@@ -127,8 +127,8 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-    - name: Resolve and install audit environment
-      run: uv sync --python 3.12 --extra web --extra dev --extra audit
+    - name: Install locked audit environment
+      run: uv sync --frozen --python 3.12 --extra web --extra dev --extra audit
     - name: Verify environment
       run: uv pip check
     - name: Audit dependencies
