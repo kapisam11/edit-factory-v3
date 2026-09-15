@@ -16,6 +16,10 @@ PROTOTYPES = {
 }
 
 
+def _words(text: str) -> set[str]:
+    return {token for token in str(text).lower().split() if token}
+
+
 def lexical_scores(text: str) -> Dict[str, float]:
     source = str(text).lower()
     terms = {
@@ -55,18 +59,18 @@ def semantic_scores(text: str, model_name: Optional[str] = None) -> Dict[str, fl
 
 
 def semantic_similarity(query: str, document: str, model_name: Optional[str] = None) -> float:
-    """Return cosine similarity when the optional semantic model exists, else lexical recall."""
-    if not str(query).strip() or not str(document).strip():
+    """Return bounded semantic similarity with a deterministic token-overlap fallback."""
+    query_words = _words(query)
+    document_words = _words(document)
+    if not query_words or not document_words:
         return 0.0
-    if os.environ.get("AIVF_DISABLE_SEMANTIC", "").lower() in {"1", "true", "yes"}:
-        return lexical_scores(f"{query} {document}").get("curious", 0.0)
-    try:
-        score = _semantic_vector_scores(str(query), [str(document)], model_name)
-        return max(0.0, min(1.0, (score[0] + 1.0) / 2.0))
-    except Exception:
-        q = set(str(query).lower().split())
-        d = set(str(document).lower().split())
-        return len(q & d) / max(1, len(q))
+    if os.environ.get("AIVF_DISABLE_SEMANTIC", "").lower() not in {"1", "true", "yes"}:
+        try:
+            score = _semantic_vector_scores(str(query), [str(document)], model_name)[0]
+            return max(0.0, min(1.0, (score + 1.0) / 2.0))
+        except Exception:
+            pass
+    return len(query_words & document_words) / max(1, len(query_words | document_words))
 
 
 def combined_scores(topic: str, context: str = "", *, semantic_weight: float = 0.65) -> Dict[str, float]:
