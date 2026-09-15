@@ -4,7 +4,7 @@ Thanks for contributing to Edit Factory v3.
 
 ## Development setup
 
-Use Python 3.9 or newer. From the repository root:
+Use Python 3.10 or newer. From the repository root:
 
 ```bash
 python -m venv .venv
