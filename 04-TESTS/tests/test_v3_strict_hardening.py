@@ -6,6 +6,7 @@ import pytest
 
 from ai_video_factory.edit_planner import build_timeline, choose_scene
 from ai_video_factory.production_models import Scene
+from ai_video_factory.production_pipeline import _platform_aspect_ratio
 from ai_video_factory.v3_engine import EditType, V3Config, create_v3_blueprint
 from ai_video_factory.v3_quality import enforce_retention_events, normalize_duration, strict_render_check
 from ai_video_factory.v3_semantics import combined_scores, lexical_scores
@@ -32,6 +33,13 @@ def test_strict_duration_and_platform_contracts():
     with pytest.raises(ValueError, match="between 8 and 180"):
         V3Config(target_seconds=float("inf")).validate()
     assert V3Config(target_seconds=30, platform="youtube_shorts").validate() is None
+
+
+def test_platform_dimensions_drive_ratio_without_hardcoded_vertical_assumption():
+    assert _platform_aspect_ratio({"width": 1080, "height": 1920}) == "9:16"
+    assert _platform_aspect_ratio({"width": 1920, "height": 1080}) == "16:9"
+    assert _platform_aspect_ratio({"width": 1080, "height": 1080}) == "1:1"
+    assert _platform_aspect_ratio({"width": 0, "height": 1080}) == "9:16"
 
 
 def test_semantic_module_has_deterministic_fallback():
