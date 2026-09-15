@@ -42,7 +42,12 @@ def build_cinematic_filter(
 
     if ("jump cut" in label_lower or "impact frame" in label_lower) and should_apply("jump_cut", 0.85):
         vf += ",tblend=all_mode='lighten':all_opacity=0.30"
-    if ("quick zoom" in label_lower or "punchy zoom" in label_lower) and should_apply("zoom_effect"):
+    if (
+        "quick zoom" in label_lower
+        or "punchy zoom" in label_lower
+        or "punch-in" in label_lower
+        or "micro-zoom" in label_lower
+    ) and should_apply("zoom_effect"):
         vf += ",zoompan=z='if(lte(on,1),1.1,1.05)':d=1"
     if "motion blur" in label_lower and should_apply("motion_blur", 0.70):
         vf += ",tblend=all_mode='average':all_opacity=0.55"
@@ -50,11 +55,19 @@ def build_cinematic_filter(
         vf += f",crop={target_w}:{target_h}:x='if(gt(mod(t,0.12),0.06),{x_crop+1},{x_crop})':y='if(gt(mod(t,0.12),0.06),{y_crop+1},{y_crop})'"
     if "speed ramp" in label_lower and should_apply("speed_ramp", 0.82):
         vf += ",tblend=all_mode='add':all_opacity=0.18"
+    if ("dissolve" in label_lower or "match cut" in label_lower or "j-cut" in label_lower) and should_apply("cinematic_transition", 0.80):
+        vf += ",fade=t=in:st=0:d=0.08"
     if "cinematic transition" in label_lower and should_apply("cinematic_transition", 0.80):
         vf += ",fade=t=in:st=0:d=0.12"
-    if "soft settle" in label_lower and should_apply("eq_effect"):
+    if ("soft settle" in label_lower or "subtle-parallax" in label_lower) and should_apply("eq_effect"):
         vf += ",eq=gamma=1.04"
-    if ("camera move" in label_lower or "pan" in label_lower) and should_apply("pan_effect"):
+    if (
+        "camera move" in label_lower
+        or "pan" in label_lower
+        or "tracking" in label_lower
+        or "reframe" in label_lower
+        or "slow push" in label_lower
+    ) and should_apply("pan_effect"):
         vf += ",pan=x='1920/2+(iw/2-1920/2)*if(lte(t,{:.1f}),t/{:.1f},1)':y='1080/2'".format(duration, duration)
     if ("hook" in label_lower or "payoff" in label_lower) and should_apply("unsharp_effect"):
         vf += ",unsharp=3:3:0.5"
