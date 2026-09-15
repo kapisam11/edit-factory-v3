@@ -25,17 +25,20 @@
 - Retained real OS-level worker cancellation and terminal-state protection.
 - Retained SQLite WAL, busy timeouts, append-only job logs, startup reconciliation, upload validation, path containment, and runtime-only API credentials.
 - Kept authenticated dashboard access, same-origin protection for mutating browser requests, and security headers.
+- Hardened the FFmpeg/FFprobe boundary with explicit executable validation, argv-only execution, bounded timeouts, media existence checks, and strict post-render probing.
+- Fixed the render-engine regression tests to exercise real media-path validation and executable rejection rather than relying on permissive legacy behavior.
+- Aligned the supported Python floor across package metadata, CI, and operational documentation to Python 3.10–3.12.
 
 ### Tooling and deployment
 - Docker contains exactly the modules required by the production WSGI entrypoint.
-- CI validates Python 3.9–3.12, Windows-sensitive modules, dependency security, CLI entry points, and the production Docker image.
+- CI validates Python 3.10–3.12, Windows-sensitive modules, dependency security, CLI entry points, and the production Docker image.
 - Local/generated state, media, models, and tool bundles remain excluded from source control.
 - `aivf` points to the canonical `cli.py` entry point; legacy compatibility launchers remain available where required.
 
 ### Documentation
 - Production architecture documentation now names the V3 planner and one supported dashboard runtime path.
 - Historical documents and compatibility code remain explicitly separated from the supported runtime; they are not the product version.
-- The remaining release gate is target-host deployment acceptance.
+- The remaining release gate is target-host deployment acceptance after a fresh green CI run.
 
 ## 2.3.0 — 2026-09-03
 
