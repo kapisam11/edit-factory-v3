@@ -14,17 +14,21 @@ from .v3_semantics import semantic_similarity
 ROLE_EFFECTS = {
     "hook": ["impact", "quick_zoom"],
     "intro": ["subtle_zoom"],
-    "conflict": ["jump_cut", "motion"],
-    "climax": ["speed_ramp", "impact"],
-    "payoff": ["settle"],
+    "conflict": ["camera move"],
+    "climax": ["speed ramp", "impact"],
+    "payoff": ["slow push", "fade"],
 }
 
 V3_PURPOSE_ROLE = {
-    "Hook": "hook", "Setup": "intro", "Context": "intro", "Claim": "intro", "Question": "intro",
-    "Curiosity": "conflict", "Memory": "conflict", "Contrast": "conflict", "Trait": "conflict",
-    "Evidence": "conflict", "Threat": "conflict", "Importance": "climax", "Escalation": "climax",
-    "Climax": "climax", "Punchline": "payoff", "Payoff": "payoff", "Proof": "payoff",
-    "Final impact": "payoff", "Reaction": "payoff",
+    "Hook": "hook",
+    "Threat": "conflict",
+    "Escalation": "climax",
+    "Climax": "climax",
+    "Payoff": "payoff",
+    "Punchline": "payoff",
+    "Final impact": "payoff",
+    "Memory": "intro",
+    "Tribute": "payoff",
 }
 
 
@@ -37,7 +41,7 @@ def _overlap_score(a: str, b: str) -> float:
     bb = set(_tokenize(b))
     if not aa or not bb:
         return 0.0
-    return len(aa & bb) / len(aa)
+    return len(aa & bb) / max(1, len(aa))
 
 
 def _sentences(script: str) -> List[str]:
@@ -64,16 +68,16 @@ def _fit_script_to_beats(script: str, count: int) -> List[str]:
 def _role_for_index(index: int, count: int) -> str:
     if count <= 1:
         return "hook"
-    position = index / max(1, count - 1)
+    ratio = index / max(1, count - 1)
     if index == 0:
         return "hook"
-    if position < 0.25:
-        return "intro"
-    if position < 0.55:
-        return "conflict"
-    if position < 0.82:
+    if ratio >= 0.88:
+        return "payoff"
+    if ratio >= 0.65:
         return "climax"
-    return "payoff"
+    if ratio >= 0.4:
+        return "conflict"
+    return "intro"
 
 
 def _desired_duration(total: float, index: int, count: int) -> float:
@@ -87,15 +91,29 @@ def _desired_duration(total: float, index: int, count: int) -> float:
     return max(1.0, total * weights[index] / (sum(weights) or 1.0))
 
 
-def choose_scene(query: str, scenes: Sequence[Scene], used_ids: Iterable[str], desired_seconds: float, role: str, *, min_match_score: float = 0.15) -> Tuple[Scene, float]:
-    """Rank footage while requiring independent semantic/lexical relevance before bonuses can win."""
+def choose_scene(
+    query: str,
+    scenes: Sequence[Scene],
+    used_ids: Iterable[str],
+    desired_seconds: float,
+    role: str,
+    *,
+    min_match_score: float = 0.15,
+    allow_reuse: bool = True,
+) -> Tuple[Scene, float]:
+    """Rank footage and optionally reject repeated scenes when unique coverage is required."""
     used = set(used_ids)
-    candidates = [s for s in scenes if s.id not in used] or list(scenes)
-    if not candidates:
+    available = [scene for scene in scenes if scene.id not in used]
+    if not available:
+        if not allow_reuse:
+            raise ValueError("No unused scenes remain; V3 refuses to repeat footage to fill a beat")
+        available = list(scenes)
+    if not available:
         raise ValueError("No scenes are available for planning")
+
     ranked: List[Tuple[float, Scene]] = []
     best_relevance = 0.0
-    for scene in candidates:
+    for scene in available:
         lexical = _overlap_score(query, scene.searchable_text)
         semantic = semantic_similarity(query, scene.searchable_text)
         relevance = 0.45 * lexical + 0.55 * semantic
@@ -109,7 +127,7 @@ def choose_scene(query: str, scenes: Sequence[Scene], used_ids: Iterable[str], d
             role_bonus = 0.10 * (1.0 - scene.motion_score) + 0.15 * scene.face_count / max(1, scene.face_count + 1)
         elif role == "hook":
             role_bonus = 0.20 * scene.importance_score
-        freshness = 0.10 if scene.id not in used else -0.15
+        freshness = 0.10
         value = 0.20 * lexical + 0.25 * semantic + 0.25 * salience + 0.15 * duration_fit + role_bonus + freshness
         ranked.append((value, scene))
     if best_relevance < min_match_score:
@@ -255,7 +273,7 @@ def build_timeline(script: str, scenes: Sequence[Scene], *, total_seconds: Optio
                 pass
 
         query = " ".join(part for part in (sentence, str(directive.get("visual_style", "")), purpose) if part)
-        scene, score = choose_scene(query, scenes, used, desired, role, min_match_score=min_match)
+        scene, score = choose_scene(query, scenes, used, desired, role, min_match_score=min_match, allow_reuse=not bool(clip_plan))
         used.append(scene.id)
         source_duration = min(max(0.4, scene.duration), max(0.4, desired))
         source_start = scene.start
