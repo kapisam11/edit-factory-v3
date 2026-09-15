@@ -128,6 +128,15 @@ def run_v3_pipeline(
             if not render_report["ok"]:
                 result.errors.extend("V3 render QC: " + error for error in render_report["errors"])
             result.warnings.extend("V3 render QC: " + warning for warning in render_report["warnings"])
+            metadata_path = package / "metadata.json"
+            if metadata_path.exists():
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata["v3_render_qc"] = render_report
+                metadata["warnings"] = result.warnings
+                metadata["errors"] = result.errors
+                metadata_path.write_text(
+                    json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
         except RenderContractError as exc:
             result.errors.append(f"V3 render contract failed: {exc}")
 
