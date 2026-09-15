@@ -37,35 +37,28 @@ def _validate_provider_key(provider: str, key: str) -> None:
         raise ValueError("API key appears to belong to groq, not openai")
 
 
-def _request_chat(url: str, key: str, model: str, prompt: str, timeout: int) -> tuple[str, int]:
+def _request_chat(url: str, key: str, model: str, prompt: str, timeout: int) -> str:
     import requests
 
     try:
         response = requests.post(
             url,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7,
-                "max_tokens": 800,
-            },
+            json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.7, "max_tokens": 800},
             timeout=timeout,
         )
     except requests.RequestException as exc:
-        raise ModelCallError(f"model request transport failure: {type(exc).__name__}") from exc
-
+        raise _RetryableModelError(f"model request transport failure: {type(exc).__name__}") from exc
     status = response.status_code
     if status == 429 or 500 <= status <= 599:
-        detail = response.text[-300:] if response.text else ""
-        raise _RetryableModelError(f"provider returned retryable HTTP {status}: {detail}")
+        raise _RetryableModelError(f"provider returned retryable HTTP {status}")
     if status >= 400:
         raise ModelCallError(f"provider returned HTTP {status}")
     try:
         payload = response.json()
     except ValueError as exc:
         raise ModelCallError("provider returned invalid JSON") from exc
-    return _extract_chat_content(payload), status
+    return _extract_chat_content(payload)
 
 
 class _RetryableModelError(ModelCallError):
@@ -82,7 +75,7 @@ def _call_with_retry(prompt: str, key: str, provider: str, timeout: int, max_ret
     for attempt in range(max_retries + 1):
         attempts = attempt + 1
         try:
-            text, _ = _request_chat(url, key, model, prompt, timeout)
+            text = _request_chat(url, key, model, prompt, timeout)
             if not text.strip():
                 return ModelResult(False, provider=provider, error_type="empty_response", message="Provider returned no text", attempts=attempts)
             return ModelResult(True, text=text, provider=provider, attempts=attempts)
@@ -92,10 +85,6 @@ def _call_with_retry(prompt: str, key: str, provider: str, timeout: int, max_ret
             time.sleep(min(2 ** attempt, 4))
         except ModelCallError as exc:
             return ModelResult(False, provider=provider, error_type=type(exc).__name__, message=str(exc), attempts=attempts, retryable=False)
-        except (TimeoutError, OSError) as exc:
-            if attempt >= max_retries:
-                return ModelResult(False, provider=provider, error_type=type(exc).__name__, message="model provider timed out or failed", attempts=attempts, retryable=True)
-            time.sleep(min(2 ** attempt, 4))
     return ModelResult(False, provider=provider, error_type="unknown", message="model provider failed", attempts=attempts)
 
 
@@ -136,6 +125,7 @@ def call_model(prompt: str, api_key: Optional[str] = None, timeout: int = 15,
     result = call_model_result(prompt, api_key=api_key, timeout=timeout, provider=provider)
     if result.success:
         return result.text
-    if result.error_type == "not_configured":
+    # Model-backed editing must degrade to the deterministic planner on transient provider failures.
+    if result.error_type in {"not_configured", "empty_response", "_RetryableModelError"} or result.retryable:
         return ""
     raise ModelCallError(result.message or "model request failed")
