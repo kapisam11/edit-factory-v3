@@ -60,13 +60,12 @@ _EVIDENCE = {
     "shareability heuristic score": ("v3_engine._heuristic_metrics", "00-INFO/V3-METRICS.md"),
 }
 
-_CAPABILITY_NAMES = tuple(_EVIDENCE)
 CAPABILITIES: Mapping[str, CapabilitySpec] = {
     key: CapabilitySpec(
         key=key,
         implementation=implementation,
         validator=validator,
-        tests=(test,) if test.endswith(".py") or test.endswith(".md") else ("test_v3_strict_hardening.py",),
+        tests=(validator,),
     )
     for key, (implementation, validator) in _EVIDENCE.items()
 }
