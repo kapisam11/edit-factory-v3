@@ -1,4 +1,4 @@
-"""Edit Factory v3 production wrapper."""
+"""Edit Factory v3 production wrapper with strict release contracts."""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from .production_models import ProductionResult
 from .production_pipeline import run_production_pipeline
+from .v3_capabilities import validate_capabilities
 from .v3_engine import V3Config, create_v3_blueprint, validate_blueprint
 from .v3_quality import RenderContractError, normalize_duration, strict_render_check
 
@@ -74,6 +75,7 @@ def run_v3_pipeline(
     enable_diarization: bool = False,
     diarization_token: Optional[str] = None,
 ) -> ProductionResult:
+    validate_capabilities()
     config = V3Config(target_seconds=target_seconds, platform=platform, audience=audience, bpm=bpm)
     blueprint = create_v3_blueprint(topic, context=context, config=config, edit_type=edit_type)
     validate_blueprint(blueprint)
@@ -116,7 +118,9 @@ def run_v3_pipeline(
                 platform_profile=profile,
                 retention_events=payload.get("retention_map", []),
             )
-            (package / "v3_render_qc.json").write_text(json.dumps(render_report, indent=2, ensure_ascii=False), encoding="utf-8")
+            (package / "v3_render_qc.json").write_text(
+                json.dumps(render_report, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
             if not render_report["ok"]:
                 result.errors.extend("V3 render QC: " + error for error in render_report["errors"])
             result.warnings.extend("V3 render QC: " + warning for warning in render_report["warnings"])
@@ -126,7 +130,9 @@ def run_v3_pipeline(
                 metadata["v3_render_qc"] = render_report
                 metadata["warnings"] = result.warnings
                 metadata["errors"] = result.errors
-                metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+                metadata_path.write_text(
+                    json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
         except RenderContractError as exc:
             result.errors.append(f"V3 render contract failed: {exc}")
 
@@ -134,4 +140,5 @@ def run_v3_pipeline(
     if isinstance(result.artifacts, dict):
         result.artifacts["v3_blueprint"] = str(blueprint_path)
         result.artifacts["v3_render_qc"] = str(package / "v3_render_qc.json")
+        result.artifacts["v3_acceptance_matrix"] = "00-INFO/24-POINT-ACCEPTANCE.md"
     return result
