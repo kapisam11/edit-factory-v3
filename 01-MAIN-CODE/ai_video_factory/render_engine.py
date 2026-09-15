@@ -79,12 +79,15 @@ def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bo
 
 
 def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str) -> None:
-    """Render a beat and pad short source media so requested beat duration is never silently lost."""
+    """Render one requested timeline beat without double-applying source offsets."""
     if duration <= 0:
         raise ValueError("render duration must be positive")
     encoder = choose_encoder()
     candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc") else ["libx264"]
     last_error = None
+    # generate_clip_paths() already trims each clip to its source timeline range.
+    # Seeking by the original timeline offset again would therefore seek twice.
+    seek_start = 0.0 if Path(src_clip).parent.name == "_clips" else max(0.0, ss)
     for selected in candidates:
         extra = (
             ["-preset", "p5", "-rc", "vbr_hq", "-b:v", "6000k"]
@@ -93,7 +96,7 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
         )
         vf_full = f"{vf},tpad=stop_mode=clone:stop_duration={float(duration):.3f}"
         cmd = [
-            "ffmpeg", "-y", "-ss", str(max(0.0, ss)), "-i", src_clip, "-t", str(duration),
+            "ffmpeg", "-y", "-ss", str(seek_start), "-i", src_clip, "-t", str(duration),
             "-vf", vf_full, "-af", "apad", "-c:v", selected, *extra,
             "-c:a", "aac", "-b:a", "128k", "-shortest", dst,
         ]
