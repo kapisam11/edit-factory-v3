@@ -60,8 +60,11 @@ def test_v3_directives_reach_real_timeline():
             id=f"scene_{i}",
             start=float(i * 3),
             end=float((i + 1) * 3),
-            description=f"Scene {i} with a person and action",
-            transcript=f"Line {i}",
+            description=(
+                f"Scene {i} with a person and action; result before context hook beat, "
+                "context build escalation climax payoff."
+            ),
+            transcript=f"Line {i} with result context hook and action",
             motion_score=0.6,
             importance_score=0.7,
         )
