@@ -121,14 +121,22 @@ def _validate_v3_inputs(input_video: str, topic: str, target_seconds: float, pla
         raise RenderContractError("V3 input video is empty")
     if not str(topic).strip() or len(str(topic)) > 500:
         raise ValueError("topic must be non-empty and <= 500 characters")
-    if not math.isfinite(float(target_seconds)) or not 0.25 <= float(target_seconds) <= 300.0:
-        raise ValueError("target_seconds must be between 0.25 and 300")
+    try:
+        target = float(target_seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("target_seconds must be numeric") from exc
+    if not math.isfinite(target) or not 8.0 <= target <= 180.0:
+        raise ValueError("target_seconds must be between 8 and 180 seconds")
     if not str(platform).strip() or len(str(platform)) > 64:
         raise ValueError("platform must be non-empty and <= 64 characters")
     if not str(audience).strip() or len(str(audience)) > 500:
         raise ValueError("audience must be non-empty and <= 500 characters")
-    if not 30 <= int(bpm) <= 240:
-        raise ValueError("bpm must be between 30 and 240")
+    try:
+        bpm_value = int(bpm)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("bpm must be an integer") from exc
+    if not 40 <= bpm_value <= 240:
+        raise ValueError("bpm must be between 40 and 240")
 
 
 def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: str = "", target_seconds: float = 30.0,
