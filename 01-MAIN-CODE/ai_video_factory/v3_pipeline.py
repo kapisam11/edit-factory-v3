@@ -14,6 +14,22 @@ from .v3_engine import V3Config, create_v3_blueprint, validate_blueprint
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
 
 
+def _audience_profile(audience: str) -> Dict[str, Any]:
+    """Turn the audience string into explicit planning preferences consumed by the script planner."""
+    text = str(audience or "general short-form viewers").lower()
+    profiles = [
+        (("comedy", "funny", "humor", "meme"), {"tone": "playful", "pacing": "fast", "hook": "reaction_or_surprise", "caption_style": "punchy"}),
+        (("anime", "manga", "otaku"), {"tone": "dramatic", "pacing": "fast", "hook": "character_or_reveal", "caption_style": "punchy"}),
+        (("gaming", "gamer", "minecraft", "fortnite"), {"tone": "energetic", "pacing": "fast", "hook": "moment_or_payoff", "caption_style": "high_contrast"}),
+        (("history", "documentary", "facts", "science", "education"), {"tone": "informative", "pacing": "measured", "hook": "evidence_or_question", "caption_style": "clear"}),
+        (("business", "finance", "entrepreneur", "marketing"), {"tone": "direct", "pacing": "tight", "hook": "claim_or_result", "caption_style": "minimal"}),
+    ]
+    for markers, profile in profiles:
+        if any(marker in text for marker in markers):
+            return {"label": audience, **profile}
+    return {"label": audience, "tone": "accessible", "pacing": "balanced", "hook": "curiosity_or_emotion", "caption_style": "readable"}
+
+
 def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     core = payload["core_idea"]
     best_hook = payload["hooks"][0] if payload.get("hooks") else {}
@@ -21,6 +37,8 @@ def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: 
     total_seconds = float(clip_plan[-1]["end"]) if clip_plan else 30.0
     avg_shot = total_seconds / max(1, len(clip_plan))
     profile = payload.get("platform_variants", {}).get(payload.get("platform", "youtube_shorts"), {})
+    audience = payload.get("audience", "general short-form viewers")
+    audience_profile = _audience_profile(audience)
     return {
         "topic": core["topic"],
         "emotion": core["target_emotion"],
@@ -42,7 +60,8 @@ def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: 
         "v3_retention_score": payload["metrics"]["retention_score"],
         "thumbnail": payload.get("thumbnail_concept", ""),
         "platform": payload.get("platform", "youtube_shorts"),
-        "audience": payload.get("audience", "general short-form viewers"),
+        "audience": audience,
+        "audience_profile": audience_profile,
         "platform_profile": profile,
         "footage_evidence": footage_evidence or {},
         "v3_directives": {
@@ -52,6 +71,8 @@ def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: 
             "hooks": payload.get("hooks", []),
             "platform": payload.get("platform", "youtube_shorts"),
             "platform_profile": profile,
+            "audience": audience,
+            "audience_profile": audience_profile,
             "min_scene_match_score": 0.15,
             "disable_templates": True,
             "blueprint_contract": "3.0.0",
@@ -191,9 +212,7 @@ def run_v3_pipeline(
                 metadata["v3_timeline_contract"] = "passed"
                 metadata["warnings"] = result.warnings
                 metadata["errors"] = result.errors
-                metadata_path.write_text(
-                    json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
-                )
+                metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
         except RenderContractError as exc:
             result.errors.append(f"V3 render contract failed: {exc}")
 
