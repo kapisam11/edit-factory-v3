@@ -6,12 +6,14 @@ production renderer instead of treating the blueprint as reporting metadata.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .production_models import ProductionResult
 from .production_pipeline import run_production_pipeline
 from .v3_engine import V3Config, create_v3_blueprint, validate_blueprint
+from .v3_quality import RenderContractError, normalize_duration, strict_render_check
 
 
 def _research_summary_from_blueprint(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,6 +92,9 @@ def run_v3_pipeline(
     payload["platform"] = platform
     blueprint_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    if skip_qc and os.environ.get("AIVF_ALLOW_SKIP_QC") != "1":
+        raise ValueError("skip_qc is disabled for strict v3 production; set AIVF_ALLOW_SKIP_QC=1 only for development")
+
     result = run_production_pipeline(
         input_video,
         topic,
@@ -105,6 +110,27 @@ def run_v3_pipeline(
         diarization_token=diarization_token,
         platform=platform,
     )
+    if result.final_video and not result.errors:
+        try:
+            profile = payload["platform_variants"][platform]
+            normalized_path = str(package / "final.v3.mp4")
+            normalize_duration(result.final_video, normalized_path, target_seconds)
+            os.replace(normalized_path, result.final_video)
+            render_report = strict_render_check(
+                result.final_video,
+                target_seconds=target_seconds,
+                platform_profile=profile,
+                retention_events=payload.get("retention_map", []),
+            )
+            (package / "v3_render_qc.json").write_text(
+                json.dumps(render_report, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            if not render_report["ok"]:
+                result.errors.extend("V3 render QC: " + error for error in render_report["errors"])
+            result.warnings.extend("V3 render QC: " + warning for warning in render_report["warnings"])
+        except RenderContractError as exc:
+            result.errors.append(f"V3 render contract failed: {exc}")
+
     result.artifacts = getattr(result, "artifacts", {}) or {}
     if isinstance(result.artifacts, dict):
         result.artifacts["v3_blueprint"] = str(blueprint_path)
