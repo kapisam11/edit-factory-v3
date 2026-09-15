@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from typing import Dict, Optional, Sequence
 
@@ -17,7 +18,7 @@ PROTOTYPES = {
 
 
 def _words(text: str) -> set[str]:
-    return {token for token in str(text).lower().split() if token}
+    return set(re.findall(r"[a-z0-9']+", str(text).lower()))
 
 
 def lexical_scores(text: str) -> Dict[str, float]:
@@ -53,13 +54,13 @@ def semantic_scores(text: str, model_name: Optional[str] = None) -> Dict[str, fl
         return lexical_scores(text)
     try:
         scores = _semantic_vector_scores(text, list(PROTOTYPES.values()), model_name)
-        return {emotion: score for emotion, score in zip(EMOTIONS, scores)}
+        return {emotion: max(-1.0, min(1.0, score)) for emotion, score in zip(EMOTIONS, scores)}
     except Exception:
         return lexical_scores(text)
 
 
 def semantic_similarity(query: str, document: str, model_name: Optional[str] = None) -> float:
-    """Return bounded semantic similarity with a deterministic token-overlap fallback."""
+    """Return a 0..1 relevance score whose zero point represents no positive semantic evidence."""
     query_words = _words(query)
     document_words = _words(document)
     if not query_words or not document_words:
@@ -67,7 +68,7 @@ def semantic_similarity(query: str, document: str, model_name: Optional[str] = N
     if os.environ.get("AIVF_DISABLE_SEMANTIC", "").lower() not in {"1", "true", "yes"}:
         try:
             score = _semantic_vector_scores(str(query), [str(document)], model_name)[0]
-            return max(0.0, min(1.0, (score + 1.0) / 2.0))
+            return max(0.0, min(1.0, score))
         except Exception:
             pass
     return len(query_words & document_words) / max(1, len(query_words | document_words))
