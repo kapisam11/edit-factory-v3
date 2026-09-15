@@ -3,11 +3,11 @@
 This document records the state of the hostile-review remediation branch. It is intentionally not a claim of release approval.
 
 - V3 hardening branch: `hardening/v3-true-10-10`
-- The original V3 hardening PR was merged as commit `3d211fd74cfd323d646a92237776d2b06358091f`.
+- The original V3 hardening PR was merged as commit `3d211fd74cfdce36fa0808fc646674b6073f2688`.
 - Current remediation continues on the hardening branch after that merge.
-- Python support remains 3.9+ and the locked CI matrix exercises Python 3.9–3.12.
+- Python support is 3.10+ and the locked CI matrix exercises Python 3.10–3.12.
 - A committed `uv.lock` is present and CI installs it with `uv sync --frozen` for reproducible dependency resolution.
-- FFmpeg/FFprobe subprocesses use argv-style execution and bounded timeouts in the hardened media modules.
+- FFmpeg/FFprobe subprocesses use argv-style execution and bounded timeouts in the hardened media modules, with explicit executable validation.
 - V3 no longer monkey-patches the production pipeline's module-global renderer callback; V3 disables legacy auto-fix through an explicit function argument.
 - V3 input validation aligns with the blueprint contract: target duration 8–180 seconds, BPM 40–240, bounded text inputs, and regular non-empty source files.
 - Media QC validates the presence of a video stream, positive duration/dimensions, target dimensions and duration, and observed visual changes near retention events.
