@@ -13,18 +13,19 @@ This document records the current evidence state of Edit Factory v3. It intentio
 - Subtitle drawtext text escapes FFmpeg filter metacharacters and subtitle probing fails closed instead of inventing a duration.
 - Real render integration tests and adversarial V3 contract tests exist, with the V3 coverage gate raised to 60% in CI.
 - Python support is declared as 3.10+ and CI targets Python 3.10–3.13.
+- A committed `uv.lock` is present and release CI consumes it with `uv sync --frozen`.
+- Model-provider failures use bounded retries for transient HTTP/transport failures and degrade to deterministic planning when the provider remains unavailable.
 - Docker runs the production WSGI service as the dedicated non-root `aivf` user.
 
 ## Current limitations that block release certification
 
-- There is currently no committed dependency lockfile. The historical `uv.lock` was empty and was removed rather than treating an empty file as reproducibility evidence. CI therefore resolves dependencies during each run.
-- A fresh pull-request CI run for the current hardening branch has not yet been completed; the previous V3 hardening PR was already merged before this remediation pass.
+- A fresh pull-request CI run is in progress for the current hardening head; certification waits for every required job to finish green.
 - Repository-only inspection cannot certify artistic quality. A real rendered video still requires human visual acceptance.
 - Target-host cancellation, restart/reconciliation, persistent-volume, and production-secret checks remain deployment acceptance gates.
 
 ## Historical notes
 
-Some older documents describe Python 3.9 support or frozen dependency environments. Those statements are historical and must not be treated as current release requirements until they are explicitly updated.
+Some older documents describe Python 3.9 support or unfrozen dependency resolution. Those statements are historical and must not be treated as current release requirements.
 
 ## Release rule
 
