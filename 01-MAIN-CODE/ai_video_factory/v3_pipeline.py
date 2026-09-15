@@ -8,12 +8,13 @@ from typing import Any, Dict, Optional
 
 from .production_models import ProductionResult
 from .production_pipeline import run_production_pipeline
+from .scene_intelligence import analyze_video
 from .v3_capabilities import validate_capabilities
 from .v3_engine import V3Config, create_v3_blueprint, validate_blueprint
-from .v3_quality import RenderContractError, normalize_duration, strict_render_check
+from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
 
 
-def _research_summary_from_blueprint(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     core = payload["core_idea"]
     best_hook = payload["hooks"][0] if payload.get("hooks") else {}
     clip_plan = payload.get("clip_plan", [])
@@ -41,7 +42,9 @@ def _research_summary_from_blueprint(payload: Dict[str, Any]) -> Dict[str, Any]:
         "v3_retention_score": payload["metrics"]["retention_score"],
         "thumbnail": payload.get("thumbnail_concept", ""),
         "platform": payload.get("platform", "youtube_shorts"),
+        "audience": payload.get("audience", "general short-form viewers"),
         "platform_profile": profile,
+        "footage_evidence": footage_evidence or {},
         "v3_directives": {
             "edit_type": payload["edit_type"],
             "clip_plan": clip_plan,
@@ -49,11 +52,58 @@ def _research_summary_from_blueprint(payload: Dict[str, Any]) -> Dict[str, Any]:
             "hooks": payload.get("hooks", []),
             "platform": payload.get("platform", "youtube_shorts"),
             "platform_profile": profile,
-            "min_scene_match_score": 0.05,
+            "min_scene_match_score": 0.15,
             "disable_templates": True,
             "blueprint_contract": "3.0.0",
         },
     }
+
+
+def _build_footage_evidence(input_video: str, enable_ocr: bool) -> Dict[str, Any]:
+    """Analyze source footage before script generation so planning is footage-aware from the start."""
+    scenes = analyze_video(input_video, sample_seconds=2.5, enable_ocr=enable_ocr)
+    ranked = sorted(scenes, key=lambda scene: (scene.importance_score, scene.motion_score, scene.audio_energy), reverse=True)
+    return {
+        "scene_count": len(scenes),
+        "top_scenes": [
+            {
+                "id": scene.id,
+                "start": round(scene.start, 3),
+                "end": round(scene.end, 3),
+                "description": scene.description,
+                "transcript": scene.transcript,
+                "objects": scene.objects,
+                "text": scene.text,
+                "motion_score": round(scene.motion_score, 3),
+                "audio_energy": round(scene.audio_energy, 3),
+                "face_count": scene.face_count,
+                "importance_score": round(scene.importance_score, 3),
+            }
+            for scene in ranked[:12]
+        ],
+    }
+
+
+def _validate_timeline_contract(package: Path, blueprint_payload: Dict[str, Any], target_seconds: float) -> None:
+    timeline_path = package / "timeline.json"
+    if not timeline_path.exists():
+        raise RenderContractError("V3 timeline artifact is missing")
+    payload = json.loads(timeline_path.read_text(encoding="utf-8"))
+    segments = payload.get("segments", [])
+    clip_plan = blueprint_payload.get("clip_plan", [])
+    if not isinstance(segments, list) or len(segments) != len(clip_plan):
+        raise RenderContractError(
+            f"render timeline segment count {len(segments) if isinstance(segments, list) else 0} != blueprint beat count {len(clip_plan)}"
+        )
+    for index, (segment, beat) in enumerate(zip(segments, clip_plan), start=1):
+        if abs(float(segment.get("start", -1)) - float(beat["start"])) > 0.01:
+            raise RenderContractError(f"timeline segment {index} start diverges from blueprint")
+        if abs(float(segment.get("end", -1)) - float(beat["end"])) > 0.01:
+            raise RenderContractError(f"timeline segment {index} end diverges from blueprint")
+        if float(segment.get("end", 0)) <= float(segment.get("start", 0)):
+            raise RenderContractError(f"timeline segment {index} has non-positive duration")
+    if abs(float(payload.get("duration", 0.0)) - float(target_seconds)) > 0.01:
+        raise RenderContractError("timeline duration diverges from V3 target")
 
 
 def run_v3_pipeline(
@@ -85,17 +135,23 @@ def run_v3_pipeline(
     blueprint_path = package / "v3_blueprint.json"
     payload = blueprint.to_dict()
     payload["platform"] = platform
+    payload["audience"] = audience
     blueprint_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     if skip_qc and os.environ.get("AIVF_ALLOW_SKIP_QC") != "1":
         raise ValueError("skip_qc is disabled for strict v3 production; set AIVF_ALLOW_SKIP_QC=1 only for development")
+
+    try:
+        footage_evidence = _build_footage_evidence(input_video, enable_ocr)
+    except Exception as exc:
+        raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
 
     result = run_production_pipeline(
         input_video,
         topic,
         package_dir,
         target_seconds=target_seconds,
-        research_summary=_research_summary_from_blueprint(payload),
+        research_summary=_research_summary_from_blueprint(payload, footage_evidence),
         enable_ocr=enable_ocr,
         model_key=model_key,
         skip_qc=skip_qc,
@@ -108,10 +164,14 @@ def run_v3_pipeline(
 
     if result.final_video and not result.errors:
         try:
-            profile = payload["platform_variants"][platform]
+            _validate_timeline_contract(package, payload, target_seconds)
+            retention_path = str(package / "final.v3.retention.mp4")
+            enforce_retention_events(result.final_video, retention_path, payload.get("retention_map", []))
+            os.replace(retention_path, result.final_video)
             normalized_path = str(package / "final.v3.mp4")
             normalize_duration(result.final_video, normalized_path, target_seconds)
             os.replace(normalized_path, result.final_video)
+            profile = payload["platform_variants"][platform]
             render_report = strict_render_check(
                 result.final_video,
                 target_seconds=target_seconds,
@@ -128,6 +188,7 @@ def run_v3_pipeline(
             if metadata_path.exists():
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
                 metadata["v3_render_qc"] = render_report
+                metadata["v3_timeline_contract"] = "passed"
                 metadata["warnings"] = result.warnings
                 metadata["errors"] = result.errors
                 metadata_path.write_text(
