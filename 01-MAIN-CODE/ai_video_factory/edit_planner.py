@@ -1,9 +1,4 @@
-"""Convert a short-form script into a footage-aware edit timeline.
-
-The planner remains backward compatible with the v3 API, while accepting the
-v3 creative contract so the selected edit style and retention plan affect the
-actual render timeline.
-"""
+"""Convert a short-form script and V3 blueprint into a footage-aware edit timeline.""
 from __future__ import annotations
 
 import json
@@ -16,7 +11,6 @@ from .scene_intelligence import score_scene
 from .validation import validate_target_seconds
 
 
-ROLE_ORDER = ("hook", "intro", "conflict", "climax", "payoff")
 ROLE_EFFECTS = {
     "hook": ["impact", "quick_zoom"],
     "intro": ["subtle_zoom"],
@@ -35,7 +29,7 @@ V3_PURPOSE_ROLE = {
 
 
 def _tokenize(text: str) -> List[str]:
-    return [t.lower().strip(".,!?;:()[]{}\"'") for t in text.split() if t.strip()]
+    return re.findall(r"[a-z0-9']+", str(text).lower())
 
 
 def _overlap_score(a: str, b: str) -> float:
@@ -47,10 +41,24 @@ def _overlap_score(a: str, b: str) -> float:
 
 
 def _sentences(script: str) -> List[str]:
-    lines = [line.strip() for line in script.splitlines() if line.strip()]
-    if lines:
-        return lines
-    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
+    lines = [line.strip() for line in str(script).splitlines() if line.strip()]
+    return lines or [s.strip() for s in re.split(r"(?<=[.!?])\s+", str(script)) if s.strip()]
+
+
+def _fit_script_to_beats(script: str, count: int) -> List[str]:
+    """Map model prose onto the immutable V3 beat count without dropping content."""
+    if count <= 0:
+        return []
+    words = str(script).split()
+    if not words:
+        raise ValueError("Script is empty")
+    chunks: List[str] = []
+    for i in range(count):
+        start = round(i * len(words) / count)
+        end = round((i + 1) * len(words) / count)
+        chunk = " ".join(words[start:end]).strip()
+        chunks.append(chunk or words[min(i, len(words) - 1)])
+    return chunks
 
 
 def _role_for_index(index: int, count: int) -> str:
@@ -79,12 +87,19 @@ def _desired_duration(total: float, index: int, count: int) -> float:
     return max(1.0, total * weights[index] / (sum(weights) or 1.0))
 
 
-def choose_scene(query: str, scenes: Sequence[Scene], used_ids: Iterable[str], desired_seconds: float, role: str) -> Tuple[Scene, float]:
+def choose_scene(
+    query: str,
+    scenes: Sequence[Scene],
+    used_ids: Iterable[str],
+    desired_seconds: float,
+    role: str,
+    *,
+    min_match_score: float = 0.05,
+) -> Tuple[Scene, float]:
     used = set(used_ids)
     candidates = [s for s in scenes if s.id not in used] or list(scenes)
     if not candidates:
         raise ValueError("No scenes are available for planning")
-
     ranked: List[Tuple[float, Scene]] = []
     for scene in candidates:
         relevance = _overlap_score(query, scene.searchable_text)
@@ -102,6 +117,8 @@ def choose_scene(query: str, scenes: Sequence[Scene], used_ids: Iterable[str], d
         ranked.append((value, scene))
     ranked.sort(key=lambda item: item[0], reverse=True)
     best_score, best_scene = ranked[0]
+    if best_score < min_match_score and len(candidates) > 1:
+        raise ValueError(f"No scene meets semantic/relevance threshold for query: {query[:120]}")
     return best_scene, round(float(best_score), 4)
 
 
@@ -122,7 +139,7 @@ def _directive_effects(directive: Mapping[str, Any], role: str) -> List[str]:
         effects.append("camera move")
     elif motion == "subtle-parallax":
         effects.append("soft settle")
-    if transition in {"dissolve", "match cut"}:
+    if transition in {"dissolve", "match cut", "j-cut"}:
         effects.append("cinematic transition")
     elif transition == "speed ramp":
         effects.append("speed ramp")
@@ -130,7 +147,6 @@ def _directive_effects(directive: Mapping[str, Any], role: str) -> List[str]:
 
 
 def _validate_v3_target_seconds(value: float, field_name: str = "total_seconds", platform_profile: Optional[Mapping[str, Any]] = None) -> float:
-    """Validate the wider V3 duration contract without changing legacy callers."""
     try:
         result = float(value)
     except (TypeError, ValueError) as exc:
@@ -153,25 +169,24 @@ def build_timeline(
     source_video: Optional[str] = None,
     creative_directives: Optional[Mapping[str, Any]] = None,
 ) -> EditTimeline:
-    """Build a deterministic timeline and honor v3 creative directives when supplied."""
-    lines = _sentences(script)
-    if not lines:
+    """Build a timeline whose beat structure is controlled by the V3 blueprint when provided."""
+    if not str(script).strip():
         raise ValueError("Script is empty")
     if not scenes:
         raise ValueError("Scene index is empty")
-
     directives = creative_directives if isinstance(creative_directives, Mapping) else {}
-    if total_seconds is None:
-        target = validate_target_seconds(sum(s.duration for s in scenes[: max(1, len(lines))]), "total_seconds")
-    elif directives:
-        profile = directives.get("platform_profile")
-        target = _validate_v3_target_seconds(total_seconds, "total_seconds", profile if isinstance(profile, Mapping) else None)
+    clip_plan = directives.get("clip_plan") if isinstance(directives.get("clip_plan"), list) else []
+    if clip_plan:
+        target = _validate_v3_target_seconds(total_seconds if total_seconds is not None else clip_plan[-1].get("end", 30.0), "total_seconds", directives.get("platform_profile") if isinstance(directives.get("platform_profile"), Mapping) else None)
+        lines = _fit_script_to_beats(script, len(clip_plan))
     else:
-        target = validate_target_seconds(total_seconds, "total_seconds")
+        lines = _sentences(script)
+        target = validate_target_seconds(sum(s.duration for s in scenes[: max(1, len(lines))]), "total_seconds") if total_seconds is None else validate_target_seconds(total_seconds, "total_seconds")
 
     cursor = 0.0
     used: List[str] = []
     segments: List[TimelineSegment] = []
+    min_match = float(directives.get("min_scene_match_score", 0.05) or 0.05)
 
     for index, sentence in enumerate(lines):
         directive = _directive_for_index(directives, index)
@@ -184,12 +199,9 @@ def build_timeline(
                 desired = planned
         except (TypeError, ValueError):
             pass
-
-        visual_style = str(directive.get("visual_style", "")).strip()
-        query = " ".join(part for part in (sentence, visual_style, purpose) if part)
-        scene, score = choose_scene(query, scenes, used, desired, role)
+        query = " ".join(part for part in (sentence, str(directive.get("visual_style", "")), purpose) if part)
+        scene, score = choose_scene(query, scenes, used, desired, role, min_match_score=min_match)
         used.append(scene.id)
-
         available = max(0.4, scene.duration)
         source_duration = min(available, max(0.4, desired))
         source_start = scene.start
@@ -197,7 +209,6 @@ def build_timeline(
         actual_duration = source_end - source_start
         target_start = cursor
         target_end = cursor + actual_duration
-
         effects = _directive_effects(directive, role)
         motion = str(directive.get("camera_motion", "")).strip()
         transition = str(directive.get("transition", "")).strip()
@@ -205,39 +216,30 @@ def build_timeline(
         label = f"{role.title()} - {sentence[:70]}"
         if directive_label:
             label += f" [{directive_label}]"
-
-        segments.append(
-            TimelineSegment(
-                id=f"edit_{index:03d}",
-                role=role,
-                start=round(target_start, 3),
-                end=round(target_end, 3),
-                source_scene_id=scene.id,
-                source_start=round(source_start, 3),
-                source_end=round(source_end, 3),
-                label=label,
-                transcript=sentence,
-                caption_emphasis=[w for w in _tokenize(sentence) if len(w) >= 7][:4],
-                effects=effects,
-                score=score,
-            )
-        )
+        segments.append(TimelineSegment(
+            id=f"edit_{index:03d}", role=role, start=round(target_start, 3), end=round(target_end, 3),
+            source_scene_id=scene.id, source_start=round(source_start, 3), source_end=round(source_end, 3),
+            label=label, transcript=sentence,
+            caption_emphasis=[w for w in _tokenize(sentence) if len(w) >= 7][:4], effects=effects, score=score,
+        ))
         cursor = target_end
 
-    timeline = EditTimeline(
-        duration=round(cursor, 3),
-        aspect_ratio=aspect_ratio,
-        segments=segments,
-        source_video=source_video,
-    )
+    # The V3 planner has an immutable exact target. If a source shot is shorter than a beat,
+    # preserve the requested beat duration and let the renderer's padding/stretch contract fulfill it.
+    if clip_plan:
+        segments[-1].end = round(segments[-1].end + (target - cursor), 3)
+        cursor = target
+
+    timeline = EditTimeline(duration=round(cursor, 3), aspect_ratio=aspect_ratio, segments=segments, source_video=source_video)
     errors = timeline.validate()
     if errors:
         raise ValueError("Invalid edit timeline: " + "; ".join(errors))
+    if clip_plan and abs(timeline.duration - target) > 0.01:
+        raise ValueError(f"V3 timeline duration mismatch: {timeline.duration:.3f} != {target:.3f}")
     return timeline
 
 
 def timeline_to_composer_plan(timeline: EditTimeline) -> List[Tuple[float, str]]:
-    """Return the legacy composer plan format while preserving new timeline data."""
     return [(round(s.duration, 3), s.label) for s in timeline.segments]
 
 
@@ -254,11 +256,7 @@ def load_timeline(path: str) -> EditTimeline:
         payload = json.load(handle)
     segments = [TimelineSegment(**segment) for segment in payload.get("segments", [])]
     return EditTimeline(
-        duration=float(payload.get("duration", 0.0)),
-        aspect_ratio=str(payload.get("aspect_ratio", "9:16")),
-        source_video=payload.get("source_video"),
-        music_path=payload.get("music_path"),
-        voiceover_path=payload.get("voiceover_path"),
-        version=int(payload.get("version", 1)),
-        segments=segments,
+        duration=float(payload.get("duration", 0.0)), aspect_ratio=str(payload.get("aspect_ratio", "9:16")),
+        source_video=payload.get("source_video"), music_path=payload.get("music_path"),
+        voiceover_path=payload.get("voiceover_path"), version=int(payload.get("version", 1)), segments=segments,
     )
