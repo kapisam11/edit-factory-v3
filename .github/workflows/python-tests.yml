@@ -64,10 +64,21 @@ jobs:
         /tmp/aivf-wheel-test/bin/python -m pip install "${WHEEL}[web]"
         /tmp/aivf-wheel-test/bin/python -c "import ai_video_factory; import app.cli; import app.wsgi; import tools.enforce_hook; print('isolated wheel import ok')"
         /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); assert next(ep.value for ep in group if ep.name=='aivf')=='app.cli:main'"
-    - name: Run tests with coverage
+    - name: Run tests with V3 coverage gate
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
-      run: uv run pytest -q 04-TESTS/tests --cov=ai_video_factory --cov=app --cov=tools --cov-report=term-missing --cov-report=xml --cov-fail-under=50
+      run: >-
+        uv run pytest -q 04-TESTS/tests
+        --cov=ai_video_factory.v3_engine
+        --cov=ai_video_factory.v3_semantics
+        --cov=ai_video_factory.v3_quality
+        --cov=ai_video_factory.v3_capabilities
+        --cov=ai_video_factory.v3_pipeline
+        --cov=ai_video_factory.edit_planner
+        --cov=ai_video_factory.effects_engine
+        --cov=ai_video_factory.render_engine
+        --cov=ai_video_factory.composer
+        --cov-report=term-missing --cov-report=xml --cov-fail-under=50
 
   windows-smoke:
     runs-on: windows-latest
