@@ -67,7 +67,7 @@ jobs:
     - name: Run tests with coverage
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
-      run: uv run pytest -q 04-TESTS/tests --cov=ai_video_factory --cov=app --cov=tools --cov-report=term-missing --cov-report=xml --cov-fail-under=30
+      run: uv run pytest -q 04-TESTS/tests --cov=ai_video_factory --cov=app --cov=tools --cov-report=term-missing --cov-report=xml --cov-fail-under=50
 
   windows-smoke:
     runs-on: windows-latest
