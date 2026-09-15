@@ -6,7 +6,7 @@ Install from the repository-root `pyproject.toml` with the extras required for t
 Python floor is 3.10. FFmpeg and optional model/OCR assets are runtime dependencies; generated
 media, uploads, knowledge data, SQLite state, and local tool bundles are not source artifacts.
 
-The repository currently does not contain a committed dependency lockfile. Dependency versions are resolved during installation/CI; do not describe the environment as frozen or fully bit-for-bit reproducible until a real lockfile is committed and consumed with `--frozen`.
+The repository contains a committed `uv.lock`, and CI consumes it with `uv sync --frozen` for reproducible dependency resolution.
 
 ## Dashboard authentication
 
