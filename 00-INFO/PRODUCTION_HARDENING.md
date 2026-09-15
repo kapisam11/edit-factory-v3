@@ -20,11 +20,12 @@ This branch is the final verification pass for the dashboard and local single-ho
 - Config persistence redacts API credentials.
 - Model-provider credentials never fall through from Groq to OpenAI.
 - Template FFmpeg overlays use argv-based subprocess execution with a hard timeout; filenames are not passed through a shell.
+- The shared FFmpeg/FFprobe helper now rejects non-FFmpeg/non-FFprobe executables instead of silently rewriting arbitrary commands.
 - Dashboard workflow selection is applied in the spawned worker, with canonical target-duration validation.
 - Production Gunicorn uses one `gthread` worker with four threads so the long-lived dashboard SSE endpoint cannot block all other HTTP requests.
 - Docker contains the complete production WSGI dependency boundary and does not rely on the old `worker.py` name.
 - Persistent SQLite state is stored under `/app/state`.
-- CI validates Python 3.9–3.12, Windows-sensitive modules, dependency audit, CLI smoke tests, and Docker image creation/imports.
+- CI validates Python 3.10–3.12, Windows-sensitive modules, dependency audit, CLI smoke tests, and Docker image creation/imports.
 - Runtime/generated directories are ignored going forward.
 - Current-tree runtime FFmpeg/tool artifacts have been removed; historical Git objects remain a separately coordinated migration.
 
