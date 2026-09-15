@@ -151,11 +151,15 @@ def _sample_visual_changes(path: str, sample_hz: float = 2.0) -> Dict[str, Any]:
         for idx, delta in enumerate(deltas)
         if delta >= threshold
     ]
+    max_gap = None
+    if change_events:
+        points = [0.0, *change_events, frame_count / sample_hz]
+        max_gap = round(max(b - a for a, b in zip(points, points[1:])), 3)
     return {
         "frames": frame_count,
         "threshold": round(threshold, 3),
         "change_events": change_events,
-        "max_gap": None,
+        "max_gap": max_gap,
     }
 
 
@@ -192,6 +196,11 @@ def strict_render_check(
             errors.append("retention map contains non-increasing event times")
         if any(t > float(target_seconds) + 0.05 for t in events):
             errors.append("retention map contains events beyond target duration")
+    if visual.get("max_gap") is not None and visual["max_gap"] > 3.5:
+        warnings.append(
+            f"coarse visual sampling found a change gap of {visual['max_gap']:.2f}s; "
+            "review the render for retention pacing"
+        )
 
     return {
         "ok": not errors,
