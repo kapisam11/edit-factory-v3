@@ -1,7 +1,6 @@
 """AI Video Factory — Enhanced Quality Control v3."""
 import json
 import os
-import subprocess
 from typing import Any, Dict, List, Optional
 import re
 
@@ -42,7 +41,10 @@ def check_audio_levels(video_path: str) -> Dict[str, Any]:
     if not os.path.exists(video_path):
         return {"error": "Video not found"}
     cmd = ["ffmpeg", "-i", video_path, "-af", "loudnorm=print_format=json", "-f", "null", "-"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = run_ffmpeg(cmd, timeout=300, capture_output=True)
+    except Exception as exc:
+        return {"error": f"Audio level analysis failed: {exc}"}
     lufs_data = {}
     try:
         json_start = result.stderr.find("{")
@@ -52,7 +54,17 @@ def check_audio_levels(video_path: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         pass
     silence_cmd = ["ffmpeg", "-i", video_path, "-af", "silencedetect=noise=-50dB:d=0.5", "-f", "null", "-"]
-    silence_result = subprocess.run(silence_cmd, capture_output=True, text=True)
+    try:
+        silence_result = run_ffmpeg(silence_cmd, timeout=300, capture_output=True)
+    except Exception as exc:
+        return {
+            "integrated_lufs": lufs_data.get("input_i", "unknown"),
+            "true_peak": lufs_data.get("input_tp", "unknown"),
+            "loudness_range": lufs_data.get("input_lra", "unknown"),
+            "silence_segments": [],
+            "silence_count": 0,
+            "recommendation": f"Silence analysis failed: {exc}",
+        }
     silence_segments = []
     for line in silence_result.stderr.split("\n"):
         if "silence_start:" in line:
