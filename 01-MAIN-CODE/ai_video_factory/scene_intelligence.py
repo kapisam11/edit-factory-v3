@@ -31,7 +31,7 @@ def _ffprobe_duration(video_path: str) -> float:
             return 0.0
         value = float(result.stdout.strip())
         return max(0.0, value)
-    except (OSError, subprocess.SubprocessError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         return 0.0
 
 
