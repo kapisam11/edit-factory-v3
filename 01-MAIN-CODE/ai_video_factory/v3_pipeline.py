@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from . import production_pipeline as _production_pipeline_module
 from .production_models import ProductionResult
 from .production_pipeline import run_production_pipeline
 from .scene_intelligence import analyze_video
@@ -16,7 +17,6 @@ from .v3_quality import RenderContractError, enforce_retention_events, normalize
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
-    """Turn the audience string into explicit planning preferences consumed by the script planner."""
     text = str(audience or "general short-form viewers").lower()
     profiles = [
         (("comedy", "funny", "humor", "meme"), {"tone": "playful", "pacing": "fast", "hook": "reaction_or_surprise", "caption_style": "punchy"}),
@@ -41,162 +41,134 @@ def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: 
     audience = payload.get("audience", "general short-form viewers")
     audience_profile = _audience_profile(audience)
     return {
-        "topic": core["topic"],
-        "emotion": core["target_emotion"],
-        "strongest_angle": core["emotional_angle"],
-        "main_conflict": core["stakes"],
-        "why_care": core["why_people_care"],
-        "watch_to_end_reason": core["watch_to_end_reason"],
-        "payoff": core["payoff"],
-        "hook": best_hook.get("text", ""),
-        "visual_hook": best_hook.get("visual", ""),
-        "target_total_seconds": total_seconds,
-        "hook_duration": clip_plan[0]["end"] if clip_plan else 2.0,
-        "avg_shot_duration": avg_shot,
-        "cuts_per_minute": round(60.0 / max(avg_shot, 0.1), 2),
+        "topic": core["topic"], "emotion": core["target_emotion"], "strongest_angle": core["emotional_angle"],
+        "main_conflict": core["stakes"], "why_care": core["why_people_care"], "watch_to_end_reason": core["watch_to_end_reason"],
+        "payoff": core["payoff"], "hook": best_hook.get("text", ""), "visual_hook": best_hook.get("visual", ""),
+        "target_total_seconds": total_seconds, "hook_duration": clip_plan[0]["end"] if clip_plan else 2.0,
+        "avg_shot_duration": avg_shot, "cuts_per_minute": round(60.0 / max(avg_shot, 0.1), 2),
         "music_energy": 0.8 if payload["music"]["energy"] == "high" else 0.55,
-        "music_style": payload["music"]["emotional_tone"],
-        "v3_edit_type": payload["edit_type"],
-        "v3_quality_score": payload["quality"]["score"],
-        "v3_retention_score": payload["metrics"]["retention_score"],
-        "thumbnail": payload.get("thumbnail_concept", ""),
-        "platform": payload.get("platform", "youtube_shorts"),
-        "audience": audience,
-        "audience_profile": audience_profile,
-        "platform_profile": profile,
+        "music_style": payload["music"]["emotional_tone"], "v3_edit_type": payload["edit_type"],
+        "v3_quality_score": payload["quality"]["score"], "v3_retention_score": payload["metrics"]["retention_score"],
+        "thumbnail": payload.get("thumbnail_concept", ""), "platform": payload.get("platform", "youtube_shorts"),
+        "audience": audience, "audience_profile": audience_profile, "platform_profile": profile,
         "footage_evidence": footage_evidence or {},
         "v3_directives": {
-            "edit_type": payload["edit_type"],
-            "clip_plan": clip_plan,
-            "retention_map": payload.get("retention_map", []),
-            "hooks": payload.get("hooks", []),
-            "platform": payload.get("platform", "youtube_shorts"),
-            "platform_profile": profile,
-            "audience": audience,
-            "audience_profile": audience_profile,
-            "min_scene_match_score": 0.15,
-            "disable_templates": True,
-            "blueprint_contract": "3.0.0",
+            "edit_type": payload["edit_type"], "clip_plan": clip_plan, "retention_map": payload.get("retention_map", []),
+            "hooks": payload.get("hooks", []), "platform": payload.get("platform", "youtube_shorts"), "platform_profile": profile,
+            "audience": audience, "audience_profile": audience_profile, "min_scene_match_score": 0.15,
+            "disable_templates": True, "blueprint_contract": "3.0.0",
         },
     }
 
 
 def _build_footage_evidence(input_video: str, enable_ocr: bool) -> Dict[str, Any]:
-    """Analyze source footage before script generation so planning is footage-aware from the start."""
     scenes = analyze_video(input_video, sample_seconds=2.5, enable_ocr=enable_ocr)
     ranked = sorted(scenes, key=lambda scene: (scene.importance_score, scene.motion_score, scene.audio_energy), reverse=True)
-    return {
-        "scene_count": len(scenes),
-        "top_scenes": [
-            {
-                "id": scene.id,
-                "start": round(scene.start, 3),
-                "end": round(scene.end, 3),
-                "description": scene.description,
-                "transcript": scene.transcript,
-                "objects": scene.objects,
-                "text": scene.text,
-                "motion_score": round(scene.motion_score, 3),
-                "audio_energy": round(scene.audio_energy, 3),
-                "face_count": scene.face_count,
-                "importance_score": round(scene.importance_score, 3),
-            }
-            for scene in ranked[:12]
-        ],
-    }
+    return {"scene_count": len(scenes), "top_scenes": [{
+        "id": scene.id, "start": round(scene.start, 3), "end": round(scene.end, 3), "description": scene.description,
+        "transcript": scene.transcript, "objects": scene.objects, "text": scene.text,
+        "motion_score": round(scene.motion_score, 3), "audio_energy": round(scene.audio_energy, 3),
+        "face_count": scene.face_count, "importance_score": round(scene.importance_score, 3),
+    } for scene in ranked[:12]]}
 
 
 def _validate_timeline_contract(package: Path, blueprint_payload: Dict[str, Any], target_seconds: float) -> None:
     timeline_path = package / "timeline.json"
-    if not timeline_path.exists():
+    if not timeline_path.is_file():
         raise RenderContractError("V3 timeline artifact is missing")
     payload = json.loads(timeline_path.read_text(encoding="utf-8"))
     segments = payload.get("segments", [])
     clip_plan = blueprint_payload.get("clip_plan", [])
     if not isinstance(segments, list) or len(segments) != len(clip_plan):
-        raise RenderContractError(
-            f"render timeline segment count {len(segments) if isinstance(segments, list) else 0} != blueprint beat count {len(clip_plan)}"
-        )
+        raise RenderContractError(f"render timeline segment count {len(segments) if isinstance(segments, list) else 0} != blueprint beat count {len(clip_plan)}")
     for index, (segment, beat) in enumerate(zip(segments, clip_plan), start=1):
-        if abs(float(segment.get("start", -1)) - float(beat["start"])) > 0.01:
-            raise RenderContractError(f"timeline segment {index} start diverges from blueprint")
-        if abs(float(segment.get("end", -1)) - float(beat["end"])) > 0.01:
-            raise RenderContractError(f"timeline segment {index} end diverges from blueprint")
-        if float(segment.get("end", 0)) <= float(segment.get("start", 0)):
+        try:
+            start = float(segment["start"]); end = float(segment["end"])
+            beat_start = float(beat["start"]); beat_end = float(beat["end"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RenderContractError(f"timeline segment {index} has invalid numeric boundaries") from exc
+        if abs(start - beat_start) > 0.01 or abs(end - beat_end) > 0.01:
+            raise RenderContractError(f"timeline segment {index} diverges from blueprint")
+        if end <= start:
             raise RenderContractError(f"timeline segment {index} has non-positive duration")
-    if abs(float(payload.get("duration", 0.0)) - float(target_seconds)) > 0.01:
+    try:
+        timeline_duration = float(payload["duration"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RenderContractError("timeline duration is invalid") from exc
+    if abs(timeline_duration - float(target_seconds)) > 0.01:
         raise RenderContractError("timeline duration diverges from V3 target")
 
 
-def _run_immutable_v3_production(*args: Any, **kwargs: Any) -> ProductionResult:
-    """Invoke the legacy orchestration without permitting its review auto-fixer to rewrite V3 plans."""
-    original_compose = _production_pipeline_module.compose_short_from_video
-
-    def compose_without_auto_fix(*compose_args: Any, **compose_kwargs: Any) -> str:
-        compose_kwargs["auto_fix"] = False
-        return original_compose(*compose_args, **compose_kwargs)
-
-    _production_pipeline_module.compose_short_from_video = compose_without_auto_fix
+def _atomic_json_write(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix=".aivf-", suffix=".partial", dir=str(path.parent), text=True)
     try:
-        return run_production_pipeline(*args, **kwargs)
-    finally:
-        _production_pipeline_module.compose_short_from_video = original_compose
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            handle.flush(); os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except BaseException:
+        try: os.unlink(temp_path)
+        except OSError: pass
+        raise
 
 
-def run_v3_pipeline(
-    input_video: str,
-    topic: str,
-    package_dir: str,
-    *,
-    context: str = "",
-    target_seconds: float = 30.0,
-    platform: str = "youtube_shorts",
-    audience: str = "general short-form viewers",
-    bpm: int = 120,
-    edit_type: Optional[str] = None,
-    model_key: Optional[str] = None,
-    skip_qc: bool = False,
-    music_path: Optional[str] = None,
-    enable_ocr: bool = False,
-    enable_object_detection: bool = True,
-    enable_diarization: bool = False,
-    diarization_token: Optional[str] = None,
-) -> ProductionResult:
+def _validate_v3_inputs(input_video: str, topic: str, target_seconds: float, platform: str, audience: str, bpm: int) -> None:
+    path = Path(input_video)
+    if not path.is_file():
+        raise RenderContractError(f"V3 input video is missing or not a file: {path}")
+    if path.stat().st_size <= 0:
+        raise RenderContractError("V3 input video is empty")
+    if not str(topic).strip() or len(str(topic)) > 500:
+        raise ValueError("topic must be non-empty and <= 500 characters")
+    try:
+        target = float(target_seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("target_seconds must be numeric") from exc
+    if not math.isfinite(target) or not 8.0 <= target <= 180.0:
+        raise ValueError("target_seconds must be between 8 and 180 seconds")
+    if not str(platform).strip() or len(str(platform)) > 64:
+        raise ValueError("platform must be non-empty and <= 64 characters")
+    if not str(audience).strip() or len(str(audience)) > 500:
+        raise ValueError("audience must be non-empty and <= 500 characters")
+    try:
+        bpm_value = int(bpm)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("bpm must be an integer") from exc
+    if not 40 <= bpm_value <= 240:
+        raise ValueError("bpm must be between 40 and 240")
+
+
+def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: str = "", target_seconds: float = 30.0,
+                    platform: str = "youtube_shorts", audience: str = "general short-form viewers", bpm: int = 120,
+                    edit_type: Optional[str] = None, model_key: Optional[str] = None, skip_qc: bool = False,
+                    music_path: Optional[str] = None, enable_ocr: bool = False, enable_object_detection: bool = True,
+                    enable_diarization: bool = False, diarization_token: Optional[str] = None) -> ProductionResult:
     validate_capabilities()
-    config = V3Config(target_seconds=target_seconds, platform=platform, audience=audience, bpm=bpm)
+    _validate_v3_inputs(input_video, topic, target_seconds, platform, audience, bpm)
+    config = V3Config(target_seconds=float(target_seconds), platform=platform, audience=audience, bpm=int(bpm))
     blueprint = create_v3_blueprint(topic, context=context, config=config, edit_type=edit_type)
     validate_blueprint(blueprint)
 
     package = Path(package_dir)
     package.mkdir(parents=True, exist_ok=True)
     blueprint_path = package / "v3_blueprint.json"
-    payload = blueprint.to_dict()
-    payload["platform"] = platform
-    payload["audience"] = audience
-    blueprint_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    payload = blueprint.to_dict(); payload["platform"] = platform; payload["audience"] = audience
+    _atomic_json_write(blueprint_path, payload)
 
     if skip_qc and os.environ.get("AIVF_ALLOW_SKIP_QC") != "1":
         raise ValueError("skip_qc is disabled for strict v3 production; set AIVF_ALLOW_SKIP_QC=1 only for development")
-
     try:
         footage_evidence = _build_footage_evidence(input_video, enable_ocr)
     except Exception as exc:
         raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
 
-    result = _run_immutable_v3_production(
-        input_video,
-        topic,
-        package_dir,
-        target_seconds=target_seconds,
+    result = run_production_pipeline(
+        input_video, topic, package_dir, target_seconds=target_seconds,
         research_summary=_research_summary_from_blueprint(payload, footage_evidence),
-        enable_ocr=enable_ocr,
-        model_key=model_key,
-        skip_qc=skip_qc,
-        music_path=music_path,
-        enable_object_detection=enable_object_detection,
-        enable_diarization=enable_diarization,
-        diarization_token=diarization_token,
-        platform=platform,
+        enable_ocr=enable_ocr, model_key=model_key, skip_qc=skip_qc, music_path=music_path,
+        enable_object_detection=enable_object_detection, enable_diarization=enable_diarization,
+        diarization_token=diarization_token, platform=platform, allow_auto_fix=False,
     )
 
     if result.final_video and not result.errors:
@@ -209,15 +181,8 @@ def run_v3_pipeline(
             normalize_duration(result.final_video, normalized_path, target_seconds)
             os.replace(normalized_path, result.final_video)
             profile = payload["platform_variants"][platform]
-            render_report = strict_render_check(
-                result.final_video,
-                target_seconds=target_seconds,
-                platform_profile=profile,
-                retention_events=payload.get("retention_map", []),
-            )
-            (package / "v3_render_qc.json").write_text(
-                json.dumps(render_report, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
+            render_report = strict_render_check(result.final_video, target_seconds=target_seconds, platform_profile=profile, retention_events=payload.get("retention_map", []))
+            _atomic_json_write(package / "v3_render_qc.json", render_report)
             if not render_report["ok"]:
                 result.errors.extend("V3 render QC: " + error for error in render_report["errors"])
             result.warnings.extend("V3 render QC: " + warning for warning in render_report["warnings"])
@@ -228,7 +193,7 @@ def run_v3_pipeline(
                 metadata["v3_timeline_contract"] = "passed"
                 metadata["warnings"] = result.warnings
                 metadata["errors"] = result.errors
-                metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+                _atomic_json_write(metadata_path, metadata)
         except RenderContractError as exc:
             result.errors.append(f"V3 render contract failed: {exc}")
 

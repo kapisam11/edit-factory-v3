@@ -16,24 +16,50 @@ def _ensure_dir(p: str) -> None:
     os.makedirs(p, exist_ok=True)
 
 
-def _ffmpeg_timeout() -> int:
-    timeout = int(os.environ.get("AIVF_FFMPEG_TIMEOUT_SECONDS", "3600"))
-    if timeout <= 0:
-        raise ValueError("FFmpeg timeout must be positive")
+def _bounded_timeout(env_name: str, default: int, maximum: int = 7200) -> int:
+    try:
+        timeout = int(os.environ.get(env_name, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{env_name} must be an integer") from exc
+    if not 1 <= timeout <= maximum:
+        raise ValueError(f"{env_name} must be between 1 and {maximum} seconds")
     return timeout
 
 
-def _ffprobe_timeout() -> int:
-    timeout = int(os.environ.get("AIVF_FFPROBE_TIMEOUT_SECONDS", "30"))
-    if timeout <= 0:
-        raise ValueError("FFprobe timeout must be positive")
-    return timeout
+def _ffmpeg_binary() -> str:
+    binary = shutil.which("ffmpeg")
+    if not binary:
+        raise RuntimeError("ffmpeg executable is required but was not found on PATH")
+    return binary
+
+
+def _ffprobe_binary() -> str:
+    binary = shutil.which("ffprobe")
+    if not binary:
+        raise RuntimeError("ffprobe executable is required but was not found on PATH")
+    return binary
+
+
+def _validate_media_path(value: str) -> str:
+    if not value or "\x00" in str(value):
+        raise ValueError("media path is invalid")
+    return str(value)
+
+
+def _validate_tool_argv(cmd: List[str], expected: str) -> List[str]:
+    if not cmd:
+        raise ValueError(f"command must start with {expected}")
+    requested = Path(str(cmd[0])).name.lower()
+    allowed = {expected.lower(), f"{expected}.exe"}
+    if requested not in allowed:
+        raise ValueError(f"command must start with {expected}")
+    return list(cmd)
 
 
 def run_ffprobe(cmd: List[str], timeout: Optional[int] = None) -> subprocess.CompletedProcess:
-    if not cmd or Path(cmd[0]).name != "ffprobe":
-        raise ValueError("run_ffprobe expects an ffprobe argv list")
-    timeout = timeout if timeout is not None else _ffprobe_timeout()
+    cmd = _validate_tool_argv(cmd, "ffprobe")
+    cmd[0] = _ffprobe_binary()
+    timeout = timeout if timeout is not None else _bounded_timeout("AIVF_FFPROBE_TIMEOUT_SECONDS", 30)
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
@@ -41,18 +67,24 @@ def run_ffprobe(cmd: List[str], timeout: Optional[int] = None) -> subprocess.Com
 
 
 def validate_media_output(path: str, require_video: bool = True, require_audio: bool = False) -> dict:
-    target = Path(path)
-    if not target.exists() or target.stat().st_size == 0:
+    target = Path(_validate_media_path(path))
+    if not target.is_file() or target.stat().st_size == 0:
         raise RuntimeError(f"Media output missing or empty: {target}")
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        raise RuntimeError("ffprobe is required to validate media outputs")
-    result = run_ffprobe([
-        ffprobe, "-v", "error", "-show_entries", "format=duration,size",
-        "-show_streams", "-of", "json", str(target),
-    ])
+    result = run_ffprobe(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration,size,format_name",
+            "-show_streams",
+            "-of",
+            "json",
+            str(target),
+        ]
+    )
     if result.returncode != 0:
-        raise RuntimeError(f"ffprobe failed for {target}: {result.stderr[-1000:]}")
+        raise RuntimeError(f"ffprobe failed for {target}: {(result.stderr or '')[-1000:]}")
     try:
         data = json.loads(result.stdout or "{}")
     except json.JSONDecodeError as exc:
@@ -69,24 +101,27 @@ def validate_media_output(path: str, require_video: bool = True, require_audio: 
 
 
 def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bool = False) -> subprocess.CompletedProcess:
-    if not cmd or Path(cmd[0]).name != "ffmpeg":
-        raise ValueError("run_ffmpeg expects an ffmpeg argv list")
-    timeout = timeout if timeout is not None else _ffmpeg_timeout()
+    cmd = _validate_tool_argv(cmd, "ffmpeg")
+    cmd[0] = _ffmpeg_binary()
+    timeout = timeout if timeout is not None else _bounded_timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600)
     try:
-        return subprocess.run(cmd, check=True, timeout=timeout, capture_output=capture_output, text=capture_output)
+        return subprocess.run(
+            cmd,
+            check=True,
+            timeout=timeout,
+            capture_output=capture_output,
+            text=capture_output,
+        )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"FFmpeg timed out after {timeout}s") from exc
 
 
 def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str) -> None:
-    """Render one requested timeline beat without double-applying source offsets."""
     if duration <= 0:
         raise ValueError("render duration must be positive")
     encoder = choose_encoder()
     candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc") else ["libx264"]
     last_error = None
-    # generate_clip_paths() already trims each clip to its source timeline range.
-    # Seeking by the original timeline offset again would therefore seek twice.
     seek_start = 0.0 if Path(src_clip).parent.name == "_clips" else max(0.0, ss)
     for selected in candidates:
         extra = (
@@ -96,9 +131,27 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
         )
         vf_full = f"{vf},tpad=stop_mode=clone:stop_duration={float(duration):.3f}"
         cmd = [
-            "ffmpeg", "-y", "-ss", str(seek_start), "-i", src_clip, "-t", str(duration),
-            "-vf", vf_full, "-af", "apad", "-c:v", selected, *extra,
-            "-c:a", "aac", "-b:a", "128k", "-shortest", dst,
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(seek_start),
+            "-i",
+            _validate_media_path(src_clip),
+            "-t",
+            str(duration),
+            "-vf",
+            vf_full,
+            "-af",
+            "apad",
+            "-c:v",
+            selected,
+            *extra,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-shortest",
+            _validate_media_path(dst),
         ]
         try:
             run_ffmpeg(cmd)
@@ -113,13 +166,23 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
 
 
 def write_concat_list(seq_files: List[str], concat_list_path: str) -> None:
+    if not seq_files:
+        raise ValueError("concat list cannot be empty")
+    _ensure_dir(str(Path(concat_list_path).parent))
     with open(concat_list_path, "w", encoding="utf-8", newline="\n") as f:
         for p in seq_files:
-            safe_path = str(Path(p)).replace("'", "'\\''")
+            value = _validate_media_path(p)
+            if not Path(value).is_file():
+                raise FileNotFoundError(value)
+            if "\r" in value or "\n" in value:
+                raise ValueError("media paths cannot contain newlines")
+            safe_path = value.replace("'", "'\\''")
             f.write(f"file '{safe_path}'\n")
 
 
 def concat_segments(concat_list_path: str, output_path: str, encoder: str = "libx264") -> None:
+    if not Path(concat_list_path).is_file():
+        raise FileNotFoundError(concat_list_path)
     preset = ffmpeg_preset_for(encoder)
     codec = preset.get("codec", "libx264")
     opts = ["-preset", preset.get("preset", "slow")]
@@ -128,8 +191,22 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
     else:
         opts += ["-crf", preset.get("crf", "20")]
     cmd = [
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list_path,
-        "-c:v", codec, *opts, "-c:a", "aac", "-movflags", "+faststart", output_path,
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        concat_list_path,
+        "-c:v",
+        codec,
+        *opts,
+        "-c:a",
+        "aac",
+        "-movflags",
+        "+faststart",
+        output_path,
     ]
     try:
         run_ffmpeg(cmd)
@@ -139,24 +216,54 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
             raise
         Path(output_path).unlink(missing_ok=True)
         fallback = [
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list_path,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-c:a", "aac",
-            "-movflags", "+faststart", output_path,
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list_path,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "20",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            output_path,
         ]
         run_ffmpeg(fallback)
         validate_media_output(output_path)
 
 
 def _escape_filter_path(path: str) -> str:
-    return str(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    return _validate_media_path(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
 def burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
     filter_path = _escape_filter_path(srt_path)
     cmd = [
-        "ffmpeg", "-y", "-i", video_path, "-vf", f"subtitles=filename='{filter_path}'",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "copy",
-        "-movflags", "+faststart", output_path,
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_path,
+        "-vf",
+        f"subtitles=filename='{filter_path}'",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "23",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+        output_path,
     ]
     run_ffmpeg(cmd)
     validate_media_output(output_path)
@@ -164,8 +271,22 @@ def burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
 
 def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
     cmd = [
-        "ffmpeg", "-y", "-i", video_path, "-i", vo_path, "-c:v", "copy",
-        "-c:a", "aac", "-map", "0:v:0", "-map", "1:a:0", "-shortest", output_path,
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_path,
+        "-i",
+        vo_path,
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-shortest",
+        output_path,
     ]
     run_ffmpeg(cmd)
     validate_media_output(output_path)

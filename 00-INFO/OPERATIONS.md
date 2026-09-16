@@ -2,9 +2,11 @@
 
 ## Local development
 
-Install from `pyproject.toml` with the extras required for the features you use. The supported
-Python floor is 3.9. FFmpeg and optional model/OCR assets are runtime dependencies; generated
+Install from the repository-root `pyproject.toml` with the extras required for the features you use. The supported
+Python floor is 3.10. FFmpeg and optional model/OCR assets are runtime dependencies; generated
 media, uploads, knowledge data, SQLite state, and local tool bundles are not source artifacts.
+
+The repository contains a committed `uv.lock`, and CI consumes it with `uv sync --frozen` for reproducible dependency resolution.
 
 ## Dashboard authentication
 
@@ -39,5 +41,5 @@ uploads, knowledge data, and `/app/state/jobs.db` across container replacement.
 ## Release gate
 
 Before a production release, CI must pass Python tests, lint, dependency audit, CLI smoke tests,
-and the Docker build. A release should also include a real end-to-end render and cancellation
-smoke test on the target operating system.
+and the Docker build. A release should also include a real end-to-end render, cancellation/restart
+smoke tests, and human visual acceptance on the target operating system.
