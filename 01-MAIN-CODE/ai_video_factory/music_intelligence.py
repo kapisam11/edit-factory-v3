@@ -7,14 +7,17 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from typing import Any, Dict, List, Optional
+
+from .render_engine import run_ffprobe
 
 
 def _duration(path: str) -> float:
     cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=20)
+        result = run_ffprobe(cmd, timeout=20)
+        if result.returncode != 0:
+            return 0.0
         return max(0.0, float(result.stdout.strip()))
     except Exception:
         return 0.0
