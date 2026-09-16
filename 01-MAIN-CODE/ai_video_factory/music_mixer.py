@@ -8,10 +8,11 @@ Requires: librosa (optional but recommended), numpy
 """
 import logging
 import os
-import subprocess
 from typing import List, Optional, Tuple
 
 import numpy as np
+
+from .render_engine import run_ffmpeg, run_ffprobe, validate_media_output
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,8 @@ def mix_audio(
     ])
 
     logger.info("[MIX] Running: %s", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    run_ffmpeg(cmd)
+    validate_media_output(output_path, require_video=True, require_audio=True)
     return output_path
 
 
@@ -179,22 +181,26 @@ def add_music_to_video(
     # Get video duration
     try:
         import json
-        probe = subprocess.run(
+        probe = run_ffprobe(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "json", video_path],
-            capture_output=True, text=True, check=True,
+            timeout=20,
         )
+        if probe.returncode != 0:
+            raise RuntimeError((probe.stderr or "ffprobe failed").strip())
         vid_dur = float(json.loads(probe.stdout)["format"]["duration"])
     except Exception:
         vid_dur = 60.0
 
     # Get music duration
     try:
-        probe = subprocess.run(
+        probe = run_ffprobe(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "json", music_path],
-            capture_output=True, text=True, check=True,
+            timeout=20,
         )
+        if probe.returncode != 0:
+            raise RuntimeError((probe.stderr or "ffprobe failed").strip())
         music_dur = float(json.loads(probe.stdout)["format"]["duration"])
     except Exception:
         music_dur = 60.0
@@ -224,5 +230,6 @@ def add_music_to_video(
     ]
 
     logger.info("[MIX] Adding music: %s", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    run_ffmpeg(cmd)
+    validate_media_output(output_path, require_video=True, require_audio=True)
     return output_path
