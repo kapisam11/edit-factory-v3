@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 import math
 import os
-import subprocess
 from dataclasses import asdict
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .production_models import Scene
+from .render_engine import run_ffprobe
 
 
 class SceneAnalysisError(RuntimeError):
@@ -26,7 +26,9 @@ def _ffprobe_duration(video_path: str) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1", video_path,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+        result = run_ffprobe(cmd, timeout=30)
+        if result.returncode != 0:
+            return 0.0
         value = float(result.stdout.strip())
         return max(0.0, value)
     except (OSError, subprocess.SubprocessError, ValueError):
