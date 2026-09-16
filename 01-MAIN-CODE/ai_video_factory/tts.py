@@ -11,6 +11,7 @@ Usage:
 """
 import logging
 import os
+import shutil
 import subprocess
 from typing import Optional
 
@@ -30,7 +31,18 @@ DEFAULT_VOICE = "en-US-GuyNeural"
 
 
 def _edge_tts_available() -> bool:
-    return subprocess.run(["edge-tts", "--help"], capture_output=True).returncode == 0
+    if shutil.which("edge-tts") is None:
+        return False
+    try:
+        return subprocess.run(
+            ["edge-tts", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def generate_voiceover(text: str, out_path: str, voice: Optional[str] = None) -> str:
@@ -65,7 +77,10 @@ def _generate_edge_tts(text: str, out_path: str, voice: Optional[str] = None) ->
         "--write-media", out_path,
     ]
     logger.info("[TTS] Edge TTS: voice=%s", v)
-    subprocess.run(cmd, check=True, capture_output=True)
+    subprocess.run(cmd, check=True, capture_output=True, timeout=120, text=True)
+    output = os.path.abspath(out_path)
+    if not os.path.isfile(output) or os.path.getsize(output) == 0:
+        raise RuntimeError("Edge TTS completed without producing a non-empty audio file")
     return out_path
 
 
