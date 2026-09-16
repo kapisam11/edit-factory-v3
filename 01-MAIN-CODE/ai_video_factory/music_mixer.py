@@ -125,9 +125,6 @@ def mix_audio(
     inputs = 2
     filter_complex_parts = []
 
-    # Video stream
-    filter_complex_parts.append("[0:v]copy[vout]")
-
     # Music volume adjustment
     music_vol = int(music_volume * 100)
     filter_complex_parts.append(f"[1:a]volume={music_vol}[music]")
@@ -153,7 +150,7 @@ def mix_audio(
 
     cmd.extend([
         "-filter_complex", filter_str,
-        "-map", "[vout]",
+        "-map", "0:v:0",
         "-map", "[aout]",
         "-c:v", "libx264",
         "-preset", "fast",
