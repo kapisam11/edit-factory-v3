@@ -143,7 +143,8 @@ def test_render_engine_capture_disabled_streams_and_reports_ffmpeg_stderr(monkey
     monkeypatch.setattr(render_engine.shutil, "which", lambda name: f"/usr/bin/{name}")
     output = io.StringIO()
     monkeypatch.setattr(render_engine.sys, "stderr", output)
-    stream = io.StringIO("progress\nmissing encoder\n")
+    stderr_data = "progress\nmissing encoder\n"
+    stream = io.StringIO(stderr_data)
 
     class FakeProcess:
         stderr = stream
@@ -155,7 +156,7 @@ def test_render_engine_capture_disabled_streams_and_reports_ffmpeg_stderr(monkey
     monkeypatch.setattr(render_engine.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     with pytest.raises(RuntimeError, match="missing encoder"):
         render_engine.run_ffmpeg(["ffmpeg", "-i", "input.mp4", "output.mp4"], timeout=60)
-    assert output.getvalue() == "progress\nmissing encoder\n"
+    assert output.getvalue() == stderr_data
 
 
 def test_tts_output_validation_requires_audio_stream(monkeypatch, tmp_path):
