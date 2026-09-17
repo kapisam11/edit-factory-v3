@@ -1,17 +1,15 @@
 """Install production-safe storage, caching, and small dashboard UX extensions."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
 
-from flask import jsonify, request, send_from_directory
+from flask import jsonify, send_from_directory
 
 from dashboard_cache import HybridCache
 from dashboard_store import DashboardStore
-
-
-TERMINAL_STATUSES = {"done", "error", "cancelled", "interrupted"}
 
 
 def install_dashboard_optimizations(app_module: Any) -> None:
@@ -27,8 +25,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     app_module.dashboard_cache = cache
 
     # Keep the existing public helper API intact while moving connections to a
-    # reusable storage boundary. This also covers compatibility routes that call
-    # web_app_v3.get_db() directly.
+    # reusable storage boundary. Compatibility routes that call get_db() now
+    # use the same connection policy and indexes as the main dashboard.
     app_module.get_db = store.connect
 
     original_init_db = app_module.init_db
@@ -54,8 +52,6 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     def db_append_log(job_id: str, level: str, message: str) -> None:
         store.append_log(job_id, level, message)
-        # Job detail includes logs, so invalidate the short-lived job listing.
-        cache.delete("jobs:list")
 
     def db_list_jobs() -> list[dict]:
         cached = cache.get_json("jobs:list")
@@ -76,6 +72,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     def set_setting(key: str, value: Any) -> None:
         original_set_setting(key, value)
         cache.delete("settings")
+        cache.delete("jobs:list")
 
     app_module.init_db = init_db
     app_module.db_insert_job = db_insert_job
@@ -92,9 +89,13 @@ def install_dashboard_optimizations(app_module: Any) -> None:
             return jsonify({"error": "Job not found"}), 404
         if job.get("status") != "done":
             return jsonify({"error": "Preview is available after a job completes"}), 409
-        package = app_module._resolve_package(Path(job.get("pkg_dir") or "").name)
-        if not package:
+
+        package_value = str(job.get("pkg_dir") or "")
+        package = Path(package_value).resolve()
+        output_root = app_module.OUTPUT_FOLDER.resolve()
+        if output_root not in package.parents or not package.is_dir():
             return jsonify({"error": "Package not found"}), 404
+
         preferred = ("final_with_music.mp4", "final_short.mp4", "final_short_vo.mp4")
         filename = next((name for name in preferred if (package / name).is_file()), None)
         if not filename:
@@ -123,5 +124,6 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         secrets = app_module.get_runtime_default_secrets()
         app_module._runtime_secrets[job_id] = secrets
         cache.delete("jobs:list")
-        started = app_module._start_job(job_id, __import__("json").loads(job.get("params") or "{}"), secrets)
+        params = json.loads(job.get("params") or "{}")
+        started = app_module._start_job(job_id, params, secrets)
         return jsonify({"job_id": job_id, "status": "running" if started else "queued"}), 202
