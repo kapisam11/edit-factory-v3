@@ -77,7 +77,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           python -m pip install --disable-pip-version-check -r "$RUNNER_TEMP/aivf-snyk-requirements.txt"
-          npx --yes snyk@latest test \
+          npx --yes snyk@1.1307.2 test \
             --file="$RUNNER_TEMP/aivf-snyk-requirements.txt" \
             --package-manager=pip \
             --command=python \
