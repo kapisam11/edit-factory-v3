@@ -78,7 +78,7 @@ jobs:
         --cov=ai_video_factory.effects_engine
         --cov=ai_video_factory.render_engine
         --cov=ai_video_factory.composer
-        --cov-report=term-missing --cov-report=xml --cov-fail-under=50
+        --cov-report=term-missing --cov-report=xml --cov-fail-under=80
 
   windows-smoke:
     runs-on: windows-latest
