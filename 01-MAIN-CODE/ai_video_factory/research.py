@@ -13,7 +13,7 @@ do not break the workflow.
 from typing import Dict, List, Optional
 import time
 import re
-from .visuals_fetcher import fetch_visuals
+from .visuals_fetcher import fetch_visuals, validate_remote_url
 
 
 def _safe_get_json(url: str, params=None, timeout=6):
@@ -57,7 +57,6 @@ def _duckduckgo_search(topic: str, limit: int = 6) -> List[Dict[str, str]]:
         if not r.ok:
             return []
         html = r.text
-        # Rough but effective regex-based scraping for result titles/links
         items = []
         for m in re.finditer(r'<a rel="nofollow" class="result__a" href="(.*?)">(.*?)</a>', html, flags=re.S):
             href = m.group(1)
@@ -83,22 +82,7 @@ def _detect_recent_news(results: List[Dict[str, str]]) -> bool:
 
 
 def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[str] = None) -> Dict[str, object]:
-    """Return an enhanced research summary for `topic`.
-
-    Returns a dict with the following keys:
-      - topic
-      - who_what
-      - why_care
-      - main_conflict
-      - emotion
-      - strongest_angle
-      - sources (list)
-      - visuals (list of image urls / suggested screenshots)
-      - trending (bool)
-
-    If `use_groq` is True and `groq_api_key` is provided the function will
-    attempt an optional Groq-assisted enrichment. Failures are ignored.
-    """
+    """Return an enhanced research summary for `topic`."""
     summary = {
         "topic": topic,
         "who_what": "",
@@ -113,7 +97,6 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
         "trending": False,
     }
 
-    # 1) Wikipedia extract
     wiki = _fetch_wikipedia_summary(topic)
     if wiki:
         summary.update({
@@ -131,7 +114,6 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
             "strongest_angle": "Human choices, consequences, and mystery.",
         })
 
-    # 2) Search results for supporting visuals & trending signal
     results = _duckduckgo_search(topic, limit=8)
     for r in results:
         url = r.get("url")
@@ -139,15 +121,11 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
             summary["sources"].append(url)
     summary["trending"] = _detect_recent_news(results)
 
-    # 3) Derive simple visuals by extracting OpenGraph images (best-effort)
-    # Use the new visuals_fetcher to collect scored, purpose-tagged visuals
     try:
         vis = fetch_visuals(topic, max_items=12)
-        # store structured visuals (dicts)
         if vis:
             summary["visuals"] = vis
     except Exception:
-        # fallback: extract OpenGraph images (best-effort)
         try:
             import requests
 
@@ -156,27 +134,31 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
                 if not u:
                     continue
                 try:
-                    rr = requests.get(u, timeout=5, headers={"User-Agent": "ai-video-factory/1.0"})
+                    # The research fallback may visit public result pages, but it
+                    # still rejects non-HTTPS/private hosts and follows no redirects.
+                    safe_url = validate_remote_url(u, allowed_hosts=None)
+                    rr = requests.get(
+                        safe_url,
+                        timeout=5,
+                        headers={"User-Agent": "ai-video-factory/1.0"},
+                        allow_redirects=False,
+                    )
                     if rr.ok:
                         m = re.search(r'<meta property="og:image" content="([^\"]+)"', rr.text)
                         if m:
-                            summary["visuals"].append({"url": m.group(1), "source": u, "purpose": "context", "score": 0.5})
+                            summary["visuals"].append({"url": m.group(1), "source": safe_url, "purpose": "context", "score": 0.5})
                 except Exception:
                     continue
         except Exception:
             pass
 
-    # 4) Optional Groq enrichment hook (best-effort; not required to run)
     if use_groq and groq_api_key:
         try:
             _groq_enrich(topic, summary, groq_api_key)
         except Exception:
-            # ignore Groq failures; the rest of the summary is usable
             pass
 
-    # ensure uniqueness and truncate lists
     summary["sources"] = list(dict.fromkeys([s for s in summary["sources"] if s]))[:12]
-    # visuals may be dicts; dedupe by URL
     seen_urls = set()
     unique_visuals = []
     for v in summary.get("visuals", []):
@@ -196,13 +178,7 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
 
 
 def _groq_enrich(topic: str, summary: Dict[str, object], api_key: str):
-    """Optional helper to enrich `summary` via a Groq call.
-
-    This function is intentionally conservative: it performs a small
-    POST request and attempts to merge back a short improved angle or
-    supporting facts. If Groq's API shape changes, this helper should be
-    adapted. Keep your API key in the environment or pass it in at runtime.
-    """
+    """Optional helper to enrich `summary` via a Groq call."""
     try:
         import requests
 
