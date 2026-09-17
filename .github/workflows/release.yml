@@ -39,7 +39,6 @@ jobs:
       id-token: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
-      image_tag: ${{ steps.meta.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -57,6 +56,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            type=raw,value=latest
             type=ref,event=branch
             type=ref,event=tag
             type=sha,format=short
@@ -129,20 +129,28 @@ jobs:
           scp 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/docker-compose.yml"
 
+      - name: Log in to GHCR on remote host
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          REGISTRY_USER: ${{ secrets.DEPLOY_REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.DEPLOY_REGISTRY_TOKEN }}
+        run: |
+          test -n "$REGISTRY_USER"
+          test -n "$REGISTRY_TOKEN"
+          printf '%s' "$REGISTRY_TOKEN" | ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login '$REGISTRY' -u '$REGISTRY_USER' --password-stdin"
+
       - name: Pull image and restart service
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          REGISTRY_USER: ${{ secrets.DEPLOY_REGISTRY_USER }}
-          REGISTRY_TOKEN: ${{ secrets.DEPLOY_REGISTRY_TOKEN }}
           DEPLOY_TAG: ${{ inputs.image_tag || github.ref_name }}
         run: |
-          test -n "$REGISTRY_USER"
-          test -n "$REGISTRY_TOKEN"
           test -n "$DEPLOY_TAG"
           IMAGE="${REGISTRY}/${IMAGE_NAME}:${DEPLOY_TAG}"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && printf '%s' '$REGISTRY_TOKEN' | docker login '$REGISTRY' -u '$REGISTRY_USER' --password-stdin && docker pull '$IMAGE' && AIVF_IMAGE='$IMAGE' docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml up -d --no-build --remove-orphans"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && docker pull '$IMAGE' && AIVF_IMAGE='$IMAGE' docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml up -d --no-build --remove-orphans"
 
       - name: Verify deployed health endpoint
         env:
