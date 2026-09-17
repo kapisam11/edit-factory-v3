@@ -56,14 +56,19 @@ jobs:
         AIVF_UPLOAD_DIR: /tmp/aivf-wheel-uploads
         AIVF_OUTPUT_DIR: /tmp/aivf-wheel-output
       run: |
-        rm -rf dist /tmp/aivf-wheel-test
+        set -euo pipefail
+        rm -rf dist /tmp/aivf-wheel-test /tmp/aivf-wheel-work
         uv run python -m build --wheel --outdir dist
         uv run python -m venv /tmp/aivf-wheel-test
         WHEEL=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
         test -n "$WHEEL"
         /tmp/aivf-wheel-test/bin/python -m pip install "${WHEEL}[web]"
-        /tmp/aivf-wheel-test/bin/python -c "import ai_video_factory; import app.cli; import app.wsgi; import tools.enforce_hook; print('isolated wheel import ok')"
-        /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); assert next(ep.value for ep in group if ep.name=='aivf')=='app.cli:main'"
+        cd /tmp
+        /tmp/aivf-wheel-test/bin/aivf --help
+        /tmp/aivf-wheel-test/bin/aivf-content --help
+        /tmp/aivf-wheel-test/bin/aivf-v3 --help
+        /tmp/aivf-wheel-test/bin/python -c "import os; import ai_video_factory; import app.cli; import app.web_app_v3; from app import wsgi; assert os.path.isdir(app.web_app_v3.app.template_folder); assert os.path.isdir(app.web_app_v3.app.static_folder); assert wsgi.app is app.web_app_v3.app; print('isolated wheel runtime ok')"
+        /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); names={ep.name:ep.value for ep in group}; assert names['aivf']=='app.cli:main'; assert names['aivf-content']=='app.content_factory_cli:main'; assert names['aivf-v3']=='ai_video_factory.v3_cli:main'"
     - name: Run tests with V3 coverage gate
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
@@ -95,6 +100,12 @@ jobs:
     - name: Install locked development environment
       shell: pwsh
       run: uv sync --frozen --python 3.12 --extra web --extra dev
+    - name: Install FFmpeg
+      shell: pwsh
+      run: |
+        choco install ffmpeg -y --no-progress
+        ffmpeg -version
+        ffprobe -version
     - name: Verify locked environment
       shell: pwsh
       run: uv pip check
@@ -106,7 +117,14 @@ jobs:
       env:
         PYTHONPATH: 01-MAIN-CODE;02-WEB-FILES;03-SIDE-CODE
       run: uv run python -c "from app import upload_cleanup; assert callable(upload_cleanup.cleanup_orphan_uploads)"
-
+    - name: Exercise real Windows FFmpeg path
+      shell: pwsh
+      env:
+        PYTHONPATH: 01-MAIN-CODE;02-WEB-FILES;03-SIDE-CODE
+      run: |
+        $video = Join-Path $env:RUNNER_TEMP 'aivf-windows-smoke.mp4'
+        ffmpeg -y -f lavfi -i 'color=c=black:s=320x240:d=1' -f lavfi -i 'anullsrc=r=48000:cl=mono' -shortest -c:v libx264 -c:a aac $video
+        uv run python -c "from ai_video_factory.render_engine import validate_media_output; validate_media_output(r'$video', require_video=True, require_audio=True)"
     - name: Run Windows-safe hardening tests
       shell: pwsh
       env:

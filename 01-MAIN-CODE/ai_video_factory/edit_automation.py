@@ -1,5 +1,6 @@
 """Simple automated editing helpers using the shared media runner."""
 import re
+import shutil
 from typing import List, Tuple
 
 from .render_engine import run_ffmpeg, run_ffprobe, validate_media_output
@@ -27,7 +28,7 @@ def detect_non_silent_segments(
         dur = _get_duration(video_path)
         return [(0.0, dur)] if dur else []
 
-    dur = _get_duration(video_path) or (silence_ends[-1] if silence_ends else 0.0)
+    dur = _get_duration(video_path)
     if dur <= 0:
         return []
 
@@ -47,17 +48,24 @@ def detect_non_silent_segments(
 
 def _get_duration(path: str) -> float:
     """Return duration of media using shared ffprobe execution."""
-    ffprobe = shutil.which("ffprobe") or "ffprobe"
     try:
         result = run_ffprobe([
-            ffprobe, "-v", "error",
+            "ffprobe", "-v", "error",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
             path,
-        ])
-        return float((result.stdout or "").strip())
-    except Exception:
-        return 0.0
+        ], timeout=20)
+    except Exception as exc:
+        raise RuntimeError(f"Could not determine media duration for {path}: {exc}") from exc
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed for {path}: {(result.stderr or 'unknown error').strip()[-1000:]}")
+    try:
+        duration = float((result.stdout or "").strip())
+    except ValueError as exc:
+        raise RuntimeError(f"ffprobe returned invalid duration for {path}") from exc
+    if duration <= 0:
+        raise RuntimeError(f"ffprobe returned a non-positive duration for {path}")
+    return duration
 
 
 def trim_segment(video_path: str, start: float, end: float, out_path: str) -> str:

@@ -18,6 +18,7 @@ class DashboardStore:
 
     WRITE_RETRIES = 3
     RETRY_DELAY_SECONDS = 0.05
+    MAX_LIST_LIMIT = 500
 
     def __init__(self, db_path: str | Path):
         self.db_path = str(Path(db_path))
@@ -123,9 +124,13 @@ class DashboardStore:
         return dict(row) if row else None
 
     def list_jobs(self, limit: int = 100) -> list[dict]:
+        try:
+            bounded_limit = max(1, min(int(limit), self.MAX_LIST_LIMIT))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("limit must be an integer") from exc
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (int(limit),)
+                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (bounded_limit,)
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -138,10 +143,32 @@ class DashboardStore:
         )
 
     def logs_since(self, job_id: str, last_id: int = 0) -> list[dict]:
+        try:
+            bounded_last_id = max(0, int(last_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("last_id must be an integer") from exc
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT id, created_at, level, message FROM job_logs "
                 "WHERE job_id=? AND id>? ORDER BY id ASC",
-                (job_id, last_id),
+                (job_id, bounded_last_id),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def check_rate_limit(self, client_ip: str, max_requests: int = 10, window_seconds: int = 60) -> bool:
+        if max_requests < 1 or window_seconds < 1:
+            raise ValueError("rate-limit values must be positive")
+        now = time.time()
+        cutoff = now - window_seconds
+
+        def write(conn: sqlite3.Connection) -> bool:
+            conn.execute("DELETE FROM rate_limits WHERE ts<?", (cutoff,))
+            count = conn.execute(
+                "SELECT COUNT(*) FROM rate_limits WHERE client_ip=?", (client_ip,)
+            ).fetchone()[0]
+            if count >= max_requests:
+                return False
+            conn.execute("INSERT INTO rate_limits (client_ip,ts) VALUES (?,?)", (client_ip, now))
+            return True
+
+        return self.write(write)

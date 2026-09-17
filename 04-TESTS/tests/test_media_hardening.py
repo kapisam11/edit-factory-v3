@@ -1,6 +1,8 @@
 import json
 import subprocess
 
+import pytest
+
 from ai_video_factory import complete_factory, music_intelligence
 from ai_video_factory import music_mixer, quality_control_v3
 
@@ -24,6 +26,17 @@ def test_music_intelligence_duration_uses_hardened_ffprobe(monkeypatch):
     assert calls["cmd"][0] == "ffprobe"
 
 
+def test_music_intelligence_duration_failure_is_not_coerced_to_zero(monkeypatch):
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "invalid media"
+
+    monkeypatch.setattr(music_intelligence, "run_ffprobe", lambda *args, **kwargs: Result())
+    with pytest.raises(RuntimeError, match="ffprobe failed"):
+        music_intelligence._duration("broken.mp3")
+
+
 def test_quality_control_audio_analysis_has_bounded_runner(monkeypatch, tmp_path):
     video = tmp_path / "video.mp4"
     video.write_bytes(b"x")
@@ -43,6 +56,18 @@ def test_quality_control_audio_analysis_has_bounded_runner(monkeypatch, tmp_path
     assert report["integrated_lufs"] == "-14.0"
     assert len(calls) == 2
     assert all(timeout == 300 for _, timeout, _ in calls)
+
+
+def test_quality_control_audio_analysis_failure_is_hard_failure(monkeypatch, tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"x")
+
+    def failing_run(*args, **kwargs):
+        raise RuntimeError("FFmpeg timed out")
+
+    monkeypatch.setattr(quality_control_v3, "run_ffmpeg", failing_run)
+    with pytest.raises(RuntimeError, match="Audio level analysis failed"):
+        quality_control_v3.check_audio_levels(str(video))
 
 
 def test_complete_factory_probe_uses_hardened_ffprobe(monkeypatch):
@@ -86,3 +111,30 @@ def test_music_mix_validates_final_media(monkeypatch, tmp_path):
     result = music_mixer.mix_audio(str(video), str(music), None, str(output))
     assert result == str(output)
     assert calls["validated"] is True
+
+
+def test_music_mixer_duration_failure_is_hard_failure(monkeypatch, tmp_path):
+    video = tmp_path / "video.mp4"
+    music = tmp_path / "music.mp3"
+    output = tmp_path / "out.mp4"
+    video.write_bytes(b"x")
+    music.write_bytes(b"x")
+
+    monkeypatch.setattr(music_mixer, "run_ffprobe", lambda *args, **kwargs: type("R", (), {
+        "returncode": 1, "stdout": "", "stderr": "bad input"
+    })())
+    with pytest.raises(RuntimeError, match="ffprobe failed"):
+        music_mixer.add_music_to_video(str(video), str(music), str(output))
+
+
+def test_render_engine_ffmpeg_failure_contains_stderr(monkeypatch):
+    from ai_video_factory import render_engine
+
+    monkeypatch.setattr(render_engine.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def failing_run(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, ["ffmpeg"], stderr="codec initialization failed")
+
+    monkeypatch.setattr(render_engine.subprocess, "run", failing_run)
+    with pytest.raises(RuntimeError, match="codec initialization failed"):
+        render_engine.run_ffmpeg(["ffmpeg", "-version"])

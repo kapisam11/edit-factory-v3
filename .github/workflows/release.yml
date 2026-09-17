@@ -116,9 +116,11 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
+          set -euo pipefail
           test -n "$DEPLOY_USER"
           test -n "$DEPLOY_PATH"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT'"
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p ${q_deploy_path}/06-CONFIG-AND-DEPLOYMENT"
 
       - name: Copy Compose configuration
         env:
@@ -136,10 +138,13 @@ jobs:
           REGISTRY_USER: ${{ secrets.DEPLOY_REGISTRY_USER }}
           REGISTRY_TOKEN: ${{ secrets.DEPLOY_REGISTRY_TOKEN }}
         run: |
+          set -euo pipefail
           test -n "$REGISTRY_USER"
           test -n "$REGISTRY_TOKEN"
+          printf -v q_registry '%q' "$REGISTRY"
+          printf -v q_registry_user '%q' "$REGISTRY_USER"
           printf '%s' "$REGISTRY_TOKEN" | ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "docker login '$REGISTRY' -u '$REGISTRY_USER' --password-stdin"
+            "docker login ${q_registry} -u ${q_registry_user} --password-stdin"
 
       - name: Pull image and restart service
         env:
@@ -148,9 +153,13 @@ jobs:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           DEPLOY_TAG: ${{ inputs.image_tag || github.ref_name }}
         run: |
+          set -euo pipefail
           test -n "$DEPLOY_TAG"
+          [[ "$DEPLOY_TAG" =~ ^[A-Za-z0-9._-]+$ ]]
           IMAGE="${REGISTRY}/${IMAGE_NAME}:${DEPLOY_TAG}"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && docker pull '$IMAGE' && AIVF_IMAGE='$IMAGE' docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml up -d --no-build --remove-orphans"
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          printf -v q_image '%q' "$IMAGE"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && docker pull ${q_image} && AIVF_IMAGE=${q_image} docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml up -d --no-build --remove-orphans"
 
       - name: Verify deployed health endpoint
         env:
@@ -158,4 +167,6 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS http://127.0.0.1:5000/api/health && exit 0; sleep 3; done; exit 1"
+          set -euo pipefail
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS http://127.0.0.1:5000/api/health && exit 0; sleep 3; done; exit 1"

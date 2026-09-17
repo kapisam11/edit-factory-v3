@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 import time
 
+import pytest
+
 from dashboard_cache import HybridCache
 from dashboard_store import DashboardStore
 
@@ -57,6 +59,18 @@ def test_dashboard_store_indexes_and_job_roundtrip(tmp_path):
     assert store.get_job("job-1")["status"] == "queued"
     assert store.update_job_if_status("job-1", ("queued",), status="running") == 1
     assert store.update_job_if_status("job-1", ("queued",), status="done") == 0
+
+
+def test_dashboard_store_list_limit_is_bounded(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store = DashboardStore(db)
+    for index in range(3):
+        store.insert_job(f"job-{index}", f"topic-{index}", {})
+    assert len(store.list_jobs(999999)) == 3
+    assert len(store.list_jobs(-10)) == 1
+    with pytest.raises(ValueError, match="limit"):
+        store.list_jobs("not-an-int")
 
 
 def test_hybrid_cache_expires_and_deletes():
