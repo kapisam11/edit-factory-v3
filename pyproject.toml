@@ -37,7 +37,8 @@ py-modules = ["cli", "dashboard_auth", "dashboard_cache", "dashboard_compat", "d
 
 [tool.setuptools.data-files]
 "share/ai-video-factory/templates" = ["02-WEB-FILES/templates/index.html", "02-WEB-FILES/templates/login.html", "02-WEB-FILES/templates/minecraft_betrayal.json"]
-"share/ai-video-factory/static/css" = ["02-WEB-FILES/static/css/style.css"]
+"share/ai-video-factory/static/css" = ["02-WEB-FILES/static/css/style.css", "02-WEB-FILES/static/css/enhancements.css"]
+"share/ai-video-factory/static/js" = ["02-WEB-FILES/static/js/dashboard_enhancements.js"]
 
 [tool.pytest.ini_options]
 markers = ["integration: tests that execute external media/runtime components such as FFmpeg"]
