@@ -60,12 +60,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Build locked dependency environment
+        if: ${{ secrets.SNYK_TOKEN != '' }}
+        run: uv sync --frozen --python 3.12 --extra web --extra dev --extra audit
+      - name: Export locked dependency manifest
+        if: ${{ secrets.SNYK_TOKEN != '' }}
+        run: uv export --locked --format requirements-txt --all-extras --no-hashes --output-file "$RUNNER_TEMP/aivf-snyk-requirements.txt"
       - name: Snyk dependency scan
         if: ${{ secrets.SNYK_TOKEN != '' }}
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          npx --yes snyk@latest test --file=pyproject.toml --package-manager=pip --severity-threshold=high
+          npx --yes snyk@latest test \
+            --file="$RUNNER_TEMP/aivf-snyk-requirements.txt" \
+            --package-manager=pip \
+            --command=python \
+            --severity-threshold=high
       - name: Explain optional configuration
         if: ${{ secrets.SNYK_TOKEN == '' }}
         run: echo "SNYK_TOKEN is not configured; Snyk scan skipped without failing CI."
