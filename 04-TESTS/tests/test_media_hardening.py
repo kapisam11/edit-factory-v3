@@ -138,3 +138,37 @@ def test_render_engine_ffmpeg_failure_contains_stderr(monkeypatch):
     monkeypatch.setattr(render_engine.subprocess, "run", failing_run)
     with pytest.raises(RuntimeError, match="codec initialization failed"):
         render_engine.run_ffmpeg(["ffmpeg", "-version"])
+
+
+def test_render_engine_capture_disabled_still_reports_ffmpeg_stderr(monkeypatch):
+    from ai_video_factory import render_engine
+
+    monkeypatch.setattr(render_engine.shutil, "which", lambda name: f"/usr/bin/{name}")
+    calls = {}
+
+    def fake_run(cmd, **kwargs):
+        calls.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 1, stdout=None, stderr="missing encoder")
+
+    monkeypatch.setattr(render_engine.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="missing encoder"):
+        render_engine.run_ffmpeg(["ffmpeg", "-i", "input.mp4", "output.mp4"])
+    assert calls["stderr"] is subprocess.PIPE
+    assert calls["check"] is False
+
+
+def test_render_engine_rejects_missing_media_inputs(tmp_path):
+    from ai_video_factory import render_engine
+
+    with pytest.raises(FileNotFoundError, match="subtitle video"):
+        render_engine.burn_subtitles(
+            str(tmp_path / "missing.mp4"),
+            str(tmp_path / "captions.srt"),
+            str(tmp_path / "out.mp4"),
+        )
+    with pytest.raises(FileNotFoundError, match="voiceover audio"):
+        render_engine.mix_voiceover(
+            str(tmp_path / "video.mp4"),
+            str(tmp_path / "missing.wav"),
+            str(tmp_path / "out.mp4"),
+        )
