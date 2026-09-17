@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -112,13 +113,33 @@ def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bo
     cmd[0] = _ffmpeg_binary()
     timeout = timeout if timeout is not None else _bounded_timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600)
     try:
-        return subprocess.run(
+        if capture_output:
+            return subprocess.run(
+                cmd,
+                check=True,
+                timeout=timeout,
+                capture_output=True,
+                text=True,
+            )
+
+        result = subprocess.run(
             cmd,
-            check=True,
+            check=False,
             timeout=timeout,
-            capture_output=capture_output,
-            text=capture_output,
+            stdout=None,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        if result.returncode != 0:
+            detail = (result.stderr or "").strip()
+            if len(detail) > 2000:
+                detail = detail[-2000:]
+            suffix = f": {detail}" if detail else ""
+            raise RuntimeError(f"FFmpeg failed with exit code {result.returncode}{suffix}")
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+            sys.stderr.flush()
+        return result
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         if len(detail) > 2000:
