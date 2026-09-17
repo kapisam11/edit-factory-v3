@@ -273,6 +273,9 @@ class ResearchStage(PipelineStage):
         else:
             ctx.warnings.append(f"Research failed: {result.error}")
             ctx.research = {"title": ctx.topic, "topic": ctx.topic}
+        if ctx.package_dir:
+            with open(os.path.join(ctx.package_dir, "research.json"), "w", encoding="utf-8") as handle:
+                json.dump(ctx.research, handle, indent=2, ensure_ascii=False)
         return ctx
 
 
@@ -282,11 +285,15 @@ class PlanStage(PipelineStage):
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         from .plan import make_idea
-        summary = ctx.research or {"title": ctx.topic, "topic": ctx.topic}
+        summary = dict(ctx.research or {"title": ctx.topic, "topic": ctx.topic})
+        summary["target_total_seconds"] = ctx.target_seconds
         ctx.plan = make_idea(summary)
         ctx.edit_plan = ctx.plan.get("edit_plan", [])
         if not ctx.plan:
             raise RuntimeError("Plan generation produced no plan")
+        if ctx.package_dir:
+            with open(os.path.join(ctx.package_dir, "plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(ctx.plan, handle, indent=2, ensure_ascii=False)
         return ctx
 
 
@@ -299,6 +306,13 @@ class ScriptStage(PipelineStage):
         ctx.script = generate_script(ctx.plan, ctx.topic)
         if not ctx.script.strip():
             raise RuntimeError("Script generation produced an empty script")
+        if ctx.package_dir:
+            with open(os.path.join(ctx.package_dir, "script.txt"), "w", encoding="utf-8") as handle:
+                handle.write(ctx.script)
+            plan_payload = dict(ctx.plan)
+            plan_payload["script"] = ctx.script
+            with open(os.path.join(ctx.package_dir, "plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(plan_payload, handle, indent=2, ensure_ascii=False)
         return ctx
 
 
@@ -337,7 +351,7 @@ class ThumbnailStage(PipelineStage):
 
 class AutoEditStage(PipelineStage):
     name = "auto_edit"
-    skippable = True
+    skippable = False
     retryable = True
     max_retries = 2
 
