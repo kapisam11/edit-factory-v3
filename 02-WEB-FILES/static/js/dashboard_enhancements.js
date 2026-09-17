@@ -148,21 +148,23 @@
             window.checkJobStatus = async function(jobId) {
                 enhancementJobId = jobId;
                 await original(jobId);
-                try {
-                    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/status`, { cache: 'no-store' });
-                    const data = await res.json();
-                    if (data.status === 'done') {
-                        enhancementTerminal = true;
-                        hideRetry();
-                        await showPreview(jobId);
-                    } else if (data.status === 'error' || data.status === 'interrupted') {
-                        enhancementTerminal = true;
-                        showRetry();
-                    } else {
-                        enhancementTerminal = false;
-                        hideRetry();
-                    }
-                } catch (_) {}
+
+                // The canonical status handler already performed the status request.
+                // Reuse its terminal-state DOM update instead of fetching the same
+                // endpoint a second time every five seconds.
+                const statusEl = document.getElementById('logStatus');
+                const className = statusEl?.className || '';
+                if (className.includes('done')) {
+                    enhancementTerminal = true;
+                    hideRetry();
+                    await showPreview(jobId);
+                } else if (className.includes('error')) {
+                    enhancementTerminal = true;
+                    showRetry();
+                } else {
+                    enhancementTerminal = false;
+                    hideRetry();
+                }
             };
             window.__aivfStatusWrapped = true;
         }
