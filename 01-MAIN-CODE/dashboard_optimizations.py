@@ -160,4 +160,15 @@ def install_dashboard_optimizations(app_module: Any) -> None:
             )
             cache.delete("jobs:list")
             return jsonify({"error": f"Retry could not start: {exc}"}), 500
+
+        final_job = app_module.db_get_job(job_id) or {}
+        if final_job.get("status") == "error":
+            app_module._runtime_secrets.pop(job_id, None)
+            cache.delete("jobs:list")
+            return jsonify({
+                "error": final_job.get("error") or "Retry could not start",
+                "job_id": job_id,
+                "status": "error",
+            }), 500
+
         return jsonify({"job_id": job_id, "status": "running" if started else "queued"}), 202
