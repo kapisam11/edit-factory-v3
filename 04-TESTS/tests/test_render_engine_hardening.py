@@ -35,7 +35,8 @@ def test_run_ffmpeg_capture_path_accepts_resolved_binary_path(monkeypatch):
 
 
 def test_run_ffmpeg_streams_stderr_and_keeps_bounded_tail(monkeypatch):
-    stream = io.StringIO("progress 1\nprogress 2\ncodec initialization failed\n")
+    stderr_data = "progress 1\nprogress 2\ncodec initialization failed\n"
+    stream = io.StringIO(stderr_data)
     output = io.StringIO()
     monkeypatch.setattr(render_engine.sys, "stderr", output)
 
@@ -53,7 +54,7 @@ def test_run_ffmpeg_streams_stderr_and_keeps_bounded_tail(monkeypatch):
     with pytest.raises(RuntimeError, match="codec initialization failed"):
         render_engine.run_ffmpeg(["ffmpeg", "-version"], timeout=11)
 
-    assert output.getvalue() == stream.getvalue()
+    assert output.getvalue() == stderr_data
 
 
 def test_ffprobe_timeout_is_bounded(monkeypatch):
