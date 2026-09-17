@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+from collections import deque
 from pathlib import Path
 from typing import List, Optional
 
@@ -108,6 +110,61 @@ def validate_media_output(path: str, require_video: bool = True, require_audio: 
     return data
 
 
+def _run_ffmpeg_streaming(cmd: List[str], timeout: int) -> subprocess.CompletedProcess:
+    """Run FFmpeg while streaming stderr and retaining only a bounded failure tail."""
+    process = subprocess.Popen(
+        cmd,
+        check=False,
+        stdout=None,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    stderr_tail = deque(maxlen=200)
+
+    def pump_stderr() -> None:
+        stream = process.stderr
+        if stream is None:
+            return
+        try:
+            for line in stream:
+                stderr_tail.append(line)
+                sys.stderr.write(line)
+                sys.stderr.flush()
+        finally:
+            stream.close()
+
+    reader = threading.Thread(
+        target=pump_stderr,
+        name="aivf-ffmpeg-stderr",
+        daemon=True,
+    )
+    reader.start()
+
+    try:
+        returncode = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            process.wait(timeout=5)
+        reader.join(timeout=2)
+        raise RuntimeError(f"FFmpeg timed out after {timeout}s") from exc
+
+    reader.join(timeout=2)
+    detail = "".join(stderr_tail)
+    if returncode != 0:
+        detail = detail.strip()
+        if len(detail) > 2000:
+            detail = detail[-2000:]
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"FFmpeg failed with exit code {returncode}{suffix}")
+
+    return subprocess.CompletedProcess(cmd, returncode, stdout=None, stderr=detail)
+
+
 def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bool = False) -> subprocess.CompletedProcess:
     cmd = _validate_tool_argv(cmd, "ffmpeg")
     cmd[0] = _ffmpeg_binary()
@@ -121,33 +178,13 @@ def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bo
                 capture_output=True,
                 text=True,
             )
-
-        result = subprocess.run(
-            cmd,
-            check=False,
-            timeout=timeout,
-            stdout=None,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        if result.returncode != 0:
-            detail = (result.stderr or "").strip()
-            if len(detail) > 2000:
-                detail = detail[-2000:]
-            suffix = f": {detail}" if detail else ""
-            raise RuntimeError(f"FFmpeg failed with exit code {result.returncode}{suffix}")
-        if result.stderr:
-            sys.stderr.write(result.stderr)
-            sys.stderr.flush()
-        return result
+        return _run_ffmpeg_streaming(cmd, timeout)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         if len(detail) > 2000:
             detail = detail[-2000:]
         suffix = f": {detail}" if detail else ""
         raise RuntimeError(f"FFmpeg failed with exit code {exc.returncode}{suffix}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"FFmpeg timed out after {timeout}s") from exc
 
 
 def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str) -> None:
