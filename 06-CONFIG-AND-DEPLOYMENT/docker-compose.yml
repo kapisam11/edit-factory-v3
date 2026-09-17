@@ -1,5 +1,6 @@
 services:
   web:
+    image: ${AIVF_IMAGE:-ghcr.io/kapisam11/edit-factory-v3:latest}
     build:
       context: .
       dockerfile: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
@@ -14,6 +15,7 @@ services:
       AIVF_RETENTION_DAYS: ${AIVF_RETENTION_DAYS:-7}
       AIVF_CLEANUP_INTERVAL_SECONDS: ${AIVF_CLEANUP_INTERVAL_SECONDS:-21600}
       AIVF_MAX_CONCURRENT_JOBS: ${AIVF_MAX_CONCURRENT_JOBS:-2}
+      AIVF_REDIS_URL: ${AIVF_REDIS_URL:-}
     volumes:
       - aivf-output:/app/output
       - aivf-uploads:/app/uploads
