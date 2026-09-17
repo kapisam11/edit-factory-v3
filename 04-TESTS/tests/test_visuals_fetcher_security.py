@@ -50,3 +50,32 @@ def test_research_fallback_validation_allows_public_https(monkeypatch):
     assert visuals_fetcher.validate_remote_url(
         "https://example.com/article", allowed_hosts=None
     ) == "https://example.com/article"
+
+
+def test_safe_get_revalidates_redirect_target(monkeypatch):
+    class Response:
+        def __init__(self, status_code, location=None):
+            self.status_code = status_code
+            self.headers = {"Location": location} if location else {}
+
+    calls = []
+    responses = iter([Response(302, "https://example.com/private.jpg")])
+
+    def fake_request(url, **kwargs):
+        calls.append((url, kwargs))
+        return next(responses)
+
+    monkeypatch.setattr(visuals_fetcher.requests, "get", fake_request)
+    monkeypatch.setattr(
+        visuals_fetcher.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(0, 0, 0, "", ("93.184.216.34", 443))],
+    )
+
+    with pytest.raises(ValueError, match="host is not allowed"):
+        visuals_fetcher._safe_get(
+            "https://upload.wikimedia.org/test.jpg",
+            allowed_hosts=visuals_fetcher._VISUAL_DOWNLOAD_HOSTS,
+        )
+    assert len(calls) == 1
+    assert calls[0][1]["allow_redirects"] is False
