@@ -1,0 +1,177 @@
+name: Build, publish, and deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy the selected image to the configured production host"
+        required: false
+        default: false
+        type: boolean
+      image_tag:
+        description: "Image tag to deploy when running manually"
+        required: false
+        default: "latest"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  container:
+    name: Build and publish container
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
+
+      - name: Attest container provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  deploy:
+    name: Deploy to production host
+    needs: container
+    if: >-
+      ${{ vars.AIVF_DEPLOY_ENABLED == 'true' &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy == true)) }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout deployment configuration
+        uses: actions/checkout@v6
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
+
+      - name: Prepare remote deployment directory
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_PATH"
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p ${q_deploy_path}/06-CONFIG-AND-DEPLOYMENT"
+
+      - name: Copy Compose configuration
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          scp 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/docker-compose.yml"
+
+      - name: Log in to GHCR on remote host
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          REGISTRY_USER: ${{ secrets.DEPLOY_REGISTRY_USER }}
+          REGISTRY_TOKEN: ${{ secrets.DEPLOY_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$REGISTRY_USER"
+          test -n "$REGISTRY_TOKEN"
+          printf -v q_registry '%q' "$REGISTRY"
+          printf -v q_registry_user '%q' "$REGISTRY_USER"
+          printf '%s' "$REGISTRY_TOKEN" | ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ${q_registry} -u ${q_registry_user} --password-stdin"
+
+      - name: Pull image and restart service
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_TAG: ${{ inputs.image_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_TAG"
+          [[ "$DEPLOY_TAG" =~ ^[A-Za-z0-9._-]+$ ]]
+          IMAGE="${REGISTRY}/${IMAGE_NAME}:${DEPLOY_TAG}"
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          printf -v q_image '%q' "$IMAGE"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && docker pull ${q_image} && AIVF_IMAGE=${q_image} docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml up -d --no-build --remove-orphans"
+
+      - name: Verify deployed health endpoint
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS http://127.0.0.1:5000/api/health && exit 0; sleep 3; done; exit 1"

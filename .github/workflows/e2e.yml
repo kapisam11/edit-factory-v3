@@ -1,0 +1,98 @@
+name: Dashboard E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dashboard-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dashboard environment
+        run: uv sync --frozen --python 3.12 --extra web --extra dev
+      - name: Start dashboard
+        env:
+          FLASK_SECRET_KEY: e2e-session-secret
+          AIVF_DASHBOARD_TOKEN: e2e-dashboard-token
+          AIVF_STATE_DIR: ${{ runner.temp }}/aivf-state
+          AIVF_UPLOAD_DIR: ${{ runner.temp }}/aivf-uploads
+          AIVF_OUTPUT_DIR: ${{ runner.temp }}/aivf-output
+          PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+        run: |
+          mkdir -p "$AIVF_STATE_DIR" "$AIVF_UPLOAD_DIR" "$AIVF_OUTPUT_DIR"
+          nohup uv run gunicorn -c 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py app.wsgi:app > "$RUNNER_TEMP/aivf-gunicorn.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/aivf-gunicorn.pid"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/api/health > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/aivf-gunicorn.log"
+          exit 1
+      - name: Run authenticated dashboard flow
+        env:
+          AIVF_DASHBOARD_TOKEN: e2e-dashboard-token
+          BASE_URL: http://127.0.0.1:5000
+          COOKIE_JAR: ${{ runner.temp }}/aivf-cookies.txt
+          RESULTS_DIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE_URL/login" > /dev/null
+          curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -L \
+            -d "token=$AIVF_DASHBOARD_TOKEN" "$BASE_URL/login" > /dev/null
+          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs" > "$RESULTS_DIR/jobs.json"
+          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/queue/status" > "$RESULTS_DIR/queue.json"
+          curl -fsS -b "$COOKIE_JAR" \
+            -H "Origin: $BASE_URL" \
+            -H "Content-Type: application/json" \
+            -d '{"max_concurrent_jobs":1}' \
+            "$BASE_URL/api/settings" > "$RESULTS_DIR/settings.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RESULTS_DIR"])
+          settings = json.loads((root / "settings.json").read_text())
+          assert settings["max_concurrent_jobs"] == 1
+          jobs = json.loads((root / "jobs.json").read_text())
+          assert isinstance(jobs, list)
+          queue = json.loads((root / "queue.json").read_text())
+          assert "queued" in queue and "running" in queue
+          PY
+      - name: Verify cross-origin writes fail closed
+        env:
+          BASE_URL: http://127.0.0.1:5000
+          COOKIE_JAR: ${{ runner.temp }}/aivf-cookies.txt
+        run: |
+          code=$(curl -sS -o "$RUNNER_TEMP/forbidden.json" -w '%{http_code}' \
+            -X POST -b "$COOKIE_JAR" \
+            -H 'Content-Type: application/json' \
+            -d '{"max_concurrent_jobs":2}' \
+            "$BASE_URL/api/settings")
+          test "$code" = "403"
+      - name: Show server log on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/aivf-gunicorn.log"
+      - name: Stop dashboard
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/aivf-gunicorn.pid"; then
+            kill "$(cat "$RUNNER_TEMP/aivf-gunicorn.pid")" || true
+          fi

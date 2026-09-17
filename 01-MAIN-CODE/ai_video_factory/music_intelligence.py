@@ -7,17 +7,29 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from typing import Any, Dict, List, Optional
+
+from .render_engine import run_ffprobe
 
 
 def _duration(path: str) -> float:
-    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=20)
-        return max(0.0, float(result.stdout.strip()))
-    except Exception:
-        return 0.0
+        result = run_ffprobe(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path],
+            timeout=20,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Could not determine music duration for {path}: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or "ffprobe failed").strip()[-1000:]
+        raise RuntimeError(f"ffprobe failed for {path}: {detail}")
+    try:
+        duration = float((result.stdout or "").strip())
+    except ValueError as exc:
+        raise RuntimeError(f"ffprobe returned invalid duration for {path}") from exc
+    if duration <= 0:
+        raise RuntimeError(f"ffprobe returned a non-positive duration for {path}")
+    return duration
 
 
 def analyze_music(path: str, *, hop_length: int = 512) -> Dict[str, Any]:

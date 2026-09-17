@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 import math
 import os
-import subprocess
 from dataclasses import asdict
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .production_models import Scene
+from .render_engine import run_ffprobe
 
 
 class SceneAnalysisError(RuntimeError):
@@ -26,11 +26,25 @@ def _ffprobe_duration(video_path: str) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1", video_path,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
-        value = float(result.stdout.strip())
-        return max(0.0, value)
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return 0.0
+        result = run_ffprobe(cmd, timeout=30)
+    except (OSError, RuntimeError) as exc:
+        raise SceneAnalysisError(f"FFprobe failed while reading duration for {video_path}: {exc}") from exc
+
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip()
+        suffix = f": {detail[-1000:]}" if detail else ""
+        raise SceneAnalysisError(f"FFprobe failed while reading duration for {video_path}{suffix}")
+
+    raw_value = (result.stdout or "").strip()
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise SceneAnalysisError(
+            f"FFprobe returned an invalid duration for {video_path}: {raw_value!r}"
+        ) from exc
+    if not math.isfinite(value) or value <= 0:
+        raise SceneAnalysisError(f"FFprobe returned a non-positive duration for {video_path}")
+    return value
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -119,27 +133,13 @@ def analyze_video(
 ) -> List[Scene]:
     """Analyze a source video into coarse scenes.
 
-    The fallback path still creates a useful deterministic scene index from
-    duration alone. OpenCV augments scenes with motion/brightness/faces/OCR.
+    Duration is always established through FFprobe before scene analysis.
+    OpenCV augments scenes with motion/brightness/faces/OCR.
     """
     if not video_path or not os.path.exists(video_path):
         raise SceneAnalysisError(f"Video does not exist: {video_path}")
 
     duration = _ffprobe_duration(video_path)
-    if duration <= 0:
-        try:
-            import cv2  # type: ignore
-            cap = cv2.VideoCapture(video_path)
-            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
-            frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-            cap.release()
-            if fps > 0 and frames > 0:
-                duration = frames / fps
-        except Exception:
-            duration = 0.0
-
-    if duration <= 0:
-        raise SceneAnalysisError("Unable to determine source video duration")
 
     step = max(0.5, float(sample_seconds))
     count = min(max_scenes, max(1, int(math.ceil(duration / step))))

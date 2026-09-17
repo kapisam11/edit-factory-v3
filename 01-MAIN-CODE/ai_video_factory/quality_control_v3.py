@@ -1,9 +1,8 @@
 """AI Video Factory — Enhanced Quality Control v3."""
 import json
 import os
-import subprocess
-from typing import Any, Dict, List, Optional
 import re
+from typing import Any, Dict, List, Optional
 
 from .render_engine import run_ffmpeg
 
@@ -20,10 +19,9 @@ def check_black_frames(video_path: str, threshold: float = 0.95, min_duration: f
     cmd = ["ffmpeg", "-i", video_path, "-vf", f"blackdetect=d={min_duration}:pic_th={threshold}", "-an", "-f", "null", "-"]
     try:
         result = run_ffmpeg(cmd, capture_output=True)
-        stderr = result.stderr or ""
-    except Exception:
-        return []
-    return _parse_filter_ranges(stderr, "black_start", "black_end")
+    except Exception as exc:
+        raise RuntimeError(f"Black-frame analysis failed: {exc}") from exc
+    return _parse_filter_ranges(result.stderr or "", "black_start", "black_end")
 
 
 def check_frozen_frames(video_path: str, min_duration: float = 1.0) -> List[Dict]:
@@ -32,29 +30,38 @@ def check_frozen_frames(video_path: str, min_duration: float = 1.0) -> List[Dict
     cmd = ["ffmpeg", "-i", video_path, "-vf", f"freezedetect=n=-60dB:d={min_duration}", "-an", "-f", "null", "-"]
     try:
         result = run_ffmpeg(cmd, capture_output=True)
-        stderr = result.stderr or ""
-    except Exception:
-        return []
-    return _parse_filter_ranges(stderr, "freeze_start", "freeze_end")
+    except Exception as exc:
+        raise RuntimeError(f"Frozen-frame analysis failed: {exc}") from exc
+    return _parse_filter_ranges(result.stderr or "", "freeze_start", "freeze_end")
 
 
 def check_audio_levels(video_path: str) -> Dict[str, Any]:
     if not os.path.exists(video_path):
         return {"error": "Video not found"}
     cmd = ["ffmpeg", "-i", video_path, "-af", "loudnorm=print_format=json", "-f", "null", "-"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = run_ffmpeg(cmd, timeout=300, capture_output=True)
+    except Exception as exc:
+        raise RuntimeError(f"Audio level analysis failed: {exc}") from exc
     lufs_data = {}
     try:
-        json_start = result.stderr.find("{")
-        json_end = result.stderr.rfind("}") + 1
+        stderr = result.stderr or ""
+        json_start = stderr.find("{")
+        json_end = stderr.rfind("}") + 1
         if json_start >= 0 and json_end > json_start:
-            lufs_data = json.loads(result.stderr[json_start:json_end])
-    except json.JSONDecodeError:
-        pass
+            lufs_data = json.loads(stderr[json_start:json_end])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Audio level analysis returned malformed loudnorm JSON") from exc
+    if not lufs_data:
+        raise RuntimeError("Audio level analysis returned no loudnorm data")
+
     silence_cmd = ["ffmpeg", "-i", video_path, "-af", "silencedetect=noise=-50dB:d=0.5", "-f", "null", "-"]
-    silence_result = subprocess.run(silence_cmd, capture_output=True, text=True)
+    try:
+        silence_result = run_ffmpeg(silence_cmd, timeout=300, capture_output=True)
+    except Exception as exc:
+        raise RuntimeError(f"Silence analysis failed: {exc}") from exc
     silence_segments = []
-    for line in silence_result.stderr.split("\n"):
+    for line in (silence_result.stderr or "").split("\n"):
         if "silence_start:" in line:
             try:
                 start = float(line.split("silence_start:")[1].split()[0])
@@ -69,7 +76,14 @@ def check_audio_levels(video_path: str) -> Dict[str, Any]:
                     silence_segments[-1]["duration"] = end - silence_segments[-1]["start"]
             except (ValueError, IndexError):
                 continue
-    return {"integrated_lufs": lufs_data.get("input_i", "unknown"), "true_peak": lufs_data.get("input_tp", "unknown"), "loudness_range": lufs_data.get("input_lra", "unknown"), "silence_segments": silence_segments, "silence_count": len(silence_segments), "recommendation": _audio_recommendation(lufs_data, silence_segments)}
+    return {
+        "integrated_lufs": lufs_data.get("input_i", "unknown"),
+        "true_peak": lufs_data.get("input_tp", "unknown"),
+        "loudness_range": lufs_data.get("input_lra", "unknown"),
+        "silence_segments": silence_segments,
+        "silence_count": len(silence_segments),
+        "recommendation": _audio_recommendation(lufs_data, silence_segments),
+    }
 
 
 def _audio_recommendation(lufs_data: Dict, silence_segments: List) -> str:
@@ -121,8 +135,8 @@ def run_enhanced_qc(package_dir: str, research: Optional[Dict] = None, script: O
         from .quality_control import run_final_checks
         base_report = run_final_checks(package_dir)
         result["checks"].update(base_report.get("checks", {}))
-    except Exception as e:
-        result["warnings"].append(f"Base QC failed: {e}")
+    except Exception as exc:
+        raise RuntimeError(f"Base QC failed: {exc}") from exc
     if main_video:
         black = check_black_frames(main_video)
         if black:
