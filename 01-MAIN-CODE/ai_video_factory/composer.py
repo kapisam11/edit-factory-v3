@@ -157,16 +157,6 @@ def compose_short_from_video(
     edit_plan = [(6, "segment")]
     script = ""
     plan: Dict[str, Any] = {}
-    if not skip_qc:
-        try:
-            from .quality_control import run_final_checks
-            checks = run_final_checks(package_dir)
-            if not checks.get("ok", False):
-                raise RuntimeError("Final quality checks failed: " + "; ".join(checks.get("notes", [])))
-        except RuntimeError:
-            raise
-        except Exception as e:
-            logger.warning("Final checks could not run: %s", e)
 
     if review:
         try:
@@ -212,7 +202,7 @@ def compose_short_from_video(
     if not clip_paths:
         raise RuntimeError("No clips could be generated from input video.")
     if is_v3 and len(clip_paths) != len(edit_plan):
-        raise RuntimeError(f"V3 rendered source clip count {len(clip_paths)} != edit-plan count {len(edit_plan)}")
+        raise RuntimeError(f"V3 source clip count {len(clip_paths)} != edit-plan count {len(edit_plan)}")
 
     filter_effectiveness = _load_filter_effectiveness(package_dir)
     target_size = _target_size_from_plan(plan)
@@ -251,8 +241,7 @@ def compose_short_from_video(
     seq_files = _apply_templates(seq_files, package_dir)
 
     subtitle_path = os.path.join(package_dir, "captions.ass")
-    choreographed = os.path.exists(subtitle_path)
-    if not choreographed:
+    if not os.path.exists(subtitle_path):
         subtitle_path = os.path.join(package_dir, "script.srt")
         try:
             script_to_srt(script, subtitle_path)
@@ -281,6 +270,16 @@ def compose_short_from_video(
         except Exception as e:
             logger.warning("voiceover mix failed: %s", e)
 
-    if not os.path.exists(out_file):
-        raise RuntimeError(f"Final output missing: {out_file}")
+    if not os.path.isfile(out_file) or os.path.getsize(out_file) <= 0:
+        raise RuntimeError(f"Final output missing or empty: {out_file}")
+
+    if not skip_qc:
+        try:
+            from .quality_control import run_final_checks
+            report = run_final_checks(package_dir)
+        except Exception as exc:
+            raise RuntimeError(f"Final quality checks failed after render: {exc}") from exc
+        if not report.get("ok", False):
+            raise RuntimeError("Final quality checks failed after render: " + "; ".join(report.get("notes", [])))
+
     return out_file
