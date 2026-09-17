@@ -1,10 +1,11 @@
+import io
 import json
 import subprocess
 
 import pytest
 
 from ai_video_factory import complete_factory, music_intelligence
-from ai_video_factory import music_mixer, quality_control_v3
+from ai_video_factory import music_mixer, quality_control_v3, render_engine, tts
 
 
 def test_music_intelligence_duration_uses_hardened_ffprobe(monkeypatch):
@@ -128,8 +129,6 @@ def test_music_mixer_duration_failure_is_hard_failure(monkeypatch, tmp_path):
 
 
 def test_render_engine_ffmpeg_failure_contains_stderr(monkeypatch):
-    from ai_video_factory import render_engine
-
     monkeypatch.setattr(render_engine.shutil, "which", lambda name: f"/usr/bin/{name}")
 
     def failing_run(*args, **kwargs):
@@ -137,29 +136,43 @@ def test_render_engine_ffmpeg_failure_contains_stderr(monkeypatch):
 
     monkeypatch.setattr(render_engine.subprocess, "run", failing_run)
     with pytest.raises(RuntimeError, match="codec initialization failed"):
-        render_engine.run_ffmpeg(["ffmpeg", "-version"])
+        render_engine.run_ffmpeg(["ffmpeg", "-version"], capture_output=True)
 
 
-def test_render_engine_capture_disabled_still_reports_ffmpeg_stderr(monkeypatch):
-    from ai_video_factory import render_engine
-
+def test_render_engine_capture_disabled_streams_and_reports_ffmpeg_stderr(monkeypatch):
     monkeypatch.setattr(render_engine.shutil, "which", lambda name: f"/usr/bin/{name}")
-    calls = {}
+    output = io.StringIO()
+    monkeypatch.setattr(render_engine.sys, "stderr", output)
+    stream = io.StringIO("progress\nmissing encoder\n")
 
-    def fake_run(cmd, **kwargs):
-        calls.update(kwargs)
-        return subprocess.CompletedProcess(cmd, 1, stdout=None, stderr="missing encoder")
+    class FakeProcess:
+        stderr = stream
 
-    monkeypatch.setattr(render_engine.subprocess, "run", fake_run)
+        def wait(self, timeout=None):
+            assert timeout == 60
+            return 1
+
+    monkeypatch.setattr(render_engine.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     with pytest.raises(RuntimeError, match="missing encoder"):
-        render_engine.run_ffmpeg(["ffmpeg", "-i", "input.mp4", "output.mp4"])
-    assert calls["stderr"] is subprocess.PIPE
-    assert calls["check"] is False
+        render_engine.run_ffmpeg(["ffmpeg", "-i", "input.mp4", "output.mp4"], timeout=60)
+    assert output.getvalue() == "progress\nmissing encoder\n"
+
+
+def test_tts_output_validation_requires_audio_stream(monkeypatch, tmp_path):
+    output = tmp_path / "voice.mp3"
+    output.write_bytes(b"not-empty")
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"streams": [{"codec_type": "video", "duration": "2"}]})
+        stderr = ""
+
+    monkeypatch.setattr(tts, "run_ffprobe", lambda *args, **kwargs: Result())
+    with pytest.raises(RuntimeError, match="does not contain an audio stream"):
+        tts._validate_audio_output(str(output))
 
 
 def test_render_engine_rejects_missing_media_inputs(tmp_path):
-    from ai_video_factory import render_engine
-
     with pytest.raises(FileNotFoundError, match="subtitle video"):
         render_engine.burn_subtitles(
             str(tmp_path / "missing.mp4"),
