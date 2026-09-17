@@ -2,6 +2,7 @@
     'use strict';
 
     let enhancementJobId = null;
+    let enhancementTerminal = false;
     let healthTimer = null;
     let statusTimer = null;
 
@@ -85,6 +86,7 @@
             button.textContent = 'Retrying…';
         }
         try {
+            enhancementTerminal = false;
             const res = await fetch(`/api/jobs/${encodeURIComponent(enhancementJobId)}/retry`, {
                 method: 'POST',
                 headers: { 'Origin': window.location.origin },
@@ -100,6 +102,7 @@
                 status.className = 'log-status running';
             }
         } catch (err) {
+            enhancementTerminal = true;
             if (button) {
                 button.disabled = false;
                 button.textContent = 'Retry current job';
@@ -126,6 +129,7 @@
             const original = window.connectToLogs;
             window.connectToLogs = function(jobId) {
                 enhancementJobId = jobId;
+                enhancementTerminal = false;
                 hideRetry();
                 const video = document.getElementById('livePreview');
                 const empty = document.getElementById('previewEmpty');
@@ -148,11 +152,14 @@
                     const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/status`, { cache: 'no-store' });
                     const data = await res.json();
                     if (data.status === 'done') {
+                        enhancementTerminal = true;
                         hideRetry();
                         await showPreview(jobId);
                     } else if (data.status === 'error' || data.status === 'interrupted') {
+                        enhancementTerminal = true;
                         showRetry();
                     } else {
+                        enhancementTerminal = false;
                         hideRetry();
                     }
                 } catch (_) {}
@@ -168,7 +175,7 @@
         refreshHealth();
         healthTimer = setInterval(refreshHealth, 10000);
         statusTimer = setInterval(() => {
-            if (enhancementJobId && typeof window.checkJobStatus === 'function') {
+            if (!enhancementTerminal && enhancementJobId && typeof window.checkJobStatus === 'function') {
                 window.checkJobStatus(enhancementJobId);
             }
         }, 5000);
