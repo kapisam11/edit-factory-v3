@@ -9,11 +9,14 @@ Usage:
     from ai_video_factory.tts import generate_voiceover
     generate_voiceover("Nobody expected him to survive...", "vo.mp3")
 """
+import json
 import logging
 import os
 import shutil
 import subprocess
 from typing import Optional
+
+from .render_engine import run_ffprobe
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +48,50 @@ def _edge_tts_available() -> bool:
         return False
 
 
+def _validate_audio_output(path: str) -> str:
+    output = os.path.abspath(path)
+    if not os.path.isfile(output) or os.path.getsize(output) == 0:
+        raise RuntimeError("TTS completed without producing a non-empty audio file")
+
+    result = run_ffprobe(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type,duration",
+            "-of",
+            "json",
+            output,
+        ]
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"TTS output failed FFprobe validation: {(result.stderr or '')[-1000:]}")
+    try:
+        data = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("TTS output FFprobe response was invalid JSON") from exc
+    streams = data.get("streams") or []
+    if not streams or streams[0].get("codec_type") != "audio":
+        raise RuntimeError("TTS output does not contain an audio stream")
+    try:
+        duration = float(streams[0].get("duration") or 0.0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("TTS output contains an invalid audio duration") from exc
+    if duration <= 0:
+        raise RuntimeError("TTS output contains no positive audio duration")
+    return path
+
+
 def generate_voiceover(text: str, out_path: str, voice: Optional[str] = None) -> str:
     """Generate voiceover using the best available backend.
 
     Tries Edge TTS first (free, natural), falls back to pyttsx3.
     """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("TTS text must be a non-empty string")
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
     # Try Edge TTS
@@ -65,10 +107,12 @@ def generate_voiceover(text: str, out_path: str, voice: Optional[str] = None) ->
 def _generate_edge_tts(text: str, out_path: str, voice: Optional[str] = None) -> str:
     """Use Microsoft Edge TTS (free, high quality, no API key)."""
     v = voice or DEFAULT_VOICE
-    # Split long text into chunks if needed (edge-tts has CLI limits)
+    # Split long text into chunks if needed (edge-tts has CLI limits).
+    # Keep the current bounded invocation behavior until chunked-audio merging
+    # is introduced explicitly; never silently truncate user content.
     max_chars = 3000
     if len(text) > max_chars:
-        text = text[:max_chars]
+        raise ValueError(f"Edge TTS input is too long ({len(text)} characters; maximum is {max_chars})")
 
     cmd = [
         "edge-tts",
@@ -78,10 +122,7 @@ def _generate_edge_tts(text: str, out_path: str, voice: Optional[str] = None) ->
     ]
     logger.info("[TTS] Edge TTS: voice=%s", v)
     subprocess.run(cmd, check=True, capture_output=True, timeout=120, text=True)
-    output = os.path.abspath(out_path)
-    if not os.path.isfile(output) or os.path.getsize(output) == 0:
-        raise RuntimeError("Edge TTS completed without producing a non-empty audio file")
-    return out_path
+    return _validate_audio_output(out_path)
 
 
 def _generate_pyttsx3(text: str, out_path: str) -> str:
@@ -97,7 +138,7 @@ def _generate_pyttsx3(text: str, out_path: str) -> str:
             break
     engine.save_to_file(text, out_path)
     engine.runAndWait()
-    return out_path
+    return _validate_audio_output(out_path)
 
 
 def generate_high_quality_voiceover(text: str, out_path: str, elevenlabs_key: str) -> str:
@@ -114,7 +155,7 @@ def generate_high_quality_voiceover(text: str, out_path: str, elevenlabs_key: st
     r.raise_for_status()
     with open(out_path, "wb") as f:
         f.write(r.content)
-    return out_path
+    return _validate_audio_output(out_path)
 
 
 def generate_emotional_voiceover(text: str, out_path: str, emotion: str = "dramatic") -> str:
