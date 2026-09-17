@@ -39,6 +39,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -68,11 +69,21 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      - name: Detect Snyk configuration
+        id: snyk_config
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          if [ -n "$SNYK_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Export locked application dependencies
-        if: ${{ secrets.SNYK_TOKEN != '' }}
+        if: steps.snyk_config.outputs.configured == 'true'
         run: uv export --locked --format requirements-txt --no-hashes --extra web --extra dev --extra audit --output-file "$RUNNER_TEMP/aivf-snyk-requirements.txt"
       - name: Snyk dependency scan
-        if: ${{ secrets.SNYK_TOKEN != '' }}
+        if: steps.snyk_config.outputs.configured == 'true'
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
@@ -83,5 +94,5 @@ jobs:
             --command=python \
             --severity-threshold=high
       - name: Explain optional configuration
-        if: ${{ secrets.SNYK_TOKEN == '' }}
+        if: steps.snyk_config.outputs.configured == 'false'
         run: echo "SNYK_TOKEN is not configured; Snyk scan skipped without failing CI."
