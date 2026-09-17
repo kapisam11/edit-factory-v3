@@ -99,6 +99,36 @@ def test_retry_rejects_corrupted_persisted_parameters_without_queueing(monkeypat
     assert job["error"] == "previous failure"
 
 
+def test_retry_reports_worker_start_failure(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+
+    install_dashboard_optimizations(appmod)
+    appmod.db_insert_job("job-start-failure", "topic", {"topic": "topic"})
+    appmod.db_update_job("job-start-failure", status="error", step="failed", error="previous failure")
+
+    def failing_start(job_id, params, secrets):
+        appmod.db_update_job(
+            job_id,
+            status="error",
+            step="failed",
+            error="Worker failed to start: boom",
+        )
+        return False
+
+    monkeypatch.setattr(appmod, "_start_job", failing_start)
+
+    with appmod.app.test_request_context("/api/jobs/job-start-failure/retry", method="POST"):
+        response, status = appmod.app.view_functions["retry_job"]("job-start-failure")
+
+    payload = response.get_json()
+    assert status == 500
+    assert payload["job_id"] == "job-start-failure"
+    assert payload["status"] == "error"
+    assert payload["error"] == "Worker failed to start: boom"
+    assert appmod.db_get_job("job-start-failure")["status"] == "error"
+
+
 def test_startup_reconciles_non_terminal_jobs(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
     appmod.db_insert_job("queued", "queued", {"topic": "queued"})
