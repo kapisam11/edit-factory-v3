@@ -13,7 +13,7 @@ do not break the workflow.
 from typing import Dict, List, Optional
 import time
 import re
-from .visuals_fetcher import fetch_visuals, validate_remote_url
+from .visuals_fetcher import fetch_visuals
 
 
 def _safe_get_json(url: str, params=None, timeout=6):
@@ -121,36 +121,15 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
             summary["sources"].append(url)
     summary["trending"] = _detect_recent_news(results)
 
+    # Visual discovery is intentionally centralized in visuals_fetcher. We no
+    # longer fetch arbitrary search-result pages here, which removes a second
+    # SSRF-capable network path when an upstream search result is attacker-influenced.
     try:
         vis = fetch_visuals(topic, max_items=12)
         if vis:
             summary["visuals"] = vis
     except Exception:
-        try:
-            import requests
-
-            for r in results[:6]:
-                u = r.get("url")
-                if not u:
-                    continue
-                try:
-                    # The research fallback may visit public result pages, but it
-                    # still rejects non-HTTPS/private hosts and follows no redirects.
-                    safe_url = validate_remote_url(u, allowed_hosts=None)
-                    rr = requests.get(
-                        safe_url,
-                        timeout=5,
-                        headers={"User-Agent": "ai-video-factory/1.0"},
-                        allow_redirects=False,
-                    )
-                    if rr.ok:
-                        m = re.search(r'<meta property="og:image" content="([^\"]+)"', rr.text)
-                        if m:
-                            summary["visuals"].append({"url": m.group(1), "source": safe_url, "purpose": "context", "score": 0.5})
-                except Exception:
-                    continue
-        except Exception:
-            pass
+        pass
 
     if use_groq and groq_api_key:
         try:
