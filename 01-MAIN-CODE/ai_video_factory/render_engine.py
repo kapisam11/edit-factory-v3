@@ -46,6 +46,13 @@ def _validate_media_path(value: str) -> str:
     return str(value)
 
 
+def _validate_media_input(value: str, label: str = "media") -> str:
+    path = Path(_validate_media_path(value))
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} input not found: {path}")
+    return str(path)
+
+
 def _validate_tool_argv(cmd: List[str], expected: str) -> List[str]:
     if not cmd:
         raise ValueError(f"command must start with {expected}")
@@ -112,6 +119,12 @@ def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bo
             capture_output=capture_output,
             text=capture_output,
         )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        if len(detail) > 2000:
+            detail = detail[-2000:]
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"FFmpeg failed with exit code {exc.returncode}{suffix}") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"FFmpeg timed out after {timeout}s") from exc
 
@@ -119,6 +132,7 @@ def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bo
 def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str) -> None:
     if duration <= 0:
         raise ValueError("render duration must be positive")
+    src_clip = _validate_media_input(src_clip, "source clip")
     encoder = choose_encoder()
     candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc") else ["libx264"]
     last_error = None
@@ -136,7 +150,7 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
             "-ss",
             str(seek_start),
             "-i",
-            _validate_media_path(src_clip),
+            src_clip,
             "-t",
             str(duration),
             "-vf",
@@ -171,9 +185,7 @@ def write_concat_list(seq_files: List[str], concat_list_path: str) -> None:
     _ensure_dir(str(Path(concat_list_path).parent))
     with open(concat_list_path, "w", encoding="utf-8", newline="\n") as f:
         for p in seq_files:
-            value = _validate_media_path(p)
-            if not Path(value).is_file():
-                raise FileNotFoundError(value)
+            value = _validate_media_input(p, "concat input")
             if "\r" in value or "\n" in value:
                 raise ValueError("media paths cannot contain newlines")
             safe_path = value.replace("'", "'\\''")
@@ -206,7 +218,7 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
         "aac",
         "-movflags",
         "+faststart",
-        output_path,
+        _validate_media_path(output_path),
     ]
     try:
         run_ffmpeg(cmd)
@@ -234,7 +246,7 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
             "aac",
             "-movflags",
             "+faststart",
-            output_path,
+            _validate_media_path(output_path),
         ]
         run_ffmpeg(fallback)
         validate_media_output(output_path)
@@ -245,6 +257,8 @@ def _escape_filter_path(path: str) -> str:
 
 
 def burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
+    video_path = _validate_media_input(video_path, "subtitle video")
+    srt_path = _validate_media_input(srt_path, "subtitle file")
     filter_path = _escape_filter_path(srt_path)
     cmd = [
         "ffmpeg",
@@ -263,13 +277,15 @@ def burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
         "copy",
         "-movflags",
         "+faststart",
-        output_path,
+        _validate_media_path(output_path),
     ]
     run_ffmpeg(cmd)
     validate_media_output(output_path)
 
 
 def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
+    video_path = _validate_media_input(video_path, "voiceover video")
+    vo_path = _validate_media_input(vo_path, "voiceover audio")
     cmd = [
         "ffmpeg",
         "-y",
@@ -286,7 +302,7 @@ def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
         "-map",
         "1:a:0",
         "-shortest",
-        output_path,
+        _validate_media_path(output_path),
     ]
     run_ffmpeg(cmd)
     validate_media_output(output_path)
