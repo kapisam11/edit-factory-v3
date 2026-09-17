@@ -114,7 +114,6 @@ def _run_ffmpeg_streaming(cmd: List[str], timeout: int) -> subprocess.CompletedP
     """Run FFmpeg while streaming stderr and retaining only a bounded failure tail."""
     process = subprocess.Popen(
         cmd,
-        check=False,
         stdout=None,
         stderr=subprocess.PIPE,
         text=True,
