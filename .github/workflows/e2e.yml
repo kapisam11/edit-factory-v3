@@ -51,26 +51,29 @@ jobs:
           AIVF_DASHBOARD_TOKEN: e2e-dashboard-token
           BASE_URL: http://127.0.0.1:5000
           COOKIE_JAR: ${{ runner.temp }}/aivf-cookies.txt
+          RESULTS_DIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
           curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE_URL/login" > /dev/null
           curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -L \
             -d "token=$AIVF_DASHBOARD_TOKEN" "$BASE_URL/login" > /dev/null
-          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs" > "$RUNNER_TEMP/jobs.json"
-          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/queue/status" > "$RUNNER_TEMP/queue.json"
+          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs" > "$RESULTS_DIR/jobs.json"
+          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/queue/status" > "$RESULTS_DIR/queue.json"
           curl -fsS -b "$COOKIE_JAR" \
             -H "Origin: $BASE_URL" \
             -H "Content-Type: application/json" \
             -d '{"max_concurrent_jobs":1}' \
-            "$BASE_URL/api/settings" > "$RUNNER_TEMP/settings.json"
+            "$BASE_URL/api/settings" > "$RESULTS_DIR/settings.json"
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
-          settings = json.loads(Path("$RUNNER_TEMP/settings.json").read_text())
+          root = Path(os.environ["RESULTS_DIR"])
+          settings = json.loads((root / "settings.json").read_text())
           assert settings["max_concurrent_jobs"] == 1
-          jobs = json.loads(Path("$RUNNER_TEMP/jobs.json").read_text())
+          jobs = json.loads((root / "jobs.json").read_text())
           assert isinstance(jobs, list)
-          queue = json.loads(Path("$RUNNER_TEMP/queue.json").read_text())
+          queue = json.loads((root / "queue.json").read_text())
           assert "queued" in queue and "running" in queue
           PY
       - name: Verify cross-origin writes fail closed
