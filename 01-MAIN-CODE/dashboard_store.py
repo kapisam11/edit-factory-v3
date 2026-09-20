@@ -73,7 +73,8 @@ class DashboardStore:
     def insert_job(self, job_id: str, topic: str, params: dict) -> None:
         self.write(
             lambda conn: conn.execute(
-                "INSERT INTO jobs (id, topic, status, step, params) VALUES (?, ?, 'queued', 'waiting', ?)",
+                "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 (job_id, topic, json.dumps(params)),
             )
         )
