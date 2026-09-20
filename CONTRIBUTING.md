@@ -1,7 +1,7 @@
 # Contributing to Edit Factory v3
 
 Thanks for contributing to Edit Factory v3.
-
+kapasam2000
 ## Development setup
 
 Use Python 3.10 or newer. From the repository root:
