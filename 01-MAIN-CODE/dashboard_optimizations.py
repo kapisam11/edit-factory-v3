@@ -6,10 +6,22 @@ import os
 from pathlib import Path
 from typing import Any
 
-from flask import jsonify, send_from_directory
+from flask import Response, has_request_context, jsonify, request, send_from_directory
 
 from dashboard_cache import HybridCache
 from dashboard_store import DashboardStore
+from resource_governor import (
+    MAX_JOB_STORAGE_BYTES,
+    MAX_RENDER_WALLCLOCK_SECONDS,
+    MAX_SSE_LIFETIME_SECONDS,
+    ResourceLimitExceeded,
+    acquire_sse,
+    check_job_creation_limits,
+    job_storage_ok,
+    principal_for_request,
+    release_sse,
+    total_storage_bytes,
+)
 
 
 def install_dashboard_optimizations(app_module: Any) -> None:
@@ -42,6 +54,13 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         store.ensure_indexes()
 
     def db_insert_job(job_id: str, topic: str, params: dict) -> None:
+        params = dict(params)
+        principal = principal_for_request(request) if has_request_context() else str(params.get("_principal", "internal"))
+        try:
+            check_job_creation_limits(store.connect, principal, (app_module.UPLOAD_FOLDER, app_module.OUTPUT_FOLDER))
+        except ResourceLimitExceeded as exc:
+            raise ValueError(str(exc)) from exc
+        params["_principal"] = principal
         store.insert_job(job_id, topic, params)
         cache.delete("jobs:list")
 
@@ -93,6 +112,140 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     app_module.get_settings = get_settings
     app_module.set_setting = set_setting
     app_module.check_rate_limit = check_rate_limit
+
+    original_start_job = app_module._start_job
+    resource_watchdogs: set[str] = set()
+
+    def _watch_resource_budget(job_id: str, process: Any) -> None:
+        started = __import__("time").monotonic()
+        deadline = started + MAX_RENDER_WALLCLOCK_SECONDS
+        while process.is_alive():
+            if __import__("time").monotonic() >= deadline:
+                try:
+                    from dashboard_compat import _terminate_process_tree
+                    _terminate_process_tree(process)
+                except Exception:
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                current = app_module.db_get_job(job_id) or {}
+                if current.get("status") in {"queued", "running", "cancelling"}:
+                    app_module.db_update_job(
+                        job_id,
+                        status="error",
+                        step="resource_limit",
+                        error=f"Render wall-clock budget exceeded ({MAX_RENDER_WALLCLOCK_SECONDS}s)",
+                    )
+                    app_module.db_append_log(job_id, "ERROR", "Render wall-clock budget exceeded")
+                return
+            current = app_module.db_get_job(job_id) or {}
+            package_dir = current.get("pkg_dir")
+            if package_dir and not job_storage_ok(package_dir):
+                try:
+                    from dashboard_compat import _terminate_process_tree
+                    _terminate_process_tree(process)
+                except Exception:
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                current = app_module.db_get_job(job_id) or {}
+                if current.get("status") in {"queued", "running", "cancelling"}:
+                    app_module.db_update_job(
+                        job_id,
+                        status="error",
+                        step="resource_limit",
+                        error=f"Per-job storage quota exceeded ({MAX_JOB_STORAGE_BYTES // (1024 * 1024)} MiB)",
+                    )
+                    app_module.db_append_log(job_id, "ERROR", "Per-job storage quota exceeded")
+                return
+            __import__("time").sleep(0.5)
+
+    def governed_start_job(job_id, params, secrets):
+        started = original_start_job(job_id, params, secrets)
+        process = app_module._active_processes.get(job_id)
+        if started and process is not None:
+            thread = __import__("threading").Thread(
+                target=_watch_resource_budget,
+                args=(job_id, process),
+                name=f"aivf-budget-{job_id}",
+                daemon=True,
+            )
+            thread.start()
+            resource_watchdogs.add(job_id)
+        return started
+
+    app_module._start_job = governed_start_job
+
+    original_log_stream = app_module.app.view_functions.get("job_logs_stream")
+    if original_log_stream is not None:
+        def bounded_log_stream(job_id: str):
+            if not acquire_sse():
+                return jsonify({"error": "SSE connection capacity reached"}), 429
+            try:
+                response = original_log_stream(job_id)
+            except Exception:
+                release_sse()
+                raise
+            if not isinstance(response, Response):
+                release_sse()
+                return response
+            original_iter = response.response
+
+            def bounded_iter():
+                deadline = __import__("time").monotonic() + MAX_SSE_LIFETIME_SECONDS
+                try:
+                    for chunk in original_iter:
+                        yield chunk
+                        if __import__("time").monotonic() >= deadline:
+                            yield "event: limit\\ndata: {\\"error\\":\\"SSE lifetime limit reached\\"}\\n\\n"
+                            break
+                finally:
+                    release_sse()
+
+            response.response = bounded_iter()
+            response.headers["X-AIVF-SSE-Limit-Seconds"] = str(MAX_SSE_LIFETIME_SECONDS)
+            return response
+
+        app_module.app.view_functions["job_logs_stream"] = bounded_log_stream
+
+    cleanup_state = {"last": 0.0}
+
+    def _database_cleanup() -> None:
+        import time
+        now = time.monotonic()
+        interval = max(300.0, float(os.environ.get("AIVF_DB_CLEANUP_INTERVAL_SECONDS", "3600")))
+        if now - cleanup_state["last"] < interval:
+            return
+        cleanup_state["last"] = now
+        days = max(1.0, float(os.environ.get("AIVF_DB_RETENTION_DAYS", os.environ.get("AIVF_RETENTION_DAYS", "30"))))
+        cutoff = time.time() - days * 86400
+        with store.connect() as conn:
+            stale = conn.execute(
+                "SELECT id, pkg_dir FROM jobs WHERE status IN ('done','error','cancelled','interrupted') AND updated_at < datetime(?, 'unixepoch')",
+                (cutoff,),
+            ).fetchall()
+            stale_ids = [row["id"] for row in stale]
+            if stale_ids:
+                placeholders = ",".join("?" for _ in stale_ids)
+                conn.execute(f"DELETE FROM job_logs WHERE job_id IN ({placeholders})", stale_ids)
+                conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", stale_ids)
+            conn.execute("DELETE FROM rate_limits WHERE ts < ?", (cutoff,))
+        upload_cutoff = cutoff
+        try:
+            for child in app_module.UPLOAD_FOLDER.iterdir():
+                try:
+                    if child.is_file() and child.stat().st_mtime < upload_cutoff:
+                        child.unlink(missing_ok=True)
+                except OSError:
+                    continue
+        except OSError:
+            pass
+
+    @app_module.app.before_request
+    def governed_resource_maintenance():
+        _database_cleanup()
 
     @app_module.app.get("/api/jobs/<job_id>/preview")
     def job_preview(job_id: str):
