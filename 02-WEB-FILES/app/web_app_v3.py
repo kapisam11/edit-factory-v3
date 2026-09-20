@@ -242,6 +242,20 @@ def get_settings() -> dict:
             defaults[key] = _validate_setting(key, value)
         except ValueError:
             logger.warning("Ignoring invalid persisted setting: %s", key)
+    try:
+        platform = defaults["default_v3_platform"]
+        max_seconds = {
+            "youtube_shorts": 60.0,
+            "tiktok": 180.0,
+            "instagram_reels": 90.0,
+            "square": 90.0,
+            "youtube": 180.0,
+        }[platform]
+        if float(defaults["default_target_seconds"]) > max_seconds:
+            defaults["default_target_seconds"] = min(45.0, max_seconds)
+    except (KeyError, TypeError, ValueError):
+        defaults["default_v3_platform"] = "youtube_shorts"
+        defaults["default_target_seconds"] = 45.0
     return defaults
 
 
@@ -259,6 +273,11 @@ def _validate_setting(key: str, value: Any) -> Any:
         result = str(value).strip()
         if not minimum <= len(result) <= maximum:
             raise ValueError(f"{key} must be between {minimum} and {maximum} characters")
+        if key == "default_v3_platform":
+            allowed = {"youtube_shorts", "tiktok", "instagram_reels", "square", "youtube"}
+            if result.lower() not in allowed:
+                raise ValueError("default_v3_platform is unsupported")
+            return result.lower()
         return result
     if kind == "int":
         if isinstance(value, bool):
