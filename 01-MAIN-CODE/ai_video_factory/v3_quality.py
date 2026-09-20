@@ -256,7 +256,7 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
     if expected_width and info["width"] != expected_width: errors.append(f"width {info['width']} != required {expected_width}")
     if expected_height and info["height"] != expected_height: errors.append(f"height {info['height']} != required {expected_height}")
     if not info["has_audio"]: warnings.append("rendered artifact has no audio stream")
-    visual = _sample_visual_changes(path, sample_hz=10.0); events = []
+    visual = _sample_visual_changes(path, sample_hz=10.0); events = []; retention_verification = None
     for item in retention_events:
         if isinstance(item, Mapping):
             try: events.append(float(item.get("time", 0.0)))
@@ -272,9 +272,10 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
             else:
                 try:
                     verification = verify_retention_against_baseline(retention_baseline, path, retention_events)
+                    retention_verification = verification
                     if not verification["ok"]:
                         errors.extend("independent retention QC: " + error for error in verification["errors"])
                 except RenderContractError as exc:
                     errors.append(f"independent retention QC failed: {exc}")
     if visual.get("max_gap") is not None and visual["max_gap"] > 3.0: errors.append(f"coarse visual sampling found a change gap of {visual['max_gap']:.2f}s; maximum allowed gap is 3.00s")
-    return {"ok": not errors, "errors": errors, "warnings": warnings, "media": info, "visual_sampling": visual}
+    return {"ok": not errors, "errors": errors, "warnings": warnings, "media": info, "visual_sampling": visual, "retention_verification": retention_verification}
