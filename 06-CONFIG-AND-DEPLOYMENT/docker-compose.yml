@@ -2,7 +2,7 @@ services:
   web:
     image: ${AIVF_IMAGE:-ghcr.io/kapisam11/edit-factory-v3:latest}
     build:
-      context: .
+      context: ..
       dockerfile: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
     ports:
       - "5000:5000"
