@@ -6,7 +6,7 @@ This document defines release-gating acceptance criteria for the 24 findings fro
 |---:|---|---|---|
 | 1 | Blueprint/render mismatch | V3 timeline boundaries and count exactly match the immutable blueprint | `edit_planner.build_timeline`, `v3_pipeline._validate_timeline_contract` |
 | 2 | Exact duration | Short sources are padded; final media is normalized and probed against target duration | `render_engine.render_segment`, `v3_quality.normalize_duration` |
-| 3 | Retention only advisory | Retention timestamps are validated, converted into real render effects, and checked against observed pixel changes | `v3_quality.enforce_retention_events`, `strict_render_check` |
+| 3 | Retention only advisory | V3 renders and persists a no-retention baseline, applies retention effects afterward, and verifies final-vs-baseline local pixel deltas before release QC passes | `v3_pipeline.run_v3_pipeline`, `v3_quality.verify_retention_against_baseline` |
 | 4 | Directive/effect seam | V3 motion/transition directives resolve to valid FFmpeg video filters | `effects_engine`, `test_v3_effect_mapping.py` |
 | 5 | QC naming | Planning/editorial QC and post-render media QC are separate machine-readable gates | `v3_engine`, `v3_quality` |
 | 6 | Fake predictive metrics | Retention/completion/rewatch/share values are explicitly heuristic, never platform predictions | `00-INFO/V3-METRICS.md` |
@@ -26,8 +26,8 @@ This document defines release-gating acceptance criteria for the 24 findings fro
 | 20 | PR drift | Hardening PR targets `main` and must remain mergeable/CI-green before release | PR #6 |
 | 21 | V2 debt | V3 is isolated behind an explicit wrapper/contract and no legacy template path is allowed to silently override V3 | `v3_pipeline.py`, `composer._apply_templates` |
 | 22 | Maintainability | V3 enforcement responsibilities are separated into focused modules with typed contracts | `v3_engine`, `v3_quality`, `v3_semantics`, `v3_capabilities`, `edit_planner` |
-| 23 | Fake capability count | Exactly 40 registry entries match the V3 capability list and resolve to concrete implementation symbols | `v3_capabilities.validate_capabilities`, registry tests |
-| 24 | Real video quality unproven | CI proves media invariants and V3 contract compliance; a real-render visual review remains the final artistic gate | `v3_render_qc.json`, release rule |
+| 23 | Capability truthfulness | Exactly 40 registry entries remain compatible, but each entry exposes evidence level, status, display name, and truth note so heuristics are not represented as equivalent to human review | `v3_capabilities.validate_capabilities`, truthfulness tests |
+| 24 | Real video quality unproven | CI proves media invariants, independent retention QC, semantic/dead-moment heuristics, and V3 readiness evidence; a real-render visual review remains the final artistic gate | `v3_render_qc.json`, `v3_semantic_qc.json`, `v3_readiness.json`, release rule |
 
 ## Release rule
 

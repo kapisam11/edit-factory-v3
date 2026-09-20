@@ -142,6 +142,7 @@ class ProductionResult:
     metadata_path: Optional[str] = None
     qc_report_path: Optional[str] = None
     metrics_path: Optional[str] = None
+    artifacts: Dict[str, str] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
 

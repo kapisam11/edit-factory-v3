@@ -19,7 +19,7 @@ Browser -> Gunicorn (1 worker) -> Flask
                                   +-> SQLite (WAL/busy timeout)
                                   +-> spawned job process -> pipeline -> FFmpeg/FFprobe
 
-V3 planner -> emotion/core -> edit type -> hooks -> clip plan -> music -> retention -> QC
+V3 planner -> emotion/core -> edit type -> hooks -> clip plan -> music -> retention plan -> independent baseline render -> retention render -> baseline-delta QC -> semantic QC -> artifact readiness -> `v3_renderer_bridge` -> legacy media renderer
           -> packaging -> existing production renderer
 ```
 

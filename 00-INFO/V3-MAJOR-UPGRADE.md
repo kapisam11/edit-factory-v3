@@ -22,7 +22,7 @@ Every blueprint includes platform profiles, thumbnail direction, title options, 
 
 ## The 40 v3 upgrades
 
-The v3 engine exposes exactly 40 tracked capabilities so the release can be verified programmatically:
+The v3 engine exposes exactly 40 tracked capabilities so the release can be verified programmatically. The registry is evidence-labeled: deterministic contract capabilities are `implemented`, mixed semantic/lexical checks are `hybrid`, and editorial/visual approximations are `heuristic`. A heuristic entry is not a claim of human editorial review, platform prediction, or general AI semantic understanding.
 
 1. Emotion-first core idea
 2. Single edit-type lock

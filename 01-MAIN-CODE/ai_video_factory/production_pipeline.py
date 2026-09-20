@@ -108,7 +108,7 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
                             model_key: Optional[str] = None, skip_qc: bool = False, music_path: Optional[str] = None,
                             experiment_history_path: Optional[str] = None, enable_object_detection: bool = True,
                             enable_diarization: bool = False, diarization_token: Optional[str] = None,
-                            platform: str = "youtube_shorts", allow_auto_fix: bool = True) -> ProductionResult:
+                            platform: str = "youtube_shorts", allow_auto_fix: bool = True, finalize_upload_package: bool = True) -> ProductionResult:
     """Run production. V3 callers disable the legacy auto-fixer explicitly."""
     os.makedirs(package_dir, exist_ok=True)
     result = ProductionResult(package_dir=package_dir)
@@ -247,10 +247,10 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
                               "object_detections": intelligence["object_detection"].get("count", 0), "word_timestamps": intelligence["word_timestamps"].get("count", 0),
                               "diarized_segments": intelligence["diarization"].get("count", 0), "rendered": result.final_video is not None, "v3_retention_events": len(v3_directives.get("retention_map", []))})
 
-    if result.final_video and not result.errors:
+    if result.final_video and not result.errors and finalize_upload_package:
         try:
-            from .upload_package import finalize_upload_package
-            upload_manifest = finalize_upload_package(package_dir, topic=topic, summary=summary, script=script, platform=platform, final_video=result.final_video,
+            from .upload_package import finalize_upload_package as build_upload_package
+            upload_manifest = build_upload_package(package_dir, topic=topic, summary=summary, script=script, platform=platform, final_video=result.final_video,
                                                       thumbnail=summary.get("thumbnail") or None,
                                                       caption_path=os.path.join(package_dir, "captions.ass") if os.path.exists(os.path.join(package_dir, "captions.ass")) else None)
             metadata_payload = json.loads(Path(result.metadata_path).read_text(encoding="utf-8"))

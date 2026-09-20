@@ -135,6 +135,7 @@ def test_v3_pipeline_renders_contract_valid_video(tmp_path, monkeypatch):
     from ai_video_factory.v3_pipeline import run_v3_pipeline
 
     monkeypatch.setenv("AIVF_ALLOW_SKIP_QC", "1")
+    monkeypatch.setenv("AIVF_V3_SEMANTIC_QC", "0")
     result = run_v3_pipeline(
         str(source),
         "integration render",
@@ -150,6 +151,14 @@ def test_v3_pipeline_renders_contract_valid_video(tmp_path, monkeypatch):
     assert result.errors == []
     assert result.final_video is not None
     assert result.artifacts["v3_render_qc"].endswith("v3_render_qc.json")
+    assert result.artifacts["v3_baseline"].endswith("v3_baseline.mp4")
+    assert result.artifacts["v3_readiness"].endswith("v3_readiness.json")
+    readiness = json.loads((tmp_path / "v3_package" / "v3_readiness.json").read_text(encoding="utf-8"))
+    assert readiness["state"] == "UPLOAD_PACKAGE_VALID"
+    assert readiness["checks"]["UPLOAD_PACKAGE_VALID"] is True
+    assert (tmp_path / "v3_package" / "upload_package.json").is_file()
+    render_qc = json.loads((tmp_path / "v3_package" / "v3_render_qc.json").read_text(encoding="utf-8"))
+    assert render_qc["retention_verification"]["ok"] is True
 
     probe = subprocess.run(
         [

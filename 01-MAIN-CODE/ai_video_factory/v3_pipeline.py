@@ -4,16 +4,19 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .artifact_readiness import evaluate_artifact
 from .production_models import ProductionResult
-from .production_pipeline import run_production_pipeline
 from .scene_intelligence import analyze_video
+from .v3_renderer_bridge import V3RenderRequest, render_v3
 from .v3_capabilities import validate_capabilities
 from .v3_engine import V3Config, create_v3_blueprint, validate_blueprint
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
+from .v3_semantic_qc import analyze_render_semantics
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
@@ -163,17 +166,33 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     except Exception as exc:
         raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
 
-    result = run_production_pipeline(
-        input_video, topic, package_dir, target_seconds=target_seconds,
-        research_summary=_research_summary_from_blueprint(payload, footage_evidence),
-        enable_ocr=enable_ocr, model_key=model_key, skip_qc=skip_qc, music_path=music_path,
-        enable_object_detection=enable_object_detection, enable_diarization=enable_diarization,
-        diarization_token=diarization_token, platform=platform, allow_auto_fix=False,
+    # Render the contract once with retention directives removed. This is the
+    # independent baseline; retention effects are added only after this render.
+    baseline_payload = dict(payload)
+    baseline_payload["retention_map"] = []
+    baseline_summary = _research_summary_from_blueprint(baseline_payload, footage_evidence)
+    request = V3RenderRequest(
+        input_video=input_video,
+        topic=topic,
+        package_dir=package_dir,
+        target_seconds=target_seconds,
+        research_summary=baseline_summary,
+        model_key=model_key,
+        skip_qc=skip_qc,
+        music_path=music_path,
+        enable_ocr=enable_ocr,
+        enable_object_detection=enable_object_detection,
+        enable_diarization=enable_diarization,
+        diarization_token=diarization_token,
+        platform=platform,
     )
+    result = render_v3(request)
 
     if result.final_video and not result.errors:
         try:
             _validate_timeline_contract(package, payload, target_seconds)
+            baseline_path = package / "v3_baseline.mp4"
+            shutil.copyfile(result.final_video, baseline_path)
             retention_path = str(package / "final.v3.retention.mp4")
             enforce_retention_events(result.final_video, retention_path, payload.get("retention_map", []))
             os.replace(retention_path, result.final_video)
@@ -181,15 +200,65 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             normalize_duration(result.final_video, normalized_path, target_seconds)
             os.replace(normalized_path, result.final_video)
             profile = payload["platform_variants"][platform]
-            render_report = strict_render_check(result.final_video, target_seconds=target_seconds, platform_profile=profile, retention_events=payload.get("retention_map", []))
+            render_report = strict_render_check(
+                result.final_video,
+                target_seconds=target_seconds,
+                platform_profile=profile,
+                retention_events=payload.get("retention_map", []),
+                retention_baseline=str(baseline_path),
+                require_independent_retention=True,
+            )
+            semantic_report = {"ok": True, "mode": "disabled"}
+            if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") != "0":
+                semantic_report = analyze_render_semantics(result.final_video)
+                if not semantic_report["ok"]:
+                    result.errors.extend(
+                        "V3 semantic QC: " + error for error in semantic_report["errors"]
+                    )
+                result.warnings.extend(
+                    "V3 semantic QC: " + warning for warning in semantic_report["warnings"]
+                )
+            try:
+                from .upload_package import finalize_upload_package
+                upload_manifest = finalize_upload_package(
+                    package_dir,
+                    topic=topic,
+                    summary=baseline_summary,
+                    script=str(baseline_summary.get("script", "")),
+                    platform=platform,
+                    final_video=result.final_video,
+                    thumbnail=str(baseline_summary.get("thumbnail") or "") or None,
+                    caption_path=str(package / "captions.ass") if (package / "captions.ass").exists() else None,
+                )
+                result.artifacts["upload_package_manifest"] = str(package / "upload_package.json")
+            except Exception as exc:
+                upload_manifest = None
+                result.errors.append(f"V3 upload package finalization failed: {exc}")
+
+            readiness = evaluate_artifact(
+                result.final_video,
+                target_seconds=target_seconds,
+                platform_profile=profile,
+                package_dir=package_dir,
+                upload_package_required=True,
+                publish_required=False,
+            )
             _atomic_json_write(package / "v3_render_qc.json", render_report)
+            _atomic_json_write(package / "v3_semantic_qc.json", semantic_report)
+            _atomic_json_write(package / "v3_readiness.json", readiness.to_dict())
             if not render_report["ok"]:
                 result.errors.extend("V3 render QC: " + error for error in render_report["errors"])
             result.warnings.extend("V3 render QC: " + warning for warning in render_report["warnings"])
+            if readiness.state != "MEDIA_CONTRACT_VALID":
+                result.warnings.append(
+                    f"V3 artifact readiness stopped at {readiness.state}; upload/publish readiness is not claimed"
+                )
             metadata_path = package / "metadata.json"
             if metadata_path.exists():
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
                 metadata["v3_render_qc"] = render_report
+                metadata["v3_semantic_qc"] = semantic_report
+                metadata["v3_readiness"] = readiness.to_dict()
                 metadata["v3_timeline_contract"] = "passed"
                 metadata["warnings"] = result.warnings
                 metadata["errors"] = result.errors
@@ -201,5 +270,9 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     if isinstance(result.artifacts, dict):
         result.artifacts["v3_blueprint"] = str(blueprint_path)
         result.artifacts["v3_render_qc"] = str(package / "v3_render_qc.json")
+        result.artifacts["v3_semantic_qc"] = str(package / "v3_semantic_qc.json")
+        result.artifacts["v3_readiness"] = str(package / "v3_readiness.json")
+        result.artifacts["v3_baseline"] = str(package / "v3_baseline.mp4")
+        result.artifacts["v3_renderer_bridge"] = "ai_video_factory.v3_renderer_bridge"
         result.artifacts["v3_acceptance_matrix"] = "00-INFO/24-POINT-ACCEPTANCE.md"
     return result

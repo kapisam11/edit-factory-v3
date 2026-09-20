@@ -2,6 +2,7 @@
 import os
 
 
+
 def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str) -> None:
     os.environ["AIVF_WORKER_PROCESS"] = "1"
     if os.name != "nt":
