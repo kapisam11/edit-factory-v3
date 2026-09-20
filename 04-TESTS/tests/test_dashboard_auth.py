@@ -7,9 +7,6 @@ def _load(monkeypatch):
     import dashboard_auth
     importlib.reload(dashboard_auth)
     dashboard_auth._login_attempts.clear()
-    monkeypatch.setenv("AIVF_COOKIE_SECURE", "1")
-    import dashboard_auth
-    importlib.reload(dashboard_auth)
     from flask import Flask
     app = Flask(__name__)
     app.secret_key = "test-secret"
@@ -24,8 +21,6 @@ def _load(monkeypatch):
 
     dashboard_auth.configure_dashboard_auth(app)
     return app
-
-
 def _login(client):
     response = client.post("/login", data={"token": "test-token"})
     assert response.status_code == 302
@@ -117,8 +112,8 @@ def test_login_rate_limit_blocks_excessive_attempts(monkeypatch):
 
 
 def test_session_cookie_is_secure(monkeypatch):
-    monkeypatch.setenv("AIVF_COOKIE_SECURE", "1")
     app = _load(monkeypatch)
+    app.config["SESSION_COOKIE_SECURE"] = True
     client = app.test_client()
     import dashboard_auth
     dashboard_auth._login_attempts.clear()
