@@ -118,3 +118,31 @@ def test_v3_planning_accepts_eight_second_target(monkeypatch):
     }
     idea = make_idea(summary)
     assert idea["structure"]["total_seconds"] == 8.0
+
+
+def test_v3_input_validation_rejects_invalid_contract_values(tmp_path):
+    from ai_video_factory.v3_pipeline import _validate_v3_inputs
+
+    missing = tmp_path / "missing.mp4"
+    with pytest.raises(RenderContractError, match="missing or not a file"):
+        _validate_v3_inputs(str(missing), "topic", 30, "youtube_shorts", "audience", 120)
+
+    empty = tmp_path / "empty.mp4"
+    empty.write_bytes(b"")
+    with pytest.raises(RenderContractError, match="empty"):
+        _validate_v3_inputs(str(empty), "topic", 30, "youtube_shorts", "audience", 120)
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    cases = [
+        (lambda: _validate_v3_inputs(str(source), "", 30, "youtube_shorts", "audience", 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", "bad", "youtube_shorts", "audience", 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 7, "youtube_shorts", "audience", 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 30, "", "audience", 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 30, "youtube_shorts", "audience" * 100, 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 30, "youtube_shorts", "audience", "bad"), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 30, "youtube_shorts", "audience", 300), ValueError),
+    ]
+    for invoke, error in cases:
+        with pytest.raises(error):
+            invoke()
