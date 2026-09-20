@@ -180,9 +180,11 @@ def test_render_engine_rejects_missing_media_inputs(tmp_path):
             str(tmp_path / "captions.srt"),
             str(tmp_path / "out.mp4"),
         )
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"placeholder")
     with pytest.raises(FileNotFoundError, match="voiceover audio"):
         render_engine.mix_voiceover(
-            str(tmp_path / "video.mp4"),
+            str(video),
             str(tmp_path / "missing.wav"),
             str(tmp_path / "out.mp4"),
         )
