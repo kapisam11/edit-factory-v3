@@ -781,6 +781,13 @@ def list_packages():
             script = pkg_path / "script.txt"
             preview = script.read_text(encoding="utf-8", errors="replace")[:200] if script.exists() else ""
             created = datetime.fromtimestamp(pkg_path.stat().st_ctime).strftime("%Y-%m-%d %H:%M")
+            readiness_state = None
+            readiness_path = pkg_path / "v3_readiness.json"
+            if readiness_path.exists():
+                try:
+                    readiness_state = json.loads(readiness_path.read_text(encoding="utf-8")).get("state")
+                except (OSError, ValueError, TypeError):
+                    readiness_state = None
             packages.append({
                 "name": pkg_path.name,
                 "created": created,
@@ -790,11 +797,7 @@ def list_packages():
                     (pkg_path / name).exists()
                     for name in ("final_short.mp4", "final_with_music.mp4", "final_short_vo.mp4", "final.v3.mp4")
                 ),
-                "v3_readiness": (
-                    json.loads((pkg_path / "v3_readiness.json").read_text(encoding="utf-8")).get("state")
-                    if (pkg_path / "v3_readiness.json").exists()
-                    else None
-                ),
+                "v3_readiness": readiness_state,
             })
         except OSError:
             continue
