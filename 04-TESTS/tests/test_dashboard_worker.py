@@ -8,6 +8,7 @@ def test_dashboard_workflows_map_to_expected_pipeline_stages():
     assert _skip_stages_for_workflow("director") == []
     assert _skip_stages_for_workflow("fast") == ["research", "thumbnail", "voiceover", "music", "quality_control", "metrics"]
     assert _skip_stages_for_workflow("package_only") == ["auto_edit", "voiceover", "music", "quality_control", "metrics"]
+    assert _skip_stages_for_workflow("v3") == []
 
 
 def test_dashboard_workflow_rejects_unknown_value():
