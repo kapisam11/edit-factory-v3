@@ -13,6 +13,8 @@ def _skip_stages_for_workflow(workflow: str) -> list[str]:
     """Translate the dashboard workflow name into the canonical pipeline stages."""
     from ai_video_factory.validation import normalize_workflow
     selected = normalize_workflow(workflow)
+    if selected == "v3":
+        return []
     configured = {
         "default": {"research", "plan", "script", "thumbnail", "auto_edit", "voiceover", "music", "quality_control", "metadata", "metrics"},
         "fast": {"plan", "script", "auto_edit", "metadata"},
@@ -30,9 +32,12 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
         except OSError:
             pass
     from app import web_app_v3
-    from ai_video_factory.validation import validate_target_seconds
+    from ai_video_factory.validation import validate_target_seconds, validate_v3_target_seconds
     params = dict(params)
-    params["target_seconds"] = validate_target_seconds(params.get("target_seconds", 45.0))
+    if str(params.get("workflow", "default")).strip().lower() == "v3":
+        params["target_seconds"] = validate_v3_target_seconds(params.get("target_seconds", 30.0))
+    else:
+        params["target_seconds"] = validate_target_seconds(params.get("target_seconds", 45.0))
     params["workflow"] = str(params.get("workflow", "default"))
     skip_stages = _skip_stages_for_workflow(params["workflow"])
     if not skip_stages:

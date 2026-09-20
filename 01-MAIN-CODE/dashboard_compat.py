@@ -9,7 +9,7 @@ import time
 
 from flask import jsonify, request, send_from_directory
 
-SECRET_KEYS = {"groq_key", "model_key", "elevenlabs_key"}
+SECRET_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
 _DASHBOARD_SECRETS = {key: "" for key in SECRET_KEYS}
 _START_LOCK = threading.Lock()
 _LIFECYCLE_LOCK = threading.RLock()

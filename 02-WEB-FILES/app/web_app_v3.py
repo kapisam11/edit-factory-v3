@@ -24,7 +24,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
-from ai_video_factory.validation import normalize_workflow, validate_target_seconds
+from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 
 APP_DIR = Path(__file__).resolve().parent
 SOURCE_WEB_DIR = APP_DIR.parent if (APP_DIR.parent / "templates").is_dir() else None
@@ -55,13 +55,16 @@ logger = logging.getLogger("web_app_v3")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
-SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key"}
+SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
 TERMINAL_STATUSES = {"done", "error", "cancelled", "interrupted"}
 SETTINGS_SCHEMA = {
     "default_target_seconds": ("float", 15.0, 120.0),
     "default_workflow": ("workflow", None, None),
     "default_skip_qc": ("bool", None, None),
     "default_use_groq": ("bool", None, None),
+    "default_v3_platform": ("text", 1, 64),
+    "default_v3_audience": ("text", 1, 500),
+    "default_v3_bpm": ("int", 40, 240),
     "max_upload_mb": ("int", 1, 5000),
     "max_concurrent_jobs": ("int", 1, 8),
 }
@@ -228,6 +231,9 @@ def get_settings() -> dict:
         "default_workflow": "default",
         "default_skip_qc": False,
         "default_use_groq": False,
+        "default_v3_platform": "youtube_shorts",
+        "default_v3_audience": "general short-form viewers",
+        "default_v3_bpm": 120,
         "max_upload_mb": app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024),
         "max_concurrent_jobs": int(os.environ.get("AIVF_MAX_CONCURRENT_JOBS", "2")),
     }
@@ -236,6 +242,20 @@ def get_settings() -> dict:
             defaults[key] = _validate_setting(key, value)
         except ValueError:
             logger.warning("Ignoring invalid persisted setting: %s", key)
+    try:
+        platform = defaults["default_v3_platform"]
+        max_seconds = {
+            "youtube_shorts": 60.0,
+            "tiktok": 180.0,
+            "instagram_reels": 90.0,
+            "square": 90.0,
+            "youtube": 180.0,
+        }[platform]
+        if float(defaults["default_target_seconds"]) > max_seconds:
+            defaults["default_target_seconds"] = min(45.0, max_seconds)
+    except (KeyError, TypeError, ValueError):
+        defaults["default_v3_platform"] = "youtube_shorts"
+        defaults["default_target_seconds"] = 45.0
     return defaults
 
 
@@ -249,6 +269,16 @@ def _validate_setting(key: str, value: Any) -> Any:
         return value
     if kind == "workflow":
         return normalize_workflow(str(value))
+    if kind == "text":
+        result = str(value).strip()
+        if not minimum <= len(result) <= maximum:
+            raise ValueError(f"{key} must be between {minimum} and {maximum} characters")
+        if key == "default_v3_platform":
+            allowed = {"youtube_shorts", "tiktok", "instagram_reels", "square", "youtube"}
+            if result.lower() not in allowed:
+                raise ValueError("default_v3_platform is unsupported")
+            return result.lower()
+        return result
     if kind == "int":
         if isinstance(value, bool):
             raise ValueError(f"{key} must be an integer")
@@ -411,8 +441,53 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         if not update(status="running", step="Initializing"):
             return
         log("INFO", "→ Initializing")
-        from ai_video_factory.pipeline import PipelineContext, build_director_pipeline
         pkg_dir = _safe_package_dir(params["topic"], output_root)
+        if params.get("workflow") == "v3":
+            from ai_video_factory.v3_pipeline import run_v3_pipeline
+
+            if not params.get("raw_video"):
+                raise ValueError("V3 production requires a raw video")
+            if not update(step="Running V3 Pipeline", pkg_dir=str(pkg_dir)):
+                return
+            log("INFO", "→ Running V3 Pipeline")
+            result = run_v3_pipeline(
+                params["raw_video"],
+                params["topic"],
+                str(pkg_dir),
+                context=params.get("context", ""),
+                target_seconds=params.get("target_seconds", 30.0),
+                platform=params.get("platform", "youtube_shorts"),
+                audience=params.get("audience", "general short-form viewers"),
+                bpm=params.get("bpm", 120),
+                edit_type=params.get("edit_type"),
+                model_key=secrets.get("model_key"),
+                skip_qc=params.get("skip_qc", False),
+                music_path=params.get("music_path"),
+                enable_ocr=params.get("enable_ocr", False),
+                enable_object_detection=params.get("enable_object_detection", True),
+                enable_diarization=params.get("enable_diarization", False),
+                diarization_token=secrets.get("diarization_token"),
+            )
+            result_payload = {
+                "errors": list(getattr(result, "errors", []) or []),
+                "warnings": list(getattr(result, "warnings", []) or []),
+                "artifacts": dict(getattr(result, "artifacts", {}) or {}),
+                "final_video": getattr(result, "final_video", None),
+            }
+            with open(pkg_dir / "v3_job_result.json", "w", encoding="utf-8") as handle:
+                json.dump(result_payload, handle, indent=2, ensure_ascii=False)
+            if result_payload["errors"]:
+                message = "; ".join(str(error) for error in result_payload["errors"])
+                if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
+                    log("ERROR", message)
+            else:
+                if update(status="done", step="Complete (V3)", pkg_dir=str(pkg_dir)):
+                    log("INFO", "V3 job complete!")
+                    for warning in result_payload["warnings"]:
+                        log("WARNING", str(warning))
+            return
+
+        from ai_video_factory.pipeline import PipelineContext, build_director_pipeline
         ctx = PipelineContext(
             topic=params["topic"],
             raw_video=params.get("raw_video"),
@@ -557,10 +632,15 @@ def create_job():
         return jsonify({"error": "Topic must be between 2 and 500 characters"}), 400
     settings_data = get_settings()
     try:
-        target_seconds = validate_target_seconds(
-            data.get("target_seconds", settings_data["default_target_seconds"])
-        )
         workflow = normalize_workflow(data.get("workflow", settings_data["default_workflow"]))
+        if workflow == "v3":
+            target_seconds = validate_v3_target_seconds(
+                data.get("target_seconds", settings_data.get("default_target_seconds", 45.0))
+            )
+        else:
+            target_seconds = validate_target_seconds(
+                data.get("target_seconds", settings_data["default_target_seconds"])
+            )
     except (TypeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
     try:
@@ -583,8 +663,49 @@ def create_job():
             and str(data.get("skip_qc", "")).lower() in {"1", "true", "on", "yes"}
         ),
     }
+    if workflow == "v3":
+        platform = str(data.get("platform", settings_data.get("default_v3_platform", "youtube_shorts"))).strip().lower()
+        audience = str(data.get("audience", settings_data.get("default_v3_audience", "general short-form viewers"))).strip()
+        edit_type = str(data.get("edit_type", "")).strip() or None
+        try:
+            bpm = int(data.get("bpm", settings_data.get("default_v3_bpm", 120)))
+        except (TypeError, ValueError):
+            return jsonify({"error": "bpm must be an integer between 40 and 240"}), 400
+        allowed_platforms = {"youtube_shorts", "tiktok", "instagram_reels", "square", "youtube"}
+        platform_max_seconds = {
+            "youtube_shorts": 60.0,
+            "tiktok": 180.0,
+            "instagram_reels": 90.0,
+            "square": 90.0,
+            "youtube": 180.0,
+        }
+        allowed_edit_types = {"Emotional", "Motivational", "Nostalgic", "Funny", "Dramatic", "Documentary", "Sigma", "Character Analysis", "Tribute", "Storytelling"}
+        if platform not in allowed_platforms:
+            return jsonify({"error": "Unsupported V3 platform"}), 400
+        if target_seconds > platform_max_seconds[platform]:
+            return jsonify({"error": f"target_seconds must be <= {platform_max_seconds[platform]:g} for {platform}"}), 400
+        if not audience or len(audience) > 500:
+            return jsonify({"error": "V3 audience must be between 1 and 500 characters"}), 400
+        if not 40 <= bpm <= 240:
+            return jsonify({"error": "V3 bpm must be between 40 and 240"}), 400
+        if edit_type and edit_type not in allowed_edit_types:
+            return jsonify({"error": "Unsupported V3 edit type"}), 400
+        params.update({
+            "platform": platform,
+            "audience": audience,
+            "bpm": bpm,
+            "edit_type": edit_type,
+            "context": str(data.get("context", "")).strip()[:2000],
+            "enable_ocr": str(data.get("enable_ocr", "")).lower() in {"1", "true", "on", "yes"},
+            "enable_object_detection": str(data.get("enable_object_detection", "true")).lower() in {"1", "true", "on", "yes"},
+            "enable_diarization": str(data.get("enable_diarization", "")).lower() in {"1", "true", "on", "yes"},
+        })
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
+    if workflow == "v3" and params.get("enable_diarization") and not secrets.get("diarization_token"):
+        return jsonify({"error": "Speaker diarization is enabled but no diarization token is configured"}), 400
+    if workflow == "v3" and not (request.files.get("raw_video") and request.files.get("raw_video").filename):
+        return jsonify({"error": "V3 production requires a raw video upload"}), 400
 
     upload = request.files.get("raw_video")
     try:
@@ -690,6 +811,13 @@ def list_packages():
             script = pkg_path / "script.txt"
             preview = script.read_text(encoding="utf-8", errors="replace")[:200] if script.exists() else ""
             created = datetime.fromtimestamp(pkg_path.stat().st_ctime).strftime("%Y-%m-%d %H:%M")
+            readiness_state = None
+            readiness_path = pkg_path / "v3_readiness.json"
+            if readiness_path.exists():
+                try:
+                    readiness_state = json.loads(readiness_path.read_text(encoding="utf-8")).get("state")
+                except (OSError, ValueError, TypeError):
+                    readiness_state = None
             packages.append({
                 "name": pkg_path.name,
                 "created": created,
@@ -697,8 +825,9 @@ def list_packages():
                 "script_preview": preview,
                 "has_video": any(
                     (pkg_path / name).exists()
-                    for name in ("final_short.mp4", "final_with_music.mp4", "final_short_vo.mp4")
+                    for name in ("final_short.mp4", "final_with_music.mp4", "final_short_vo.mp4", "final.v3.mp4")
                 ),
+                "v3_readiness": readiness_state,
             })
         except OSError:
             continue
