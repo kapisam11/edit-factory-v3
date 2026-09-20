@@ -24,7 +24,7 @@ COPY 04-TESTS ./04-TESTS
 COPY 05-EXTENSIONS ./05-EXTENSIONS
 COPY 06-CONFIG-AND-DEPLOYMENT ./06-CONFIG-AND-DEPLOYMENT
 
-RUN python -m pip install --no-cache-dir --upgrade pip uv \
+RUN python -m pip install --no-cache-dir --upgrade pip uv==0.12.17 \
     && uv sync --frozen --no-dev --extra web --extra ocr
 
 RUN groupadd --system aivf \
