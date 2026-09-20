@@ -54,11 +54,11 @@ def slot() -> Iterator[None]:
         now = time.time()
         try:
             with _connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
                 conn.execute(
                     "DELETE FROM ffmpeg_leases WHERE acquired < ?",
                     (now - LEASE_SECONDS,),
                 )
-                conn.execute("BEGIN IMMEDIATE")
                 count = conn.execute("SELECT COUNT(*) FROM ffmpeg_leases").fetchone()[0]
                 if count < MAX_FFMPEG_CONCURRENCY:
                     conn.execute(
