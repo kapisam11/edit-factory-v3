@@ -10,10 +10,13 @@ from typing import Any
 from flask import Response, abort, has_request_context, jsonify, request, send_from_directory
 
 from dashboard_cache import HybridCache
-from dashboard_store import DashboardStore
+from dashboard_store import DashboardStore, JobAdmissionError
 from resource_governor import (
     MAX_JOB_STORAGE_BYTES,
     MAX_RENDER_WALLCLOCK_SECONDS,
+    MAX_SSE_CONNECTIONS,
+    MAX_QUEUED_PER_PRINCIPAL,
+    RESOURCE_CHECK_INTERVAL_SECONDS,
     MAX_SSE_LIFETIME_SECONDS,
     ResourceLimitExceeded,
     acquire_sse,
@@ -57,14 +60,21 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     def db_insert_job(job_id: str, topic: str, params: dict) -> None:
         params = dict(params)
         principal = principal_for_request(request) if has_request_context() else str(params.get("_principal", "internal"))
+        params["_principal"] = principal
         try:
             check_job_creation_limits(store.connect, principal, (app_module.UPLOAD_FOLDER, app_module.OUTPUT_FOLDER))
-        except ResourceLimitExceeded as exc:
+            store.insert_job(
+                job_id,
+                topic,
+                params,
+                max_queued_jobs=app_module._MAX_QUEUED_JOBS,
+                principal=principal,
+                principal_limit=MAX_QUEUED_PER_PRINCIPAL,
+            )
+        except (ResourceLimitExceeded, JobAdmissionError) as exc:
             if has_request_context():
                 abort(429, description=str(exc))
             raise ValueError(str(exc)) from exc
-        params["_principal"] = principal
-        store.insert_job(job_id, topic, params)
         cache.delete("jobs:list")
 
     def db_update_job(job_id: str, **kwargs: Any) -> int:
@@ -144,7 +154,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 return
             current = app_module.db_get_job(job_id) or {}
             package_dir = current.get("pkg_dir")
-            if total_storage_bytes(app_module.UPLOAD_FOLDER, app_module.OUTPUT_FOLDER) > __import__("resource_governor").MAX_TOTAL_STORAGE_BYTES:
+            if total_storage_bytes(app_module.UPLOAD_FOLDER, app_module.OUTPUT_FOLDER, limit=__import__("resource_governor").MAX_TOTAL_STORAGE_BYTES) > __import__("resource_governor").MAX_TOTAL_STORAGE_BYTES:
                 try:
                     from dashboard_compat import _terminate_process_tree
                     _terminate_process_tree(process)
@@ -177,7 +187,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                     )
                     app_module.db_append_log(job_id, "ERROR", "Per-job storage quota exceeded")
                 return
-            __import__("time").sleep(0.5)
+            __import__("time").sleep(RESOURCE_CHECK_INTERVAL_SECONDS)
 
     def governed_start_job(job_id, params, secrets):
         started = original_start_job(job_id, params, secrets)
@@ -294,8 +304,9 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         if output_root not in package.parents or not package.is_dir():
             return jsonify({"error": "Package not found"}), 404
 
-        preferred = ("final_with_music.mp4", "final_short.mp4", "final_short_vo.mp4")
-        filename = next((name for name in preferred if (package / name).is_file()), None)
+        from ai_video_factory.artifact_readiness import resolve_final_video
+        resolved = resolve_final_video(package)
+        filename = resolved.name if resolved is not None else None
         if not filename:
             return jsonify({"error": "Rendered preview not found"}), 404
         response = send_from_directory(package, filename, mimetype="video/mp4")
