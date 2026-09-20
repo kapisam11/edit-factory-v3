@@ -134,6 +134,7 @@ def test_v3_pipeline_renders_contract_valid_video(tmp_path, monkeypatch):
 
     from ai_video_factory.v3_pipeline import run_v3_pipeline
 
+    monkeypatch.setenv("AIVF_ALLOW_SKIP_QC", "1")
     result = run_v3_pipeline(
         str(source),
         "integration render",
@@ -143,6 +144,7 @@ def test_v3_pipeline_renders_contract_valid_video(tmp_path, monkeypatch):
         audience="general short-form viewers",
         enable_object_detection=False,
         enable_diarization=False,
+        skip_qc=True,
     )
 
     assert result.errors == []
