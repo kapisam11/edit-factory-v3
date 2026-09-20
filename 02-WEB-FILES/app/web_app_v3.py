@@ -4,6 +4,7 @@ Single-host architecture: Flask + SQLite + one spawned process per active job.
 Secrets stay in process memory and are never persisted in job records.
 """
 import json
+import importlib.util
 import logging
 import multiprocessing
 import os
@@ -56,6 +57,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
+INTERNAL_PARAM_KEYS = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
+RUNTIME_SECRET_TTL_SECONDS = max(300, int(os.environ.get("AIVF_RETRY_SECRET_TTL_SECONDS", "3600")))
 TERMINAL_STATUSES = {"done", "error", "cancelled", "interrupted"}
 SETTINGS_SCHEMA = {
     "default_target_seconds": ("float", 15.0, 120.0),
@@ -69,6 +72,7 @@ SETTINGS_SCHEMA = {
     "max_concurrent_jobs": ("int", 1, 8),
 }
 _runtime_secrets: Dict[str, Dict[str, str]] = {}
+_runtime_secret_expiry: Dict[str, float] = {}
 _runtime_default_secrets: Dict[str, str] = {key: "" for key in SECRET_PARAM_KEYS}
 _active_processes: Dict[str, multiprocessing.Process] = {}
 _active_processes_lock = threading.RLock()
@@ -394,14 +398,43 @@ def _save_and_validate_upload(upload, suffix: str) -> Path:
         temp_path.unlink(missing_ok=True)
 
 
+def _runtime_capabilities() -> dict[str, bool]:
+    vision = importlib.util.find_spec("cv2") is not None
+    ocr = vision and importlib.util.find_spec("pytesseract") is not None and shutil.which("tesseract") is not None
+    diarization = importlib.util.find_spec("pyannote.audio") is not None
+    model_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_MODEL", ".models/mobilenet_ssd/mobilenet.caffemodel"))
+    config_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_CONFIG", ".models/mobilenet_ssd/deploy.prototxt"))
+    object_detection = vision and model_path.is_file() and config_path.is_file()
+    return {
+        "ocr": ocr,
+        "object_detection": object_detection,
+        "diarization": diarization,
+    }
+
+
+def _cleanup_runtime_secrets() -> None:
+    now = time.monotonic()
+    expired = [job_id for job_id, deadline in _runtime_secret_expiry.items() if deadline <= now]
+    for job_id in expired:
+        _runtime_secret_expiry.pop(job_id, None)
+        _runtime_secrets.pop(job_id, None)
+
+
 def _redact_job(job: dict, include_logs: bool = False) -> dict:
     result = dict(job)
     try:
         params = json.loads(result.get("params") or "{}")
     except json.JSONDecodeError:
         params = {}
-    for key in SECRET_PARAM_KEYS:
+    for key in SECRET_PARAM_KEYS | INTERNAL_PARAM_KEYS:
         params.pop(key, None)
+    result.pop("pkg_dir", None)
+    package_value = str(job.get("pkg_dir") or "").strip()
+    if package_value:
+        try:
+            result["package_name"] = Path(package_value).name
+        except OSError:
+            result["package_name"] = None
     result["params"] = params
     if include_logs:
         result["logs"] = [
@@ -528,7 +561,12 @@ def _watch_job_process(job_id: str, process: multiprocessing.Process) -> None:
     exitcode = process.exitcode
     with _active_processes_lock:
         _active_processes.pop(job_id, None)
-        _runtime_secrets.pop(job_id, None)
+        row = db_get_job(job_id)
+        if row and row.get("status") in {"error", "interrupted"} and job_id in _runtime_secrets:
+            _runtime_secret_expiry[job_id] = time.monotonic() + RUNTIME_SECRET_TTL_SECONDS
+        else:
+            _runtime_secret_expiry.pop(job_id, None)
+            _runtime_secrets.pop(job_id, None)
     _invalidate_package_cache()
 
     # A hard worker crash can bypass the worker's exception handler entirely.
@@ -552,7 +590,6 @@ def _running_count() -> int:
         dead = [job_id for job_id, process in _active_processes.items() if not process.is_alive()]
         for job_id in dead:
             _active_processes.pop(job_id, None)
-            _runtime_secrets.pop(job_id, None)
         return sum(1 for process in _active_processes.values() if process.is_alive())
 
 
@@ -697,13 +734,24 @@ def create_job():
             "edit_type": edit_type,
             "context": str(data.get("context", "")).strip()[:2000],
             "enable_ocr": str(data.get("enable_ocr", "")).lower() in {"1", "true", "on", "yes"},
-            "enable_object_detection": str(data.get("enable_object_detection", "true")).lower() in {"1", "true", "on", "yes"},
+            "enable_object_detection": str(data.get("enable_object_detection", "false")).lower() in {"1", "true", "on", "yes"},
             "enable_diarization": str(data.get("enable_diarization", "")).lower() in {"1", "true", "on", "yes"},
         })
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
-    if workflow == "v3" and params.get("enable_diarization") and not secrets.get("diarization_token"):
-        return jsonify({"error": "Speaker diarization is enabled but no diarization token is configured"}), 400
+    params["_retry_secret_keys"] = [key for key in SECRET_PARAM_KEYS if data.get(key)]
+    if workflow == "v3":
+        capabilities = _runtime_capabilities()
+        requested = (
+            ("enable_ocr", "ocr", "OCR"),
+            ("enable_object_detection", "object_detection", "Object detection"),
+            ("enable_diarization", "diarization", "Speaker diarization"),
+        )
+        for param_key, capability_key, display_name in requested:
+            if params.get(param_key) and not capabilities[capability_key]:
+                return jsonify({"error": f"{display_name} is not available in this production environment"}), 400
+        if params.get("enable_diarization") and not secrets.get("diarization_token"):
+            return jsonify({"error": "Speaker diarization is enabled but no diarization token is configured"}), 400
     if workflow == "v3" and not (request.files.get("raw_video") and request.files.get("raw_video").filename):
         return jsonify({"error": "V3 production requires a raw video upload"}), 400
 
@@ -855,6 +903,8 @@ def health():
         "ffprobe_available": shutil.which("ffprobe") is not None,
         "active_jobs": _running_count(),
         "max_content_length_mb": app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024),
+        "max_concurrent_jobs": int(get_settings().get("max_concurrent_jobs", 2)),
+        "capabilities": _runtime_capabilities(),
     })
 
 
