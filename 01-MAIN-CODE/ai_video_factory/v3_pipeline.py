@@ -218,12 +218,29 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 result.warnings.extend(
                     "V3 semantic QC: " + warning for warning in semantic_report["warnings"]
                 )
+            try:
+                from .upload_package import finalize_upload_package
+                upload_manifest = finalize_upload_package(
+                    package_dir,
+                    topic=topic,
+                    summary=baseline_summary,
+                    script=str(baseline_summary.get("script", "")),
+                    platform=platform,
+                    final_video=result.final_video,
+                    thumbnail=str(baseline_summary.get("thumbnail") or "") or None,
+                    caption_path=str(package / "captions.ass") if (package / "captions.ass").exists() else None,
+                )
+                result.artifacts["upload_package_manifest"] = str(package / "upload_package.json")
+            except Exception as exc:
+                upload_manifest = None
+                result.errors.append(f"V3 upload package finalization failed: {exc}")
+
             readiness = evaluate_artifact(
                 result.final_video,
                 target_seconds=target_seconds,
                 platform_profile=profile,
                 package_dir=package_dir,
-                upload_package_required=False,
+                upload_package_required=True,
                 publish_required=False,
             )
             _atomic_json_write(package / "v3_render_qc.json", render_report)
