@@ -4,9 +4,11 @@ from __future__ import annotations
 import math
 from typing import Iterable
 
-VALID_WORKFLOWS = ("default", "fast", "package_only")
+VALID_WORKFLOWS = ("default", "fast", "package_only", "v3")
 MIN_TARGET_SECONDS = 15.0
 MAX_TARGET_SECONDS = 120.0
+V3_MIN_TARGET_SECONDS = 8.0
+V3_MAX_TARGET_SECONDS = 180.0
 
 
 def validate_target_seconds(value: float, field_name: str = "target_seconds") -> float:
@@ -30,3 +32,16 @@ def normalize_workflow(value: str, allowed: Iterable[str] = VALID_WORKFLOWS) -> 
     if workflow not in allowed_set:
         raise ValueError(f"Unsupported workflow: {workflow}")
     return workflow
+
+
+def validate_v3_target_seconds(value: float, field_name: str = "target_seconds") -> float:
+    """Validate V3 duration independently from legacy dashboard limits."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a number") from exc
+    if not math.isfinite(result) or not V3_MIN_TARGET_SECONDS <= result <= V3_MAX_TARGET_SECONDS:
+        raise ValueError(
+            f"{field_name} must be between {V3_MIN_TARGET_SECONDS:g} and {V3_MAX_TARGET_SECONDS:g} seconds"
+        )
+    return result
