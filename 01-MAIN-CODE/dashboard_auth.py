@@ -64,10 +64,11 @@ def configure_dashboard_auth(app):
     if not token and not allow_insecure_local:
         app.logger.warning("AIVF_DASHBOARD_TOKEN is unset; dashboard access will fail closed")
 
+    cookie_secure_default = "0" if allow_insecure_local else "1"
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Strict",
-        SESSION_COOKIE_SECURE=os.environ.get("AIVF_COOKIE_SECURE", "1") == "1",
+        SESSION_COOKIE_SECURE=os.environ.get("AIVF_COOKIE_SECURE", cookie_secure_default) == "1",
     )
 
     @app.before_request
