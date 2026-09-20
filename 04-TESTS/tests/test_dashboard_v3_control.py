@@ -97,3 +97,54 @@ def test_dashboard_rejects_v3_duration_outside_v3_contract(monkeypatch, tmp_path
     )
     assert response.status_code == 400
     assert "between 8 and 180" in response.get_json()["error"]
+
+
+def test_worker_dispatches_v3_to_real_v3_pipeline(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from types import SimpleNamespace
+    import ai_video_factory.v3_pipeline as v3_pipeline
+
+    appmod.db_insert_job("job-v3-worker", "V3 worker", {
+        "topic": "V3 worker",
+        "workflow": "v3",
+        "target_seconds": 30.0,
+        "raw_video": str(tmp_path / "source.mp4"),
+        "platform": "youtube_shorts",
+        "audience": "general short-form viewers",
+        "bpm": 120,
+    })
+
+    captured = {}
+
+    def fake_run_v3_pipeline(input_video, topic, package_dir, **kwargs):
+        captured.update(input_video=input_video, topic=topic, package_dir=package_dir, kwargs=kwargs)
+        return SimpleNamespace(
+            errors=[],
+            warnings=["example warning"],
+            artifacts={"v3_readiness": str(Path(package_dir) / "v3_readiness.json")},
+            final_video=str(Path(package_dir) / "final.v3.mp4"),
+        )
+
+    monkeypatch.setattr(v3_pipeline, "run_v3_pipeline", fake_run_v3_pipeline)
+
+    appmod._run_job_worker_impl(
+        "job-v3-worker",
+        {
+            "topic": "V3 worker",
+            "workflow": "v3",
+            "target_seconds": 30.0,
+            "raw_video": str(tmp_path / "source.mp4"),
+            "platform": "youtube_shorts",
+            "audience": "general short-form viewers",
+            "bpm": 120,
+        },
+        {},
+        str(tmp_path / "output"),
+        str(appmod.DB_PATH),
+    )
+
+    assert captured["topic"] == "V3 worker"
+    assert captured["kwargs"]["platform"] == "youtube_shorts"
+    assert captured["kwargs"]["audience"] == "general short-form viewers"
+    assert appmod.db_get_job("job-v3-worker")["status"] == "done"
+    assert (Path(captured["package_dir"]) / "v3_job_result.json").is_file()
