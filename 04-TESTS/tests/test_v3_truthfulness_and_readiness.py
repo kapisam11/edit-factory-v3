@@ -40,3 +40,13 @@ def test_artifact_readiness_stops_at_media_contract(monkeypatch, tmp_path):
     assert report.checks["MEDIA_CONTRACT_VALID"] is True
     assert report.checks["UPLOAD_PACKAGE_VALID"] is False
     assert report.checks["PUBLISH_READY"] is False
+
+def test_semantic_qc_disable_is_development_only(monkeypatch, tmp_path):
+    source = tmp_path / "input.mp4"
+    source.write_bytes(b"x")
+    monkeypatch.setenv("AIVF_V3_SEMANTIC_QC", "0")
+    monkeypatch.delenv("AIVF_ENV", raising=False)
+    from ai_video_factory.v3_pipeline import run_v3_pipeline
+    with pytest.raises(ValueError, match="AIVF_V3_SEMANTIC_QC=0"):
+        run_v3_pipeline(str(source), "source footage", str(tmp_path / "package"), target_seconds=8.0)
+
