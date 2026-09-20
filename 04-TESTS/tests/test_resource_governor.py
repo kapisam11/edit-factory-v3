@@ -33,9 +33,12 @@ def test_principal_queue_limit(monkeypatch, tmp_path):
 def test_storage_quota_rejects_before_creation(monkeypatch, tmp_path):
     marker = tmp_path / "large.bin"
     marker.write_bytes(b"x" * 32)
+    db_path = tmp_path / "jobs.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE jobs(params TEXT, status TEXT)")
     monkeypatch.setattr("resource_governor.MAX_TOTAL_STORAGE_BYTES", 16)
     with pytest.raises(ResourceLimitExceeded, match="total storage quota"):
-        check_job_creation_limits(lambda: sqlite3.connect(":memory:"), "client", (tmp_path,))
+        check_job_creation_limits(lambda: sqlite3.connect(db_path), "client", (tmp_path,))
 
 
 def test_sse_counter_is_bounded():
