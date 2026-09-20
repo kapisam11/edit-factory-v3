@@ -1,6 +1,6 @@
 # 04 — Using the Dashboard
 
-The dashboard is the browser **control panel** for Edit Factory. It is the main place to start jobs, watch the queue, cancel work, inspect generated packages, and change supported runtime defaults.
+The dashboard is the browser **control panel** for Edit Factory. It is the main place to start jobs, watch the queue, cancel work, inspect generated packages, and change supported runtime defaults.\n\nThe **V3 Production** workflow is also controlled from this panel. Select V3 to expose platform, audience, BPM, edit type, creative context, OCR/object-detection/diarization controls, and the 8–180 second V3 duration range. V3 jobs require an uploaded source video and are dispatched to `ai_video_factory.v3_pipeline.run_v3_pipeline()`; completed packages expose the V3 readiness report and `final.v3.mp4` in the package viewer.
 
 ## Components
 
