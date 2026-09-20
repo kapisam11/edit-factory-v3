@@ -22,7 +22,7 @@ timeout. API credentials are supplied in memory and are never persisted in job r
 
 ## Recovery and cancellation
 
-A process restart marks outstanding `queued`, `running`, and `cancelling` jobs as `interrupted`.
+A process restart marks outstanding `queued`, `running`, and `cancelling` jobs as `interrupted`. Resource governance also enforces principal queue limits, total/per-job storage limits, a render wall-clock budget, a cross-process FFmpeg concurrency budget, and bounded SSE connections/lifetime. Terminal job/log records and stale upload files are periodically expired.
 Running cancellation terminates the dedicated job process and then records `cancelled`. SSE log
 streams close for all terminal states.
 
