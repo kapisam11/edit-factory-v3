@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from .ffmpeg_budget import run_ffmpeg_subprocess
+
 
 def install() -> None:
     from . import content_factory, upload_package
@@ -158,7 +160,7 @@ def install() -> None:
         target = Path(path)
         errors = list(result.get("errors", []))
         try:
-            decode = subprocess.run(
+            decode = run_ffmpeg_subprocess(
                 ["ffmpeg", "-v", "error", "-i", str(target), "-f", "null", "-"],
                 capture_output=True, text=True, timeout=120,
             )
@@ -167,7 +169,7 @@ def install() -> None:
         except Exception as exc:
             errors.append(f"decode_check:{exc}")
         try:
-            black = subprocess.run(
+            black = run_ffmpeg_subprocess(
                 ["ffmpeg", "-hide_banner", "-i", str(target), "-vf", "blackdetect=d=0.50:pic_th=0.98", "-an", "-f", "null", "-"],
                 capture_output=True, text=True, timeout=120,
             )
