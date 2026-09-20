@@ -35,10 +35,13 @@ MAX_RENDER_WALLCLOCK_SECONDS = _int_env("AIVF_MAX_RENDER_WALLCLOCK_SECONDS", 3_6
 
 
 def principal_for_request(request: Any) -> str:
-    forwarded = getattr(getattr(request, "headers", None), "get", lambda *_: None)("X-Forwarded-For")
-    if forwarded:
-        forwarded = str(forwarded).split(",", 1)[0].strip()
-    return str(forwarded or getattr(request, "remote_addr", None) or "unknown")
+    """Return a stable principal without trusting spoofable proxy headers by default."""
+    remote = str(getattr(request, "remote_addr", None) or "unknown")
+    if os.environ.get("AIVF_TRUST_PROXY_HEADERS", "0") == "1":
+        forwarded = getattr(getattr(request, "headers", None), "get", lambda *_: None)("X-Forwarded-For")
+        if forwarded:
+            return str(forwarded).split(",", 1)[0].strip() or remote
+    return remote
 
 
 def directory_size(path: str | Path, *, limit: int | None = None) -> int:
