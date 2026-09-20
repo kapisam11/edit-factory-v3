@@ -14,9 +14,13 @@ from dashboard_store import DashboardStore
 
 def install_dashboard_optimizations(app_module: Any) -> None:
     """Install the storage/cache boundary once on the canonical dashboard module."""
-    if getattr(app_module, "_AIVF_OPTIMIZATIONS_INSTALLED", False):
+    extensions = getattr(app_module.app, "extensions", None)
+    if extensions is not None and extensions.get("aivf_optimizations") is not None:
         return
-    app_module._AIVF_OPTIMIZATIONS_INSTALLED = True
+    if extensions is None:
+        extensions = {}
+        app_module.app.extensions = extensions
+    extensions["aivf_optimizations"] = True
 
     store = DashboardStore(app_module.DB_PATH)
     store.ensure_indexes()
