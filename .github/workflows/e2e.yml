@@ -32,6 +32,7 @@ jobs:
         env:
           FLASK_SECRET_KEY: e2e-session-secret
           AIVF_DASHBOARD_TOKEN: e2e-dashboard-token
+          AIVF_COOKIE_SECURE: "0"
           AIVF_STATE_DIR: ${{ runner.temp }}/aivf-state
           AIVF_UPLOAD_DIR: ${{ runner.temp }}/aivf-uploads
           AIVF_OUTPUT_DIR: ${{ runner.temp }}/aivf-output
