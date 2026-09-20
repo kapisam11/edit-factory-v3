@@ -84,6 +84,8 @@ def configure_dashboard_auth(app):
             "img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
             "base-uri 'self'; form-action 'self'"
         ) % g.aivf_csp_nonce
+        if app.config.get("SESSION_COOKIE_SECURE"):
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
     @app.before_request
