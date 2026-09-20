@@ -18,17 +18,17 @@ This document defines release-gating acceptance criteria for the 24 findings fro
 | 12 | Generic overlays | Overlay generation is bounded, purpose-specific and deduplicated | `v3_engine._overlay_for_purpose`, `_unique_overlay` |
 | 13 | Script before footage | V3 performs source-footage analysis before the production script call and then maps script onto immutable beats | `v3_pipeline._build_footage_evidence`, `edit_planner._fit_script_to_beats` |
 | 14 | Primitive scene matching | Scene choice combines lexical and semantic relevance with salience/role signals and fails closed below confidence threshold | `edit_planner.choose_scene` |
-| 15 | 30% coverage gate | Maintained V3 production surface has a CI coverage floor of at least 50% | `.github/workflows/python-tests.yml` |
+| 15 | Coverage gate | Maintained V3 production surface has a CI coverage floor of at least 80% | `.github/workflows/python-tests.yml` |
 | 16 | Weak strategy tests | All edit types and direct renderer mappings are exercised | `test_v3_strict_hardening.py`, `test_v3_effect_mapping.py` |
 | 17 | Weak adversarial tests | Invalid configuration, fail-closed scene matching, media normalization and render contracts are exercised | `test_v3_strict_hardening.py` |
 | 18 | No scene rejection | Independent relevance confidence is required before salience/role bonuses can select a scene | `edit_planner.choose_scene`, `min_scene_match_score=0.15` |
 | 19 | QC bypass | V3 rejects `skip_qc` unless the explicit development override is present | `v3_pipeline.py` |
-| 20 | PR drift | Hardening PR targets `main` and must remain mergeable/CI-green before release | PR #6 |
+| 20 | PR drift | Production-hardening PR must target `main`, stay mergeable, and pass the release CI suite before release | current hardening PR |
 | 21 | V2 debt | V3 is isolated behind an explicit wrapper/contract and no legacy template path is allowed to silently override V3 | `v3_pipeline.py`, `composer._apply_templates` |
 | 22 | Maintainability | V3 enforcement responsibilities are separated into focused modules with typed contracts | `v3_engine`, `v3_quality`, `v3_semantics`, `v3_capabilities`, `edit_planner` |
 | 23 | Capability truthfulness | Exactly 40 registry entries remain compatible, but each entry exposes evidence level, status, display name, and truth note so heuristics are not represented as equivalent to human review | `v3_capabilities.validate_capabilities`, truthfulness tests |
-| 24 | Real video quality unproven | CI proves media invariants, independent retention QC, semantic/dead-moment heuristics, and V3 readiness evidence; a real-render visual review remains the final artistic gate | `v3_render_qc.json`, `v3_semantic_qc.json`, `v3_readiness.json`, release rule |
+| 24 | Real video quality unproven | CI performs a real dashboard-driven V3 render, proves media invariants, independent retention QC, semantic/dead-moment heuristics, and V3 readiness evidence; a human visual review remains the final artistic gate | `.github/workflows/e2e.yml`, V3 QC/readiness artifacts, release rule |
 
 ## Release rule
 
-Release is blocked until repository CI is green, including the Python matrix, Windows smoke, dependency audit and Docker smoke. V3 production is additionally blocked by failed timeline/render contracts. Static verification does not claim aesthetic excellence; a real rendered video still requires human visual acceptance.
+Release is blocked until repository CI is green, including the Python matrix, Windows smoke, dependency audit, Docker smoke, and a real dashboard-driven V3 render. Production also requires V3 timeline/render contracts, runtime capability checks, and secure deployment configuration. Static verification does not claim aesthetic excellence; a real rendered video still requires human visual acceptance.
