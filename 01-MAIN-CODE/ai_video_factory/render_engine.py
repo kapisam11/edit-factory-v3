@@ -10,6 +10,7 @@ from collections import deque
 from pathlib import Path
 from typing import List, Optional
 
+from .ffmpeg_budget import run_ffmpeg_subprocess, slot
 from .hardware import choose_encoder, ffmpeg_preset_for
 
 logger = logging.getLogger(__name__)
@@ -169,15 +170,16 @@ def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bo
     cmd[0] = _ffmpeg_binary()
     timeout = timeout if timeout is not None else _bounded_timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600)
     try:
-        if capture_output:
-            return subprocess.run(
-                cmd,
-                check=True,
-                timeout=timeout,
-                capture_output=True,
-                text=True,
-            )
-        return _run_ffmpeg_streaming(cmd, timeout)
+        with slot():
+            if capture_output:
+                return run_ffmpeg_subprocess(
+                    cmd,
+                    check=True,
+                    timeout=timeout,
+                    capture_output=True,
+                    text=True,
+                )
+            return _run_ffmpeg_streaming(cmd, timeout)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         if len(detail) > 2000:
