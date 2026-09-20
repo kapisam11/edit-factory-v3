@@ -2,7 +2,7 @@
 
 The dashboard is the browser **control panel** for Edit Factory. It is the main place to start jobs, watch the queue, cancel work, inspect generated packages, and change supported runtime defaults.
 
-The **V3 Production** workflow is also controlled from this panel. Select V3 to expose platform, audience, BPM, edit type, creative context, OCR/object-detection/diarization controls, and the 8–180 second V3 duration range. V3 jobs require an uploaded source video and are dispatched to `ai_video_factory.v3_pipeline.run_v3_pipeline()`; completed packages expose the V3 readiness report and `final.v3.mp4` in the package viewer.
+The **V3 Production** workflow is also controlled from this panel. Select V3 to expose platform, audience, BPM, edit type, creative context, and optional OCR/object-detection/diarization controls. The dashboard disables optional controls that are not installed in the production runtime. V3 jobs require an uploaded source video and are dispatched to `ai_video_factory.v3_pipeline.run_v3_pipeline()`; completed packages expose the V3 readiness report and canonical final-video preview.
 
 ## Components
 
@@ -13,7 +13,9 @@ Browser control panel
   ↓
 02-WEB-FILES/app/web_app_v3.py
   ↓
-01-MAIN-CODE/dashboard_compat.py
+01-MAIN-CODE/dashboard_worker.py
+  ↓
+ai_video_factory.v3_pipeline.run_v3_pipeline() for V3 jobs
   ↓
 SQLite + spawned worker
   ↓
@@ -40,7 +42,7 @@ Open package → Preview video / edit script / inspect thumbnails / files
 
 ## Current controls
 
-The control panel supports an optional raw-video upload, a 15–120 second target duration, the canonical `default`, `fast`, and `package_only` workflows, Groq and QC toggles, queue monitoring, cancellation, presets, persistent defaults, and generated-package inspection.
+The control panel supports raw-video uploads, the canonical `default`, `fast`, `package_only`, and `v3` workflows, platform-aware V3 durations from 8–180 seconds, V3 audience/BPM/edit-type/context controls, runtime capability gating, Groq and QC controls, queue monitoring, cancellation, retry, live preview, presets, persistent defaults, and generated-package inspection.
 
 Older workflow aliases such as `director` and `legacy` remain accepted for compatibility but are normalized to the current canonical workflow names.
 
@@ -50,9 +52,14 @@ The Settings panel can persist:
 
 - default target duration
 - default workflow
+- default V3 platform
+- default V3 audience
+- default V3 BPM
 - default Skip-QC behavior
 - default Groq usage
 - maximum concurrent jobs
+
+Production deployments keep semantic V3 QC enabled. Disabling semantic QC or Skip-QC is development/test-only and requires the explicit QC override.
 
 API keys can be entered from the control panel. Key values are held in process memory and are not returned by the settings endpoint. The panel only reports whether a key is configured.
 
@@ -87,8 +94,9 @@ For production, keep the documented single-host Gunicorn worker-process configur
 After upgrading, verify the browser control panel itself:
 
 1. Open the dashboard and confirm settings load.
-2. Confirm the three current workflow choices appear.
-3. Create a job without raw video.
+2. Confirm `default`, `fast`, `package_only`, and `v3` workflow choices appear.
+3. Select V3 and confirm unavailable optional intelligence controls are disabled.
+4. Create a V3 job with a supported raw video.
 4. Create a job with a supported raw video.
 5. Watch queue state and live logs.
 6. Cancel a queued/running job and verify `cancelled`.
