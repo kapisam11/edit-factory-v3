@@ -75,20 +75,32 @@ def evaluate_artifact(
             errors.append("MEDIA_CONTRACT_VALID: dimensions do not match the platform contract")
 
     package = Path(package_dir).resolve() if package_dir else None
-    upload_manifest = package / "upload_manifest.json" if package else None
+    upload_manifest = package / "upload_package.json" if package else None
     upload_ok = False
     if upload_manifest and upload_manifest.is_file():
         try:
             manifest = json.loads(upload_manifest.read_text(encoding="utf-8"))
-            files = manifest.get("files") if isinstance(manifest, dict) else None
-            upload_ok = isinstance(files, list) and bool(files) and all(
-                isinstance(item, str)
-                and package in (package / item).resolve().parents
-                and (package / item).resolve().is_file()
-                for item in files
-            )
+            platforms = manifest.get("platforms") if isinstance(manifest, dict) else None
+            upload_ok = isinstance(platforms, dict) and bool(platforms)
+            if upload_ok:
+                for platform, payload in platforms.items():
+                    if not isinstance(payload, dict):
+                        upload_ok = False
+                        errors.append(f"UPLOAD_PACKAGE_VALID: invalid manifest entry for {platform}")
+                        break
+                    files = payload.get("files") or {}
+                    video_rel = files.get("video") if isinstance(files, dict) else None
+                    if not isinstance(video_rel, str):
+                        upload_ok = False
+                        errors.append(f"UPLOAD_PACKAGE_VALID: platform {platform} has no video file")
+                        break
+                    target = (package / video_rel).resolve()
+                    if package not in target.parents or not target.is_file():
+                        upload_ok = False
+                        errors.append(f"UPLOAD_PACKAGE_VALID: platform {platform} video is missing")
+                        break
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-            errors.append(f"UPLOAD_PACKAGE_VALID: invalid upload manifest: {exc}")
+            errors.append(f"UPLOAD_PACKAGE_VALID: invalid upload package manifest: {exc}")
     elif package and package.exists() and not upload_package_required:
         warnings.append("No upload manifest is present; upload-package readiness is not claimed")
     checks["UPLOAD_PACKAGE_VALID"] = upload_ok
