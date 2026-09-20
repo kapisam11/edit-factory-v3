@@ -66,7 +66,7 @@ def test_dashboard_store_list_limit_is_bounded(tmp_path):
     _create_schema(db)
     store = DashboardStore(db)
     for index in range(3):
-        store.insert_job(f"job-{index}", f"topic-{index}", {})
+        store.insert_job(f"job-{index}", f"topic-{index}", {"topic": f"topic-{index}"})
     assert len(store.list_jobs(999999)) == 3
     assert len(store.list_jobs(-10)) == 1
     with pytest.raises(ValueError, match="limit"):
