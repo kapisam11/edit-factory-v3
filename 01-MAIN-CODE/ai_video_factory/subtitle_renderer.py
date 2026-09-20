@@ -3,6 +3,8 @@ import json
 import math
 import re
 import subprocess
+
+from .ffmpeg_budget import run_ffmpeg_subprocess
 import shutil
 from typing import Dict, List, Optional
 
@@ -17,7 +19,7 @@ SUBTITLE_STYLES = {
 
 def _run_ffmpeg(command: List[str], timeout: int = 600) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout)
+        return run_ffmpeg_subprocess(command, check=True, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"FFmpeg timed out after {timeout}s") from exc
 
