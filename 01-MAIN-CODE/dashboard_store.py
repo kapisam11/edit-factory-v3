@@ -10,7 +10,12 @@ import json
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional\n\n\nclass JobAdmissionError(RuntimeError):\n    """Raised when an atomic dashboard admission limit rejects a new job."""\n
+from typing import Any, Callable, Optional
+
+
+class JobAdmissionError(RuntimeError):
+    """Raised when an atomic dashboard admission limit rejects a new job."""
+
 
 
 class DashboardStore:
