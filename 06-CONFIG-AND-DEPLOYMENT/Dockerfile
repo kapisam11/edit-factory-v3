@@ -25,7 +25,7 @@ COPY 05-EXTENSIONS ./05-EXTENSIONS
 COPY 06-CONFIG-AND-DEPLOYMENT ./06-CONFIG-AND-DEPLOYMENT
 
 RUN python -m pip install --no-cache-dir --upgrade pip uv \
-    && uv sync --frozen --no-dev --extra web
+    && uv sync --frozen --no-dev --extra web --extra ocr
 
 RUN groupadd --system aivf \
     && useradd --system --gid aivf --create-home aivf \
