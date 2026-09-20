@@ -3,6 +3,10 @@ import importlib
 
 def _load(monkeypatch):
     monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "test-token")
+    monkeypatch.setenv("AIVF_COOKIE_SECURE", "0")
+    import dashboard_auth
+    importlib.reload(dashboard_auth)
+    dashboard_auth._login_attempts.clear()
     monkeypatch.setenv("AIVF_COOKIE_SECURE", "1")
     import dashboard_auth
     importlib.reload(dashboard_auth)
@@ -113,8 +117,11 @@ def test_login_rate_limit_blocks_excessive_attempts(monkeypatch):
 
 
 def test_session_cookie_is_secure(monkeypatch):
+    monkeypatch.setenv("AIVF_COOKIE_SECURE", "1")
     app = _load(monkeypatch)
     client = app.test_client()
+    import dashboard_auth
+    dashboard_auth._login_attempts.clear()
     _login(client)
     response = client.get("/")
     cookie = response.headers.get("Set-Cookie", "")
