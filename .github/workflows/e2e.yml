@@ -17,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg tesseract-ocr
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -27,7 +27,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install dashboard environment
-        run: uv sync --frozen --python 3.12 --extra web --extra dev
+        run: uv sync --frozen --python 3.12 --extra web --extra dev --extra ocr
       - name: Start dashboard
         env:
           FLASK_SECRET_KEY: e2e-session-secret
