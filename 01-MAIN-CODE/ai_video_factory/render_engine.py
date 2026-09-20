@@ -346,6 +346,9 @@ def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
     vo_path = _validate_media_input(vo_path, "voiceover audio")
     source = validate_media_output(video_path, require_video=True, require_audio=False)
     has_audio = any(stream.get("codec_type") == "audio" for stream in source.get("streams", []))
+    duration = float((source.get("format") or {}).get("duration") or 0.0)
+    if duration <= 0:
+        raise RuntimeError("voiceover source video has no positive duration")
     output = _validate_media_path(output_path)
 
     if has_audio:
@@ -370,7 +373,8 @@ def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
             "aac",
             "-b:a",
             "192k",
-            "-shortest",
+            "-t",
+            f"{duration:.3f}",
             "-movflags",
             "+faststart",
             output,
