@@ -93,6 +93,7 @@ def test_dashboard_rejects_v3_duration_outside_v3_contract(monkeypatch, tmp_path
             "topic": "Bad V3 duration",
             "workflow": "v3",
             "target_seconds": "200",
+            "platform": "tiktok",
         },
     )
     assert response.status_code == 400
