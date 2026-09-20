@@ -24,7 +24,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
-from ai_video_factory.validation import normalize_workflow, validate_target_seconds
+from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 
 APP_DIR = Path(__file__).resolve().parent
 SOURCE_WEB_DIR = APP_DIR.parent if (APP_DIR.parent / "templates").is_dir() else None
@@ -55,13 +55,16 @@ logger = logging.getLogger("web_app_v3")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
-SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key"}
+SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
 TERMINAL_STATUSES = {"done", "error", "cancelled", "interrupted"}
 SETTINGS_SCHEMA = {
     "default_target_seconds": ("float", 15.0, 120.0),
     "default_workflow": ("workflow", None, None),
     "default_skip_qc": ("bool", None, None),
     "default_use_groq": ("bool", None, None),
+    "default_v3_platform": ("text", 1, 64),
+    "default_v3_audience": ("text", 1, 500),
+    "default_v3_bpm": ("int", 40, 240),
     "max_upload_mb": ("int", 1, 5000),
     "max_concurrent_jobs": ("int", 1, 8),
 }
@@ -228,6 +231,9 @@ def get_settings() -> dict:
         "default_workflow": "default",
         "default_skip_qc": False,
         "default_use_groq": False,
+        "default_v3_platform": "youtube_shorts",
+        "default_v3_audience": "general short-form viewers",
+        "default_v3_bpm": 120,
         "max_upload_mb": app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024),
         "max_concurrent_jobs": int(os.environ.get("AIVF_MAX_CONCURRENT_JOBS", "2")),
     }
@@ -249,6 +255,11 @@ def _validate_setting(key: str, value: Any) -> Any:
         return value
     if kind == "workflow":
         return normalize_workflow(str(value))
+    if kind == "text":
+        result = str(value).strip()
+        if not minimum <= len(result) <= maximum:
+            raise ValueError(f"{key} must be between {minimum} and {maximum} characters")
+        return result
     if kind == "int":
         if isinstance(value, bool):
             raise ValueError(f"{key} must be an integer")
@@ -557,10 +568,15 @@ def create_job():
         return jsonify({"error": "Topic must be between 2 and 500 characters"}), 400
     settings_data = get_settings()
     try:
-        target_seconds = validate_target_seconds(
-            data.get("target_seconds", settings_data["default_target_seconds"])
-        )
         workflow = normalize_workflow(data.get("workflow", settings_data["default_workflow"]))
+        if workflow == "v3":
+            target_seconds = validate_v3_target_seconds(
+                data.get("target_seconds", settings_data.get("default_target_seconds", 45.0))
+            )
+        else:
+            target_seconds = validate_target_seconds(
+                data.get("target_seconds", settings_data["default_target_seconds"])
+            )
     except (TypeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
     try:
@@ -583,8 +599,38 @@ def create_job():
             and str(data.get("skip_qc", "")).lower() in {"1", "true", "on", "yes"}
         ),
     }
+    if workflow == "v3":
+        platform = str(data.get("platform", settings_data.get("default_v3_platform", "youtube_shorts"))).strip().lower()
+        audience = str(data.get("audience", settings_data.get("default_v3_audience", "general short-form viewers"))).strip()
+        edit_type = str(data.get("edit_type", "")).strip() or None
+        try:
+            bpm = int(data.get("bpm", settings_data.get("default_v3_bpm", 120)))
+        except (TypeError, ValueError):
+            return jsonify({"error": "bpm must be an integer between 40 and 240"}), 400
+        allowed_platforms = {"youtube_shorts", "tiktok", "instagram_reels", "square", "youtube"}
+        allowed_edit_types = {"Emotional", "Motivational", "Nostalgic", "Funny", "Dramatic", "Documentary", "Sigma", "Character Analysis", "Tribute", "Storytelling"}
+        if platform not in allowed_platforms:
+            return jsonify({"error": "Unsupported V3 platform"}), 400
+        if not audience or len(audience) > 500:
+            return jsonify({"error": "V3 audience must be between 1 and 500 characters"}), 400
+        if not 40 <= bpm <= 240:
+            return jsonify({"error": "V3 bpm must be between 40 and 240"}), 400
+        if edit_type and edit_type not in allowed_edit_types:
+            return jsonify({"error": "Unsupported V3 edit type"}), 400
+        params.update({
+            "platform": platform,
+            "audience": audience,
+            "bpm": bpm,
+            "edit_type": edit_type,
+            "context": str(data.get("context", "")).strip()[:2000],
+            "enable_ocr": str(data.get("enable_ocr", "")).lower() in {"1", "true", "on", "yes"},
+            "enable_object_detection": str(data.get("enable_object_detection", "true")).lower() in {"1", "true", "on", "yes"},
+            "enable_diarization": str(data.get("enable_diarization", "")).lower() in {"1", "true", "on", "yes"},
+        })
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
+    if workflow == "v3" and not (request.files.get("raw_video") and request.files.get("raw_video").filename):
+        return jsonify({"error": "V3 production requires a raw video upload"}), 400
 
     upload = request.files.get("raw_video")
     try:
