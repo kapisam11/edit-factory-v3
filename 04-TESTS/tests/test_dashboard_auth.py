@@ -131,4 +131,5 @@ def test_dashboard_emits_nonce_based_csp(monkeypatch):
     policy = response.headers["Content-Security-Policy"]
     assert "script-src 'self';" not in policy
     assert "script-src 'self' 'nonce-" in policy
-    assert "'unsafe-inline'" not in policy.split("script-src", 1)[1].split(";", 1)[0]
+    assert "script-src-attr 'unsafe-inline'" in policy
+    assert "'unsafe-inline'" not in policy.split("script-src ", 1)[1].split(";", 1)[0]
