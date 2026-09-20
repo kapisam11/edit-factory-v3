@@ -45,7 +45,7 @@
                             </div>
 
                             <div class="form-group">
-                                <label for="raw_video">Raw Video (optional)</label>
+                                <label for="raw_video" id="rawVideoLabel">Raw Video (required for V3)</label>
                                 <div class="file-dropzone" id="dropzone">
                                     <input type="file" id="raw_video" name="raw_video" accept="video/*">
                                     <span class="dropzone-text">Drop video here or click to browse</span>
@@ -60,10 +60,72 @@
                                 <div class="form-group">
                                     <label for="workflow">Workflow</label>
                                     <select id="workflow" name="workflow">
+                                        <option value="v3">V3 Production (strict)</option>
                                         <option value="default">Default / Director</option>
                                         <option value="fast">Fast</option>
                                         <option value="package_only">Package only</option>
                                     </select>
+                                </div>
+                            </div>
+
+                            <div id="v3Controls" class="panel" style="margin-top: 12px; display: none;">
+                                <h3 style="margin-top: 0;">V3 Production Controls</h3>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="platform">Platform</label>
+                                        <select id="platform" name="platform">
+                                            <option value="youtube_shorts">YouTube Shorts</option>
+                                            <option value="tiktok">TikTok</option>
+                                            <option value="instagram_reels">Instagram Reels</option>
+                                            <option value="square">Square</option>
+                                            <option value="youtube">YouTube</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="bpm">Music BPM (40–240)</label>
+                                        <input type="number" id="bpm" name="bpm" value="120" min="40" max="240" step="1">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="audience">Audience</label>
+                                    <input type="text" id="audience" name="audience" maxlength="500" value="general short-form viewers">
+                                </div>
+                                <div class="form-group">
+                                    <label for="edit_type">Edit Type</label>
+                                    <select id="edit_type" name="edit_type">
+                                        <option value="">Auto-select from creative brief</option>
+                                        <option>Emotional</option>
+                                        <option>Motivational</option>
+                                        <option>Nostalgic</option>
+                                        <option>Funny</option>
+                                        <option>Dramatic</option>
+                                        <option>Documentary</option>
+                                        <option>Sigma</option>
+                                        <option>Character Analysis</option>
+                                        <option>Tribute</option>
+                                        <option>Storytelling</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="context">Creative Context / Direction</label>
+                                    <textarea id="context" name="context" maxlength="2000" rows="3" placeholder="Optional creative direction, story context, or constraints"></textarea>
+                                </div>
+                                <div class="toggles">
+                                    <label class="toggle">
+                                        <input type="checkbox" name="enable_ocr" id="enable_ocr">
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">OCR analysis</span>
+                                    </label>
+                                    <label class="toggle">
+                                        <input type="checkbox" name="enable_object_detection" id="enable_object_detection" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Object detection</span>
+                                    </label>
+                                    <label class="toggle">
+                                        <input type="checkbox" name="enable_diarization" id="enable_diarization">
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Speaker diarization</span>
+                                    </label>
                                 </div>
                             </div>
 
@@ -136,10 +198,31 @@
             <div class="form-group">
                 <label for="setting_workflow">Default Workflow</label>
                 <select id="setting_workflow">
+                    <option value="v3">V3 Production (strict)</option>
                     <option value="default">Default / Director</option>
                     <option value="fast">Fast</option>
                     <option value="package_only">Package only</option>
                 </select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="setting_v3_platform">Default V3 Platform</label>
+                    <select id="setting_v3_platform">
+                        <option value="youtube_shorts">YouTube Shorts</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="instagram_reels">Instagram Reels</option>
+                        <option value="square">Square</option>
+                        <option value="youtube">YouTube</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="setting_v3_bpm">Default V3 BPM</label>
+                    <input type="number" id="setting_v3_bpm" value="120" min="40" max="240" step="1">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="setting_v3_audience">Default V3 Audience</label>
+                <input type="text" id="setting_v3_audience" maxlength="500" value="general short-form viewers">
             </div>
             <div class="toggles">
                 <label class="toggle">
@@ -574,6 +657,15 @@
             if (p.workflow) document.getElementById('workflow').value = canonicalWorkflow(p.workflow);
             if (p.use_groq !== undefined) document.getElementById('use_groq').checked = Boolean(p.use_groq);
             if (p.skip_qc !== undefined) document.getElementById('skip_qc').checked = Boolean(p.skip_qc);
+            if (p.platform) document.getElementById('platform').value = p.platform;
+            if (p.audience) document.getElementById('audience').value = p.audience;
+            if (p.bpm !== undefined) document.getElementById('bpm').value = p.bpm;
+            if (p.edit_type !== undefined) document.getElementById('edit_type').value = p.edit_type || '';
+            if (p.context !== undefined) document.getElementById('context').value = p.context || '';
+            if (p.enable_ocr !== undefined) document.getElementById('enable_ocr').checked = Boolean(p.enable_ocr);
+            if (p.enable_object_detection !== undefined) document.getElementById('enable_object_detection').checked = Boolean(p.enable_object_detection);
+            if (p.enable_diarization !== undefined) document.getElementById('enable_diarization').checked = Boolean(p.enable_diarization);
+            toggleV3Controls();
         }
 
         async function savePresetPrompt() {
@@ -584,6 +676,14 @@
                 workflow: document.getElementById('workflow').value,
                 use_groq: document.getElementById('use_groq').checked,
                 skip_qc: document.getElementById('skip_qc').checked,
+                platform: document.getElementById('platform').value,
+                audience: document.getElementById('audience').value.trim(),
+                bpm: parseInt(document.getElementById('bpm').value, 10),
+                edit_type: document.getElementById('edit_type').value,
+                context: document.getElementById('context').value.trim(),
+                enable_ocr: document.getElementById('enable_ocr').checked,
+                enable_object_detection: document.getElementById('enable_object_detection').checked,
+                enable_diarization: document.getElementById('enable_diarization').checked,
             };
             try {
                 const res = await fetch('/api/presets', {
@@ -610,6 +710,9 @@
                 document.getElementById('setting_workflow').value = canonicalWorkflow(settings.default_workflow || 'default');
                 document.getElementById('setting_skip_qc').checked = Boolean(settings.default_skip_qc);
                 document.getElementById('setting_use_groq').checked = Boolean(settings.default_use_groq);
+                document.getElementById('setting_v3_platform').value = settings.default_v3_platform || 'youtube_shorts';
+                document.getElementById('setting_v3_audience').value = settings.default_v3_audience || 'general short-form viewers';
+                document.getElementById('setting_v3_bpm').value = settings.default_v3_bpm ?? 120;
                 document.getElementById('setting_concurrency').value = settings.max_concurrent_jobs ?? 2;
                 document.getElementById('setting_upload_limit').value = `${settings.max_upload_mb ?? 500} MB`;
                 const configured = ['groq_key', 'model_key', 'elevenlabs_key'].filter((key) => settings[`${key}_configured`]);
@@ -635,6 +738,9 @@
                 default_skip_qc: document.getElementById('setting_skip_qc').checked,
                 default_use_groq: document.getElementById('setting_use_groq').checked,
                 max_concurrent_jobs: parseInt(document.getElementById('setting_concurrency').value, 10),
+                default_v3_platform: document.getElementById('setting_v3_platform').value,
+                default_v3_audience: document.getElementById('setting_v3_audience').value.trim(),
+                default_v3_bpm: parseInt(document.getElementById('setting_v3_bpm').value, 10),
             };
             for (const [id, key] of [['setting_groq_key', 'groq_key'], ['setting_model_key', 'model_key'], ['setting_elevenlabs_key', 'elevenlabs_key']]) {
                 const value = document.getElementById(id).value.trim();
@@ -665,10 +771,25 @@
             document.getElementById('workflow').value = canonicalWorkflow(settings.default_workflow || 'default');
             document.getElementById('skip_qc').checked = Boolean(settings.default_skip_qc);
             document.getElementById('use_groq').checked = Boolean(settings.default_use_groq);
+            document.getElementById('platform').value = settings.default_v3_platform || 'youtube_shorts';
+            document.getElementById('audience').value = settings.default_v3_audience || 'general short-form viewers';
+            document.getElementById('bpm').value = settings.default_v3_bpm ?? 120;
+            toggleV3Controls();
+        }
+
+        function toggleV3Controls() {
+            const isV3 = document.getElementById('workflow').value === 'v3';
+            const panel = document.getElementById('v3Controls');
+            panel.style.display = isV3 ? 'block' : 'none';
+            document.getElementById('target_seconds').min = isV3 ? '8' : '15';
+            document.getElementById('target_seconds').max = isV3 ? '180' : '120';
+            document.getElementById('rawVideoLabel').textContent = isV3 ? 'Raw Video (required for V3)' : 'Raw Video (optional)';
+            panel.querySelectorAll('input, select, textarea').forEach((el) => { el.disabled = !isV3; });
         }
 
         function canonicalWorkflow(value) {
             const normalized = String(value || 'default').trim().toLowerCase();
+            if (normalized === 'v3') return 'v3';
             if (normalized === 'fast') return 'fast';
             if (normalized === 'package_only') return 'package_only';
             return 'default';
@@ -704,7 +825,9 @@
             Notification.requestPermission().catch(() => {});
         }
 
+        document.getElementById('workflow').addEventListener('change', toggleV3Controls);
         applyDefaultsToForm();
+        toggleV3Controls();
     </script>
     <script src="/static/js/dashboard_enhancements.js"></script>
 </body>
