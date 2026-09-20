@@ -559,15 +559,6 @@ def _invalidate_package_cache() -> None:
 def _watch_job_process(job_id: str, process: multiprocessing.Process) -> None:
     process.join()
     exitcode = process.exitcode
-    with _active_processes_lock:
-        _active_processes.pop(job_id, None)
-        row = db_get_job(job_id)
-        if row and row.get("status") in {"error", "interrupted"} and job_id in _runtime_secrets:
-            _runtime_secret_expiry[job_id] = time.monotonic() + RUNTIME_SECRET_TTL_SECONDS
-        else:
-            _runtime_secret_expiry.pop(job_id, None)
-            _runtime_secrets.pop(job_id, None)
-    _invalidate_package_cache()
 
     # A hard worker crash can bypass the worker's exception handler entirely.
     # Never leave a job permanently stuck in RUNNING/CANCELLING.
@@ -583,6 +574,16 @@ def _watch_job_process(job_id: str, process: multiprocessing.Process) -> None:
             db_append_log(job_id, "ERROR", reason)
     except Exception:
         logger.exception("Could not reconcile worker exit for %s", job_id)
+
+    with _active_processes_lock:
+        _active_processes.pop(job_id, None)
+        row = db_get_job(job_id)
+        if row and row.get("status") in {"error", "interrupted"} and job_id in _runtime_secrets:
+            _runtime_secret_expiry[job_id] = time.monotonic() + RUNTIME_SECRET_TTL_SECONDS
+        else:
+            _runtime_secret_expiry.pop(job_id, None)
+            _runtime_secrets.pop(job_id, None)
+    _invalidate_package_cache()
 
 
 def _running_count() -> int:
