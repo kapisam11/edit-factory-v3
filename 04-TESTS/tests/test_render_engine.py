@@ -77,7 +77,9 @@ def test_mix_voiceover_preserves_program_audio_and_duration(monkeypatch, tmp_pat
     assert calls
     cmd = calls[0]
     assert "-filter_complex" in cmd
-    assert "amix=inputs=2" in cmd
+    filter_index = cmd.index("-filter_complex")
+    filter_text = cmd[filter_index + 1]
+    assert "amix=inputs=2" in filter_text
     assert "-t" in cmd
     assert "12.500" in cmd
     assert "-shortest" not in cmd
