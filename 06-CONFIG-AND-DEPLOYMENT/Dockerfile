@@ -3,6 +3,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/app/.venv/bin:$PATH" \
     AIVF_STATE_DIR=/app/state \
     AIVF_UPLOAD_DIR=/app/uploads \
     AIVF_OUTPUT_DIR=/app/output
@@ -14,6 +15,7 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY pyproject.toml ./pyproject.toml
+COPY uv.lock ./uv.lock
 COPY LICENSE ./LICENSE
 COPY 01-MAIN-CODE ./01-MAIN-CODE
 COPY 02-WEB-FILES ./02-WEB-FILES
@@ -22,8 +24,8 @@ COPY 04-TESTS ./04-TESTS
 COPY 05-EXTENSIONS ./05-EXTENSIONS
 COPY 06-CONFIG-AND-DEPLOYMENT ./06-CONFIG-AND-DEPLOYMENT
 
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir '/app[web]'
+RUN python -m pip install --no-cache-dir --upgrade pip uv \
+    && uv sync --frozen --no-dev --extra web
 
 RUN groupadd --system aivf \
     && useradd --system --gid aivf --create-home aivf \
