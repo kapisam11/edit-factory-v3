@@ -219,7 +219,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                     for chunk in original_iter:
                         yield chunk
                         if __import__("time").monotonic() >= deadline:
-                            yield "event: limit\ndata: {\\\"error\\\":\\\"SSE lifetime limit reached\\\"}\n\n"
+                            yield "event: limit\ndata: " + json.dumps({"error": "SSE lifetime limit reached"}) + "\n\n"
                             break
                 finally:
                     release_sse()
