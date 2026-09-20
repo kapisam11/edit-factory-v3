@@ -96,6 +96,31 @@ def _platform_aspect_ratio(platform_profile: Any) -> str:
         return "9:16"
 
 
+def _merge_footage_evidence_into_scenes(scenes: Sequence[Any], footage_evidence: Any) -> None:
+    """Carry V3's pre-script footage evidence into the renderer's scene objects."""
+    if not isinstance(footage_evidence, dict):
+        return
+    by_id = {
+        str(item.get("id")): item
+        for item in footage_evidence.get("top_scenes", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    if not by_id:
+        return
+    for scene in scenes:
+        evidence = by_id.get(str(getattr(scene, "id", "")))
+        if not evidence:
+            continue
+        if not getattr(scene, "description", ""):
+            scene.description = str(evidence.get("description") or "")
+        if not getattr(scene, "transcript", ""):
+            scene.transcript = str(evidence.get("transcript") or "")
+        if not getattr(scene, "objects", None):
+            scene.objects = [str(value) for value in (evidence.get("objects") or [])]
+        if not getattr(scene, "text", None):
+            scene.text = [str(value) for value in (evidence.get("text") or [])]
+
+
 def _footage_evidence_from_scenes(scenes: Sequence[Any]) -> Dict[str, Any]:
     ranked = sorted(scenes, key=lambda scene: (scene.importance_score, scene.motion_score, scene.audio_energy), reverse=True)
     return {"scene_count": len(scenes), "top_scenes": [{
@@ -140,6 +165,7 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     try: scenes = analyze_video(source, sample_seconds=2.5, enable_ocr=enable_ocr)
     except Exception as exc: result.errors.append(f"Scene analysis failed: {exc}"); return result
     if not summary.get("footage_evidence"): summary["footage_evidence"] = _footage_evidence_from_scenes(scenes)
+    _merge_footage_evidence_into_scenes(scenes, summary.get("footage_evidence"))
     result.scenes_path = save_scene_index(scenes, os.path.join(package_dir, "scenes.json"), source)
 
     script, script_source = _generate_script(topic, summary, target_seconds, model_key)
