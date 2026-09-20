@@ -3,19 +3,19 @@ from types import SimpleNamespace
 from ai_video_factory import edit_automation
 
 
+
 def test_duration_uses_shared_ffprobe_runner(monkeypatch):
     calls = []
 
-    def fake_run_ffprobe(cmd):
-        calls.append(cmd)
-        return SimpleNamespace(returncode=0, stdout="4.25\n")
+    def fake_run_ffprobe(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout="4.25\n", stderr="")
 
-    monkeypatch.setattr(edit_automation.shutil, "which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(edit_automation, "run_ffprobe", fake_run_ffprobe)
 
     assert edit_automation._get_duration("clip.mp4") == 4.25
-    assert calls[0][0] == "/bin/ffprobe"
-
+    assert calls[0][0][0] == "ffprobe"
+    assert calls[0][1]["timeout"] == 20
 
 def test_trim_segment_uses_shared_ffmpeg_runner_and_validates(monkeypatch):
     calls = []

@@ -100,7 +100,18 @@ def enforce_retention_events(input_path: str, output_path: str, retention_events
         if len(kind) > 64: raise RenderContractError("retention event kind is too long")
         events.append((timestamp, kind)); previous = timestamp
     if not events: raise RenderContractError("V3 retention map is empty")
-    info = probe_media(input_path); kind_settings = {"zoom": (1.04, 0.045), "text": (1.02, 0.030), "motion": (1.05, 0.035), "angle": (1.06, 0.025), "clip": (1.08, 0.030), "beat drop": (1.14, 0.020)}; filters = []
+    info = probe_media(input_path)
+    # Effects must be visibly measurable after rendering, not merely serialized into the plan.
+    # Keep them restrained enough for editorial use but large enough for independent QC to detect.
+    kind_settings = {
+        "zoom": (1.06, 0.055),
+        "text": (1.04, 0.060),
+        "motion": (1.07, 0.060),
+        "angle": (1.08, 0.055),
+        "clip": (1.10, 0.060),
+        "beat drop": (1.18, 0.045),
+    }
+    filters = []
     for timestamp, kind in events:
         if timestamp >= info["duration"] - 0.02: raise RenderContractError(f"retention event at {timestamp:.3f}s is outside rendered duration")
         contrast, brightness = kind_settings.get(kind, (1.04, 0.030)); start = max(0.0, timestamp - 0.04); end = min(info["duration"], timestamp + 0.16)

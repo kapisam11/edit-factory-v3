@@ -2,12 +2,38 @@
 import hashlib
 import hmac
 import os
+import secrets
+import threading
+import time
 from urllib.parse import urlparse
 
-from flask import abort, redirect, render_template, request, session, url_for
+from flask import abort, g, redirect, render_template, request, session, url_for
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 PUBLIC_PATHS = {"/login", "/logout", "/api/health"}
+_LOGIN_LIMIT = 10
+_LOGIN_WINDOW_SECONDS = 60.0
+_login_attempts = {}
+_login_lock = threading.Lock()
+
+
+def _loopback_request() -> bool:
+    remote = (request.remote_addr or "").strip().lower()
+    host = request.host.split(":", 1)[0].strip("[]").lower()
+    return remote in {"127.0.0.1", "::1"} and host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _login_allowed(client: str) -> bool:
+    now = time.monotonic()
+    with _login_lock:
+        recent = [ts for ts in _login_attempts.get(client, []) if now - ts < _LOGIN_WINDOW_SECONDS]
+        if len(recent) >= _LOGIN_LIMIT:
+            _login_attempts[client] = recent
+            return False
+        recent.append(now)
+        _login_attempts[client] = recent
+        return True
+
 
 
 def _same_origin_request() -> bool:
@@ -38,11 +64,16 @@ def configure_dashboard_auth(app):
     if not token and not allow_insecure_local:
         app.logger.warning("AIVF_DASHBOARD_TOKEN is unset; dashboard access will fail closed")
 
+    cookie_secure_default = "0" if allow_insecure_local else "1"
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Strict",
-        SESSION_COOKIE_SECURE=os.environ.get("AIVF_COOKIE_SECURE", "0") == "1",
+        SESSION_COOKIE_SECURE=os.environ.get("AIVF_COOKIE_SECURE", cookie_secure_default) == "1",
     )
+
+    @app.before_request
+    def assign_csp_nonce():
+        g.aivf_csp_nonce = secrets.token_urlsafe(18)
 
     @app.after_request
     def security_headers(response):
@@ -50,10 +81,12 @@ def configure_dashboard_auth(app):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+            "default-src 'self'; script-src 'self' 'nonce-%s'; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
             "base-uri 'self'; form-action 'self'"
-        )
+        ) % g.aivf_csp_nonce
+        if app.config.get("SESSION_COOKIE_SECURE"):
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
     @app.before_request
@@ -73,11 +106,15 @@ def configure_dashboard_auth(app):
     def dashboard_login():
         if request.method == "GET":
             return render_template("login.html")
+        client = request.remote_addr or "unknown"
+        if not _login_allowed(client):
+            return "Too many login attempts. Try again later.", 429
         supplied = request.form.get("token", "")
         valid = bool(token) and hmac.compare_digest(
             hashlib.sha256(supplied.encode()).digest(), hashlib.sha256(token.encode()).digest()
         )
-        if valid or (allow_insecure_local and supplied == "local-development"):
+        local_dev_valid = allow_insecure_local and supplied == "local-development" and _loopback_request()
+        if valid or local_dev_valid:
             session.clear()
             session["aivf_authenticated"] = True
             return redirect("/")

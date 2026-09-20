@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
@@ -20,6 +19,7 @@ from .content_factory import (
 from .learning_recommender import load_experiments
 from .production_models import ProductionResult
 from .production_pipeline import run_production_pipeline
+from .render_engine import run_ffmpeg, run_ffprobe
 
 PLATFORM_LAYOUTS = {
     "youtube_shorts": (1080, 1920), "tiktok": (1080, 1920),
@@ -34,9 +34,10 @@ def _write_json(path: str, payload: Any) -> str:
 
 
 def _run(cmd: Sequence[str]) -> None:
-    completed = subprocess.run(list(cmd), capture_output=True, text=True)
-    if completed.returncode != 0:
-        raise RuntimeError((completed.stderr or completed.stdout or "ffmpeg failed").strip())
+    try:
+        run_ffmpeg(list(cmd), capture_output=True)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def _ffmpeg_available() -> bool:
@@ -46,11 +47,14 @@ def _ffmpeg_available() -> bool:
 def _probe(path: str) -> Dict[str, Any]:
     if not shutil.which("ffprobe"):
         return {"available": False, "warning": "ffprobe unavailable"}
-    result = subprocess.run([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-show_entries", "stream=index,codec_type,codec_name,width,height,duration",
-        "-of", "json", path,
-    ], capture_output=True, text=True)
+    try:
+        result = run_ffprobe([
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-show_entries", "stream=index,codec_type,codec_name,width,height,duration",
+            "-of", "json", path,
+        ], timeout=20)
+    except Exception as exc:
+        return {"available": False, "warning": str(exc)}
     if result.returncode != 0:
         return {"available": False, "warning": (result.stderr or "ffprobe failed").strip()}
     try:
@@ -219,7 +223,9 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
 
     if input_video is None:
         from .pipeline import PipelineContext, build_director_pipeline
-        primary_dir = str(root / "primary")
+        primary_path = root / "primary"
+        primary_path.mkdir(parents=True, exist_ok=True)
+        primary_dir = str(primary_path)
         ctx = PipelineContext(topic=topic, package_dir=primary_dir, target_seconds=target_seconds, model_key=model_key)
         ctx = provider_retry(lambda: build_director_pipeline(verbose=False).run(ctx), attempts=2)
         primary_result = ProductionResult(package_dir=primary_dir)

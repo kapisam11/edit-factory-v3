@@ -126,6 +126,12 @@ Production dashboard access requires `AIVF_DASHBOARD_TOKEN` and a strong `FLASK_
 
 Edit Factory v3 preserves working architecture instead of rewriting it for the version bump. New behavior is additive and testable. Media subprocesses remain argument-list based, runtime outputs are validated, optional AI/provider features have fallbacks, and the v3 blueprint is deterministic and offline-safe.
 
+## Engineering & operations
+
+The production architecture, database indexes, optional Redis caching, security scans, E2E checks, container publishing/deployment, coverage policy, and scaling strategy are documented in **[00-INFO/11-ENGINEERING-AND-OPERATIONS.md](00-INFO/11-ENGINEERING-AND-OPERATIONS.md)**.
+
+The dashboard now has a reusable SQLite storage boundary, short-lived metadata caching with optional Redis backing, completed-job video preview, and retry support for failed/interrupted jobs. CI also enforces an 80% minimum coverage gate for the selected high-value V3/runtime modules.
+
 ## License and distribution
 
 Edit Factory v3 is **source-available**, not MIT/open-source licensed. The complete terms are in **[LICENSE](LICENSE)**.

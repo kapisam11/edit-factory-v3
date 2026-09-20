@@ -103,3 +103,46 @@ def test_render_contract_normalizes_enforces_and_validates_duration(tmp_path):
     assert abs(report["media"]["duration"] - 5.0) <= 0.08
     assert report["media"]["width"] == 1080
     assert report["media"]["height"] == 1920
+
+
+def test_v3_planning_accepts_eight_second_target(monkeypatch):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    from ai_video_factory.plan import make_idea
+    summary = {
+        "topic": "short V3 test",
+        "target_total_seconds": 8.0,
+        "strongest_angle": "The key moment",
+        "main_conflict": "The moment changes everything",
+        "why_care": "The payoff arrives quickly",
+        "v3_directives": {"blueprint_contract": "3.0.0"},
+    }
+    idea = make_idea(summary)
+    assert idea["structure"]["total_seconds"] == 8.0
+
+
+def test_v3_input_validation_rejects_invalid_contract_values(tmp_path):
+    from ai_video_factory.v3_pipeline import _validate_v3_inputs
+
+    missing = tmp_path / "missing.mp4"
+    with pytest.raises(RenderContractError, match="missing or not a file"):
+        _validate_v3_inputs(str(missing), "topic", 30, "youtube_shorts", "audience", 120)
+
+    empty = tmp_path / "empty.mp4"
+    empty.write_bytes(b"")
+    with pytest.raises(RenderContractError, match="empty"):
+        _validate_v3_inputs(str(empty), "topic", 30, "youtube_shorts", "audience", 120)
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    cases = [
+        (lambda: _validate_v3_inputs(str(source), "", 30, "youtube_shorts", "audience", 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", "bad", "youtube_shorts", "audience", 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 7, "youtube_shorts", "audience", 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 30, "", "audience", 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 30, "youtube_shorts", "audience" * 100, 120), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 30, "youtube_shorts", "audience", "bad"), ValueError),
+        (lambda: _validate_v3_inputs(str(source), "topic", 30, "youtube_shorts", "audience", 300), ValueError),
+    ]
+    for invoke, error in cases:
+        with pytest.raises(error):
+            invoke()

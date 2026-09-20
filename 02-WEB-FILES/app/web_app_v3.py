@@ -68,11 +68,17 @@ SETTINGS_SCHEMA = {
 _runtime_secrets: Dict[str, Dict[str, str]] = {}
 _runtime_default_secrets: Dict[str, str] = {key: "" for key in SECRET_PARAM_KEYS}
 _active_processes: Dict[str, multiprocessing.Process] = {}
+_active_processes_lock = threading.RLock()
 _package_cache_lock = threading.RLock()
 _package_cache: Optional[tuple[float, list]] = None
 _PACKAGE_CACHE_TTL = 2.0
 _SQLITE_WRITE_RETRIES = 3
 _SQLITE_RETRY_DELAY_SECONDS = 0.05
+_MAX_QUEUED_JOBS = max(1, int(os.environ.get("AIVF_MAX_QUEUED_JOBS", "20")))
+_MIN_FREE_DISK_BYTES = max(
+    256 * 1024 * 1024,
+    int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "1024")) * 1024 * 1024,
+)
 
 
 def get_db() -> sqlite3.Connection:
@@ -444,38 +450,57 @@ def _invalidate_package_cache() -> None:
 
 def _watch_job_process(job_id: str, process: multiprocessing.Process) -> None:
     process.join()
-    _active_processes.pop(job_id, None)
-    _runtime_secrets.pop(job_id, None)
+    exitcode = process.exitcode
+    with _active_processes_lock:
+        _active_processes.pop(job_id, None)
+        _runtime_secrets.pop(job_id, None)
     _invalidate_package_cache()
+
+    # A hard worker crash can bypass the worker's exception handler entirely.
+    # Never leave a job permanently stuck in RUNNING/CANCELLING.
+    try:
+        row = db_get_job(job_id)
+        if row and row.get("status") in {"queued", "running", "cancelling"}:
+            reason = (
+                f"Worker process exited unexpectedly with code {exitcode}"
+                if exitcode not in (0, None)
+                else "Worker process exited before reaching a terminal job state"
+            )
+            db_update_job(job_id, status="interrupted", step="interrupted", error=reason)
+            db_append_log(job_id, "ERROR", reason)
+    except Exception:
+        logger.exception("Could not reconcile worker exit for %s", job_id)
 
 
 def _running_count() -> int:
-    dead = [job_id for job_id, process in _active_processes.items() if not process.is_alive()]
-    for job_id in dead:
-        _active_processes.pop(job_id, None)
-        _runtime_secrets.pop(job_id, None)
-    return sum(1 for process in _active_processes.values() if process.is_alive())
+    with _active_processes_lock:
+        dead = [job_id for job_id, process in _active_processes.items() if not process.is_alive()]
+        for job_id in dead:
+            _active_processes.pop(job_id, None)
+            _runtime_secrets.pop(job_id, None)
+        return sum(1 for process in _active_processes.values() if process.is_alive())
 
 
 def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
-    if _running_count() >= max(1, int(get_settings()["max_concurrent_jobs"])):
-        return False
-    from dashboard_worker import run_job
-    ctx = multiprocessing.get_context("spawn")
-    process = ctx.Process(
-        target=run_job,
-        args=(job_id, params, secrets, str(OUTPUT_FOLDER), str(DB_PATH)),
-        daemon=False,
-    )
-    process.start()
-    _active_processes[job_id] = process
-    threading.Thread(
-        target=_watch_job_process,
-        args=(job_id, process),
-        name=f"aivf-reaper-{job_id}",
-        daemon=True,
-    ).start()
-    return True
+    with _active_processes_lock:
+        if _running_count() >= max(1, int(get_settings()["max_concurrent_jobs"])):
+            return False
+        from dashboard_worker import run_job
+        ctx = multiprocessing.get_context("spawn")
+        process = ctx.Process(
+            target=run_job,
+            args=(job_id, params, secrets, str(OUTPUT_FOLDER), str(DB_PATH)),
+            daemon=False,
+        )
+        process.start()
+        _active_processes[job_id] = process
+        threading.Thread(
+            target=_watch_job_process,
+            args=(job_id, process),
+            name=f"aivf-reaper-{job_id}",
+            daemon=True,
+        ).start()
+        return True
 
 
 def _resolve_package(name: str) -> Optional[Path]:
@@ -538,12 +563,25 @@ def create_job():
         workflow = normalize_workflow(data.get("workflow", settings_data["default_workflow"]))
     except (TypeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
+    try:
+        with get_db() as conn:
+            queued = int(conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status='queued'"
+            ).fetchone()[0])
+        if queued >= _MAX_QUEUED_JOBS:
+            return jsonify({"error": "Queue capacity reached. Retry later."}), 429
+    except sqlite3.Error:
+        return jsonify({"error": "Job queue is temporarily unavailable"}), 503
+
     params = {
         "topic": topic,
         "target_seconds": target_seconds,
         "workflow": workflow,
         "use_groq": str(data.get("use_groq", "")).lower() in {"1", "true", "on", "yes"},
-        "skip_qc": str(data.get("skip_qc", "")).lower() in {"1", "true", "on", "yes"},
+        "skip_qc": (
+            os.environ.get("AIVF_ALLOW_SKIP_QC", "0") == "1"
+            and str(data.get("skip_qc", "")).lower() in {"1", "true", "on", "yes"}
+        ),
     }
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
@@ -551,10 +589,10 @@ def create_job():
     upload = request.files.get("raw_video")
     try:
         usage = shutil.disk_usage(UPLOAD_FOLDER)
-        if usage.free < 1024 * 1024 * 1024:
+        if usage.free < _MIN_FREE_DISK_BYTES:
             return jsonify({"error": "Server disk space is too low"}), 503
     except OSError:
-        pass
+        return jsonify({"error": "Server disk space could not be checked"}), 503
 
     if upload and upload.filename:
         filename = secure_filename(upload.filename)
@@ -563,6 +601,10 @@ def create_job():
             return jsonify({"error": "Unsupported video file type"}), 400
         try:
             upload_path = _save_and_validate_upload(upload, suffix)
+            remaining = shutil.disk_usage(UPLOAD_FOLDER).free
+            if remaining < _MIN_FREE_DISK_BYTES:
+                upload_path.unlink(missing_ok=True)
+                return jsonify({"error": "Server disk space is too low after upload"}), 503
         except (OSError, ValueError):
             return jsonify({"error": "Upload is too large or is not a valid supported video stream"}), 400
         params["raw_video"] = str(upload_path)

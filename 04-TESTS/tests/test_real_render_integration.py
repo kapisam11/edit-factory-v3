@@ -80,3 +80,90 @@ def output_audio_for_test(ffmpeg, tmp_path):
             stderr=subprocess.DEVNULL,
         )
     return str(path)
+
+
+@pytest.mark.integration
+def test_v3_pipeline_renders_contract_valid_video(tmp_path, monkeypatch):
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        pytest.skip("ffmpeg/ffprobe are required for the real V3 render integration test")
+
+    source = tmp_path / "v3_source.mp4"
+    subprocess.run(
+        [
+            ffmpeg, "-y",
+            "-f", "lavfi", "-i", "testsrc=size=540x960:rate=24",
+            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+            "-t", "20", "-shortest", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-c:a", "aac", str(source),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    monkeypatch.setattr("ai_video_factory.edit_planner.semantic_similarity", lambda *args, **kwargs: 1.0)
+
+    def fake_words(text, output_audio, **kwargs):
+        subprocess.run(
+            [
+                ffmpeg, "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                "-t", "8", "-q:a", "9", "-acodec", "libmp3lame", output_audio,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        words = [
+            WordTimestamp(word, min(7.0, i * 0.45), min(7.95, i * 0.45 + 0.35))
+            for i, word in enumerate(text.split()[:16])
+        ]
+        if kwargs.get("timestamps_path"):
+            with open(kwargs["timestamps_path"], "w", encoding="utf-8") as handle:
+                json.dump([word.__dict__ for word in words], handle)
+        return words
+
+    monkeypatch.setattr("ai_video_factory.advanced_intelligence.generate_word_timestamps", fake_words)
+    monkeypatch.setattr(
+        "ai_video_factory.composer.generate_voiceover",
+        lambda text, output_path: shutil.copyfile(
+            output_audio_for_test(ffmpeg, tmp_path), output_path
+        ),
+    )
+
+    from ai_video_factory.v3_pipeline import run_v3_pipeline
+
+    monkeypatch.setenv("AIVF_ALLOW_SKIP_QC", "1")
+    result = run_v3_pipeline(
+        str(source),
+        "integration render",
+        str(tmp_path / "v3_package"),
+        target_seconds=8.0,
+        platform="youtube_shorts",
+        audience="general short-form viewers",
+        enable_object_detection=False,
+        enable_diarization=False,
+        skip_qc=True,
+    )
+
+    assert result.errors == []
+    assert result.final_video is not None
+    assert result.artifacts["v3_render_qc"].endswith("v3_render_qc.json")
+
+    probe = subprocess.run(
+        [
+            ffprobe, "-v", "error",
+            "-show_entries", "format=duration",
+            "-show_entries", "stream=codec_type,width,height",
+            "-of", "json", result.final_video,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(probe.stdout)
+    assert abs(float(payload["format"]["duration"]) - 8.0) <= 0.08
+    video = next(stream for stream in payload["streams"] if stream["codec_type"] == "video")
+    assert int(video["width"]) == 1080
+    assert int(video["height"]) == 1920

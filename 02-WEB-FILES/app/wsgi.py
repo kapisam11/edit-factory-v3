@@ -23,10 +23,12 @@ app = _web_app_v3.app
 if os.environ.get("AIVF_TRUST_PROXY", "0") == "1":
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_host=1, x_proto=1)
 
+from dashboard_optimizations import install_dashboard_optimizations
 from dashboard_auth import configure_dashboard_auth
 from dashboard_compat import register_dashboard_compat
 from app.observability import install_observability
 
+install_dashboard_optimizations(_web_app_v3)
 configure_dashboard_auth(app)
 register_dashboard_compat(app)
 install_observability(app)

@@ -4,6 +4,9 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
+import threading
+from collections import deque
 from pathlib import Path
 from typing import List, Optional
 
@@ -44,6 +47,13 @@ def _validate_media_path(value: str) -> str:
     if not value or "\x00" in str(value):
         raise ValueError("media path is invalid")
     return str(value)
+
+
+def _validate_media_input(value: str, label: str = "media") -> str:
+    path = Path(_validate_media_path(value))
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} input not found: {path}")
+    return str(path)
 
 
 def _validate_tool_argv(cmd: List[str], expected: str) -> List[str]:
@@ -100,25 +110,86 @@ def validate_media_output(path: str, require_video: bool = True, require_audio: 
     return data
 
 
+def _run_ffmpeg_streaming(cmd: List[str], timeout: int) -> subprocess.CompletedProcess:
+    """Run FFmpeg while streaming stderr and retaining only a bounded failure tail."""
+    process = subprocess.Popen(
+        cmd,
+        stdout=None,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    stderr_tail = deque(maxlen=200)
+
+    def pump_stderr() -> None:
+        stream = process.stderr
+        if stream is None:
+            return
+        try:
+            for line in stream:
+                stderr_tail.append(line)
+                sys.stderr.write(line)
+                sys.stderr.flush()
+        finally:
+            stream.close()
+
+    reader = threading.Thread(
+        target=pump_stderr,
+        name="aivf-ffmpeg-stderr",
+        daemon=True,
+    )
+    reader.start()
+
+    try:
+        returncode = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            process.wait(timeout=5)
+        reader.join(timeout=2)
+        raise RuntimeError(f"FFmpeg timed out after {timeout}s") from exc
+
+    reader.join(timeout=2)
+    detail = "".join(stderr_tail)
+    if returncode != 0:
+        detail = detail.strip()
+        if len(detail) > 2000:
+            detail = detail[-2000:]
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"FFmpeg failed with exit code {returncode}{suffix}")
+
+    return subprocess.CompletedProcess(cmd, returncode, stdout=None, stderr=detail)
+
+
 def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bool = False) -> subprocess.CompletedProcess:
     cmd = _validate_tool_argv(cmd, "ffmpeg")
     cmd[0] = _ffmpeg_binary()
     timeout = timeout if timeout is not None else _bounded_timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600)
     try:
-        return subprocess.run(
-            cmd,
-            check=True,
-            timeout=timeout,
-            capture_output=capture_output,
-            text=capture_output,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"FFmpeg timed out after {timeout}s") from exc
+        if capture_output:
+            return subprocess.run(
+                cmd,
+                check=True,
+                timeout=timeout,
+                capture_output=True,
+                text=True,
+            )
+        return _run_ffmpeg_streaming(cmd, timeout)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        if len(detail) > 2000:
+            detail = detail[-2000:]
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"FFmpeg failed with exit code {exc.returncode}{suffix}") from exc
 
 
 def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str) -> None:
     if duration <= 0:
         raise ValueError("render duration must be positive")
+    src_clip = _validate_media_input(src_clip, "source clip")
     encoder = choose_encoder()
     candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc") else ["libx264"]
     last_error = None
@@ -136,7 +207,7 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
             "-ss",
             str(seek_start),
             "-i",
-            _validate_media_path(src_clip),
+            src_clip,
             "-t",
             str(duration),
             "-vf",
@@ -171,9 +242,7 @@ def write_concat_list(seq_files: List[str], concat_list_path: str) -> None:
     _ensure_dir(str(Path(concat_list_path).parent))
     with open(concat_list_path, "w", encoding="utf-8", newline="\n") as f:
         for p in seq_files:
-            value = _validate_media_path(p)
-            if not Path(value).is_file():
-                raise FileNotFoundError(value)
+            value = _validate_media_input(p, "concat input")
             if "\r" in value or "\n" in value:
                 raise ValueError("media paths cannot contain newlines")
             safe_path = value.replace("'", "'\\''")
@@ -206,7 +275,7 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
         "aac",
         "-movflags",
         "+faststart",
-        output_path,
+        _validate_media_path(output_path),
     ]
     try:
         run_ffmpeg(cmd)
@@ -234,7 +303,7 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
             "aac",
             "-movflags",
             "+faststart",
-            output_path,
+            _validate_media_path(output_path),
         ]
         run_ffmpeg(fallback)
         validate_media_output(output_path)
@@ -245,6 +314,8 @@ def _escape_filter_path(path: str) -> str:
 
 
 def burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
+    video_path = _validate_media_input(video_path, "subtitle video")
+    srt_path = _validate_media_input(srt_path, "subtitle file")
     filter_path = _escape_filter_path(srt_path)
     cmd = [
         "ffmpeg",
@@ -263,30 +334,73 @@ def burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
         "copy",
         "-movflags",
         "+faststart",
-        output_path,
+        _validate_media_path(output_path),
     ]
     run_ffmpeg(cmd)
     validate_media_output(output_path)
 
 
 def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        video_path,
-        "-i",
-        vo_path,
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-shortest",
-        output_path,
-    ]
+    """Overlay voiceover on the existing program audio without dropping it."""
+    video_path = _validate_media_input(video_path, "voiceover video")
+    vo_path = _validate_media_input(vo_path, "voiceover audio")
+    source = validate_media_output(video_path, require_video=True, require_audio=False)
+    has_audio = any(stream.get("codec_type") == "audio" for stream in source.get("streams", []))
+    duration = float((source.get("format") or {}).get("duration") or 0.0)
+    if duration <= 0:
+        raise RuntimeError("voiceover source video has no positive duration")
+    output = _validate_media_path(output_path)
+
+    if has_audio:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-i",
+            vo_path,
+            "-filter_complex",
+            "[0:a:0]volume=0.35[program];"
+            "[1:a:0]volume=1.0[voice];"
+            "[program][voice]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            "-map",
+            "0:v:0",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-t",
+            f"{duration:.3f}",
+            "-movflags",
+            "+faststart",
+            output,
+        ]
+    else:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-i",
+            vo_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            output,
+        ]
     run_ffmpeg(cmd)
-    validate_media_output(output_path)
+    validate_media_output(output, require_video=True, require_audio=True)

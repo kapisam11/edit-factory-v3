@@ -74,6 +74,62 @@ def test_sqlite_write_does_not_retry_non_lock_error(monkeypatch, tmp_path):
     assert attempts["count"] == 1
 
 
+def test_retry_rejects_corrupted_persisted_parameters_without_queueing(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+
+    install_dashboard_optimizations(appmod)
+    appmod.db_insert_job("job-bad-params", "topic", {"topic": "topic"})
+    appmod.db_update_job(
+        "job-bad-params",
+        status="error",
+        step="failed",
+        error="previous failure",
+        params="{broken-json",
+    )
+
+    with appmod.app.test_request_context("/api/jobs/job-bad-params/retry", method="POST"):
+        response, status = appmod.app.view_functions["retry_job"]("job-bad-params")
+
+    assert status == 409
+    assert response.get_json()["error"] == "Job parameters are invalid"
+    job = appmod.db_get_job("job-bad-params")
+    assert job["status"] == "error"
+    assert job["step"] == "failed"
+    assert job["error"] == "previous failure"
+
+
+
+def test_retry_reports_worker_start_failure(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+
+    install_dashboard_optimizations(appmod)
+    assert "retry_job" in appmod.app.view_functions
+    appmod.db_insert_job("job-start-failure", "topic", {"topic": "topic"})
+    appmod.db_update_job("job-start-failure", status="error", step="failed", error="previous failure")
+
+    def failing_start(job_id, params, secrets):
+        appmod.db_update_job(
+            job_id,
+            status="error",
+            step="failed",
+            error="Worker failed to start: boom",
+        )
+        return False
+
+    monkeypatch.setattr(appmod, "_start_job", failing_start)
+
+    with appmod.app.test_request_context("/api/jobs/job-start-failure/retry", method="POST"):
+        response, status = appmod.app.view_functions["retry_job"]("job-start-failure")
+
+    payload = response.get_json()
+    assert status == 500
+    assert payload["job_id"] == "job-start-failure"
+    assert payload["status"] == "error"
+    assert payload["error"] == "Worker failed to start: boom"
+    assert appmod.db_get_job("job-start-failure")["status"] == "error"
+
 def test_startup_reconciles_non_terminal_jobs(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
     appmod.db_insert_job("queued", "queued", {"topic": "queued"})

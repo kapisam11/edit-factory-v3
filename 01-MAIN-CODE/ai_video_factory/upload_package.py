@@ -4,10 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
+
+from .render_engine import run_ffprobe
 
 
 @dataclass(frozen=True)
@@ -160,11 +161,13 @@ def _sha256(path: Path) -> str:
 
 def _probe_media(video_path: Path) -> Dict[str, Any]:
     try:
-        result = subprocess.run([
+        result = run_ffprobe([
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-show_entries", "stream=index,codec_type,codec_name,width,height,duration",
             "-of", "json", str(video_path),
-        ], check=True, capture_output=True, text=True, timeout=20)
+        ], timeout=20)
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or "ffprobe failed").strip())
         return json.loads(result.stdout or "{}")
     except Exception as exc:
         return {"available": False, "warning": f"ffprobe unavailable: {exc}"}

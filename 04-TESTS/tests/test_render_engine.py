@@ -51,3 +51,35 @@ def test_apply_overlay_uses_argv_not_shell(monkeypatch, tmp_path):
     assert output in cmd
     assert kwargs["check"] is True
     assert kwargs["timeout"] == 3600
+
+
+def test_mix_voiceover_preserves_program_audio_and_duration(monkeypatch, tmp_path):
+    video = tmp_path / "video.mp4"
+    voice = tmp_path / "voice.mp3"
+    output = tmp_path / "out.mp4"
+    video.write_bytes(b"video")
+    voice.write_bytes(b"voice")
+    calls = []
+
+    monkeypatch.setattr(
+        render_engine,
+        "validate_media_output",
+        lambda path, **kwargs: (
+            {"format": {"duration": "12.5"}, "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]}
+            if path == str(video)
+            else {"format": {"duration": "12.5"}, "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]}
+        ),
+    )
+    monkeypatch.setattr(render_engine, "run_ffmpeg", lambda cmd: calls.append(cmd))
+
+    render_engine.mix_voiceover(str(video), str(voice), str(output))
+
+    assert calls
+    cmd = calls[0]
+    assert "-filter_complex" in cmd
+    filter_index = cmd.index("-filter_complex")
+    filter_text = cmd[filter_index + 1]
+    assert "amix=inputs=2" in filter_text
+    assert "-t" in cmd
+    assert "12.500" in cmd
+    assert "-shortest" not in cmd
