@@ -47,6 +47,7 @@ def render_v3(request: V3RenderRequest) -> ProductionResult:
         diarization_token=request.diarization_token,
         platform=request.platform,
         allow_auto_fix=False,
+        finalize_upload_package=False,
     )
 
 
