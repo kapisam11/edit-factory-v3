@@ -422,8 +422,53 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         if not update(status="running", step="Initializing"):
             return
         log("INFO", "→ Initializing")
-        from ai_video_factory.pipeline import PipelineContext, build_director_pipeline
         pkg_dir = _safe_package_dir(params["topic"], output_root)
+        if params.get("workflow") == "v3":
+            from ai_video_factory.v3_pipeline import run_v3_pipeline
+
+            if not params.get("raw_video"):
+                raise ValueError("V3 production requires a raw video")
+            if not update(step="Running V3 Pipeline", pkg_dir=str(pkg_dir)):
+                return
+            log("INFO", "→ Running V3 Pipeline")
+            result = run_v3_pipeline(
+                params["raw_video"],
+                params["topic"],
+                str(pkg_dir),
+                context=params.get("context", ""),
+                target_seconds=params.get("target_seconds", 30.0),
+                platform=params.get("platform", "youtube_shorts"),
+                audience=params.get("audience", "general short-form viewers"),
+                bpm=params.get("bpm", 120),
+                edit_type=params.get("edit_type"),
+                model_key=secrets.get("model_key"),
+                skip_qc=params.get("skip_qc", False),
+                music_path=params.get("music_path"),
+                enable_ocr=params.get("enable_ocr", False),
+                enable_object_detection=params.get("enable_object_detection", True),
+                enable_diarization=params.get("enable_diarization", False),
+                diarization_token=secrets.get("diarization_token"),
+            )
+            result_payload = {
+                "errors": list(getattr(result, "errors", []) or []),
+                "warnings": list(getattr(result, "warnings", []) or []),
+                "artifacts": dict(getattr(result, "artifacts", {}) or {}),
+                "final_video": getattr(result, "final_video", None),
+            }
+            with open(pkg_dir / "v3_job_result.json", "w", encoding="utf-8") as handle:
+                json.dump(result_payload, handle, indent=2, ensure_ascii=False)
+            if result_payload["errors"]:
+                message = "; ".join(str(error) for error in result_payload["errors"])
+                if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
+                    log("ERROR", message)
+            else:
+                if update(status="done", step="Complete (V3)", pkg_dir=str(pkg_dir)):
+                    log("INFO", "V3 job complete!")
+                    for warning in result_payload["warnings"]:
+                        log("WARNING", str(warning))
+            return
+
+        from ai_video_factory.pipeline import PipelineContext, build_director_pipeline
         ctx = PipelineContext(
             topic=params["topic"],
             raw_video=params.get("raw_video"),
