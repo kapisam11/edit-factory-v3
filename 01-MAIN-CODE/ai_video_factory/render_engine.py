@@ -341,25 +341,62 @@ def burn_subtitles(video_path: str, srt_path: str, output_path: str) -> None:
 
 
 def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
+    """Overlay voiceover on the existing program audio without dropping it."""
     video_path = _validate_media_input(video_path, "voiceover video")
     vo_path = _validate_media_input(vo_path, "voiceover audio")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        video_path,
-        "-i",
-        vo_path,
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-shortest",
-        _validate_media_path(output_path),
-    ]
+    source = validate_media_output(video_path, require_video=True, require_audio=False)
+    has_audio = any(stream.get("codec_type") == "audio" for stream in source.get("streams", []))
+    output = _validate_media_path(output_path)
+
+    if has_audio:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-i",
+            vo_path,
+            "-filter_complex",
+            "[0:a:0]volume=0.35[program];"
+            "[1:a:0]volume=1.0[voice];"
+            "[program][voice]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            "-map",
+            "0:v:0",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            output,
+        ]
+    else:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-i",
+            vo_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            output,
+        ]
     run_ffmpeg(cmd)
-    validate_media_output(output_path)
+    validate_media_output(output, require_video=True, require_audio=True)
