@@ -9,6 +9,8 @@ import tempfile
 from statistics import median
 from typing import Any, Dict, Mapping, Optional, Sequence
 
+from .ffmpeg_budget import run_ffmpeg_subprocess
+
 
 class RenderContractError(RuntimeError):
     """Raised when a rendered artifact violates the requested production contract."""
@@ -26,8 +28,15 @@ def _timeout(env_name: str, default: int) -> int:
 
 def _run(command: Sequence[str], *, timeout: Optional[int] = None, capture_output: bool = True, text: bool = True) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(list(command), check=True, capture_output=capture_output, text=text,
-                              timeout=timeout if timeout is not None else _timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600))
+        kwargs = {
+            "check": True,
+            "capture_output": capture_output,
+            "text": text,
+            "timeout": timeout if timeout is not None else _timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600),
+        }
+        if command and os.path.basename(str(command[0])).lower() in {"ffmpeg", "ffmpeg.exe"}:
+            return run_ffmpeg_subprocess(command, **kwargs)
+        return subprocess.run(list(command), **kwargs)
     except subprocess.TimeoutExpired as exc:
         raise RenderContractError(f"media command timed out after {exc.timeout}s") from exc
     except OSError as exc:
