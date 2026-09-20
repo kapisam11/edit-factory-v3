@@ -788,7 +788,12 @@ def list_packages():
                 "script_preview": preview,
                 "has_video": any(
                     (pkg_path / name).exists()
-                    for name in ("final_short.mp4", "final_with_music.mp4", "final_short_vo.mp4")
+                    for name in ("final_short.mp4", "final_with_music.mp4", "final_short_vo.mp4", "final.v3.mp4")
+                ),
+                "v3_readiness": (
+                    json.loads((pkg_path / "v3_readiness.json").read_text(encoding="utf-8")).get("state")
+                    if (pkg_path / "v3_readiness.json").exists()
+                    else None
                 ),
             })
         except OSError:
