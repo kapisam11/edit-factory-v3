@@ -11,17 +11,17 @@ This document records the current evidence state of Edit Factory v3. It intentio
 - V3 input validation rejects missing/empty source media and bounds topic, audience, platform, BPM, and target-duration inputs against the blueprint limits.
 - V3 blueprint/QC and production JSON/text artifacts use atomic temp-file replacement in the hardened paths.
 - Subtitle drawtext text escapes FFmpeg filter metacharacters and subtitle probing fails closed instead of inventing a duration.
-- Real render integration tests and adversarial V3 contract tests exist, with the repository's existing V3 coverage gate retained at 50%.
+- Real render integration tests, adversarial V3 contract tests, and a real dashboard-driven V3 E2E render exist. The maintained V3 coverage gate is 80%.
 - Python support is 3.10+ and the locked CI matrix exercises Python 3.10–3.12.
-- A committed `uv.lock` is present and release CI consumes it with `uv sync --frozen`.
+- A committed `uv.lock` is present and both CI and the production Docker image install from it with `uv sync --frozen`.
 - Model-provider failures use bounded retries for transient HTTP/transport failures and degrade to deterministic planning when the provider remains unavailable.
 - Docker runs the production WSGI service as the dedicated non-root `aivf` user.
 
 ## Current limitations that block release certification
 
 - The fresh pull-request CI run must finish green on the latest hardening head before automated verification can be certified.
-- Repository-only inspection cannot certify artistic quality. A real rendered video still requires human visual acceptance.
-- Target-host cancellation, restart/reconciliation, persistent-volume, and production-secret checks remain deployment acceptance gates.
+- Repository-only inspection cannot certify artistic quality. A human still needs to visually accept a real rendered V3 output.
+- Target-host cancellation, restart/reconciliation, persistent-volume, TLS/reverse-proxy, and production-secret checks remain deployment acceptance gates.
 
 ## Historical notes
 
