@@ -674,6 +674,8 @@ def create_job():
         })
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
+    if workflow == "v3" and params.get("enable_diarization") and not secrets.get("diarization_token"):
+        return jsonify({"error": "Speaker diarization is enabled but no diarization token is configured"}), 400
     if workflow == "v3" and not (request.files.get("raw_video") and request.files.get("raw_video").filename):
         return jsonify({"error": "V3 production requires a raw video upload"}), 400
 
