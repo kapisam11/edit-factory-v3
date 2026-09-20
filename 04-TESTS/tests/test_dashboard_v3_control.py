@@ -149,3 +149,16 @@ def test_worker_dispatches_v3_to_real_v3_pipeline(monkeypatch, tmp_path):
     assert captured["kwargs"]["audience"] == "general short-form viewers"
     assert appmod.db_get_job("job-v3-worker")["status"] == "done"
     assert (Path(captured["package_dir"]) / "v3_job_result.json").is_file()
+
+
+def test_v3_defaults_are_platform_safe(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    appmod.set_setting("default_workflow", "v3")
+    appmod.set_setting("default_v3_platform", "youtube_shorts")
+    appmod.set_setting("default_target_seconds", 120)
+    settings = appmod.get_settings()
+    assert settings["default_v3_platform"] == "youtube_shorts"
+    assert settings["default_target_seconds"] <= 60
+
+    with pytest.raises(ValueError):
+        appmod.set_setting("default_v3_platform", "not-a-platform")
