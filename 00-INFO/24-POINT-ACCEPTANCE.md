@@ -6,7 +6,7 @@ This document defines release-gating acceptance criteria for the 24 findings fro
 |---:|---|---|---|
 | 1 | Blueprint/render mismatch | V3 timeline boundaries and count exactly match the immutable blueprint | `edit_planner.build_timeline`, `v3_pipeline._validate_timeline_contract` |
 | 2 | Exact duration | Short sources are padded; final media is normalized and probed against target duration | `render_engine.render_segment`, `v3_quality.normalize_duration` |
-| 3 | Retention only advisory | Retention timestamps are validated, converted into real render effects, and checked against observed pixel changes | `v3_quality.enforce_retention_events`, `strict_render_check` |
+| 3 | Retention only advisory | V3 renders and persists a no-retention baseline, applies retention effects afterward, and verifies final-vs-baseline local pixel deltas before release QC passes | `v3_pipeline.run_v3_pipeline`, `v3_quality.verify_retention_against_baseline` |
 | 4 | Directive/effect seam | V3 motion/transition directives resolve to valid FFmpeg video filters | `effects_engine`, `test_v3_effect_mapping.py` |
 | 5 | QC naming | Planning/editorial QC and post-render media QC are separate machine-readable gates | `v3_engine`, `v3_quality` |
 | 6 | Fake predictive metrics | Retention/completion/rewatch/share values are explicitly heuristic, never platform predictions | `00-INFO/V3-METRICS.md` |
