@@ -117,10 +117,9 @@ def test_session_cookie_is_secure(monkeypatch):
     client = app.test_client()
     import dashboard_auth
     dashboard_auth._login_attempts.clear()
-    _login(client)
-    response = client.get("/")
-    cookie = response.headers.get("Set-Cookie", "")
-    assert "Secure" in cookie
+    response = client.post("/login", data={"token": "test-token"})
+    assert response.status_code == 302
+    assert "Secure" in response.headers.get("Set-Cookie", "")
 
 
 def test_dashboard_emits_nonce_based_csp(monkeypatch):
