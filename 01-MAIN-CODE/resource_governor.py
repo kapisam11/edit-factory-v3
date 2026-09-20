@@ -79,8 +79,9 @@ def principal_queued_jobs(db_connect, principal: str) -> int:
     count = 0
     for row in rows:
         try:
-            params = json.loads(row["params"] or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
+            raw_params = row["params"] if hasattr(row, "keys") else row[0]
+            params = json.loads(raw_params or "{}")
+        except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             continue
         if str(params.get("_principal", "")) == principal:
             count += 1
