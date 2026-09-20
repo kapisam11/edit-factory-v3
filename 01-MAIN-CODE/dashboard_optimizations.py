@@ -333,7 +333,19 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         previous_error = job.get("error")
         previous_pkg_dir = job.get("pkg_dir")
 
-        secrets = app_module.get_runtime_default_secrets()
+        required_secret_keys = [
+            key for key in params.get("_retry_secret_keys", [])
+            if key in app_module.SECRET_PARAM_KEYS
+        ]
+        secrets = dict(app_module.get_runtime_default_secrets())
+        retained = getattr(app_module, "_runtime_secrets", {}).get(job_id) or {}
+        secrets.update(retained)
+        if required_secret_keys and any(not secrets.get(key) for key in required_secret_keys):
+            return jsonify({
+                "error": "This job used one-off credentials that are no longer available in memory. Re-enter the credentials and create a new job.",
+                "job_id": job_id,
+                "status": job.get("status"),
+            }), 409
         changed = store.update_job_if_status(
             job_id,
             ("error", "interrupted"),
@@ -351,6 +363,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
             started = app_module._start_job(job_id, params, secrets)
         except Exception as exc:
             app_module._runtime_secrets.pop(job_id, None)
+            app_module._runtime_secret_expiry.pop(job_id, None)
             store.update_job_if_status(
                 job_id,
                 ("queued",),
@@ -365,6 +378,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         final_job = app_module.db_get_job(job_id) or {}
         if final_job.get("status") == "error":
             app_module._runtime_secrets.pop(job_id, None)
+            app_module._runtime_secret_expiry.pop(job_id, None)
             cache.delete("jobs:list")
             return jsonify({
                 "error": final_job.get("error") or "Retry could not start",
