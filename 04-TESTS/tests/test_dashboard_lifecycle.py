@@ -130,6 +130,66 @@ def test_retry_reports_worker_start_failure(monkeypatch, tmp_path):
     assert payload["error"] == "Worker failed to start: boom"
     assert appmod.db_get_job("job-start-failure")["status"] == "error"
 
+def test_job_redaction_hides_internal_paths_and_principal(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    appmod.db_insert_job(
+        "job-redact",
+        "topic",
+        {
+            "topic": "topic",
+            "raw_video": str(tmp_path / "uploads" / "source.mp4"),
+            "_principal": "127.0.0.1",
+            "_retry_secret_keys": ["model_key"],
+            "workflow": "v3",
+            "target_seconds": 8,
+        },
+    )
+    appmod.db_update_job("job-redact", pkg_dir=str(tmp_path / "output" / "job-redact"))
+    payload = appmod._redact_job(appmod.db_get_job("job-redact"))
+    assert "pkg_dir" not in payload
+    assert payload["package_name"] == "job-redact"
+    assert payload["params"]["workflow"] == "v3"
+    assert "raw_video" not in payload["params"]
+    assert "_principal" not in payload["params"]
+    assert "_retry_secret_keys" not in payload["params"]
+
+
+def test_health_reports_runtime_capability_contract(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    response = appmod.app.test_client().get("/api/health")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert "max_concurrent_jobs" in payload
+    assert set(payload["capabilities"]) == {"ocr", "object_detection", "diarization"}
+
+
+def test_retry_preserves_retained_one_off_secret(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
+    appmod.db_insert_job(
+        "job-secret-retry",
+        "topic",
+        {"topic": "topic", "workflow": "default", "_retry_secret_keys": ["model_key"]},
+    )
+    appmod.db_update_job("job-secret-retry", status="error", step="failed", error="previous failure")
+
+    captured = {}
+    appmod._runtime_secrets["job-secret-retry"] = {"model_key": "one-off-secret"}
+
+    def fake_start(job_id, params, secrets):
+        captured.update(secrets)
+        appmod.db_update_job(job_id, status="running", step="started")
+        return True
+
+    monkeypatch.setattr(appmod, "_start_job", fake_start)
+    with appmod.app.test_request_context("/api/jobs/job-secret-retry/retry", method="POST"):
+        response, status = appmod.app.view_functions["retry_job"]("job-secret-retry")
+
+    assert status == 202
+    assert captured["model_key"] == "one-off-secret"
+
+
 def test_startup_reconciles_non_terminal_jobs(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
     appmod.db_insert_job("queued", "queued", {"topic": "queued"})
@@ -189,7 +249,8 @@ def test_worker_exit_reconciles_running_job_and_releases_secrets(monkeypatch, tm
     job = appmod.db_get_job("job-crash")
     assert job["status"] == "interrupted"
     assert "Worker exited unexpectedly" in job["error"]
-    assert "job-crash" not in appmod._runtime_secrets
+    assert "job-crash" in appmod._runtime_secrets
+    assert "job-crash" in appmod._runtime_secret_expiry
 
 
 def test_worker_exit_after_cancellation_is_terminal(monkeypatch, tmp_path):
