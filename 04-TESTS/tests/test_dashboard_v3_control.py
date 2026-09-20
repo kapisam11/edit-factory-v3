@@ -46,6 +46,7 @@ def test_dashboard_queues_full_v3_configuration(monkeypatch, tmp_path):
             "enable_ocr": "true",
             "enable_object_detection": "true",
             "enable_diarization": "true",
+            "diarization_token": "test-diarization-token",
             "raw_video": (io.BytesIO(b"video"), "source.mp4"),
         },
         content_type="multipart/form-data",
@@ -62,6 +63,7 @@ def test_dashboard_queues_full_v3_configuration(monkeypatch, tmp_path):
     assert captured["params"]["enable_object_detection"] is True
     assert captured["params"]["enable_diarization"] is True
     assert captured["params"]["raw_video"] == str(fake_upload)
+    assert captured["secrets"]["diarization_token"] == "test-diarization-token"
 
     job = appmod.db_get_job(captured["job_id"])
     persisted = json.loads(job["params"])
