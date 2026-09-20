@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 from typing import List, Optional
 
-from .ffmpeg_budget import run_ffmpeg_subprocess, slot
+from .ffmpeg_budget import slot
 from .hardware import choose_encoder, ffmpeg_preset_for
 
 logger = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bo
     try:
         with slot():
             if capture_output:
-                return run_ffmpeg_subprocess(
+                return subprocess.run(
                     cmd,
                     check=True,
                     timeout=timeout,
