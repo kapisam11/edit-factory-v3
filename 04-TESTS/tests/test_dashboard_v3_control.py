@@ -29,6 +29,7 @@ def test_dashboard_queues_full_v3_configuration(monkeypatch, tmp_path):
         captured.update(job_id=job_id, params=dict(params), secrets=dict(secrets))
         return True
 
+    monkeypatch.setattr(appmod, "_runtime_capabilities", lambda: {"ocr": True, "object_detection": True, "diarization": True})
     monkeypatch.setattr(appmod, "_save_and_validate_upload", save_upload)
     monkeypatch.setattr(appmod, "_start_job", start_job)
 
