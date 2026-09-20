@@ -58,7 +58,16 @@ def make_idea(summary: Dict[str, str]) -> Dict[str, object]:
     vertical edit. Duration follows the shared application contract of 15-120s.
     """
     topic = summary.get("topic", "Unknown topic")
-    target_total_seconds = validate_target_seconds(summary.get("target_total_seconds", 45.0))
+    v3_directives = summary.get("v3_directives")
+    if isinstance(v3_directives, dict) and v3_directives.get("blueprint_contract"):
+        try:
+            target_total_seconds = float(summary.get("target_total_seconds", 30.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("target_seconds must be a number") from exc
+        if target_total_seconds != target_total_seconds or target_total_seconds < 8.0 or target_total_seconds > 180.0:
+            raise ValueError("V3 target_seconds must be between 8 and 180 seconds")
+    else:
+        target_total_seconds = validate_target_seconds(summary.get("target_total_seconds", 45.0))
 
     # Pick ONE main emotion from research if present; otherwise choose a sensible default
     allowed_emotions = ["emotional", "inspiring", "nostalgic", "dramatic", "mysterious", "funny", "shocking", "intense"]
