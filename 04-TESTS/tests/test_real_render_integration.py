@@ -95,7 +95,7 @@ def test_v3_pipeline_renders_contract_valid_video(tmp_path, monkeypatch):
             ffmpeg, "-y",
             "-f", "lavfi", "-i", "testsrc=size=540x960:rate=24",
             "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
-            "-t", "8", "-shortest", "-pix_fmt", "yuv420p",
+            "-t", "20", "-shortest", "-pix_fmt", "yuv420p",
             "-c:v", "libx264", "-c:a", "aac", str(source),
         ],
         check=True,
