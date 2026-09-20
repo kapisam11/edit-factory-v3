@@ -720,6 +720,7 @@
                 document.getElementById('setting_v3_bpm').value = settings.default_v3_bpm ?? 120;
                 document.getElementById('setting_concurrency').value = settings.max_concurrent_jobs ?? 2;
                 document.getElementById('setting_upload_limit').value = `${settings.max_upload_mb ?? 500} MB`;
+                applyDefaultsToForm();
                 const configured = ['groq_key', 'model_key', 'elevenlabs_key', 'diarization_token'].filter((key) => settings[`${key}_configured`]);
                 document.getElementById('secretStatus').textContent = configured.length ? `${configured.length} API key(s) configured.` : 'No API keys configured.';
             } catch (e) {
