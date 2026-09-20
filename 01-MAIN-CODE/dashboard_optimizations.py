@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from flask import Response, has_request_context, jsonify, request, send_from_directory
+from flask import Response, abort, has_request_context, jsonify, request, send_from_directory
 
 from dashboard_cache import HybridCache
 from dashboard_store import DashboardStore
@@ -59,6 +59,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         try:
             check_job_creation_limits(store.connect, principal, (app_module.UPLOAD_FOLDER, app_module.OUTPUT_FOLDER))
         except ResourceLimitExceeded as exc:
+            if has_request_context():
+                abort(429, description=str(exc))
             raise ValueError(str(exc)) from exc
         params["_principal"] = principal
         store.insert_job(job_id, topic, params)
@@ -141,6 +143,20 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 return
             current = app_module.db_get_job(job_id) or {}
             package_dir = current.get("pkg_dir")
+            if total_storage_bytes(app_module.UPLOAD_FOLDER, app_module.OUTPUT_FOLDER) > __import__("resource_governor").MAX_TOTAL_STORAGE_BYTES:
+                try:
+                    from dashboard_compat import _terminate_process_tree
+                    _terminate_process_tree(process)
+                except Exception:
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                current = app_module.db_get_job(job_id) or {}
+                if current.get("status") in {"queued", "running", "cancelling"}:
+                    app_module.db_update_job(job_id, status="error", step="resource_limit", error="Total storage quota exceeded")
+                    app_module.db_append_log(job_id, "ERROR", "Total storage quota exceeded")
+                return
             if package_dir and not job_storage_ok(package_dir):
                 try:
                     from dashboard_compat import _terminate_process_tree
@@ -166,9 +182,13 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         started = original_start_job(job_id, params, secrets)
         process = app_module._active_processes.get(job_id)
         if started and process is not None:
+            def watch_and_release():
+                try:
+                    _watch_resource_budget(job_id, process)
+                finally:
+                    resource_watchdogs.discard(job_id)
             thread = __import__("threading").Thread(
-                target=_watch_resource_budget,
-                args=(job_id, process),
+                target=watch_and_release,
                 name=f"aivf-budget-{job_id}",
                 daemon=True,
             )
