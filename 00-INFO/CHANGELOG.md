@@ -4,7 +4,7 @@
 
 ### V3 creative system
 - Added the emotion-first V3 blueprint engine and `aivf-v3` CLI.
-- Added exactly 40 tracked V3 creative, retention, quality, platform, and packaging capabilities.
+- Added exactly 40 tracked V3 creative, retention, quality, platform, and packaging capabilities. The registry now labels each capability as deterministic, hybrid, or heuristic instead of implying that heuristic checks are equivalent to human editorial review.
 - Added core emotional idea analysis, single edit-type locking, ranked hooks, adaptive clip planning, overlay rules, music/beat/drop planning, retention events, human-editor QC, platform variants, and upload metadata generation.
 - Added V3 production integration that persists `v3_blueprint.json` before handing the brief to the existing media renderer.
 - Added deterministic, offline-safe V3 planning so creative planning does not require an external AI provider.
