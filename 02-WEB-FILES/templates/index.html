@@ -258,6 +258,10 @@
                 <label for="setting_elevenlabs_key">ElevenLabs Key</label>
                 <input type="password" id="setting_elevenlabs_key" autocomplete="off" placeholder="Leave blank to keep current key">
             </div>
+            <div class="form-group">
+                <label for="setting_diarization_token">Diarization Token</label>
+                <input type="password" id="setting_diarization_token" autocomplete="off" placeholder="Needed only when speaker diarization is enabled">
+            </div>
             <div id="secretStatus" class="log-status">Loading…</div>
             <button class="btn-primary" onclick="saveSettings()">Save Settings</button>
         </div>
@@ -715,7 +719,7 @@
                 document.getElementById('setting_v3_bpm').value = settings.default_v3_bpm ?? 120;
                 document.getElementById('setting_concurrency').value = settings.max_concurrent_jobs ?? 2;
                 document.getElementById('setting_upload_limit').value = `${settings.max_upload_mb ?? 500} MB`;
-                const configured = ['groq_key', 'model_key', 'elevenlabs_key'].filter((key) => settings[`${key}_configured`]);
+                const configured = ['groq_key', 'model_key', 'elevenlabs_key', 'diarization_token'].filter((key) => settings[`${key}_configured`]);
                 document.getElementById('secretStatus').textContent = configured.length ? `${configured.length} API key(s) configured.` : 'No API keys configured.';
             } catch (e) {
                 document.getElementById('secretStatus').textContent = 'Settings unavailable.';
@@ -742,7 +746,7 @@
                 default_v3_audience: document.getElementById('setting_v3_audience').value.trim(),
                 default_v3_bpm: parseInt(document.getElementById('setting_v3_bpm').value, 10),
             };
-            for (const [id, key] of [['setting_groq_key', 'groq_key'], ['setting_model_key', 'model_key'], ['setting_elevenlabs_key', 'elevenlabs_key']]) {
+            for (const [id, key] of [['setting_groq_key', 'groq_key'], ['setting_model_key', 'model_key'], ['setting_elevenlabs_key', 'elevenlabs_key'], ['setting_diarization_token', 'diarization_token']]) {
                 const value = document.getElementById(id).value.trim();
                 if (value) newSettings[key] = value;
             }
@@ -754,7 +758,7 @@
                 });
                 const data = await safeJson(res);
                 if (!res.ok || data.error) throw new Error(data.error || 'Failed to save settings');
-                ['setting_groq_key', 'setting_model_key', 'setting_elevenlabs_key'].forEach((id) => { document.getElementById(id).value = ''; });
+                ['setting_groq_key', 'setting_model_key', 'setting_elevenlabs_key', 'setting_diarization_token'].forEach((id) => { document.getElementById(id).value = ''; });
                 await loadSettings();
                 applyDefaultsToForm();
                 closeSettings();
