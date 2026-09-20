@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -246,7 +247,19 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 "SELECT id, pkg_dir FROM jobs WHERE status IN ('done','error','cancelled','interrupted') AND updated_at < datetime(?, 'unixepoch')",
                 (cutoff,),
             ).fetchall()
-            stale_ids = [row["id"] for row in stale]
+            stale_rows = list(stale)
+            stale_ids = [row["id"] for row in stale_rows]
+            output_root = app_module.OUTPUT_FOLDER.resolve()
+            for row in stale_rows:
+                package_value = str(row["pkg_dir"] or "").strip()
+                if not package_value:
+                    continue
+                try:
+                    package = Path(package_value).resolve()
+                    if output_root in package.parents and package.is_dir():
+                        shutil.rmtree(package)
+                except OSError:
+                    continue
             if stale_ids:
                 placeholders = ",".join("?" for _ in stale_ids)
                 conn.execute(f"DELETE FROM job_logs WHERE job_id IN ({placeholders})", stale_ids)
