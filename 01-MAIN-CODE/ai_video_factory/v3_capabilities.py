@@ -13,6 +13,9 @@ class CapabilitySpec:
     validator: str
     tests: Tuple[str, ...]
     status: str = "implemented"
+    evidence_level: str = "deterministic"
+    display_name: str = ""
+    truth_note: str = ""
 
 
 _TEST_STRICT = "test_v3_strict_hardening.py"
@@ -61,8 +64,61 @@ _EVIDENCE = {
     "shareability heuristic score": ("v3_engine._heuristic_metrics", "v3_engine._heuristic_metrics", (_TEST_STRICT,)),
 }
 
+_HEURISTIC_KEYS = {
+    "human-editor reject pass",
+    "dead-moment detection",
+    "AI-slideshow guard",
+    "payoff validation",
+    "hook-payoff continuity",
+    "retention heuristic score",
+    "completion heuristic score",
+    "rewatch heuristic score",
+    "shareability heuristic score",
+}
+_HYBRID_SEMANTIC_KEYS = {
+    "emotion-first core idea",
+    "visual hook",
+    "text hook",
+    "emotional hook",
+    "hook A/B ranking",
+    "purpose-driven clip plan",
+    "adaptive clip count",
+    "repetition detection",
+    "silent-viewing readability",
+}
+_DISPLAY_NAMES = {
+    "human-editor reject pass": "editorial reject-rule pass",
+    "dead-moment detection": "dead-moment heuristic",
+    "AI-slideshow guard": "slideshow-cadence heuristic",
+    "payoff validation": "payoff-structure check",
+    "hook-payoff continuity": "hook-payoff continuity check",
+}
+
+
+def _spec(key: str, implementation: str, validator: str, tests: Tuple[str, ...]) -> CapabilitySpec:
+    if key in _HEURISTIC_KEYS:
+        level, status = "heuristic", "heuristic"
+        note = "Deterministic/editorial heuristic; not equivalent to human review or a platform prediction."
+    elif key in _HYBRID_SEMANTIC_KEYS:
+        level, status = "hybrid_semantic", "hybrid"
+        note = "Uses semantic/lexical evidence where available with deterministic fallback."
+    else:
+        level, status = "deterministic_contract", "implemented"
+        note = "Deterministic implementation with repository-level validation evidence."
+    return CapabilitySpec(
+        key=key,
+        implementation=implementation,
+        validator=validator,
+        tests=tests,
+        status=status,
+        evidence_level=level,
+        display_name=_DISPLAY_NAMES.get(key, key),
+        truth_note=note,
+    )
+
+
 CAPABILITIES: Mapping[str, CapabilitySpec] = {
-    key: CapabilitySpec(key=key, implementation=implementation, validator=validator, tests=tests)
+    key: _spec(key, implementation, validator, tests)
     for key, (implementation, validator, tests) in _EVIDENCE.items()
 }
 
@@ -89,7 +145,11 @@ def validate_capabilities() -> None:
     for spec in CAPABILITIES.values():
         if not spec.implementation or not spec.validator or not spec.tests:
             raise ValueError(f"V3 capability missing evidence: {spec.key}")
-        if spec.status != "implemented":
-            raise ValueError(f"V3 capability is not release-ready: {spec.key}")
+        if spec.status not in {"implemented", "hybrid", "heuristic"}:
+            raise ValueError(f"V3 capability has unknown evidence status: {spec.key}")
+        if spec.status == "heuristic" and spec.evidence_level != "heuristic":
+            raise ValueError(f"heuristic capability has incorrect evidence level: {spec.key}")
+        if not spec.display_name or not spec.truth_note:
+            raise ValueError(f"V3 capability is missing a truthfulness label: {spec.key}")
         _resolve_symbol(spec.implementation)
         _resolve_symbol(spec.validator)
