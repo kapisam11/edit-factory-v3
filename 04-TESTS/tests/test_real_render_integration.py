@@ -154,7 +154,9 @@ def test_v3_pipeline_renders_contract_valid_video(tmp_path, monkeypatch):
     assert result.artifacts["v3_baseline"].endswith("v3_baseline.mp4")
     assert result.artifacts["v3_readiness"].endswith("v3_readiness.json")
     readiness = json.loads((tmp_path / "v3_package" / "v3_readiness.json").read_text(encoding="utf-8"))
-    assert readiness["state"] == "MEDIA_CONTRACT_VALID"
+    assert readiness["state"] == "UPLOAD_PACKAGE_VALID"
+    assert readiness["checks"]["UPLOAD_PACKAGE_VALID"] is True
+    assert (tmp_path / "v3_package" / "upload_package.json").is_file()
     render_qc = json.loads((tmp_path / "v3_package" / "v3_render_qc.json").read_text(encoding="utf-8"))
     assert render_qc["retention_verification"]["ok"] is True
 
