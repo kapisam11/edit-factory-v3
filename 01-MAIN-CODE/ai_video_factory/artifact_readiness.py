@@ -12,6 +12,8 @@ from typing import Any, Mapping, Optional
 
 from .v3_quality import probe_media
 
+FINAL_VIDEO_CANDIDATES = ("final.v3.mp4", "final_with_music.mp4", "final_short.mp4", "final_short_vo.mp4", "final.mp4")
+
 READINESS_STATES = (
     "MEDIA_VALID",
     "MEDIA_CONTRACT_VALID",
@@ -29,6 +31,23 @@ class ReadinessReport:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def resolve_final_video(package_dir: str | Path) -> Optional[Path]:
+    """Return the canonical completed video artifact for a package."""
+    root = Path(package_dir).resolve()
+    if not root.is_dir():
+        return None
+    for name in FINAL_VIDEO_CANDIDATES:
+        candidate = (root / name).resolve()
+        if root not in candidate.parents or not candidate.is_file():
+            continue
+        try:
+            probe_media(str(candidate))
+        except Exception:
+            continue
+        return candidate
+    return None
 
 
 def _highest_state(checks: Mapping[str, bool]) -> str:
@@ -124,4 +143,4 @@ def evaluate_artifact(
     return ReadinessReport(_highest_state(checks), checks, errors, warnings)
 
 
-__all__ = ["READINESS_STATES", "ReadinessReport", "evaluate_artifact"]
+__all__ = ["FINAL_VIDEO_CANDIDATES", "READINESS_STATES", "ReadinessReport", "evaluate_artifact", "resolve_final_video"]
