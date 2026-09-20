@@ -757,6 +757,7 @@ def create_job():
         return jsonify({"error": "V3 production requires a raw video upload"}), 400
 
     upload = request.files.get("raw_video")
+    upload_path: Optional[Path] = None
     try:
         usage = shutil.disk_usage(UPLOAD_FOLDER)
         if usage.free < _MIN_FREE_DISK_BYTES:
@@ -780,7 +781,12 @@ def create_job():
         params["raw_video"] = str(upload_path)
 
     job_id = f"job_{uuid.uuid4().hex[:12]}"
-    db_insert_job(job_id, topic, params)
+    try:
+        db_insert_job(job_id, topic, params)
+    except Exception:
+        if upload_path is not None:
+            upload_path.unlink(missing_ok=True)
+        raise
     _runtime_secrets[job_id] = secrets
     _start_job(job_id, params, secrets)
     return jsonify({"job_id": job_id, "status": "queued"}), 202
