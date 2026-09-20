@@ -542,6 +542,7 @@
                             <div class="package-meta">
                                 <span>${escapeHtml(pkg.created || '')}</span>
                                 ${pkg.has_video ? '<span class="badge video">Video</span>' : '<span class="badge">Package</span>'}
+                                ${pkg.v3_readiness ? `<span class="badge">${escapeHtml(pkg.v3_readiness)}</span>` : ''}
                             </div>
                             <p class="package-script">${escapeHtml(pkg.script_preview || '')}${pkg.script_preview ? '…' : ''}</p>
                         </div>
@@ -572,7 +573,7 @@
                 showPackageFiles(name, currentPackageFiles);
                 showPackageThumbnails(name, currentPackageFiles);
                 const videos = currentPackageFiles.filter((f) => /\.(mp4|webm|mov)$/i.test(f.path));
-                const preferred = ['final_with_music.mp4', 'final_short.mp4', 'final_short_vo.mp4'];
+                const preferred = ['final.v3.mp4', 'final_with_music.mp4', 'final_short.mp4', 'final_short_vo.mp4'];
                 const selected = preferred.find((p) => videos.some((f) => f.path === p)) || (videos[0] && videos[0].path);
                 const videoWrap = document.getElementById('videoPlayerWrap');
                 videoWrap.innerHTML = selected
