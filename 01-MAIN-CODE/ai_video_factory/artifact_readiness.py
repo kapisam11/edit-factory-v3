@@ -48,6 +48,7 @@ def evaluate_artifact(
     package_dir: Optional[str] = None,
     upload_package_required: bool = False,
     publish_required: bool = False,
+    publish_prerequisites_met: bool = False,
 ) -> ReadinessReport:
     errors: list[str] = []
     warnings: list[str] = []
@@ -110,10 +111,13 @@ def evaluate_artifact(
     checks["PUBLISH_READY"] = (
         checks["MEDIA_CONTRACT_VALID"]
         and checks["UPLOAD_PACKAGE_VALID"]
+        and (publish_prerequisites_met or not publish_required)
         and not errors
     )
     if not publish_required:
         checks["PUBLISH_READY"] = False
+    elif not publish_prerequisites_met:
+        errors.append("PUBLISH_READY: platform publish prerequisites have not been explicitly satisfied")
     elif not checks["PUBLISH_READY"]:
         errors.append("PUBLISH_READY: one or more required release gates are not satisfied")
 
