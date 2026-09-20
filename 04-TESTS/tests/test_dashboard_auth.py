@@ -104,6 +104,8 @@ def test_insecure_local_mode_is_loopback_only(monkeypatch):
 
 def test_login_rate_limit_blocks_excessive_attempts(monkeypatch):
     app = _load(monkeypatch)
+    import dashboard_auth
+    dashboard_auth._login_attempts.clear()
     client = app.test_client()
     for _ in range(10):
         assert client.post("/login", data={"token": "wrong"}).status_code == 401
