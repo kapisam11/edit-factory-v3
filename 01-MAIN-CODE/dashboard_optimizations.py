@@ -14,7 +14,6 @@ from dashboard_store import DashboardStore, JobAdmissionError
 from resource_governor import (
     MAX_JOB_STORAGE_BYTES,
     MAX_RENDER_WALLCLOCK_SECONDS,
-    MAX_SSE_CONNECTIONS,
     MAX_QUEUED_PER_PRINCIPAL,
     RESOURCE_CHECK_INTERVAL_SECONDS,
     MAX_SSE_LIFETIME_SECONDS,
@@ -288,6 +287,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     @app_module.app.before_request
     def governed_resource_maintenance():
+        app_module._cleanup_runtime_secrets()
         _database_cleanup()
 
     @app_module.app.get("/api/jobs/<job_id>/preview")
