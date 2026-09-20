@@ -786,10 +786,26 @@
             const isV3 = document.getElementById('workflow').value === 'v3';
             const panel = document.getElementById('v3Controls');
             panel.style.display = isV3 ? 'block' : 'none';
-            document.getElementById('target_seconds').min = isV3 ? '8' : '15';
-            document.getElementById('target_seconds').max = isV3 ? '180' : '120';
+            updateV3DurationRange();
             document.getElementById('rawVideoLabel').textContent = isV3 ? 'Raw Video (required for V3)' : 'Raw Video (optional)';
             panel.querySelectorAll('input, select, textarea').forEach((el) => { el.disabled = !isV3; });
+        }
+
+        function updateV3DurationRange() {
+            const isV3 = document.getElementById('workflow').value === 'v3';
+            const platform = document.getElementById('platform').value;
+            const maxByPlatform = {
+                youtube_shorts: 60,
+                tiktok: 180,
+                instagram_reels: 90,
+                square: 90,
+                youtube: 180,
+            };
+            const input = document.getElementById('target_seconds');
+            const max = isV3 ? (maxByPlatform[platform] || 180) : 120;
+            input.min = isV3 ? '8' : '15';
+            input.max = String(max);
+            if (Number(input.value) > max) input.value = max;
         }
 
         function canonicalWorkflow(value) {
@@ -831,6 +847,7 @@
         }
 
         document.getElementById('workflow').addEventListener('change', toggleV3Controls);
+        document.getElementById('platform').addEventListener('change', updateV3DurationRange);
         applyDefaultsToForm();
         toggleV3Controls();
     </script>
