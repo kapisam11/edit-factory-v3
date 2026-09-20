@@ -6,6 +6,7 @@ import math
 import os
 import subprocess
 import tempfile
+from statistics import median
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 
@@ -89,18 +90,36 @@ def normalize_duration(input_path: str, target_path: str, target_seconds: float)
         raise RenderContractError(f"could not normalize rendered duration: {exc}") from exc
 
 
-def enforce_retention_events(input_path: str, output_path: str, retention_events: Sequence[Mapping[str, Any]]) -> str:
-    events = []; previous = -1.0
+def _validated_retention_events(
+    retention_events: Sequence[Mapping[str, Any]],
+    duration: float,
+) -> list[tuple[float, str]]:
+    events: list[tuple[float, str]] = []
+    previous = -1.0
     for item in retention_events:
-        if not isinstance(item, Mapping): raise RenderContractError("retention event must be an object")
-        try: timestamp = float(item.get("time", -1.0))
-        except (TypeError, ValueError) as exc: raise RenderContractError("retention event time is invalid") from exc
-        if not math.isfinite(timestamp) or timestamp < 0.0 or timestamp <= previous: raise RenderContractError("retention events must be finite and strictly increasing")
+        if not isinstance(item, Mapping):
+            raise RenderContractError("retention event must be an object")
+        try:
+            timestamp = float(item.get("time", -1.0))
+        except (TypeError, ValueError) as exc:
+            raise RenderContractError("retention event time is invalid") from exc
+        if not math.isfinite(timestamp) or timestamp < 0.0 or timestamp <= previous:
+            raise RenderContractError("retention events must be finite and strictly increasing")
+        if timestamp >= duration - 0.02:
+            raise RenderContractError(f"retention event at {timestamp:.3f}s is outside rendered duration")
         kind = str(item.get("kind", "motion")).strip().lower()
-        if len(kind) > 64: raise RenderContractError("retention event kind is too long")
-        events.append((timestamp, kind)); previous = timestamp
-    if not events: raise RenderContractError("V3 retention map is empty")
+        if len(kind) > 64:
+            raise RenderContractError("retention event kind is too long")
+        events.append((timestamp, kind))
+        previous = timestamp
+    if not events:
+        raise RenderContractError("V3 retention map is empty")
+    return events
+
+
+def enforce_retention_events(input_path: str, output_path: str, retention_events: Sequence[Mapping[str, Any]]) -> str:
     info = probe_media(input_path)
+    events = _validated_retention_events(retention_events, info["duration"])
     # Effects must be visibly measurable after rendering, not merely serialized into the plan.
     # Keep them restrained enough for editorial use but large enough for independent QC to detect.
     kind_settings = {
@@ -142,7 +161,87 @@ def _sample_visual_changes(path: str, sample_hz: float = 10.0) -> Dict[str, Any]
     return {"frames": frame_count, "sample_hz": sample_hz, "sample_duration": sample_duration, "threshold": round(threshold, 3), "change_events": change_events, "max_gap": max_gap}
 
 
-def strict_render_check(path: str, *, target_seconds: float, platform_profile: Mapping[str, Any], retention_events: Sequence[Mapping[str, Any]] = ()) -> Dict[str, Any]:
+def _sample_gray_frame(path: str, timestamp: float) -> bytes:
+    result = _run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{max(0.0, timestamp):.3f}", "-i", path,
+            "-frames:v", "1", "-vf", "scale=160:90,format=gray",
+            "-f", "rawvideo", "pipe:1",
+        ],
+        timeout=_timeout("AIVF_FFPROBE_TIMEOUT_SECONDS", 30),
+        capture_output=True,
+        text=False,
+    )
+    raw = result.stdout if isinstance(result.stdout, (bytes, bytearray)) else b""
+    expected = 160 * 90
+    if len(raw) < expected:
+        raise RenderContractError(f"could not sample a frame from {path} at {timestamp:.3f}s")
+    return raw[:expected]
+
+
+def _frame_delta(first: bytes, second: bytes) -> float:
+    if len(first) != len(second) or not first:
+        return 0.0
+    return sum(abs(a - b) for a, b in zip(first, second)) / len(first)
+
+
+def verify_retention_against_baseline(
+    baseline_path: str,
+    rendered_path: str,
+    retention_events: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Verify retention effects against a no-retention baseline render."""
+    baseline = probe_media(baseline_path)
+    rendered = probe_media(rendered_path)
+    if baseline["width"] != rendered["width"] or baseline["height"] != rendered["height"]:
+        raise RenderContractError("baseline and rendered dimensions differ")
+    if abs(baseline["duration"] - rendered["duration"]) > 0.08:
+        raise RenderContractError("baseline and rendered durations differ")
+    events = _validated_retention_events(retention_events, rendered["duration"])
+    checks: list[dict[str, Any]] = []
+    for index, (timestamp, kind) in enumerate(events):
+        active_times = [timestamp + offset for offset in (0.02, 0.08, 0.14)
+                        if timestamp + offset < rendered["duration"] - 0.02]
+        event_deltas = [
+            _frame_delta(_sample_gray_frame(baseline_path, t), _sample_gray_frame(rendered_path, t))
+            for t in active_times
+        ]
+        next_time = events[index + 1][0] if index + 1 < len(events) else rendered["duration"]
+        candidates = [timestamp + 0.55, timestamp + max(0.35, (next_time - timestamp) * 0.50)]
+        control_times = [min(t, rendered["duration"] - 0.05) for t in candidates
+                         if t < next_time - 0.18 and t < rendered["duration"] - 0.05]
+        if not control_times:
+            control_times = [max(0.05, timestamp - 0.45)] if timestamp >= 0.45 else [0.30]
+        control_deltas = [
+            _frame_delta(_sample_gray_frame(baseline_path, t), _sample_gray_frame(rendered_path, t))
+            for t in control_times
+        ]
+        event_delta = median(event_deltas) if event_deltas else 0.0
+        control_delta = median(control_deltas) if control_deltas else 0.0
+        threshold = max(2.5, control_delta * 1.70 + 0.35)
+        checks.append({
+            "time": timestamp, "kind": kind,
+            "event_delta": round(event_delta, 3),
+            "control_delta": round(control_delta, 3),
+            "threshold": round(threshold, 3),
+            "passed": event_delta >= threshold,
+        })
+    missing = [check for check in checks if not check["passed"]]
+    return {
+        "ok": not missing,
+        "method": "baseline-vs-rendered-local-pixel-delta",
+        "baseline": os.path.abspath(baseline_path),
+        "rendered": os.path.abspath(rendered_path),
+        "events": checks,
+        "errors": [
+            f"retention event at {item['time']:.2f}s did not exceed independent baseline threshold"
+            for item in missing
+        ],
+    }
+
+
+def strict_render_check(path: str, *, target_seconds: float, platform_profile: Mapping[str, Any], retention_events: Sequence[Mapping[str, Any]] = (), retention_baseline: Optional[str] = None, require_independent_retention: bool = False) -> Dict[str, Any]:
     info = probe_media(path); expected_width = int(platform_profile.get("width") or 0); expected_height = int(platform_profile.get("height") or 0); errors: list[str] = []; warnings: list[str] = []
     if abs(info["duration"] - float(target_seconds)) > 0.08: errors.append(f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s")
     if expected_width and info["width"] != expected_width: errors.append(f"width {info['width']} != required {expected_width}")
@@ -158,7 +257,15 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
         if events[0] > 0.25: errors.append("retention map does not begin near the opening")
         if any(b <= a for a, b in zip(events, events[1:])): errors.append("retention map contains non-increasing event times")
         if any(not math.isfinite(t) or t < 0.0 or t > float(target_seconds) + 0.05 for t in events): errors.append("retention map contains events outside target duration")
-        detected = visual.get("change_events", []); missing = [event for event in events if not any(abs(event - change) <= 0.30 for change in detected)]
-        if missing: errors.append("rendered visual stream is missing observable changes near retention events: " + ", ".join(f"{t:.2f}s" for t in missing[:8]))
+        if require_independent_retention:
+            if not retention_baseline:
+                errors.append("independent retention baseline is required")
+            else:
+                try:
+                    verification = verify_retention_against_baseline(retention_baseline, path, retention_events)
+                    if not verification["ok"]:
+                        errors.extend("independent retention QC: " + error for error in verification["errors"])
+                except RenderContractError as exc:
+                    errors.append(f"independent retention QC failed: {exc}")
     if visual.get("max_gap") is not None and visual["max_gap"] > 3.0: errors.append(f"coarse visual sampling found a change gap of {visual['max_gap']:.2f}s; maximum allowed gap is 3.00s")
     return {"ok": not errors, "errors": errors, "warnings": warnings, "media": info, "visual_sampling": visual}
