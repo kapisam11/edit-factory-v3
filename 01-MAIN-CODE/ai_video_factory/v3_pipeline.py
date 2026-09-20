@@ -159,13 +159,13 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     payload = blueprint.to_dict(); payload["platform"] = platform; payload["audience"] = audience
     _atomic_json_write(blueprint_path, payload)
 
-    if skip_qc and os.environ.get("AIVF_ALLOW_SKIP_QC") != "1":
-        raise ValueError("skip_qc is disabled for strict v3 production; set AIVF_ALLOW_SKIP_QC=1 only for development")
+    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+    qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
+    if skip_qc and (environment not in {"development", "test"} or not qc_override):
+        raise ValueError("skip_qc is disabled for production; use development/test with AIVF_ALLOW_SKIP_QC=1")
     semantic_qc_disabled = os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0"
-    if semantic_qc_disabled:
-        environment = os.environ.get("AIVF_ENV", "production").strip().lower()
-        if environment not in {"development", "test"} or os.environ.get("AIVF_ALLOW_SKIP_QC") != "1":
-            raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
+    if semantic_qc_disabled and (environment not in {"development", "test"} or not qc_override):
+        raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
     try:
         footage_evidence = _build_footage_evidence(input_video, enable_ocr)
     except Exception as exc:
