@@ -161,6 +161,11 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
 
     if skip_qc and os.environ.get("AIVF_ALLOW_SKIP_QC") != "1":
         raise ValueError("skip_qc is disabled for strict v3 production; set AIVF_ALLOW_SKIP_QC=1 only for development")
+    semantic_qc_disabled = os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0"
+    if semantic_qc_disabled:
+        environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+        if environment not in {"development", "test"} or os.environ.get("AIVF_ALLOW_SKIP_QC") != "1":
+            raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
     try:
         footage_evidence = _build_footage_evidence(input_video, enable_ocr)
     except Exception as exc:
@@ -209,7 +214,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 require_independent_retention=True,
             )
             semantic_report = {"ok": True, "mode": "disabled"}
-            if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") != "0":
+            if not semantic_qc_disabled:
                 semantic_report = analyze_render_semantics(result.final_video)
                 if not semantic_report["ok"]:
                     result.errors.extend(
