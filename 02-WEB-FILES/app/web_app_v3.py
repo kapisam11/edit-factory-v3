@@ -398,10 +398,17 @@ def _save_and_validate_upload(upload, suffix: str) -> Path:
         temp_path.unlink(missing_ok=True)
 
 
+def _module_available(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
 def _runtime_capabilities() -> dict[str, bool]:
-    vision = importlib.util.find_spec("cv2") is not None
-    ocr = vision and importlib.util.find_spec("pytesseract") is not None and shutil.which("tesseract") is not None
-    diarization = importlib.util.find_spec("pyannote.audio") is not None
+    vision = _module_available("cv2")
+    ocr = vision and _module_available("pytesseract") and shutil.which("tesseract") is not None
+    diarization = _module_available("pyannote.audio")
     model_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_MODEL", ".models/mobilenet_ssd/mobilenet.caffemodel"))
     config_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_CONFIG", ".models/mobilenet_ssd/deploy.prototxt"))
     object_detection = vision and model_path.is_file() and config_path.is_file()
@@ -410,6 +417,11 @@ def _runtime_capabilities() -> dict[str, bool]:
         "object_detection": object_detection,
         "diarization": diarization,
     }
+
+
+def _retain_runtime_secrets_for_retry(job_id: str) -> None:
+    if job_id in _runtime_secrets:
+        _runtime_secret_expiry[job_id] = time.monotonic() + RUNTIME_SECRET_TTL_SECONDS
 
 
 def _cleanup_runtime_secrets() -> None:
@@ -578,8 +590,8 @@ def _watch_job_process(job_id: str, process: multiprocessing.Process) -> None:
     with _active_processes_lock:
         _active_processes.pop(job_id, None)
         row = db_get_job(job_id)
-        if row and row.get("status") in {"error", "interrupted"} and job_id in _runtime_secrets:
-            _runtime_secret_expiry[job_id] = time.monotonic() + RUNTIME_SECRET_TTL_SECONDS
+        if row and row.get("status") in {"error", "interrupted"}:
+            _retain_runtime_secrets_for_retry(job_id)
         else:
             _runtime_secret_expiry.pop(job_id, None)
             _runtime_secrets.pop(job_id, None)
