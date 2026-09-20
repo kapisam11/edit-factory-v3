@@ -653,9 +653,18 @@ def create_job():
         except (TypeError, ValueError):
             return jsonify({"error": "bpm must be an integer between 40 and 240"}), 400
         allowed_platforms = {"youtube_shorts", "tiktok", "instagram_reels", "square", "youtube"}
+        platform_max_seconds = {
+            "youtube_shorts": 60.0,
+            "tiktok": 180.0,
+            "instagram_reels": 90.0,
+            "square": 90.0,
+            "youtube": 180.0,
+        }
         allowed_edit_types = {"Emotional", "Motivational", "Nostalgic", "Funny", "Dramatic", "Documentary", "Sigma", "Character Analysis", "Tribute", "Storytelling"}
         if platform not in allowed_platforms:
             return jsonify({"error": "Unsupported V3 platform"}), 400
+        if target_seconds > platform_max_seconds[platform]:
+            return jsonify({"error": f"target_seconds must be <= {platform_max_seconds[platform]:g} for {platform}"}), 400
         if not audience or len(audience) > 500:
             return jsonify({"error": "V3 audience must be between 1 and 500 characters"}), 400
         if not 40 <= bpm <= 240:
