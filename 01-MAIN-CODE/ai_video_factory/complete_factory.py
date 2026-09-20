@@ -16,6 +16,7 @@ from .content_factory import (
     plan_source_aware_crop, provider_retry, score_shots, thumbnail_factory_plan,
     trend_research, validate_render,
 )
+from .artifact_readiness import evaluate_artifact
 from .learning_recommender import load_experiments
 from .production_models import ProductionResult
 from .production_pipeline import run_production_pipeline
@@ -352,6 +353,19 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             caption_path=str(Path(primary_result.package_dir) / "captions.ass") if Path(primary_result.package_dir, "captions.ass").exists() else None,
         )
     manifest["upload_packages"] = upload_packages
+    artifact_readiness: Dict[str, Any] = {}
+    for platform, video_path in formats.items():
+        width, height = PLATFORM_LAYOUTS[platform]
+        readiness = evaluate_artifact(
+            video_path,
+            target_seconds=target_seconds,
+            platform_profile={"width": width, "height": height},
+            package_dir=str(root),
+            upload_package_required=True,
+            publish_required=publish_youtube,
+        )
+        artifact_readiness[platform] = readiness.to_dict()
+    manifest["artifact_readiness"] = artifact_readiness
     _write_json(str(root / "complete_factory_manifest.json"), manifest)
 
     if experiment_history_path:
