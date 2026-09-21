@@ -117,6 +117,8 @@ jobs:
           test -f "$PACKAGE_DIR/final.v3.mp4"
           test -f "$PACKAGE_DIR/v3_readiness.json"
           test -f "$PACKAGE_DIR/v3_render_qc.json"
+          test -f "$PACKAGE_DIR/scenes.json"
+          grep -Eqi "HOOK|CONTEXT|ESCALATION|PAYOFF|FINAL|IMPACT" "$PACKAGE_DIR/scenes.json"
           cp "$PACKAGE_DIR/v3_readiness.json" "$RESULTS_DIR/v3-readiness.json"
           cp "$PACKAGE_DIR/v3_render_qc.json" "$RESULTS_DIR/v3-render-qc.json"
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$PACKAGE_DIR/final.v3.mp4"
