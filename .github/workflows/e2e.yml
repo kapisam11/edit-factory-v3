@@ -55,6 +55,8 @@ jobs:
           RESULTS_DIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
+          health_details_code=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/api/health/details")
+          test "$health_details_code" = "401"
           curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE_URL/login" > /dev/null
           curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -L \
             -d "token=$AIVF_DASHBOARD_TOKEN" "$BASE_URL/login" > /dev/null
