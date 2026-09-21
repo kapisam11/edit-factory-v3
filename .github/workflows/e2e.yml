@@ -132,12 +132,12 @@ jobs:
           render_qc = json.loads((root / "v3-render-qc.json").read_text())
           print("V3 READINESS:", json.dumps(readiness, indent=2))
           print("V3 RENDER QC:", json.dumps(render_qc, indent=2))
-          assert readiness["checks"]["MEDIA_VALID"] is True
-          assert readiness["checks"]["MEDIA_CONTRACT_VALID"] is True
-          assert readiness["checks"]["UPLOAD_PACKAGE_VALID"] is True
-          assert readiness["state"] == "UPLOAD_PACKAGE_VALID"
-          assert render_qc["ok"] is True
-          assert render_qc["retention_verification"]["ok"] is True
+          if readiness["checks"].get("MEDIA_VALID") is not True: raise SystemExit(31)
+          if readiness["checks"].get("MEDIA_CONTRACT_VALID") is not True: raise SystemExit(32)
+          if readiness["checks"].get("UPLOAD_PACKAGE_VALID") is not True: raise SystemExit(33)
+          if readiness.get("state") != "UPLOAD_PACKAGE_VALID": raise SystemExit(34)
+          if render_qc.get("ok") is not True: raise SystemExit(35)
+          if (render_qc.get("retention_verification") or {}).get("ok") is not True: raise SystemExit(36)
           PY
       - name: Verify cross-origin writes fail closed
         env:
