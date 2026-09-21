@@ -50,3 +50,13 @@ def test_semantic_qc_disable_is_development_only(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="AIVF_V3_SEMANTIC_QC=0"):
         run_v3_pipeline(str(source), "source footage", str(tmp_path / "package"), target_seconds=8.0)
 
+
+
+def test_semantic_similarity_rewards_concise_matching_scene_evidence(monkeypatch):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    from ai_video_factory.v3_semantics import semantic_similarity
+    score = semantic_similarity(
+        "The part of setup context setup context setup question-provoking frame Hook",
+        "setup context",
+    )
+    assert score >= 0.15
