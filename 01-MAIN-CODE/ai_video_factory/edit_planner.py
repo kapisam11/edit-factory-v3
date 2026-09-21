@@ -131,7 +131,6 @@ def choose_scene(
 
     ranked: List[Tuple[float, Scene]] = []
     semantic_evidence_available = any(_has_semantic_evidence(scene) for scene in available)
-    rejected_for_relevance = 0
     for scene in available:
         lexical = _overlap_score(query, scene.searchable_text)
         query_tokens = set(_tokenize(query))
@@ -148,7 +147,6 @@ def choose_scene(
         # salient but irrelevant scene can never bypass the relevance contract.
         hard_relevance = max(relevance, lexical_evidence)
         if semantic_evidence_available and hard_relevance < min_match_score:
-            rejected_for_relevance += 1
             continue
         salience = score_scene(scene, query)
         duration_fit = min(scene.duration, desired_seconds) / max(scene.duration, desired_seconds, 0.01)
