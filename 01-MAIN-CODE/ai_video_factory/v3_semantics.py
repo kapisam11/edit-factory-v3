@@ -71,7 +71,12 @@ def semantic_similarity(query: str, document: str, model_name: Optional[str] = N
             return max(0.0, min(1.0, score))
         except Exception:
             pass
-    return len(query_words & document_words) / max(1, len(query_words | document_words))
+    overlap = len(query_words & document_words)
+    if not overlap:
+        return 0.0
+    precision = overlap / max(1, len(document_words))
+    recall = overlap / max(1, len(query_words))
+    return 2.0 * precision * recall / max(1e-9, precision + recall)
 
 
 def combined_scores(topic: str, context: str = "", *, semantic_weight: float = 0.65) -> Dict[str, float]:
