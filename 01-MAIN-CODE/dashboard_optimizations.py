@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from flask import Response, abort, has_request_context, jsonify, request, send_file, send_from_directory
+from flask import Response, abort, has_request_context, jsonify, redirect, request, send_from_directory, url_for
 
 from dashboard_cache import HybridCache
 from dashboard_store import DashboardStore, JobAdmissionError
@@ -309,12 +309,9 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         filename = resolved.name if resolved is not None else None
         if not filename:
             return jsonify({"error": "Rendered preview not found"}), 404
-        response = send_file(
-            resolved,
-            mimetype="video/mp4",
-            conditional=True,
-            etag=True,
-            max_age=60,
+        response = redirect(
+            url_for("package_file", name=package.name, filename=resolved.name),
+            code=302,
         )
         response.headers["Cache-Control"] = "private, max-age=60"
         return response
