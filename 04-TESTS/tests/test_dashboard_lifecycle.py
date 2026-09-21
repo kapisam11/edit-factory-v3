@@ -286,7 +286,7 @@ def test_v3_preview_serves_canonical_artifact(monkeypatch, tmp_path):
 
     monkeypatch.setattr(artifact_readiness, "resolve_final_video", lambda _package: final_video)
 
-    response = appmod.app.test_client().get("/api/jobs/job-preview/preview")
+    response = appmod.app.test_client().get("/api/jobs/job-preview/preview", follow_redirects=True)
     assert response.status_code == 200
     assert response.mimetype == "video/mp4"
     assert response.data == b"fake-mp4-bytes"
