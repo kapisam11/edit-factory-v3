@@ -285,9 +285,15 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         except OSError:
             pass
 
+    def _is_media_request() -> bool:
+        path = request.path
+        return path.endswith("/preview") or path.startswith("/api/package/")
+
     @app_module.app.before_request
     def governed_resource_maintenance():
         app_module._cleanup_runtime_secrets()
+        if _is_media_request():
+            return
         _database_cleanup()
 
     @app_module.app.get("/api/jobs/<job_id>/preview")
