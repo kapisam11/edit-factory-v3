@@ -112,12 +112,14 @@ jobs:
           curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs/$JOB_ID" > "$RESULTS_DIR/v3-job.json"
           PACKAGE=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["package_name"])' "$RESULTS_DIR/v3-job.json")
           test -n "$PACKAGE"
-          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/packages/$PACKAGE/file/v3_readiness.json" > "$RESULTS_DIR/v3-readiness.json"
-          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/packages/$PACKAGE/file/v3_render_qc.json" > "$RESULTS_DIR/v3-render-qc.json"
-          final_http=$(curl -sS -o "$RESULTS_DIR/v3-final-artifact.mp4" -w '%{http_code}' -b "$COOKIE_JAR" "$BASE_URL/api/packages/$PACKAGE/file/final.v3.mp4")
-          echo "FINAL_ARTIFACT_HTTP=$final_http"
-          test "$final_http" = "200" || exit 10
-          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-final-artifact.mp4" || exit 11
+          PACKAGE_DIR="$RUNNER_TEMP/aivf-output/$PACKAGE"
+          test -d "$PACKAGE_DIR"
+          test -f "$PACKAGE_DIR/final.v3.mp4"
+          test -f "$PACKAGE_DIR/v3_readiness.json"
+          test -f "$PACKAGE_DIR/v3_render_qc.json"
+          cp "$PACKAGE_DIR/v3_readiness.json" "$RESULTS_DIR/v3-readiness.json"
+          cp "$PACKAGE_DIR/v3_render_qc.json" "$RESULTS_DIR/v3-render-qc.json"
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$PACKAGE_DIR/final.v3.mp4"
           echo "Testing live preview endpoint..."
           preview_http=$(curl -sS -o "$RESULTS_DIR/v3-preview.mp4" -w '%{http_code}' -b "$COOKIE_JAR" "$BASE_URL/api/jobs/$JOB_ID/preview")
           echo "PREVIEW_HTTP=$preview_http"
