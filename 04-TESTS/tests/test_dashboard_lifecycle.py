@@ -269,3 +269,24 @@ def test_worker_exit_after_cancellation_is_terminal(monkeypatch, tmp_path):
     _watch_job_process(appmod, "job-cancel", DeadProcess())
 
     assert appmod.db_get_job("job-cancel")["status"] == "cancelled"
+
+
+def test_v3_preview_serves_canonical_artifact(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+    import ai_video_factory.artifact_readiness as artifact_readiness
+
+    install_dashboard_optimizations(appmod)
+    package = tmp_path / "output" / "job-preview"
+    package.mkdir(parents=True)
+    final_video = package / "final.v3.mp4"
+    final_video.write_bytes(b"fake-mp4-bytes")
+    appmod.db_insert_job("job-preview", "preview", {"topic": "preview", "workflow": "v3"})
+    appmod.db_update_job("job-preview", status="done", step="Complete (V3)", pkg_dir=str(package))
+
+    monkeypatch.setattr(artifact_readiness, "resolve_final_video", lambda _package: final_video)
+
+    response = appmod.app.test_client().get("/api/jobs/job-preview/preview")
+    assert response.status_code == 200
+    assert response.mimetype == "video/mp4"
+    assert response.data == b"fake-mp4-bytes"
