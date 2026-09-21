@@ -299,6 +299,7 @@ def test_v3_preview_endpoint_serves_canonical_final_video(monkeypatch, tmp_path)
     package.mkdir(parents=True, exist_ok=True)
     final_video = package / "final.v3.mp4"
     final_video.write_bytes(b"fake-mp4")
+    monkeypatch.setattr("ai_video_factory.artifact_readiness.probe_media", lambda _path: {"duration": 1.0})
     appmod.db_insert_job("preview-job", "preview", {"topic": "preview", "workflow": "v3"})
     appmod.db_update_job("preview-job", status="done", step="Complete (V3)", pkg_dir=str(package))
 
