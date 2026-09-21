@@ -21,7 +21,7 @@ This document defines release-gating acceptance criteria for the 24 findings fro
 | 15 | Coverage gate | Maintained V3 production surface has a CI coverage floor of at least 80% | `.github/workflows/python-tests.yml` |
 | 16 | Weak strategy tests | All edit types and direct renderer mappings are exercised | `test_v3_strict_hardening.py`, `test_v3_effect_mapping.py` |
 | 17 | Weak adversarial tests | Invalid configuration, fail-closed scene matching, media normalization and render contracts are exercised | `test_v3_strict_hardening.py` |
-| 18 | No scene rejection | Independent relevance confidence is required before salience/role bonuses can select a scene | `edit_planner.choose_scene`, `min_scene_match_score=0.15` |
+| 18 | No scene rejection | Independent relevance confidence is required when semantic scene evidence exists; footage with only generic time-range metadata uses a deterministic visual-salience fallback rather than failing solely because semantic text is unavailable | `edit_planner.choose_scene`, `min_scene_match_score=0.15` |
 | 19 | QC bypass | V3 rejects `skip_qc` unless the explicit development override is present | `v3_pipeline.py` |
 | 20 | PR drift | Production-hardening PR must target `main`, stay mergeable, and pass the release CI suite before release | current hardening PR |
 | 21 | V2 debt | V3 is isolated behind an explicit wrapper/contract and no legacy template path is allowed to silently override V3 | `v3_pipeline.py`, `composer._apply_templates` |
