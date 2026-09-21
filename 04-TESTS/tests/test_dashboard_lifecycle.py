@@ -295,6 +295,8 @@ def test_v3_preview_serves_canonical_artifact(monkeypatch, tmp_path):
 
 def test_v3_preview_endpoint_serves_canonical_final_video(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
     package = Path(appmod.OUTPUT_FOLDER) / "preview-job"
     package.mkdir(parents=True, exist_ok=True)
     final_video = package / "final.v3.mp4"
