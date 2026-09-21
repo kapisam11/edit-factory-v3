@@ -73,6 +73,28 @@ def test_scene_match_uses_visual_fallback_when_only_generic_time_ranges_exist(mo
     assert score > 0
 
 
+
+def test_scene_match_rejects_irrelevant_high_salience_winner(monkeypatch):
+    import ai_video_factory.v3_semantics as semantics
+
+    monkeypatch.setattr(semantics, "_semantic_vector_scores", lambda *args, **kwargs: [0.0])
+    monkeypatch.delenv("AIVF_DISABLE_SEMANTIC", raising=False)
+    scenes = [
+        Scene("relevant", 0, 2, description="ancient volcano eruption", importance_score=0.1, motion_score=0.1),
+        Scene("salient", 2, 4, description="unrelated footage", importance_score=1.0, motion_score=1.0),
+    ]
+    scene, _score = choose_scene(
+        "ancient volcano eruption",
+        scenes,
+        (),
+        2.0,
+        "hook",
+        min_match_score=0.15,
+    )
+    assert scene.id == "relevant"
+
+
+
 def test_scene_index_can_provision_minimum_v3_regions(monkeypatch):
     import ai_video_factory.scene_intelligence as scene_intelligence
 
