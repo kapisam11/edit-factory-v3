@@ -53,8 +53,15 @@ def prune_runtime_secrets():
             job = db_get_job(job_id)
         except Exception:
             continue
-        if not job or job.get("status") in terminal_statuses:
+        if not job:
             runtime_secrets.pop(job_id, None)
+            getattr(_web_app_v3, "_runtime_secret_expiry", {}).pop(job_id, None)
+            continue
+        if job.get("status") in terminal_statuses:
+            expiries = getattr(_web_app_v3, "_runtime_secret_expiry", {})
+            deadline = expiries.get(job_id)
+            if deadline is None:
+                runtime_secrets.pop(job_id, None)
 
 
 __all__ = ["app"]
