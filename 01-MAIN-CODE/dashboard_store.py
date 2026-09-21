@@ -89,6 +89,9 @@ class DashboardStore:
         encoded = json.dumps(params)
 
         def write(conn: sqlite3.Connection) -> None:
+            # Serialize admission with all other writers so quota checks and the
+            # subsequent INSERT cannot race across concurrent dashboard requests.
+            conn.execute("BEGIN IMMEDIATE")
             if max_queued_jobs is not None:
                 queued = int(
                     conn.execute(
