@@ -200,6 +200,32 @@ def test_legacy_preview_resolution_skips_invalid_candidate(tmp_path, monkeypatch
     assert artifact_readiness.resolve_final_video(package).name == "final.mp4"
 
 
+def test_v3_renderer_bridge_forces_legacy_auto_fix_off(monkeypatch):
+    import ai_video_factory.v3_renderer_bridge as bridge
+
+    captured = {}
+
+    def fake_renderer(input_video, topic, package_dir, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(bridge, "run_production_pipeline", fake_renderer)
+    request = bridge.V3RenderRequest(
+        input_video="source.mp4",
+        topic="topic",
+        package_dir="package",
+        target_seconds=8.0,
+        research_summary={"v3_directives": {"blueprint_contract": "3.0.0"}},
+    )
+
+    result = bridge.render_v3(request)
+
+    assert result is not None
+    assert captured["allow_auto_fix"] is False
+    assert captured["finalize_upload_package"] is False
+    assert captured["research_summary"]["v3_directives"]["blueprint_contract"] == "3.0.0"
+
+
 def test_v3_planning_accepts_eight_second_target(monkeypatch):
     monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
     from ai_video_factory.plan import make_idea

@@ -51,6 +51,8 @@ The dashboard includes authenticated queue monitoring and live logs. The hardeni
 - `POST /api/jobs/<job_id>/retry` to requeue a failed or interrupted job.
 - `/api/health` for minimal unauthenticated liveness; authenticated `/api/health/details` for operational media-tool and capacity diagnostics.
 
+Retry credentials are never persisted. Runtime credentials are retained only in bounded process memory. If a process restart or TTL expiry removes a one-off credential, the retry endpoint returns the missing secret-key names and the authenticated operator can submit those values for that retry; the values are not written to SQLite or API job records.
+
 The browser can use the preview endpoint as soon as the job reaches `done`.
 
 ## Security scanning
