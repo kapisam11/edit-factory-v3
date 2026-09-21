@@ -257,8 +257,21 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
                          "recommendation": recommendation.settings, "intelligence": intelligence, "platform": platform, "v3_directives": v3_directives})
     result.plan_path = _write_json(os.path.join(package_dir, "plan.json"), plan_payload)
 
+    # V3 has its own strict render/QC/readiness contract. The legacy
+    # quality-control rules enforce a 30-60s content-production profile and
+    # reject valid V3 contracts such as 8s outputs before V3 QC can run.
+    render_skip_legacy_qc = skip_qc or is_v3
+    render_review = not render_skip_legacy_qc
     try:
-        rendered = compose_short_from_video(source, package_dir, out_file=os.path.join(package_dir, "final.mp4"), review=not skip_qc, auto_fix=allow_auto_fix, model_key=model_key, skip_qc=skip_qc)
+        rendered = compose_short_from_video(
+            source,
+            package_dir,
+            out_file=os.path.join(package_dir, "final.mp4"),
+            review=render_review,
+            auto_fix=allow_auto_fix,
+            model_key=model_key,
+            skip_qc=render_skip_legacy_qc,
+        )
         final_path = os.path.join(package_dir, "final.mp4")
         if rendered and os.path.exists(rendered) and os.path.abspath(rendered) != os.path.abspath(final_path):
             temp_final = final_path + ".partial"; shutil.copyfile(rendered, temp_final); os.replace(temp_final, final_path); rendered = final_path
