@@ -121,58 +121,9 @@ jobs:
           cp "$PACKAGE_DIR/v3_render_qc.json" "$RESULTS_DIR/v3-render-qc.json"
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$PACKAGE_DIR/final.v3.mp4"
           echo "Testing live preview endpoint..."
-          BASE_URL="$BASE_URL" TOKEN="$AIVF_DASHBOARD_TOKEN" JOB_ID="$JOB_ID" OUTPUT="$RESULTS_DIR/v3-preview.mp4" python - <<'PY'
-          import os
-          from pathlib import Path
-          import requests
-
-          base = os.environ["BASE_URL"]
-          token = os.environ["TOKEN"]
-          job_id = os.environ["JOB_ID"]
-          output = Path(os.environ["OUTPUT"])
-          session = requests.Session()
-
-          login = session.post(
-              f"{base}/login",
-              data={"token": token},
-              allow_redirects=True,
-              timeout=15,
-          )
-          print("LOGIN_HTTP=", login.status_code, flush=True)
-          login.raise_for_status()
-
-          preview_url = f"{base}/api/jobs/{job_id}/preview"
-          head = session.head(
-              preview_url,
-              allow_redirects=True,
-              timeout=(10, 15),
-          )
-          print("PREVIEW_HEAD_HTTP=", head.status_code, flush=True)
-          print("PREVIEW_HEAD_URL=", head.url, flush=True)
-          print("PREVIEW_HEAD_HEADERS=", dict(head.headers), flush=True)
-          head.raise_for_status()
-
-          response = session.get(
-              preview_url,
-              allow_redirects=True,
-              stream=True,
-              timeout=(10, 30),
-          )
-          print("PREVIEW_HTTP=", response.status_code, flush=True)
-          print("PREVIEW_FINAL_URL=", response.url, flush=True)
-          print("PREVIEW_HEADERS=", dict(response.headers), flush=True)
-          response.raise_for_status()
-
-          iterator = response.iter_content(chunk_size=64 * 1024)
-          try:
-              first_chunk = next(iterator)
-          finally:
-              response.close()
-          if not first_chunk:
-              raise SystemExit("preview response returned no media bytes")
-          print("PREVIEW_FIRST_CHUNK_BYTES=", len(first_chunk), flush=True)
-          output.write_bytes(first_chunk)
-          PY
+          curl --http1.1 --retry 2 --retry-all-errors --connect-timeout 5 --max-time 60             --fail --silent --show-error             --cookie "$COOKIE_JAR"             --dump-header "$RESULTS_DIR/v3-preview.headers"             --output "$RESULTS_DIR/v3-preview.mp4"             "$BASE_URL/api/jobs/$JOB_ID/preview"
+          test -s "$RESULTS_DIR/v3-preview.mp4"
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4"
           python - <<'PY'
           import json
           import os
