@@ -117,7 +117,10 @@ def choose_scene(
         lexical = _overlap_score(query, scene.searchable_text)
         semantic = semantic_similarity(query, scene.searchable_text)
         relevance = 0.45 * lexical + 0.55 * semantic
-        best_relevance = max(best_relevance, relevance)
+        # Explicit transcript/OCR keyword evidence is itself valid scene relevance.
+        # Keep the blended score for ranking, but do not discard a scene when its
+        # deterministic lexical evidence independently clears the hard gate.
+        best_relevance = max(best_relevance, relevance, lexical)
         salience = score_scene(scene, query)
         duration_fit = min(scene.duration, desired_seconds) / max(scene.duration, desired_seconds, 0.01)
         role_bonus = 0.0
