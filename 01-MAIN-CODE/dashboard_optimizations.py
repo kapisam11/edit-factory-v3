@@ -359,14 +359,28 @@ def install_dashboard_optimizations(app_module: Any) -> None:
             key for key in params.get("_retry_secret_keys", [])
             if key in app_module.SECRET_PARAM_KEYS
         ]
+        # Credentials are never persisted in SQLite. A retry after process restart
+        # may therefore supply the required one-off values explicitly in this
+        # request; they are held only in memory for the bounded retry lifetime.
+        payload = request.get_json(silent=True) if request.is_json else request.form.to_dict()
+        payload = payload if isinstance(payload, dict) else {}
         secrets = dict(app_module.get_runtime_default_secrets())
         retained = getattr(app_module, "_runtime_secrets", {}).get(job_id) or {}
         secrets.update(retained)
-        if required_secret_keys and any(not secrets.get(key) for key in required_secret_keys):
+        provided = {
+            key: str(payload.get(key, "")).strip()
+            for key in required_secret_keys
+            if payload.get(key)
+        }
+        secrets.update(provided)
+        missing_secret_keys = [key for key in required_secret_keys if not secrets.get(key)]
+        if missing_secret_keys:
             return jsonify({
-                "error": "This job used one-off credentials that are no longer available in memory. Re-enter the credentials and create a new job.",
+                "error": "Retry requires credentials that are not currently available. Provide the missing credential fields and retry again.",
                 "job_id": job_id,
                 "status": job.get("status"),
+                "required_secret_keys": required_secret_keys,
+                "missing_secret_keys": missing_secret_keys,
             }), 409
         changed = store.update_job_if_status(
             job_id,
