@@ -89,7 +89,7 @@ jobs:
           response=$(curl --fail-with-body -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -H "Origin: $BASE_URL" -F "topic=setup context setup context setup context" -F "target_seconds=8" -F "workflow=v3" -F "platform=youtube_shorts" -F "audience=integration test viewers" -F "context=setup context setup context" -F "bpm=120" -F "enable_ocr=true" -F "enable_object_detection=false" -F "enable_diarization=false" -F "raw_video=@$RUNNER_TEMP/v3-source.mp4;type=video/mp4" "$BASE_URL/api/jobs")
           ffmpeg -y -ss 3 -i "$RUNNER_TEMP/v3-source.mp4" -frames:v 1 "$RUNNER_TEMP/v3-ocr-check.png" >/dev/null 2>&1
           tesseract "$RUNNER_TEMP/v3-ocr-check.png" stdout 2>/dev/null | tee "$RESULTS_DIR/v3-fixture-ocr.txt"
-          grep -Eiq 'source|footage|answer|setup|evidence|payoff' "$RESULTS_DIR/v3-fixture-ocr.txt"
+          grep -Eiq 'setup|context|people|question|hook' "$RESULTS_DIR/v3-fixture-ocr.txt"
           printf '%s' "$response" > "$RESULTS_DIR/v3-create.json"
           JOB_ID=$(python -c 'import json,sys; print(json.load(sys.stdin)["job_id"])' <<<"$response")
           echo "JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
