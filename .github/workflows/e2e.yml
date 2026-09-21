@@ -116,13 +116,13 @@ jobs:
           curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/packages/$PACKAGE/file/v3_render_qc.json" > "$RESULTS_DIR/v3-render-qc.json"
           final_http=$(curl -sS -o "$RESULTS_DIR/v3-final-artifact.mp4" -w '%{http_code}' -b "$COOKIE_JAR" "$BASE_URL/api/packages/$PACKAGE/file/final.v3.mp4")
           echo "FINAL_ARTIFACT_HTTP=$final_http"
-          test "$final_http" = "200"
-          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-final-artifact.mp4"
+          test "$final_http" = "200" || exit 10
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-final-artifact.mp4" || exit 11
           echo "Testing live preview endpoint..."
           preview_http=$(curl -sS -o "$RESULTS_DIR/v3-preview.mp4" -w '%{http_code}' -b "$COOKIE_JAR" "$BASE_URL/api/jobs/$JOB_ID/preview")
           echo "PREVIEW_HTTP=$preview_http"
-          test "$preview_http" = "200"
-          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4"
+          test "$preview_http" = "200" || exit 20
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4" || exit 21
           python - <<'PY'
           import json
           import os
