@@ -164,6 +164,42 @@ def test_render_contract_normalizes_enforces_and_validates_duration(tmp_path):
     assert report["media"]["height"] == 1920
 
 
+from pathlib import Path
+
+def test_v3_preview_resolution_rejects_corrupt_canonical_and_legacy_fallback(tmp_path, monkeypatch):
+    from ai_video_factory import artifact_readiness
+
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "v3_blueprint.json").write_text("{}", encoding="utf-8")
+    (package / "final.v3.mp4").write_bytes(b"corrupt")
+    (package / "final.mp4").write_bytes(b"valid legacy")
+
+    monkeypatch.setattr(
+        artifact_readiness,
+        "probe_media",
+        lambda path: (_ for _ in ()).throw(ValueError("corrupt media")),
+    )
+    assert artifact_readiness.resolve_final_video(package) is None
+
+
+def test_legacy_preview_resolution_skips_invalid_candidate(tmp_path, monkeypatch):
+    from ai_video_factory import artifact_readiness
+
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final_with_music.mp4").write_bytes(b"bad")
+    (package / "final.mp4").write_bytes(b"good")
+
+    def fake_probe(path):
+        if Path(path).name == "final_with_music.mp4":
+            raise ValueError("bad media")
+        return {"duration": 1.0, "width": 1, "height": 1}
+
+    monkeypatch.setattr(artifact_readiness, "probe_media", fake_probe)
+    assert artifact_readiness.resolve_final_video(package).name == "final.mp4"
+
+
 def test_v3_planning_accepts_eight_second_target(monkeypatch):
     monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
     from ai_video_factory.plan import make_idea
