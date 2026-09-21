@@ -17,11 +17,30 @@ This document records the current evidence state of Edit Factory v3. It intentio
 - Model-provider failures use bounded retries for transient HTTP/transport failures and degrade to deterministic planning when the provider remains unavailable.
 - Docker runs the production WSGI service as the dedicated non-root `aivf` user.
 
-## Current limitations that block release certification
+## Current engineering status
 
-- The fresh pull-request CI run must finish green on the latest hardening head before automated verification can be certified.
-- Repository-only inspection cannot certify artistic quality. A human still needs to visually accept a real rendered V3 output.
-- Target-host cancellation, restart/reconciliation, persistent-volume, TLS/reverse-proxy, and production-secret checks remain deployment acceptance gates.
+The repository-level findings from the September 21 hostile review are closed in the current hardening line:
+
+- Scene relevance is enforced per candidate before ranking.
+- V3 preview resolution is canonical-only and FFprobe-validates the artifact before serving it.
+- OCR E2E fails closed and asserts OCR-derived evidence reaches the scene index.
+- The deployment README newline defect is fixed.
+- Gunicorn uses a finite request timeout aligned with the SSE lifetime cap.
+- Detailed health diagnostics are authenticated; the public health contract is minimal.
+- Total-storage filesystem scans are reconciliation work, throttled separately from the per-job enforcement loop.
+- V3 rendering crosses an explicit V3RenderRequest compatibility adapter that forces legacy auto-fix and legacy package finalization off; a regression test locks that contract.
+- Retry credentials are never persisted. If process-local retry credentials have expired or the process restarted, the authenticated retry endpoint now accepts the required credentials explicitly for that retry and retains them only in bounded process memory.
+
+## Remaining external acceptance gates
+
+These are deployment evidence gates, not unresolved repository defects:
+
+- Run the exact release artifact on the target production host.
+- Verify cancellation/restart reconciliation and no orphan FFmpeg processes.
+- Verify persistent-volume behavior and retention/cleanup on the real host.
+- Verify TLS/reverse-proxy configuration and production cookie settings.
+- Verify production secrets are injected through the deployment environment and are not written to job state.
+- Render a real V3 production input and perform human visual/audio acceptance of the resulting media.
 
 ## Historical notes
 
