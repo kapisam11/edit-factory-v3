@@ -112,10 +112,13 @@ jobs:
           curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs/$JOB_ID" > "$RESULTS_DIR/v3-job.json"
           PACKAGE=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["package_name"])' "$RESULTS_DIR/v3-job.json")
           test -n "$PACKAGE"
-          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs/$JOB_ID/preview" -o "$RESULTS_DIR/v3-preview.mp4"
-          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4"
           curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/packages/$PACKAGE/file/v3_readiness.json" > "$RESULTS_DIR/v3-readiness.json"
           curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/packages/$PACKAGE/file/v3_render_qc.json" > "$RESULTS_DIR/v3-render-qc.json"
+          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/packages/$PACKAGE/file/final.v3.mp4" -o "$RESULTS_DIR/v3-final-artifact.mp4"
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-final-artifact.mp4"
+          echo "Testing live preview endpoint..."
+          curl --fail-with-body -sS -b "$COOKIE_JAR" "$BASE_URL/api/jobs/$JOB_ID/preview" -o "$RESULTS_DIR/v3-preview.mp4"
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4"
           python - <<'PY'
           import json
           import os
