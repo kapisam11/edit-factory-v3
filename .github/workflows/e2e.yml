@@ -123,6 +123,8 @@ jobs:
           root = Path(os.environ["RESULTS_DIR"])
           readiness = json.loads((root / "v3-readiness.json").read_text())
           render_qc = json.loads((root / "v3-render-qc.json").read_text())
+          print("V3 READINESS:", json.dumps(readiness, indent=2))
+          print("V3 RENDER QC:", json.dumps(render_qc, indent=2))
           assert readiness["checks"]["MEDIA_VALID"] is True
           assert readiness["checks"]["MEDIA_CONTRACT_VALID"] is True
           assert readiness["checks"]["UPLOAD_PACKAGE_VALID"] is True
