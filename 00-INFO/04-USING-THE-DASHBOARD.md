@@ -97,7 +97,6 @@ After upgrading, verify the browser control panel itself:
 2. Confirm `default`, `fast`, `package_only`, and `v3` workflow choices appear.
 3. Select V3 and confirm unavailable optional intelligence controls are disabled.
 4. Create a V3 job with a supported raw video.
-4. Create a job with a supported raw video.
 5. Watch queue state and live logs.
 6. Cancel a queued/running job and verify `cancelled`.
 7. Open a completed package and test video, script, thumbnails, and files.
