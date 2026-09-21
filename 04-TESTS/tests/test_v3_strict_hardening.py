@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -164,7 +165,6 @@ def test_render_contract_normalizes_enforces_and_validates_duration(tmp_path):
     assert report["media"]["height"] == 1920
 
 
-from pathlib import Path
 
 def test_v3_preview_resolution_rejects_corrupt_canonical_and_legacy_fallback(tmp_path, monkeypatch):
     from ai_video_factory import artifact_readiness
