@@ -129,6 +129,7 @@ def analyze_video(
     *,
     sample_seconds: float = 2.5,
     max_scenes: int = 240,
+    min_scenes: int = 0,
     enable_ocr: bool = False,
 ) -> List[Scene]:
     """Analyze a source video into coarse scenes.
@@ -142,7 +143,11 @@ def analyze_video(
     duration = _ffprobe_duration(video_path)
 
     step = max(0.5, float(sample_seconds))
-    count = min(max_scenes, max(1, int(math.ceil(duration / step))))
+    requested_min_scenes = max(1, int(min_scenes or 0))
+    count = min(
+        max_scenes,
+        max(requested_min_scenes, max(1, int(math.ceil(duration / step)))),
+    )
     edges = [min(duration, i * duration / count) for i in range(count + 1)]
 
     scenes: List[Scene] = []
