@@ -287,7 +287,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     def _is_media_request() -> bool:
         path = request.path
-        return path.endswith("/preview") or path.startswith("/api/package/")
+        return path.endswith("/preview") or (path.startswith("/api/package/") or path.startswith("/api/packages/"))
 
     @app_module.app.before_request
     def governed_resource_maintenance():
