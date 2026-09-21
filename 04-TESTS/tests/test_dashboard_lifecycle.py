@@ -290,3 +290,18 @@ def test_v3_preview_serves_canonical_artifact(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert response.mimetype == "video/mp4"
     assert response.data == b"fake-mp4-bytes"
+
+
+def test_v3_preview_endpoint_serves_canonical_final_video(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    package = Path(appmod.OUTPUT_FOLDER) / "preview-job"
+    package.mkdir(parents=True, exist_ok=True)
+    final_video = package / "final.v3.mp4"
+    final_video.write_bytes(b"fake-mp4")
+    appmod.db_insert_job("preview-job", "preview", {"topic": "preview", "workflow": "v3"})
+    appmod.db_update_job("preview-job", status="done", step="Complete (V3)", pkg_dir=str(package))
+
+    response = appmod.app.test_client().get("/api/jobs/preview-job/preview")
+    assert response.status_code == 200
+    assert response.data == b"fake-mp4"
+    assert response.mimetype == "video/mp4"
