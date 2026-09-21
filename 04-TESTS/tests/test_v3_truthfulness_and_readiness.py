@@ -60,3 +60,28 @@ def test_semantic_similarity_rewards_concise_matching_scene_evidence(monkeypatch
         "setup context",
     )
     assert score >= 0.15
+
+
+def test_scene_planner_accepts_explicit_ocr_keyword_evidence(monkeypatch):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    from ai_video_factory.edit_planner import choose_scene
+    from ai_video_factory.production_models import Scene
+
+    scene = Scene(
+        id="scene_1",
+        start=0.0,
+        end=2.0,
+        description="clean setup",
+        text=["setup", "context"],
+        importance_score=0.0,
+    )
+    selected, score = choose_scene(
+        "The part of setup context most people miss",
+        [scene],
+        [],
+        2.0,
+        "hook",
+        min_match_score=0.15,
+    )
+    assert selected.id == "scene_1"
+    assert score > 0.0
