@@ -199,6 +199,41 @@ def test_retry_preserves_retained_one_off_secret(monkeypatch, tmp_path):
     assert captured["model_key"] == "one-off-secret"
 
 
+def test_retry_accepts_missing_one_off_secret_without_persisting_it(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+
+    install_dashboard_optimizations(appmod)
+    appmod.db_insert_job(
+        "job-restart-safe-retry",
+        "topic",
+        {"topic": "topic", "workflow": "default", "_retry_secret_keys": ["model_key"]},
+    )
+    appmod.db_update_job("job-restart-safe-retry", status="error", step="failed", error="previous failure")
+    appmod._runtime_secrets.pop("job-restart-safe-retry", None)
+    appmod._runtime_secret_expiry.pop("job-restart-safe-retry", None)
+
+    captured = {}
+
+    def fake_start(job_id, params, secrets):
+        captured.update(secrets)
+        appmod.db_update_job(job_id, status="running", step="started")
+        return True
+
+    monkeypatch.setattr(appmod, "_start_job", fake_start)
+    with appmod.app.test_request_context(
+        "/api/jobs/job-restart-safe-retry/retry",
+        method="POST",
+        json={"model_key": "re-entered-secret"},
+    ):
+        response, status = appmod.app.view_functions["retry_job"]("job-restart-safe-retry")
+
+    assert status == 202
+    assert captured["model_key"] == "re-entered-secret"
+    persisted = appmod.db_get_job("job-restart-safe-retry")["params"]
+    assert "re-entered-secret" not in persisted
+
+
 def test_startup_reconciles_non_terminal_jobs(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
     appmod.db_insert_job("queued", "queued", {"topic": "queued"})
