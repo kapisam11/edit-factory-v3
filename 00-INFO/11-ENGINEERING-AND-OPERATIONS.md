@@ -49,7 +49,7 @@ The dashboard includes authenticated queue monitoring and live logs. The hardeni
 
 - `GET /api/jobs/<job_id>/preview` for the preferred rendered video after completion.
 - `POST /api/jobs/<job_id>/retry` to requeue a failed or interrupted job.
-- `/api/health` for service and media-tool health checks.
+- `/api/health` for minimal unauthenticated liveness; authenticated `/api/health/details` for operational media-tool and capacity diagnostics.
 
 The browser can use the preview endpoint as soon as the job reaches `done`.
 

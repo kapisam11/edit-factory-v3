@@ -7,7 +7,7 @@ workers = 1
 worker_class = "gthread"
 threads = 4
 bind = "0.0.0.0:5000"
-timeout = 0
+timeout = 960  # Finite request lifetime; exceeds the 900s SSE application cap with margin.
 preload_app = False
 
 

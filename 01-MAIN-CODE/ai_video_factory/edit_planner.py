@@ -130,7 +130,6 @@ def choose_scene(
         raise ValueError("No scenes are available for planning")
 
     ranked: List[Tuple[float, Scene]] = []
-    best_relevance = 0.0
     semantic_evidence_available = any(_has_semantic_evidence(scene) for scene in available)
     for scene in available:
         lexical = _overlap_score(query, scene.searchable_text)
@@ -144,9 +143,11 @@ def choose_scene(
         semantic = semantic_similarity(query, scene.searchable_text)
         relevance = 0.45 * lexical + 0.55 * semantic
         # Explicit transcript/OCR keyword evidence is valid scene relevance.
-        # Use query-token recall for the hard gate so broad scene descriptions
-        # cannot dilute a small number of exact, production-relevant matches.
-        best_relevance = max(best_relevance, relevance, lexical_evidence)
+        # The hard gate applies to every candidate before ranking so a highly
+        # salient but irrelevant scene can never bypass the relevance contract.
+        hard_relevance = max(relevance, lexical_evidence)
+        if semantic_evidence_available and hard_relevance < min_match_score:
+            continue
         salience = score_scene(scene, query)
         duration_fit = min(scene.duration, desired_seconds) / max(scene.duration, desired_seconds, 0.01)
         role_bonus = 0.0
@@ -159,8 +160,13 @@ def choose_scene(
         freshness = 0.10
         value = 0.20 * lexical + 0.25 * semantic + 0.25 * salience + 0.15 * duration_fit + role_bonus + freshness
         ranked.append((value, scene))
-    if semantic_evidence_available and best_relevance < min_match_score:
-        raise ValueError(f"No scene meets minimum relevance confidence ({best_relevance:.3f} < {min_match_score:.3f}) for query: {query[:120]}")
+    if not ranked:
+        if semantic_evidence_available:
+            raise ValueError(
+                f"No scene meets minimum relevance confidence "
+                f"({min_match_score:.3f}) for query: {query[:120]}"
+            )
+        raise ValueError(f"No eligible scene is available for query: {query[:120]}")
     ranked.sort(key=lambda item: item[0], reverse=True)
     best_score, best_scene = ranked[0]
     return best_scene, round(float(best_score), 4)

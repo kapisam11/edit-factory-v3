@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -73,6 +74,28 @@ def test_scene_match_uses_visual_fallback_when_only_generic_time_ranges_exist(mo
     assert score > 0
 
 
+
+def test_scene_match_rejects_irrelevant_high_salience_winner(monkeypatch):
+    import ai_video_factory.v3_semantics as semantics
+
+    monkeypatch.setattr(semantics, "_semantic_vector_scores", lambda *args, **kwargs: [0.0])
+    monkeypatch.delenv("AIVF_DISABLE_SEMANTIC", raising=False)
+    scenes = [
+        Scene("relevant", 0, 2, description="ancient volcano eruption", importance_score=0.1, motion_score=0.1),
+        Scene("salient", 2, 4, description="unrelated footage", importance_score=1.0, motion_score=1.0),
+    ]
+    scene, _score = choose_scene(
+        "ancient volcano eruption",
+        scenes,
+        (),
+        2.0,
+        "hook",
+        min_match_score=0.15,
+    )
+    assert scene.id == "relevant"
+
+
+
 def test_scene_index_can_provision_minimum_v3_regions(monkeypatch):
     import ai_video_factory.scene_intelligence as scene_intelligence
 
@@ -140,6 +163,41 @@ def test_render_contract_normalizes_enforces_and_validates_duration(tmp_path):
     assert abs(report["media"]["duration"] - 5.0) <= 0.08
     assert report["media"]["width"] == 1080
     assert report["media"]["height"] == 1920
+
+
+
+def test_v3_preview_resolution_rejects_corrupt_canonical_and_legacy_fallback(tmp_path, monkeypatch):
+    from ai_video_factory import artifact_readiness
+
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "v3_blueprint.json").write_text("{}", encoding="utf-8")
+    (package / "final.v3.mp4").write_bytes(b"corrupt")
+    (package / "final.mp4").write_bytes(b"valid legacy")
+
+    monkeypatch.setattr(
+        artifact_readiness,
+        "probe_media",
+        lambda path: (_ for _ in ()).throw(ValueError("corrupt media")),
+    )
+    assert artifact_readiness.resolve_final_video(package) is None
+
+
+def test_legacy_preview_resolution_skips_invalid_candidate(tmp_path, monkeypatch):
+    from ai_video_factory import artifact_readiness
+
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final_with_music.mp4").write_bytes(b"bad")
+    (package / "final.mp4").write_bytes(b"good")
+
+    def fake_probe(path):
+        if Path(path).name == "final_with_music.mp4":
+            raise ValueError("bad media")
+        return {"duration": 1.0, "width": 1, "height": 1}
+
+    monkeypatch.setattr(artifact_readiness, "probe_media", fake_probe)
+    assert artifact_readiness.resolve_final_video(package).name == "final.mp4"
 
 
 def test_v3_planning_accepts_eight_second_target(monkeypatch):

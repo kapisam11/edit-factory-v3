@@ -34,17 +34,27 @@ class ReadinessReport:
 
 
 def resolve_final_video(package_dir: str | Path) -> Optional[Path]:
-    """Return the canonical completed video artifact for a package."""
+    """Return the first valid completed video artifact for a package.
+
+    V3 packages are canonical-only: once ``v3_blueprint.json`` exists, a
+    legacy filename must never mask a missing or corrupt ``final.v3.mp4``.
+    Every candidate is probed before it can be returned.
+    """
     root = Path(package_dir).resolve()
     if not root.is_dir():
         return None
-    for name in FINAL_VIDEO_CANDIDATES:
+
+    candidates = ("final.v3.mp4",) if (root / "v3_blueprint.json").is_file() else FINAL_VIDEO_CANDIDATES
+    for name in candidates:
         candidate = (root / name).resolve()
         if root not in candidate.parents or not candidate.is_file():
             continue
+        try:
+            probe_media(str(candidate))
+        except Exception:
+            continue
         return candidate
     return None
-
 
 def _highest_state(checks: Mapping[str, bool]) -> str:
     state = "MEDIA_INVALID"

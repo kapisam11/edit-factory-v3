@@ -155,13 +155,21 @@ def test_job_redaction_hides_internal_paths_and_principal(monkeypatch, tmp_path)
     assert "_retry_secret_keys" not in payload["params"]
 
 
-def test_health_reports_runtime_capability_contract(monkeypatch, tmp_path):
+def test_health_is_minimal_and_details_are_available_to_authenticated_wsgi(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
-    response = appmod.app.test_client().get("/api/health")
+    client = appmod.app.test_client()
+
+    response = client.get("/api/health")
     assert response.status_code == 200
-    payload = response.get_json()
-    assert "max_concurrent_jobs" in payload
-    assert set(payload["capabilities"]) == {"ocr", "object_detection", "diarization"}
+    assert response.get_json() == {"status": "ok"}
+
+    detailed = client.get("/api/health/details")
+    assert detailed.status_code == 200
+    payload = detailed.get_json()
+    assert payload["status"] == "ok"
+    assert "disk_free_mb" in payload
+    assert "capabilities" in payload
+
 
 
 def test_retry_preserves_retained_one_off_secret(monkeypatch, tmp_path):

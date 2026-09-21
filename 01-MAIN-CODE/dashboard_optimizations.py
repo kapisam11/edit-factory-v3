@@ -16,6 +16,7 @@ from resource_governor import (
     MAX_RENDER_WALLCLOCK_SECONDS,
     MAX_QUEUED_PER_PRINCIPAL,
     RESOURCE_CHECK_INTERVAL_SECONDS,
+    RESOURCE_RECONCILE_INTERVAL_SECONDS,
     MAX_SSE_LIFETIME_SECONDS,
     ResourceLimitExceeded,
     acquire_sse,
@@ -129,10 +130,13 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     resource_watchdogs: set[str] = set()
 
     def _watch_resource_budget(job_id: str, process: Any) -> None:
-        started = __import__("time").monotonic()
+        clock = __import__("time")
+        started = clock.monotonic()
         deadline = started + MAX_RENDER_WALLCLOCK_SECONDS
+        last_total_storage_scan = 0.0
         while process.is_alive():
-            if __import__("time").monotonic() >= deadline:
+            now = clock.monotonic()
+            if now >= deadline:
                 try:
                     from dashboard_compat import _terminate_process_tree
                     _terminate_process_tree(process)
@@ -153,20 +157,26 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 return
             current = app_module.db_get_job(job_id) or {}
             package_dir = current.get("pkg_dir")
-            if total_storage_bytes(app_module.UPLOAD_FOLDER, app_module.OUTPUT_FOLDER, limit=__import__("resource_governor").MAX_TOTAL_STORAGE_BYTES) > __import__("resource_governor").MAX_TOTAL_STORAGE_BYTES:
-                try:
-                    from dashboard_compat import _terminate_process_tree
-                    _terminate_process_tree(process)
-                except Exception:
+            if now - last_total_storage_scan >= RESOURCE_RECONCILE_INTERVAL_SECONDS:
+                last_total_storage_scan = now
+                if total_storage_bytes(
+                    app_module.UPLOAD_FOLDER,
+                    app_module.OUTPUT_FOLDER,
+                    limit=__import__("resource_governor").MAX_TOTAL_STORAGE_BYTES,
+                ) > __import__("resource_governor").MAX_TOTAL_STORAGE_BYTES:
                     try:
-                        process.terminate()
+                        from dashboard_compat import _terminate_process_tree
+                        _terminate_process_tree(process)
                     except Exception:
-                        pass
-                current = app_module.db_get_job(job_id) or {}
-                if current.get("status") in {"queued", "running", "cancelling"}:
-                    app_module.db_update_job(job_id, status="error", step="resource_limit", error="Total storage quota exceeded")
-                    app_module.db_append_log(job_id, "ERROR", "Total storage quota exceeded")
-                return
+                        try:
+                            process.terminate()
+                        except Exception:
+                            pass
+                    current = app_module.db_get_job(job_id) or {}
+                    if current.get("status") in {"queued", "running", "cancelling"}:
+                        app_module.db_update_job(job_id, status="error", step="resource_limit", error="Total storage quota exceeded")
+                        app_module.db_append_log(job_id, "ERROR", "Total storage quota exceeded")
+                    return
             if package_dir and not job_storage_ok(package_dir):
                 try:
                     from dashboard_compat import _terminate_process_tree
@@ -186,7 +196,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                     )
                     app_module.db_append_log(job_id, "ERROR", "Per-job storage quota exceeded")
                 return
-            __import__("time").sleep(RESOURCE_CHECK_INTERVAL_SECONDS)
+            clock.sleep(RESOURCE_CHECK_INTERVAL_SECONDS)
 
     def governed_start_job(job_id, params, secrets):
         started = original_start_job(job_id, params, secrets)
