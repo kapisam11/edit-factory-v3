@@ -99,12 +99,14 @@ def _has_semantic_evidence(scene: Scene) -> bool:
     """Return whether a scene contains non-generic text that can support relevance matching."""
     transcript = str(scene.transcript or "").strip()
     objects = " ".join(str(item).strip() for item in scene.objects if str(item).strip())
-    text = " ".join(str(item).strip() for item in scene.text if str(item).strip())
+    ocr_text = " ".join(str(item).strip() for item in scene.text if str(item).strip())
     description = str(scene.description or "").strip()
     generic_prefix = "source footage from "
     if description.lower().startswith(generic_prefix):
         description = ""
-    return bool(" ".join(part for part in (description, transcript, objects, text) if part).strip())
+    ocr_tokens = _tokenize(ocr_text)
+    substantive_ocr = len(ocr_tokens) >= 5
+    return bool(" ".join(part for part in (description, transcript, objects) if part).strip()) or substantive_ocr
 
 
 def choose_scene(
