@@ -162,7 +162,14 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     if recommendation.evidence_count == 0: result.warnings.append(f"Learning: {recommendation.reason}")
     _write_json(os.path.join(package_dir, "recommendation.json"), recommendation.__dict__)
 
-    try: scenes = analyze_video(source, sample_seconds=2.5, enable_ocr=enable_ocr)
+    try:
+        minimum_v3_scenes = len(v3_directives.get("clip_plan", [])) if is_v3 else 0
+        scenes = analyze_video(
+            source,
+            sample_seconds=2.5,
+            min_scenes=minimum_v3_scenes,
+            enable_ocr=enable_ocr,
+        )
     except Exception as exc: result.errors.append(f"Scene analysis failed: {exc}"); return result
     if not summary.get("footage_evidence"): summary["footage_evidence"] = _footage_evidence_from_scenes(scenes)
     _merge_footage_evidence_into_scenes(scenes, summary.get("footage_evidence"))
