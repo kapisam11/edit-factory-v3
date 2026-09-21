@@ -274,6 +274,8 @@ def register_dashboard_compat(app):
     @app.before_request
     def lifecycle_maintenance():
         global _LAST_CLEANUP
+        if request.path.endswith("/preview") or request.path.startswith("/api/package/"):
+            return
         _reap_and_dispatch(web_app_v3)
         if os.environ.get("AIVF_DISABLE_AUTO_CLEANUP", "0") != "1":
             with _LIFECYCLE_LOCK:
