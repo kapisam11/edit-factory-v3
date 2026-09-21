@@ -914,6 +914,13 @@ def package_file(name, filename):
 
 @app.route("/api/health")
 def health():
+    """Minimal unauthenticated liveness/readiness response."""
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/health/details")
+def health_details():
+    """Authenticated operational health; detailed capacity data is not public."""
     usage = shutil.disk_usage(UPLOAD_FOLDER)
     return jsonify({
         "status": "ok",
