@@ -201,9 +201,22 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             retention_path = str(package / "final.v3.retention.mp4")
             enforce_retention_events(result.final_video, retention_path, payload.get("retention_map", []))
             os.replace(retention_path, result.final_video)
-            normalized_path = str(package / "final.v3.mp4")
-            normalize_duration(result.final_video, normalized_path, target_seconds)
-            os.replace(normalized_path, result.final_video)
+
+            # The V3 contract has one canonical final artifact. Do not write it
+            # as a temporary alias and then move it back to the legacy renderer
+            # filename; the dashboard/API/package layer must see final.v3.mp4.
+            canonical_final = package / "final.v3.mp4"
+            normalized_path = package / ".final.v3.normalized.mp4"
+            normalize_duration(result.final_video, str(normalized_path), target_seconds)
+            previous_final = Path(result.final_video).resolve()
+            if previous_final != canonical_final.resolve():
+                canonical_final.unlink(missing_ok=True)
+                os.replace(normalized_path, canonical_final)
+                previous_final.unlink(missing_ok=True)
+            else:
+                os.replace(normalized_path, canonical_final)
+            result.final_video = str(canonical_final)
+
             profile = payload["platform_variants"][platform]
             render_report = strict_render_check(
                 result.final_video,
