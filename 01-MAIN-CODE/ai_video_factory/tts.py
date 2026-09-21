@@ -11,6 +11,7 @@ Usage:
 """
 import json
 import logging
+import multiprocessing
 import os
 import shutil
 import subprocess
@@ -125,19 +126,36 @@ def _generate_edge_tts(text: str, out_path: str, voice: Optional[str] = None) ->
     return _validate_audio_output(out_path)
 
 
-def _generate_pyttsx3(text: str, out_path: str) -> str:
-    """Offline fallback using pyttsx3."""
+def _pyttsx3_worker(text: str, out_path: str) -> None:
     import pyttsx3  # type: ignore
     engine = pyttsx3.init()
     engine.setProperty("rate", 165)
     engine.setProperty("volume", 1.0)
     voices = engine.getProperty("voices")
-    for v in voices:
-        if "male" in v.name.lower() or "guy" in v.name.lower():
-            engine.setProperty("voice", v.id)
+    for voice in voices:
+        if "male" in voice.name.lower() or "guy" in voice.name.lower():
+            engine.setProperty("voice", voice.id)
             break
     engine.save_to_file(text, out_path)
     engine.runAndWait()
+
+
+def _generate_pyttsx3(text: str, out_path: str) -> str:
+    """Offline fallback using pyttsx3 with a hard process timeout."""
+    timeout_seconds = max(10, int(os.environ.get("AIVF_PYTTSX3_TIMEOUT_SECONDS", "120")))
+    ctx = multiprocessing.get_context("spawn")
+    process = ctx.Process(target=_pyttsx3_worker, args=(text, out_path), daemon=True)
+    process.start()
+    process.join(timeout_seconds)
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
+        if process.is_alive():
+            process.kill()
+            process.join(5)
+        raise RuntimeError(f"pyttsx3 timed out after {timeout_seconds}s")
+    if process.exitcode != 0:
+        raise RuntimeError(f"pyttsx3 worker exited with code {process.exitcode}")
     return _validate_audio_output(out_path)
 
 

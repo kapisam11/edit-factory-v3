@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 
+class JobAdmissionError(RuntimeError):
+    """Raised when an atomic dashboard admission limit rejects a new job."""
+
+
+
 class DashboardStore:
     """Small, dependency-free SQLite storage service used by the dashboard."""
 
@@ -70,14 +75,52 @@ class DashboardStore:
                 "ON rate_limits(client_ip, ts)"
             )
 
-    def insert_job(self, job_id: str, topic: str, params: dict) -> None:
-        self.write(
-            lambda conn: conn.execute(
+    def insert_job(
+        self,
+        job_id: str,
+        topic: str,
+        params: dict,
+        *,
+        max_queued_jobs: int | None = None,
+        principal: str | None = None,
+        principal_limit: int | None = None,
+    ) -> None:
+        """Insert a queued job while enforcing admission limits in one transaction."""
+        encoded = json.dumps(params)
+
+        def write(conn: sqlite3.Connection) -> None:
+            # Serialize admission with all other writers so quota checks and the
+            # subsequent INSERT cannot race across concurrent dashboard requests.
+            conn.execute("BEGIN IMMEDIATE")
+            if max_queued_jobs is not None:
+                queued = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM jobs WHERE status='queued'"
+                    ).fetchone()[0]
+                )
+                if queued >= int(max_queued_jobs):
+                    raise JobAdmissionError("queue capacity reached")
+            if principal is not None and principal_limit is not None:
+                rows = conn.execute(
+                    "SELECT params FROM jobs WHERE status IN ('queued','running')"
+                ).fetchall()
+                count = 0
+                for row in rows:
+                    try:
+                        payload = json.loads(row["params"] or "{}")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if str(payload.get("_principal", "")) == principal:
+                        count += 1
+                if count >= int(principal_limit):
+                    raise JobAdmissionError("principal queue capacity reached")
+            conn.execute(
                 "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
                 "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                (job_id, topic, json.dumps(params)),
+                (job_id, topic, encoded),
             )
-        )
+
+        self.write(write)
 
     def update_job(self, job_id: str, **kwargs: Any) -> int:
         allowed = {"status", "step", "params", "pkg_dir", "error"}

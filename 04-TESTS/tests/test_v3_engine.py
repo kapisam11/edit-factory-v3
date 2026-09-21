@@ -62,12 +62,12 @@ def test_v3_directives_reach_real_timeline():
             end=float((i + 1) * 3),
             description=(
                 f"Scene {i}: One result-before-context Hook; two setup/obstacle Context; "
-                "three escalation Rising tension; four peak decisive Climax; "
+                "three escalation Rising tension; four momentum action Escalation peak decisive Climax; "
                 "five aftermath Payoff; six final impact Resolution; effort detail curiosity."
             ),
             transcript=(
                 f"Line {i}: result-before-context Hook setup obstacle Context escalation "
-                "Rising tension peak decisive Climax aftermath Payoff final impact Resolution; "
+                "Rising tension momentum action Escalation peak decisive Climax aftermath Payoff final impact Resolution; "
                 "effort detail curiosity."
             ),
             motion_score=0.6,

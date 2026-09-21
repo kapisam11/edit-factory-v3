@@ -64,8 +64,13 @@ def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: 
     }
 
 
-def _build_footage_evidence(input_video: str, enable_ocr: bool) -> Dict[str, Any]:
-    scenes = analyze_video(input_video, sample_seconds=2.5, enable_ocr=enable_ocr)
+def _build_footage_evidence(input_video: str, enable_ocr: bool, min_scenes: int = 0) -> Dict[str, Any]:
+    scenes = analyze_video(
+        input_video,
+        sample_seconds=2.5,
+        min_scenes=max(0, int(min_scenes)),
+        enable_ocr=enable_ocr,
+    )
     ranked = sorted(scenes, key=lambda scene: (scene.importance_score, scene.motion_score, scene.audio_energy), reverse=True)
     return {"scene_count": len(scenes), "top_scenes": [{
         "id": scene.id, "start": round(scene.start, 3), "end": round(scene.end, 3), "description": scene.description,
@@ -159,10 +164,19 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     payload = blueprint.to_dict(); payload["platform"] = platform; payload["audience"] = audience
     _atomic_json_write(blueprint_path, payload)
 
-    if skip_qc and os.environ.get("AIVF_ALLOW_SKIP_QC") != "1":
-        raise ValueError("skip_qc is disabled for strict v3 production; set AIVF_ALLOW_SKIP_QC=1 only for development")
+    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+    qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
+    if skip_qc and (environment not in {"development", "test"} or not qc_override):
+        raise ValueError("skip_qc is disabled for production; use development/test with AIVF_ALLOW_SKIP_QC=1")
+    semantic_qc_disabled = os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0"
+    if semantic_qc_disabled and (environment not in {"development", "test"} or not qc_override):
+        raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
     try:
-        footage_evidence = _build_footage_evidence(input_video, enable_ocr)
+        footage_evidence = _build_footage_evidence(
+            input_video,
+            enable_ocr,
+            min_scenes=len(blueprint.clip_plan),
+        )
     except Exception as exc:
         raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
 
@@ -196,9 +210,22 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             retention_path = str(package / "final.v3.retention.mp4")
             enforce_retention_events(result.final_video, retention_path, payload.get("retention_map", []))
             os.replace(retention_path, result.final_video)
-            normalized_path = str(package / "final.v3.mp4")
-            normalize_duration(result.final_video, normalized_path, target_seconds)
-            os.replace(normalized_path, result.final_video)
+
+            # The V3 contract has one canonical final artifact. Do not write it
+            # as a temporary alias and then move it back to the legacy renderer
+            # filename; the dashboard/API/package layer must see final.v3.mp4.
+            canonical_final = package / "final.v3.mp4"
+            normalized_path = package / ".final.v3.normalized.mp4"
+            normalize_duration(result.final_video, str(normalized_path), target_seconds)
+            previous_final = Path(result.final_video).resolve()
+            if previous_final != canonical_final.resolve():
+                canonical_final.unlink(missing_ok=True)
+                os.replace(normalized_path, canonical_final)
+                previous_final.unlink(missing_ok=True)
+            else:
+                os.replace(normalized_path, canonical_final)
+            result.final_video = str(canonical_final)
+
             profile = payload["platform_variants"][platform]
             render_report = strict_render_check(
                 result.final_video,
@@ -209,7 +236,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 require_independent_retention=True,
             )
             semantic_report = {"ok": True, "mode": "disabled"}
-            if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") != "0":
+            if not semantic_qc_disabled:
                 semantic_report = analyze_render_semantics(result.final_video)
                 if not semantic_report["ok"]:
                     result.errors.extend(

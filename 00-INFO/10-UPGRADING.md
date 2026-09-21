@@ -73,11 +73,13 @@ gunicorn -c 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py wsgi:app
 
 The current browser control panel supports:
 
-- creating production jobs with an optional raw video upload
-- target durations from 15 to 120 seconds
-- the canonical `default`, `fast`, and `package_only` workflows
-- Groq and QC toggles
-- persistent defaults for duration, workflow, Groq, QC, and maximum concurrent jobs
+- creating production jobs with raw-video uploads when required by V3
+- platform-aware target durations from 8 to 180 seconds for V3
+- the canonical `default`, `fast`, `package_only`, and `v3` workflows
+- V3 platform, audience, BPM, edit type, creative context, and runtime capability controls
+- Groq and QC toggles with production-safe bypass policy
+- persistent defaults for duration, workflow, V3 platform/audience/BPM, Groq, QC, and maximum concurrent jobs
+- live preview, retry, queue monitoring, and package inspection
 - in-memory API-key configuration without returning key values from the settings endpoint
 - live job logs and queue/status monitoring
 - real job cancellation
@@ -113,8 +115,8 @@ Before trusting the upgrade, verify the **control panel itself**, not just the P
 
 1. Open the dashboard and confirm settings load.
 2. Confirm the production form uses the current workflow names.
-3. Create a job without a raw video.
-4. Create a job with a supported raw video file.
+3. Select V3 and confirm the platform-aware duration range and optional capability status.
+4. Create a V3 job with a supported raw video file.
 5. Confirm queue/status updates and live logs.
 6. Cancel a running or queued job and confirm it becomes `cancelled`.
 7. Open a completed package and verify the video, files, script, and thumbnails.

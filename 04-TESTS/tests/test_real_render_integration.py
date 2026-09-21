@@ -136,6 +136,7 @@ def test_v3_pipeline_renders_contract_valid_video(tmp_path, monkeypatch):
 
     monkeypatch.setenv("AIVF_ALLOW_SKIP_QC", "1")
     monkeypatch.setenv("AIVF_V3_SEMANTIC_QC", "0")
+    monkeypatch.setenv("AIVF_ENV", "test")
     result = run_v3_pipeline(
         str(source),
         "integration render",

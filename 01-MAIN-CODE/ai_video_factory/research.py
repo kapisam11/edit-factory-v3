@@ -99,8 +99,10 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
     If `use_groq` is True and `groq_api_key` is provided the function will
     attempt an optional Groq-assisted enrichment. Failures are ignored.
     """
+    source_status = {"wikipedia": False, "search": False, "visuals": False, "groq": False}
     summary = {
         "topic": topic,
+        "research_status": source_status,
         "who_what": "",
         "why_care": "",
         "main_conflict": "",
@@ -116,6 +118,7 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
     # 1) Wikipedia extract
     wiki = _fetch_wikipedia_summary(topic)
     if wiki:
+        source_status["wikipedia"] = True
         summary.update({
             "who_what": wiki.get("extract", "")[:800],
             "why_care": f"Because {topic} has notable events, history and community interest.",
@@ -133,6 +136,7 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
 
     # 2) Search results for supporting visuals & trending signal
     results = _duckduckgo_search(topic, limit=8)
+    source_status["search"] = bool(results)
     for r in results:
         url = r.get("url")
         if url:
@@ -146,6 +150,7 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
         # store structured visuals (dicts)
         if vis:
             summary["visuals"] = vis
+            source_status["visuals"] = True
     except Exception:
         # fallback: extract OpenGraph images (best-effort)
         try:
@@ -170,6 +175,7 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
     if use_groq and groq_api_key:
         try:
             _groq_enrich(topic, summary, groq_api_key)
+            source_status["groq"] = bool(summary.get("groq_excerpt"))
         except Exception:
             # ignore Groq failures; the rest of the summary is usable
             pass
@@ -191,6 +197,8 @@ def research_topic(topic: str, use_groq: bool = False, groq_api_key: Optional[st
         if len(unique_visuals) >= 8:
             break
     summary["visuals"] = unique_visuals
+    successful_sources = sum(1 for ok in source_status.values() if ok)
+    summary["research_status"] = {**source_status, "successful_sources": successful_sources, "degraded": successful_sources == 0}
 
     return summary
 

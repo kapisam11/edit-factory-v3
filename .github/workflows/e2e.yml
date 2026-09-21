@@ -17,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg tesseract-ocr
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -27,7 +27,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install dashboard environment
-        run: uv sync --frozen --python 3.12 --extra web --extra dev
+        run: uv sync --frozen --python 3.12 --extra web --extra dev --extra ocr
       - name: Start dashboard
         env:
           FLASK_SECRET_KEY: e2e-session-secret
@@ -76,6 +76,85 @@ jobs:
           assert isinstance(jobs, list)
           queue = json.loads((root / "queue.json").read_text())
           assert "queued" in queue and "running" in queue
+          PY
+      - name: Run real dashboard V3 production flow
+        env:
+          AIVF_DASHBOARD_TOKEN: e2e-dashboard-token
+          BASE_URL: http://127.0.0.1:5000
+          COOKIE_JAR: ${{ runner.temp }}/aivf-cookies.txt
+          RESULTS_DIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          ffmpeg -y -f lavfi -i testsrc=size=1080x1920:rate=24 -f lavfi -i anullsrc=r=48000:cl=mono -t 12 -shortest -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='HOOK CONTEXT ESCALATION PAYOFF FINAL IMPACT':fontcolor=white:borderw=8:bordercolor=black:fontsize=110:x=(w-text_w)/2:y=(h-text_h)/2" -pix_fmt yuv420p -c:v libx264 -c:a aac "$RUNNER_TEMP/v3-source.mp4" >/dev/null 2>&1
+          response=$(curl --fail-with-body -sS -b "$COOKIE_JAR" -c "$COOKIE_JAR" -H "Origin: $BASE_URL" -F "topic=setup context setup context setup context" -F "target_seconds=8" -F "workflow=v3" -F "platform=youtube_shorts" -F "audience=integration test viewers" -F "context=setup context setup context" -F "bpm=120" -F "enable_ocr=true" -F "enable_object_detection=false" -F "enable_diarization=false" -F "raw_video=@$RUNNER_TEMP/v3-source.mp4;type=video/mp4" "$BASE_URL/api/jobs")
+          ffmpeg -y -ss 3 -i "$RUNNER_TEMP/v3-source.mp4" -frames:v 1 "$RUNNER_TEMP/v3-ocr-check.png" >/dev/null 2>&1
+          tesseract "$RUNNER_TEMP/v3-ocr-check.png" stdout 2>/dev/null | tee "$RESULTS_DIR/v3-fixture-ocr.txt" || true
+          printf '%s' "$response" > "$RESULTS_DIR/v3-create.json"
+          JOB_ID=$(python -c 'import json,sys; print(json.load(sys.stdin)["job_id"])' <<<"$response")
+          echo "JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
+          for i in $(seq 1 180); do
+            status=$(curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs/$JOB_ID/status")
+            printf '%s\n' "$status" > "$RESULTS_DIR/v3-status.json"
+            state=$(python -c 'import json,sys; print(json.load(sys.stdin)["status"])' <<<"$status")
+            case "$state" in
+              done) break ;;
+              error|interrupted|cancelled)
+                curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs/$JOB_ID" > "$RESULTS_DIR/v3-job.json"
+                cat "$RESULTS_DIR/v3-job.json"
+                exit 1
+                ;;
+            esac
+            sleep 2
+          done
+          final_state=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$RESULTS_DIR/v3-status.json")
+          test "$final_state" = "done"
+          curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs/$JOB_ID" > "$RESULTS_DIR/v3-job.json"
+          PACKAGE=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["package_name"])' "$RESULTS_DIR/v3-job.json")
+          test -n "$PACKAGE"
+          PACKAGE_DIR="$RUNNER_TEMP/aivf-output/$PACKAGE"
+          test -d "$PACKAGE_DIR"
+          test -f "$PACKAGE_DIR/final.v3.mp4"
+          test -f "$PACKAGE_DIR/v3_readiness.json"
+          test -f "$PACKAGE_DIR/v3_render_qc.json"
+          cp "$PACKAGE_DIR/v3_readiness.json" "$RESULTS_DIR/v3-readiness.json"
+          cp "$PACKAGE_DIR/v3_render_qc.json" "$RESULTS_DIR/v3-render-qc.json"
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$PACKAGE_DIR/final.v3.mp4"
+          echo "Testing live preview endpoint..."
+          set +e
+          curl --http1.1 --retry 2 --retry-all-errors --connect-timeout 5 --max-time 60             --silent --show-error             --cookie "$COOKIE_JAR"             --dump-header "$RESULTS_DIR/v3-preview.headers"             --output "$RESULTS_DIR/v3-preview.mp4"             --write-out '%{http_code}'             "$BASE_URL/api/jobs/$JOB_ID/preview" > "$RESULTS_DIR/v3-preview.code"
+          preview_exit=$?
+          set -e
+          echo "PREVIEW_CURL_EXIT=$preview_exit"
+          echo "PREVIEW_HTTP=$(cat "$RESULTS_DIR/v3-preview.code")"
+          echo "PREVIEW_HEADERS:"
+          cat "$RESULTS_DIR/v3-preview.headers"
+          echo "PREVIEW_BODY_BYTES=$(wc -c < "$RESULTS_DIR/v3-preview.mp4")"
+          head -c 256 "$RESULTS_DIR/v3-preview.mp4" || true
+          echo
+          if test "$preview_exit" -ne 0; then
+            exit 20
+          fi
+          preview_http=$(cat "$RESULTS_DIR/v3-preview.code")
+          if test "$preview_http" != "200"; then
+            exit 21
+          fi
+          test -s "$RESULTS_DIR/v3-preview.mp4"
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RESULTS_DIR"])
+          readiness = json.loads((root / "v3-readiness.json").read_text())
+          render_qc = json.loads((root / "v3-render-qc.json").read_text())
+          print("V3 READINESS:", json.dumps(readiness, indent=2))
+          print("V3 RENDER QC:", json.dumps(render_qc, indent=2))
+          if readiness["checks"].get("MEDIA_VALID") is not True: raise SystemExit(31)
+          if readiness["checks"].get("MEDIA_CONTRACT_VALID") is not True: raise SystemExit(32)
+          if readiness["checks"].get("UPLOAD_PACKAGE_VALID") is not True: raise SystemExit(33)
+          if readiness.get("state") != "UPLOAD_PACKAGE_VALID": raise SystemExit(34)
+          if render_qc.get("ok") is not True: raise SystemExit(35)
+          if (render_qc.get("retention_verification") or {}).get("ok") is not True: raise SystemExit(36)
           PY
       - name: Verify cross-origin writes fail closed
         env:

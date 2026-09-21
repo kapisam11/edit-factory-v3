@@ -29,9 +29,10 @@ def _int_env(name: str, default: int, minimum: int = 1) -> int:
 MAX_TOTAL_STORAGE_BYTES = _int_env("AIVF_MAX_TOTAL_STORAGE_MB", 20_000) * 1024 * 1024
 MAX_JOB_STORAGE_BYTES = _int_env("AIVF_MAX_JOB_DISK_MB", 4_096) * 1024 * 1024
 MAX_QUEUED_PER_PRINCIPAL = _int_env("AIVF_MAX_QUEUED_PER_PRINCIPAL", 5)
-MAX_SSE_CONNECTIONS = _int_env("AIVF_MAX_SSE_CONNECTIONS", 16)
+MAX_SSE_CONNECTIONS = min(3, _int_env("AIVF_MAX_SSE_CONNECTIONS", 2))
 MAX_SSE_LIFETIME_SECONDS = _int_env("AIVF_SSE_MAX_SECONDS", 900)
 MAX_RENDER_WALLCLOCK_SECONDS = _int_env("AIVF_MAX_RENDER_WALLCLOCK_SECONDS", 3_600)
+RESOURCE_CHECK_INTERVAL_SECONDS = max(1.0, float(os.environ.get("AIVF_RESOURCE_CHECK_INTERVAL_SECONDS", "5")))
 
 
 def principal_for_request(request: Any) -> str:
@@ -122,6 +123,7 @@ __all__ = [
     "MAX_SSE_CONNECTIONS",
     "MAX_SSE_LIFETIME_SECONDS",
     "MAX_RENDER_WALLCLOCK_SECONDS",
+    "RESOURCE_CHECK_INTERVAL_SECONDS",
     "principal_for_request",
     "directory_size",
     "total_storage_bytes",

@@ -60,6 +60,43 @@ def test_scene_match_fails_closed_when_semantic_relevance_is_too_low(monkeypatch
         choose_scene("ancient volcano eruption", scenes, (), 2.0, "hook", min_match_score=0.15)
 
 
+def test_scene_match_uses_visual_fallback_when_only_generic_time_ranges_exist(monkeypatch):
+    import ai_video_factory.v3_semantics as semantics
+    monkeypatch.setattr(semantics, "_semantic_vector_scores", lambda *args, **kwargs: [0.0])
+    monkeypatch.delenv("AIVF_DISABLE_SEMANTIC", raising=False)
+    scenes = [
+        Scene("a", 0, 2, description="Source footage from 0.0s to 2.0s", importance_score=0.99, motion_score=0.8),
+        Scene("b", 2, 4, description="Source footage from 2.0s to 4.0s", importance_score=0.01, motion_score=0.1),
+    ]
+    scene, score = choose_scene("ancient volcano eruption", scenes, (), 2.0, "hook", min_match_score=0.15)
+    assert scene.id == "a"
+    assert score > 0
+
+
+def test_scene_index_can_provision_minimum_v3_regions(monkeypatch):
+    import ai_video_factory.scene_intelligence as scene_intelligence
+
+    monkeypatch.setattr(scene_intelligence.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(scene_intelligence, "_ffprobe_duration", lambda _path: 12.0)
+    monkeypatch.setattr(scene_intelligence, "_sample_frames", lambda *args, **kwargs: iter(()))
+    scenes = scene_intelligence.analyze_video("fixture.mp4", min_scenes=6)
+    assert len(scenes) == 6
+    assert scenes[-1].end == 12.0
+
+
+def test_scene_match_ignores_sparse_noisy_ocr_for_rejection(monkeypatch):
+    import ai_video_factory.v3_semantics as semantics
+    monkeypatch.setattr(semantics, "_semantic_vector_scores", lambda *args, **kwargs: [0.0])
+    monkeypatch.delenv("AIVF_DISABLE_SEMANTIC", raising=False)
+    scenes = [
+        Scene("a", 0, 2, description="Source footage from 0.0s to 2.0s", text=["SGALATION PAYO"], importance_score=0.99, motion_score=0.8),
+        Scene("b", 2, 4, description="Source footage from 2.0s to 4.0s", text=["NOISE"], importance_score=0.01, motion_score=0.1),
+    ]
+    scene, score = choose_scene("ancient volcano eruption", scenes, (), 2.0, "hook", min_match_score=0.15)
+    assert scene.id == "a"
+    assert score > 0
+
+
 def test_v3_timeline_uses_exact_blueprint_boundaries(monkeypatch):
     monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
     scenes = [Scene(str(i), i * 2, (i + 1) * 2, description="subject action scene", importance_score=0.9, motion_score=0.8) for i in range(6)]

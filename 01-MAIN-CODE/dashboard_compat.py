@@ -105,7 +105,15 @@ def _watch_job_process(web_app_v3, job_id, process):
     with _LIFECYCLE_LOCK:
         _reconcile_worker_exit(web_app_v3, job_id, process)
         web_app_v3._active_processes.pop(job_id, None)
-        web_app_v3._runtime_secrets.pop(job_id, None)
+        row = web_app_v3.db_get_job(job_id)
+        if row and row.get("status") in {"error", "interrupted"}:
+            retain = getattr(web_app_v3, "_retain_runtime_secrets_for_retry", None)
+            if callable(retain):
+                retain(job_id)
+            else:
+                web_app_v3._runtime_secrets.pop(job_id, None)
+        else:
+            web_app_v3._runtime_secrets.pop(job_id, None)
         invalidate = getattr(web_app_v3, "_invalidate_package_cache", None)
         if callable(invalidate):
             invalidate()
@@ -119,7 +127,15 @@ def _reap_and_dispatch(web_app_v3):
             process.join(timeout=0)
             _reconcile_worker_exit(web_app_v3, job_id, process)
             web_app_v3._active_processes.pop(job_id, None)
-            web_app_v3._runtime_secrets.pop(job_id, None)
+            row = web_app_v3.db_get_job(job_id)
+            if row and row.get("status") in {"error", "interrupted"}:
+                retain = getattr(web_app_v3, "_retain_runtime_secrets_for_retry", None)
+                if callable(retain):
+                    retain(job_id)
+                else:
+                    web_app_v3._runtime_secrets.pop(job_id, None)
+            else:
+                web_app_v3._runtime_secrets.pop(job_id, None)
         capacity = max(1, int(web_app_v3.get_settings()["max_concurrent_jobs"]))
         while sum(1 for p in web_app_v3._active_processes.values() if p.is_alive()) < capacity:
             with web_app_v3.get_db() as conn:
@@ -258,6 +274,8 @@ def register_dashboard_compat(app):
     @app.before_request
     def lifecycle_maintenance():
         global _LAST_CLEANUP
+        if request.path.endswith("/preview") or request.path.startswith("/api/package/") or request.path.startswith("/api/packages/"):
+            return
         _reap_and_dispatch(web_app_v3)
         if os.environ.get("AIVF_DISABLE_AUTO_CLEANUP", "0") != "1":
             with _LIFECYCLE_LOCK:

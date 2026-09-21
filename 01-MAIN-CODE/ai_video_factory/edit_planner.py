@@ -37,11 +37,15 @@ def _tokenize(text: str) -> List[str]:
 
 
 def _overlap_score(a: str, b: str) -> float:
+    """Measure deterministic lexical evidence symmetrically using token-set F1."""
     aa = set(_tokenize(a))
     bb = set(_tokenize(b))
     if not aa or not bb:
         return 0.0
-    return len(aa & bb) / max(1, len(aa))
+    overlap = len(aa & bb)
+    precision = overlap / max(1, len(bb))
+    recall = overlap / max(1, len(aa))
+    return 2.0 * precision * recall / max(1e-9, precision + recall)
 
 
 def _sentences(script: str) -> List[str]:
@@ -91,6 +95,20 @@ def _desired_duration(total: float, index: int, count: int) -> float:
     return max(1.0, total * weights[index] / (sum(weights) or 1.0))
 
 
+def _has_semantic_evidence(scene: Scene) -> bool:
+    """Return whether a scene contains non-generic text that can support relevance matching."""
+    transcript = str(scene.transcript or "").strip()
+    objects = " ".join(str(item).strip() for item in scene.objects if str(item).strip())
+    ocr_text = " ".join(str(item).strip() for item in scene.text if str(item).strip())
+    description = str(scene.description or "").strip()
+    generic_prefix = "source footage from "
+    if description.lower().startswith(generic_prefix):
+        description = ""
+    ocr_tokens = _tokenize(ocr_text)
+    substantive_ocr = len(ocr_tokens) >= 5
+    return bool(" ".join(part for part in (description, transcript, objects) if part).strip()) or substantive_ocr
+
+
 def choose_scene(
     query: str,
     scenes: Sequence[Scene],
@@ -113,11 +131,22 @@ def choose_scene(
 
     ranked: List[Tuple[float, Scene]] = []
     best_relevance = 0.0
+    semantic_evidence_available = any(_has_semantic_evidence(scene) for scene in available)
     for scene in available:
         lexical = _overlap_score(query, scene.searchable_text)
+        query_tokens = set(_tokenize(query))
+        scene_tokens = set(_tokenize(scene.searchable_text))
+        lexical_evidence = (
+            len(query_tokens & scene_tokens) / max(1, len(query_tokens))
+            if query_tokens
+            else 0.0
+        )
         semantic = semantic_similarity(query, scene.searchable_text)
         relevance = 0.45 * lexical + 0.55 * semantic
-        best_relevance = max(best_relevance, relevance)
+        # Explicit transcript/OCR keyword evidence is valid scene relevance.
+        # Use query-token recall for the hard gate so broad scene descriptions
+        # cannot dilute a small number of exact, production-relevant matches.
+        best_relevance = max(best_relevance, relevance, lexical_evidence)
         salience = score_scene(scene, query)
         duration_fit = min(scene.duration, desired_seconds) / max(scene.duration, desired_seconds, 0.01)
         role_bonus = 0.0
@@ -130,7 +159,7 @@ def choose_scene(
         freshness = 0.10
         value = 0.20 * lexical + 0.25 * semantic + 0.25 * salience + 0.15 * duration_fit + role_bonus + freshness
         ranked.append((value, scene))
-    if best_relevance < min_match_score:
+    if semantic_evidence_available and best_relevance < min_match_score:
         raise ValueError(f"No scene meets minimum relevance confidence ({best_relevance:.3f} < {min_match_score:.3f}) for query: {query[:120]}")
     ranked.sort(key=lambda item: item[0], reverse=True)
     best_score, best_scene = ranked[0]

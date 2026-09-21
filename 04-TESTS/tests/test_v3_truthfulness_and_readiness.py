@@ -40,3 +40,48 @@ def test_artifact_readiness_stops_at_media_contract(monkeypatch, tmp_path):
     assert report.checks["MEDIA_CONTRACT_VALID"] is True
     assert report.checks["UPLOAD_PACKAGE_VALID"] is False
     assert report.checks["PUBLISH_READY"] is False
+
+def test_semantic_qc_disable_is_development_only(monkeypatch, tmp_path):
+    source = tmp_path / "input.mp4"
+    source.write_bytes(b"x")
+    monkeypatch.setenv("AIVF_V3_SEMANTIC_QC", "0")
+    monkeypatch.delenv("AIVF_ENV", raising=False)
+    from ai_video_factory.v3_pipeline import run_v3_pipeline
+    with pytest.raises(ValueError, match="AIVF_V3_SEMANTIC_QC=0"):
+        run_v3_pipeline(str(source), "source footage", str(tmp_path / "package"), target_seconds=8.0)
+
+
+
+def test_semantic_similarity_rewards_concise_matching_scene_evidence(monkeypatch):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    from ai_video_factory.v3_semantics import semantic_similarity
+    score = semantic_similarity(
+        "The part of setup context setup context setup question-provoking frame Hook",
+        "setup context",
+    )
+    assert score >= 0.15
+
+
+def test_scene_planner_accepts_explicit_ocr_keyword_evidence(monkeypatch):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    from ai_video_factory.edit_planner import choose_scene
+    from ai_video_factory.production_models import Scene
+
+    scene = Scene(
+        id="scene_1",
+        start=0.0,
+        end=2.0,
+        description="clean setup",
+        text=["setup", "context"],
+        importance_score=0.0,
+    )
+    selected, score = choose_scene(
+        "The part of setup context most people miss",
+        [scene],
+        [],
+        2.0,
+        "hook",
+        min_match_score=0.15,
+    )
+    assert selected.id == "scene_1"
+    assert score > 0.0

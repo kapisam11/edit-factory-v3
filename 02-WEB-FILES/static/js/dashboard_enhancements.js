@@ -34,6 +34,22 @@
         document.getElementById('retryAction')?.addEventListener('click', retryCurrentJob);
     }
 
+    function applyV3Capabilities(capabilities) {
+        const mappings = [
+            ['enable_ocr', 'ocr', 'OCR analysis'],
+            ['enable_object_detection', 'object_detection', 'Object detection'],
+            ['enable_diarization', 'diarization', 'Speaker diarization'],
+        ];
+        mappings.forEach(([id, key, label]) => {
+            const input = document.getElementById(id);
+            if (!input) return;
+            const available = capabilities && capabilities[key] === true;
+            input.disabled = !available || document.getElementById('workflow')?.value !== 'v3';
+            if (!available) input.checked = false;
+            const labelEl = input.closest('.toggle')?.querySelector('.toggle-label');
+            if (labelEl) labelEl.textContent = available ? label : (label + ' (not installed)');
+        });
+    }
     async function refreshHealth() {
         try {
             const res = await fetch('/api/health', { cache: 'no-store' });
@@ -42,7 +58,8 @@
             if (!el) return;
             const text = el.querySelector('.system-status-text');
             if (!res.ok || data.status !== 'ok') throw new Error('health check failed');
-            text.textContent = `${data.ffmpeg_available ? 'Ready' : 'FFmpeg missing'} · ${data.active_jobs}/${data.max_concurrent_jobs} active`;
+            text.textContent = `${data.ffmpeg_available ? 'Ready' : 'FFmpeg missing'} · ${data.active_jobs}/${data.max_concurrent_jobs ?? '?'} active`;
+            applyV3Capabilities(data.capabilities || {});
             el.title = `Free disk: ${data.disk_free_mb} MB · FFprobe: ${data.ffprobe_available ? 'available' : 'missing'}`;
             el.classList.toggle('error', !data.ffmpeg_available || !data.ffprobe_available);
         } catch (_) {
