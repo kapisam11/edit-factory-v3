@@ -121,7 +121,24 @@ jobs:
           cp "$PACKAGE_DIR/v3_render_qc.json" "$RESULTS_DIR/v3-render-qc.json"
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$PACKAGE_DIR/final.v3.mp4"
           echo "Testing live preview endpoint..."
-          curl --http1.1 --retry 2 --retry-all-errors --connect-timeout 5 --max-time 60             --fail --silent --show-error             --cookie "$COOKIE_JAR"             --dump-header "$RESULTS_DIR/v3-preview.headers"             --output "$RESULTS_DIR/v3-preview.mp4"             "$BASE_URL/api/jobs/$JOB_ID/preview"
+          set +e
+          curl --http1.1 --retry 2 --retry-all-errors --connect-timeout 5 --max-time 60             --silent --show-error             --cookie "$COOKIE_JAR"             --dump-header "$RESULTS_DIR/v3-preview.headers"             --output "$RESULTS_DIR/v3-preview.mp4"             --write-out '%{http_code}'             "$BASE_URL/api/jobs/$JOB_ID/preview" > "$RESULTS_DIR/v3-preview.code"
+          preview_exit=$?
+          set -e
+          echo "PREVIEW_CURL_EXIT=$preview_exit"
+          echo "PREVIEW_HTTP=$(cat "$RESULTS_DIR/v3-preview.code")"
+          echo "PREVIEW_HEADERS:"
+          cat "$RESULTS_DIR/v3-preview.headers"
+          echo "PREVIEW_BODY_BYTES=$(wc -c < "$RESULTS_DIR/v3-preview.mp4")"
+          head -c 256 "$RESULTS_DIR/v3-preview.mp4" || true
+          echo
+          if test "$preview_exit" -ne 0; then
+            exit 20
+          fi
+          preview_http=$(cat "$RESULTS_DIR/v3-preview.code")
+          if test "$preview_http" != "200"; then
+            exit 21
+          fi
           test -s "$RESULTS_DIR/v3-preview.mp4"
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4"
           python - <<'PY'
