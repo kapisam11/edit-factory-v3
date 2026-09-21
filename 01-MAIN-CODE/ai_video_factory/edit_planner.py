@@ -95,6 +95,18 @@ def _desired_duration(total: float, index: int, count: int) -> float:
     return max(1.0, total * weights[index] / (sum(weights) or 1.0))
 
 
+def _has_semantic_evidence(scene: Scene) -> bool:
+    """Return whether a scene contains non-generic text that can support relevance matching."""
+    transcript = str(scene.transcript or "").strip()
+    objects = " ".join(str(item).strip() for item in scene.objects if str(item).strip())
+    text = " ".join(str(item).strip() for item in scene.text if str(item).strip())
+    description = str(scene.description or "").strip()
+    generic_prefix = "source footage from "
+    if description.lower().startswith(generic_prefix):
+        description = ""
+    return bool(" ".join(part for part in (description, transcript, objects, text) if part).strip())
+
+
 def choose_scene(
     query: str,
     scenes: Sequence[Scene],
@@ -117,6 +129,7 @@ def choose_scene(
 
     ranked: List[Tuple[float, Scene]] = []
     best_relevance = 0.0
+    semantic_evidence_available = any(_has_semantic_evidence(scene) for scene in available)
     for scene in available:
         lexical = _overlap_score(query, scene.searchable_text)
         query_tokens = set(_tokenize(query))
@@ -144,7 +157,7 @@ def choose_scene(
         freshness = 0.10
         value = 0.20 * lexical + 0.25 * semantic + 0.25 * salience + 0.15 * duration_fit + role_bonus + freshness
         ranked.append((value, scene))
-    if best_relevance < min_match_score:
+    if semantic_evidence_available and best_relevance < min_match_score:
         raise ValueError(f"No scene meets minimum relevance confidence ({best_relevance:.3f} < {min_match_score:.3f}) for query: {query[:120]}")
     ranked.sort(key=lambda item: item[0], reverse=True)
     best_score, best_scene = ranked[0]
