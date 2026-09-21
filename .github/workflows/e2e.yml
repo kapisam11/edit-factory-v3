@@ -121,22 +121,49 @@ jobs:
           cp "$PACKAGE_DIR/v3_render_qc.json" "$RESULTS_DIR/v3-render-qc.json"
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$PACKAGE_DIR/final.v3.mp4"
           echo "Testing live preview endpoint..."
-          set +e
-          curl --http1.1 --retry 2 --retry-all-errors --connect-timeout 5 --max-time 60 -sS             -D "$RESULTS_DIR/v3-preview.headers"             -o "$RESULTS_DIR/v3-preview.mp4"             -w '%{http_code}'             -b "$COOKIE_JAR"             "$BASE_URL/api/jobs/$JOB_ID/preview" > "$RESULTS_DIR/v3-preview.code"
-          preview_exit=$?
-          set -e
-          preview_http=$(cat "$RESULTS_DIR/v3-preview.code")
-          echo "PREVIEW_EXIT=$preview_exit"
-          echo "PREVIEW_HTTP=$preview_http"
-          echo "PREVIEW_HEADERS:"
-          cat "$RESULTS_DIR/v3-preview.headers"
-          ls -lh "$RESULTS_DIR/v3-preview.mp4" || true
-          if test "$preview_exit" -ne 0; then
-            echo "Preview transport failed"
-            exit 20
-          fi
-          test "$preview_http" = "200" || exit 21
-          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4" || exit 22
+          BASE_URL="$BASE_URL" TOKEN="$AIVF_DASHBOARD_TOKEN" JOB_ID="$JOB_ID" OUTPUT="$RESULTS_DIR/v3-preview.mp4" python - <<'PY'
+          import os
+          from pathlib import Path
+          import requests
+
+          base = os.environ["BASE_URL"]
+          token = os.environ["TOKEN"]
+          job_id = os.environ["JOB_ID"]
+          output = Path(os.environ["OUTPUT"])
+
+          session = requests.Session()
+          login = session.post(
+              f"{base}/login",
+              data={"token": token},
+              allow_redirects=True,
+              timeout=15,
+          )
+          login.raise_for_status()
+
+          response = session.get(
+              f"{base}/api/jobs/{job_id}/preview",
+              allow_redirects=True,
+              stream=True,
+              timeout=(10, 120),
+          )
+          print("PREVIEW_HTTP=", response.status_code)
+          print("PREVIEW_FINAL_URL=", response.url)
+          print("PREVIEW_HEADERS=", dict(response.headers))
+          response.raise_for_status()
+
+          total = 0
+          with output.open("wb") as handle:
+              for chunk in response.iter_content(chunk_size=1024 * 1024):
+                  if chunk:
+                      handle.write(chunk)
+                      total += len(chunk)
+
+          print("PREVIEW_BYTES=", total)
+          if total <= 0:
+              raise SystemExit("preview response was empty")
+          if output.stat().st_size != total:
+              raise SystemExit("preview byte count mismatch")
+          PY
           python - <<'PY'
           import json
           import os
