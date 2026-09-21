@@ -37,11 +37,15 @@ def _tokenize(text: str) -> List[str]:
 
 
 def _overlap_score(a: str, b: str) -> float:
+    """Measure deterministic lexical evidence symmetrically using token-set F1."""
     aa = set(_tokenize(a))
     bb = set(_tokenize(b))
     if not aa or not bb:
         return 0.0
-    return len(aa & bb) / max(1, len(aa))
+    overlap = len(aa & bb)
+    precision = overlap / max(1, len(bb))
+    recall = overlap / max(1, len(aa))
+    return 2.0 * precision * recall / max(1e-9, precision + recall)
 
 
 def _sentences(script: str) -> List[str]:
