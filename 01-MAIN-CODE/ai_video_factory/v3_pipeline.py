@@ -64,8 +64,13 @@ def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: 
     }
 
 
-def _build_footage_evidence(input_video: str, enable_ocr: bool) -> Dict[str, Any]:
-    scenes = analyze_video(input_video, sample_seconds=2.5, enable_ocr=enable_ocr)
+def _build_footage_evidence(input_video: str, enable_ocr: bool, min_scenes: int = 0) -> Dict[str, Any]:
+    scenes = analyze_video(
+        input_video,
+        sample_seconds=2.5,
+        min_scenes=max(0, int(min_scenes)),
+        enable_ocr=enable_ocr,
+    )
     ranked = sorted(scenes, key=lambda scene: (scene.importance_score, scene.motion_score, scene.audio_energy), reverse=True)
     return {"scene_count": len(scenes), "top_scenes": [{
         "id": scene.id, "start": round(scene.start, 3), "end": round(scene.end, 3), "description": scene.description,
@@ -167,7 +172,11 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     if semantic_qc_disabled and (environment not in {"development", "test"} or not qc_override):
         raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
     try:
-        footage_evidence = _build_footage_evidence(input_video, enable_ocr)
+        footage_evidence = _build_footage_evidence(
+            input_video,
+            enable_ocr,
+            min_scenes=len(blueprint.clip_plan),
+        )
     except Exception as exc:
         raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
 
