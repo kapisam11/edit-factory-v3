@@ -73,6 +73,16 @@ def test_scene_match_uses_visual_fallback_when_only_generic_time_ranges_exist(mo
     assert score > 0
 
 
+def test_scene_index_can_provision_minimum_v3_regions(monkeypatch):
+    import ai_video_factory.scene_intelligence as scene_intelligence
+
+    monkeypatch.setattr(scene_intelligence, "_ffprobe_duration", lambda _path: 12.0)
+    monkeypatch.setattr(scene_intelligence, "_sample_frames", lambda *args, **kwargs: iter(()))
+    scenes = scene_intelligence.analyze_video("fixture.mp4", min_scenes=6)
+    assert len(scenes) == 6
+    assert scenes[-1].end == 12.0
+
+
 def test_scene_match_ignores_sparse_noisy_ocr_for_rejection(monkeypatch):
     import ai_video_factory.v3_semantics as semantics
     monkeypatch.setattr(semantics, "_semantic_vector_scores", lambda *args, **kwargs: [0.0])
