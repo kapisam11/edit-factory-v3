@@ -52,7 +52,7 @@
     }
     async function refreshHealth() {
         try {
-            const res = await fetch('/api/health', { cache: 'no-store' });
+            const res = await fetch('/api/health/details', { cache: 'no-store' });
             const data = await res.json();
             const el = document.getElementById('systemStatus');
             if (!el) return;
@@ -104,11 +104,30 @@
         }
         try {
             enhancementTerminal = false;
-            const res = await fetch(`/api/jobs/${encodeURIComponent(enhancementJobId)}/retry`, {
+            let res = await fetch(`/api/jobs/${encodeURIComponent(enhancementJobId)}/retry`, {
                 method: 'POST',
                 headers: { 'Origin': window.location.origin },
             });
-            const data = await res.json().catch(() => ({}));
+            let data = await res.json().catch(() => ({}));
+            if (!res.ok && Array.isArray(data.missing_secret_keys) && data.missing_secret_keys.length) {
+                const credentials = {};
+                for (const key of data.missing_secret_keys) {
+                    const value = window.prompt(`Enter the credential required to retry this job (${key}):`);
+                    if (value === null || !value.trim()) {
+                        throw new Error('Retry cancelled: required credential was not supplied.');
+                    }
+                    credentials[key] = value.trim();
+                }
+                res = await fetch(`/api/jobs/${encodeURIComponent(enhancementJobId)}/retry`, {
+                    method: 'POST',
+                    headers: {
+                        'Origin': window.location.origin,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(credentials),
+                });
+                data = await res.json().catch(() => ({}));
+            }
             if (!res.ok) throw new Error(data.error || `Retry failed (${res.status})`);
             connectToLogs(enhancementJobId);
             if (typeof refreshQueue === 'function') refreshQueue();
