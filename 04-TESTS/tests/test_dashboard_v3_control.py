@@ -17,6 +17,7 @@ def _load_dashboard(monkeypatch, tmp_path):
 
 def test_dashboard_queues_full_v3_configuration(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
+    monkeypatch.setattr(appmod, "_runtime_capabilities", lambda: {"ocr": True, "object_detection": True, "diarization": True})
     captured = {}
 
     fake_upload = Path(appmod.UPLOAD_FOLDER) / "input.mp4"
