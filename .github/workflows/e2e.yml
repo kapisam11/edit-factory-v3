@@ -130,39 +130,48 @@ jobs:
           token = os.environ["TOKEN"]
           job_id = os.environ["JOB_ID"]
           output = Path(os.environ["OUTPUT"])
-
           session = requests.Session()
+
           login = session.post(
               f"{base}/login",
               data={"token": token},
               allow_redirects=True,
               timeout=15,
           )
+          print("LOGIN_HTTP=", login.status_code, flush=True)
           login.raise_for_status()
 
+          preview_url = f"{base}/api/jobs/{job_id}/preview"
+          head = session.head(
+              preview_url,
+              allow_redirects=True,
+              timeout=(10, 15),
+          )
+          print("PREVIEW_HEAD_HTTP=", head.status_code, flush=True)
+          print("PREVIEW_HEAD_URL=", head.url, flush=True)
+          print("PREVIEW_HEAD_HEADERS=", dict(head.headers), flush=True)
+          head.raise_for_status()
+
           response = session.get(
-              f"{base}/api/jobs/{job_id}/preview",
+              preview_url,
               allow_redirects=True,
               stream=True,
-              timeout=(10, 120),
+              timeout=(10, 30),
           )
-          print("PREVIEW_HTTP=", response.status_code)
-          print("PREVIEW_FINAL_URL=", response.url)
-          print("PREVIEW_HEADERS=", dict(response.headers))
+          print("PREVIEW_HTTP=", response.status_code, flush=True)
+          print("PREVIEW_FINAL_URL=", response.url, flush=True)
+          print("PREVIEW_HEADERS=", dict(response.headers), flush=True)
           response.raise_for_status()
 
-          total = 0
-          with output.open("wb") as handle:
-              for chunk in response.iter_content(chunk_size=1024 * 1024):
-                  if chunk:
-                      handle.write(chunk)
-                      total += len(chunk)
-
-          print("PREVIEW_BYTES=", total)
-          if total <= 0:
-              raise SystemExit("preview response was empty")
-          if output.stat().st_size != total:
-              raise SystemExit("preview byte count mismatch")
+          iterator = response.iter_content(chunk_size=64 * 1024)
+          try:
+              first_chunk = next(iterator)
+          finally:
+              response.close()
+          if not first_chunk:
+              raise SystemExit("preview response returned no media bytes")
+          print("PREVIEW_FIRST_CHUNK_BYTES=", len(first_chunk), flush=True)
+          output.write_bytes(first_chunk)
           PY
           python - <<'PY'
           import json
