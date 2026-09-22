@@ -71,7 +71,7 @@ jobs:
         /tmp/aivf-wheel-test/bin/aivf-v3 --help
         /tmp/aivf-wheel-test/bin/python -c "import os; import ai_video_factory; import app.cli; import app.web_app_v3; from app import wsgi; assert os.path.isdir(app.web_app_v3.app.template_folder); assert os.path.isdir(app.web_app_v3.app.static_folder); assert wsgi.app is app.web_app_v3.app; response=wsgi.app.test_client().get('/api/health'); assert response.status_code == 200; print('isolated wheel runtime ok')"
         /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); names={ep.name:ep.value for ep in group}; assert names['aivf']=='app.cli:main'; assert names['aivf-content']=='app.content_factory_cli:main'; assert names['aivf-v3']=='ai_video_factory.v3_cli:main'"
-    - name: Run tests with V3 core coverage gate
+    - name: Run full test suite with explicit coverage accounting
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
       run: >-
@@ -85,21 +85,25 @@ jobs:
         --cov=ai_video_factory.effects_engine
         --cov=ai_video_factory.render_engine
         --cov=ai_video_factory.composer
-        --cov-report=term-missing --cov-report=xml --cov-fail-under=80
-
-    - name: Report production-boundary coverage
-      env:
-        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
-      run: >-
-        uv run pytest -q 04-TESTS/tests
         --cov=dashboard_auth
         --cov=dashboard_worker
         --cov=dashboard_compat
         --cov=dashboard_optimizations
         --cov=resource_governor
         --cov-report=term-missing
-        --cov-report=xml:coverage-production-boundary.xml
+        --cov-report=xml
         --cov-fail-under=0
+
+    - name: Enforce V3 core coverage gate
+      run: >-
+        uv run coverage report
+        --include='01-MAIN-CODE/ai_video_factory/v3_engine.py,01-MAIN-CODE/ai_video_factory/v3_semantics.py,01-MAIN-CODE/ai_video_factory/v3_quality.py,01-MAIN-CODE/ai_video_factory/v3_capabilities.py,01-MAIN-CODE/ai_video_factory/v3_pipeline.py,01-MAIN-CODE/ai_video_factory/edit_planner.py,01-MAIN-CODE/ai_video_factory/effects_engine.py,01-MAIN-CODE/ai_video_factory/render_engine.py,01-MAIN-CODE/ai_video_factory/composer.py'
+        --fail-under=80
+
+    - name: Report production-boundary coverage
+      run: >-
+        uv run coverage report
+        --include='01-MAIN-CODE/dashboard_auth.py,01-MAIN-CODE/dashboard_worker.py,01-MAIN-CODE/dashboard_compat.py,01-MAIN-CODE/dashboard_optimizations.py,01-MAIN-CODE/resource_governor.py'
 
   windows-smoke:
     runs-on: windows-latest
