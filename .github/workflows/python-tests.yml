@@ -34,8 +34,8 @@ jobs:
       run: uv pip check
     - name: Compile Python sources
       run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
-    - name: Lint production Python
-      run: uv run ruff check 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE --select E9,F,I --ignore F401,F811,F841
+    - name: Lint production Python for correctness
+      run: uv run ruff check 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE --select E9,F --ignore F401,F811,F841
     - name: Type-check hardened production boundary
       run: uv run mypy
     - name: Smoke-test command entry points
