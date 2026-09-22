@@ -363,7 +363,7 @@ def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
             vo_path,
             "-filter_complex",
             "[0:a:0]volume=0.35[program];"
-            "[1:a:0]volume=1.0[voice];"
+            "[1:a:0]apad,atrim=duration=" + f"{duration:.3f}" + "[voice];"
             "[program][voice]amix=inputs=2:duration=first:dropout_transition=2[aout]",
             "-map",
             "0:v:0",
@@ -382,6 +382,8 @@ def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
             output,
         ]
     else:
+        # Preserve source duration when the video has no program audio.
+        # apad fills a short voiceover; the explicit -t trims any overrun.
         cmd = [
             "ffmpeg",
             "-y",
@@ -389,17 +391,20 @@ def mix_voiceover(video_path: str, vo_path: str, output_path: str) -> None:
             video_path,
             "-i",
             vo_path,
+            "-filter_complex",
+            "[1:a:0]apad[aout]",
             "-map",
             "0:v:0",
             "-map",
-            "1:a:0",
+            "[aout]",
             "-c:v",
             "copy",
             "-c:a",
             "aac",
             "-b:a",
             "192k",
-            "-shortest",
+            "-t",
+            f"{duration:.3f}",
             "-movflags",
             "+faststart",
             output,
