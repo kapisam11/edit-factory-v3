@@ -36,9 +36,19 @@ def _login_allowed(client: str) -> bool:
             cutoff = now - _LOGIN_WINDOW_SECONDS
             for key in [
                 key for key, timestamps in _login_attempts.items()
-                if not any(ts >= cutoff for ts in timestamps)
+                if key != client and not any(ts >= cutoff for ts in timestamps)
             ]:
                 _login_attempts.pop(key, None)
+            while len(_login_attempts) > 1024:
+                evictable = [
+                    (key, max(timestamps))
+                    for key, timestamps in _login_attempts.items()
+                    if key != client and timestamps
+                ]
+                if not evictable:
+                    break
+                oldest_client = min(evictable, key=lambda item: item[1])[0]
+                _login_attempts.pop(oldest_client, None)
         return True
 
 
