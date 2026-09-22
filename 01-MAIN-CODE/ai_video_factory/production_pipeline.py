@@ -215,12 +215,20 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
         try:
             from .advanced_intelligence import extract_faces
             import cv2  # type: ignore
-            cap = cv2.VideoCapture(source); fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0); frame_count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
-            duration = frame_count / fps if fps > 0 else 0.0; t = 0.0
-            while t <= duration:
+            cap = cv2.VideoCapture(source)
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            frame_count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+            duration = frame_count / fps if fps > 0 else 0.0
+            max_face_samples = max(12, min(240, int(os.environ.get("AIVF_MAX_FACE_ANALYSIS_SAMPLES", "240"))))
+            sample_interval = max(2.5, duration / max_face_samples) if duration > 0 else 2.5
+            t = 0.0
+            samples = 0
+            while t <= duration and samples < max_face_samples:
                 cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0); ok, frame = cap.read()
-                if ok: faces_by_time.append((round(t, 3), extract_faces(frame)))
-                t += 2.5
+                if ok:
+                    faces_by_time.append((round(t, 3), extract_faces(frame)))
+                    samples += 1
+                t += sample_interval
             cap.release()
         except Exception as exc: result.warnings.append(f"Face analysis unavailable: {exc}")
         object_boxes = _safe_boxes(object_detections); captions = build_choreographed_captions(speech_words, face_boxes_by_time=faces_by_time, object_boxes_by_time=object_boxes)
@@ -271,6 +279,7 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
             auto_fix=allow_auto_fix,
             model_key=model_key,
             skip_qc=render_skip_legacy_qc,
+            strict_voiceover=is_v3,
         )
         final_path = os.path.join(package_dir, "final.mp4")
         if rendered and os.path.exists(rendered) and os.path.abspath(rendered) != os.path.abspath(final_path):
