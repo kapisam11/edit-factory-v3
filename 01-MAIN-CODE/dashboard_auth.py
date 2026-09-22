@@ -13,7 +13,7 @@ SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 PUBLIC_PATHS = {"/login", "/logout", "/api/health"}
 _LOGIN_LIMIT = 10
 _LOGIN_WINDOW_SECONDS = 60.0
-_login_attempts = {}
+_login_attempts: dict[str, list[float]] = {}
 _login_lock = threading.Lock()
 
 
