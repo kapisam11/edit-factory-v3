@@ -67,6 +67,24 @@ aivf-content --help
 aivf-v3 --help
 ```
 
+## Windows one-click start
+
+On Windows, double-click **[START-ALL.bat](START-ALL.bat)** in the repository root. It is the main local launcher and stays next to this README.
+
+It will:
+1. Check that Docker Desktop is installed and running.
+2. Create a local development `06-CONFIG-AND-DEPLOYMENT/.env` with generated secrets when one does not exist.
+3. Validate the Docker Compose configuration.
+4. Build and start the complete Edit Factory dashboard stack.
+5. Wait for `/api/health` to become healthy.
+6. Open the dashboard login page in your browser and show the local dashboard token in the launcher window.
+7. When `uv` is installed, run dependency, Python compilation, Ruff, mypy, and the full pytest suite.
+8. Run a final dashboard health check and report failures with a non-zero exit code.
+
+The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` for a faster startup, or `docker compose ... down` to stop the stack.
+
+The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**.
+
 ## Python API
 
 ```python
@@ -94,6 +112,8 @@ result = run_v3_pipeline(
 ```text
 Edit Factory v3
 ├── README.md
+├── START-ALL.bat                     <- one-click Windows launcher
+├── START-ALL.ps1                     <- Windows launcher implementation
 ├── LICENSE
 ├── pyproject.toml
 ├── uv.lock
