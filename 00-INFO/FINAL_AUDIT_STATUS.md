@@ -31,6 +31,17 @@ The repository-level findings from the September 21 hostile review are closed in
 - V3 rendering crosses an explicit V3RenderRequest compatibility adapter that forces legacy auto-fix and legacy package finalization off; a regression test locks that contract.
 - Retry credentials are never persisted. If process-local retry credentials have expired or the process restarted, the authenticated retry endpoint now accepts the required credentials explicitly for that retry and retains them only in bounded process memory.
 
+## Additional hardening applied after the 2026-09-21 review
+
+- V3 voiceover generation/mixing now fails the V3 production contract instead of silently degrading when voiceover is requested.
+- Silent-source voiceover mixing preserves the source video duration by padding/trimming the voiceover explicitly.
+- Required V3 artifact-readiness failures now propagate into the job result.
+- Face analysis is capped to a bounded number of source samples and adapts the sampling interval for long source videos.
+- Login-attempt tracking prunes stale client keys once the in-memory set grows beyond a bounded threshold.
+- CI pins GitHub Actions to immutable commit SHAs, runs staged mypy checks, and measures dashboard/resource-governance modules in the production coverage gate.
+- The production Docker image uses a pinned Python base-image digest and excludes test/extension trees from the runtime image.
+- Deployment includes an automated target-host V3 production smoke covering authenticated job creation, real V3 rendering, readiness, FFprobe validation, and preview.
+
 ## Remaining external acceptance gates
 
 These are deployment evidence gates, not unresolved repository defects:

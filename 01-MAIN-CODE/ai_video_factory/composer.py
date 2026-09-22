@@ -149,6 +149,7 @@ def compose_short_from_video(
     auto_fix: bool = False,
     model_key: Optional[str] = None,
     skip_qc: bool = False,
+    strict_voiceover: bool = False,
 ) -> str:
     _ensure_dir(package_dir)
     if out_file is None:
@@ -255,6 +256,8 @@ def compose_short_from_video(
         generate_voiceover(script, vo_path)
         has_vo = True
     except Exception as e:
+        if strict_voiceover:
+            raise RuntimeError(f"Voiceover generation failed: {e}") from e
         logger.warning("TTS voiceover failed: %s", e)
 
     concat_out = os.path.join(temp_dir, "concatenated.mp4")
@@ -268,6 +271,8 @@ def compose_short_from_video(
             mix_voiceover(out_file, vo_path, mixed)
             os.replace(mixed, out_file)
         except Exception as e:
+            if strict_voiceover:
+                raise RuntimeError(f"Voiceover mix failed: {e}") from e
             logger.warning("voiceover mix failed: %s", e)
 
     if not os.path.isfile(out_file) or os.path.getsize(out_file) <= 0:

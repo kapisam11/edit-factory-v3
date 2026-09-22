@@ -43,6 +43,22 @@ py-modules = ["cli", "dashboard_auth", "dashboard_cache", "dashboard_compat", "d
 [tool.pytest.ini_options]
 markers = ["integration: tests that execute external media/runtime components such as FFmpeg"]
 
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+follow_imports = "skip"
+check_untyped_defs = true
+warn_unused_ignores = true
+files = [
+  "01-MAIN-CODE/ai_video_factory/v3_pipeline.py",
+  "01-MAIN-CODE/ai_video_factory/v3_engine.py",
+  "01-MAIN-CODE/ai_video_factory/v3_quality.py",
+  "01-MAIN-CODE/ai_video_factory/v3_renderer_bridge.py",
+  "01-MAIN-CODE/ai_video_factory/artifact_readiness.py",
+  "01-MAIN-CODE/dashboard_auth.py",
+  "01-MAIN-CODE/resource_governor.py",
+]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100

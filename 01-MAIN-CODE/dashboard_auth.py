@@ -13,7 +13,7 @@ SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 PUBLIC_PATHS = {"/login", "/logout", "/api/health"}
 _LOGIN_LIMIT = 10
 _LOGIN_WINDOW_SECONDS = 60.0
-_login_attempts = {}
+_login_attempts: dict[str, list[float]] = {}
 _login_lock = threading.Lock()
 
 
@@ -32,6 +32,23 @@ def _login_allowed(client: str) -> bool:
             return False
         recent.append(now)
         _login_attempts[client] = recent
+        if len(_login_attempts) > 1024:
+            cutoff = now - _LOGIN_WINDOW_SECONDS
+            for key in [
+                key for key, timestamps in _login_attempts.items()
+                if key != client and not any(ts >= cutoff for ts in timestamps)
+            ]:
+                _login_attempts.pop(key, None)
+            while len(_login_attempts) > 1024:
+                evictable = [
+                    (key, max(timestamps))
+                    for key, timestamps in _login_attempts.items()
+                    if key != client and timestamps
+                ]
+                if not evictable:
+                    break
+                oldest_client = min(evictable, key=lambda item: item[1])[0]
+                _login_attempts.pop(oldest_client, None)
         return True
 
 

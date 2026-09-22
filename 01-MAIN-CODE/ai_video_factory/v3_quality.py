@@ -28,7 +28,7 @@ def _timeout(env_name: str, default: int) -> int:
 
 def _run(command: Sequence[str], *, timeout: Optional[int] = None, capture_output: bool = True, text: bool = True) -> subprocess.CompletedProcess:
     try:
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "check": True,
             "capture_output": capture_output,
             "text": text,
@@ -186,7 +186,7 @@ def _sample_gray_frame(path: str, timestamp: float) -> bytes:
     expected = 160 * 90
     if len(raw) < expected:
         raise RenderContractError(f"could not sample a frame from {path} at {timestamp:.3f}s")
-    return raw[:expected]
+    return bytes(raw[:expected])
 
 
 def _frame_delta(first: bytes, second: bytes) -> float:

@@ -103,12 +103,14 @@ def evaluate_artifact(
     package = Path(package_dir).resolve() if package_dir else None
     upload_manifest = package / "upload_package.json" if package else None
     upload_ok = False
-    if upload_manifest and upload_manifest.is_file():
+    if package is not None and upload_manifest is not None and upload_manifest.is_file():
         try:
             manifest = json.loads(upload_manifest.read_text(encoding="utf-8"))
             platforms = manifest.get("platforms") if isinstance(manifest, dict) else None
-            upload_ok = isinstance(platforms, dict) and bool(platforms)
-            if upload_ok:
+            if not isinstance(platforms, dict) or not platforms:
+                upload_ok = False
+            else:
+                upload_ok = True
                 for platform, payload in platforms.items():
                     if not isinstance(payload, dict):
                         upload_ok = False

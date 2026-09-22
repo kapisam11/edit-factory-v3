@@ -295,8 +295,10 @@ def _overlay_for_purpose(purpose: str, core: CoreIdea, max_words: int, edit_type
         "Proof": ("Here is the proof", "This confirms it"),
         "Final impact": (core.payoff, "That is why it mattered"),
     }
-    base = choices.get(purpose, (purpose,))[0]
-    alternate = choices.get(purpose, (purpose,))[1] if len(choices.get(purpose, (purpose,))) > 1 else purpose
+    choice = choices.get(purpose)
+    if choice is None:
+        choice = (purpose, purpose)
+    base, alternate = choice
     if edit_type == EditType.DOCUMENTARY and purpose in {"Evidence", "Payoff"}:
         base = alternate
     return _compact(base, max_words)

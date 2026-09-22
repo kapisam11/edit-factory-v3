@@ -147,6 +147,20 @@ def _validate_v3_inputs(input_video: str, topic: str, target_seconds: float, pla
         raise ValueError("bpm must be between 40 and 240")
 
 
+def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
+    """Promote required artifact-readiness failures into the V3 job result."""
+    result.artifacts = getattr(result, "artifacts", {}) or {}
+    result.artifacts["v3_readiness_state"] = str(getattr(readiness, "state", "") or "")
+    errors = list(getattr(readiness, "errors", []) or [])
+    if errors:
+        result.errors.extend(f"V3 artifact readiness: {error}" for error in errors)
+    if getattr(readiness, "state", None) != "UPLOAD_PACKAGE_VALID" and not errors:
+        result.errors.append(
+            f"V3 artifact readiness stopped at {getattr(readiness, 'state', 'UNKNOWN')}; "
+            "required upload-package validation did not pass"
+        )
+
+
 def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: str = "", target_seconds: float = 30.0,
                     platform: str = "youtube_shorts", audience: str = "general short-form viewers", bpm: int = 120,
                     edit_type: Optional[str] = None, model_key: Optional[str] = None, skip_qc: bool = False,
@@ -276,9 +290,10 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             if not render_report["ok"]:
                 result.errors.extend("V3 render QC: " + error for error in render_report["errors"])
             result.warnings.extend("V3 render QC: " + warning for warning in render_report["warnings"])
-            if readiness.state != "MEDIA_CONTRACT_VALID":
+            _apply_readiness_contract(result, readiness)
+            if readiness.state == "UPLOAD_PACKAGE_VALID":
                 result.warnings.append(
-                    f"V3 artifact readiness stopped at {readiness.state}; upload/publish readiness is not claimed"
+                    "V3 artifact readiness: upload package validated; publish readiness is intentionally not claimed"
                 )
             metadata_path = package / "metadata.json"
             if metadata_path.exists():

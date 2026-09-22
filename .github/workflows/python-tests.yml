@@ -17,15 +17,15 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11', '3.12']
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
     - name: Install FFmpeg for media integration tests
       run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
       with:
         python-version: ${{ matrix.python-version }}
     - name: Set up uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
       with:
         enable-cache: true
     - name: Install locked development environment
@@ -36,6 +36,8 @@ jobs:
       run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
     - name: Lint production Python for correctness
       run: uv run ruff check 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE --select E9,F --ignore F401,F811,F841
+    - name: Type-check hardened production boundary
+      run: uv run mypy
     - name: Smoke-test command entry points
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
@@ -69,7 +71,7 @@ jobs:
         /tmp/aivf-wheel-test/bin/aivf-v3 --help
         /tmp/aivf-wheel-test/bin/python -c "import os; import ai_video_factory; import app.cli; import app.web_app_v3; from app import wsgi; assert os.path.isdir(app.web_app_v3.app.template_folder); assert os.path.isdir(app.web_app_v3.app.static_folder); assert wsgi.app is app.web_app_v3.app; response=wsgi.app.test_client().get('/api/health'); assert response.status_code == 200; print('isolated wheel runtime ok')"
         /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); names={ep.name:ep.value for ep in group}; assert names['aivf']=='app.cli:main'; assert names['aivf-content']=='app.content_factory_cli:main'; assert names['aivf-v3']=='ai_video_factory.v3_cli:main'"
-    - name: Run tests with V3 coverage gate
+    - name: Run full test suite with explicit coverage accounting
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
       run: >-
@@ -83,18 +85,36 @@ jobs:
         --cov=ai_video_factory.effects_engine
         --cov=ai_video_factory.render_engine
         --cov=ai_video_factory.composer
-        --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+        --cov=dashboard_auth
+        --cov=dashboard_worker
+        --cov=dashboard_compat
+        --cov=dashboard_optimizations
+        --cov=resource_governor
+        --cov-report=term-missing
+        --cov-report=xml
+        --cov-fail-under=0
+
+    - name: Enforce V3 core coverage gate
+      run: >-
+        uv run coverage report
+        --include='01-MAIN-CODE/ai_video_factory/v3_engine.py,01-MAIN-CODE/ai_video_factory/v3_semantics.py,01-MAIN-CODE/ai_video_factory/v3_quality.py,01-MAIN-CODE/ai_video_factory/v3_capabilities.py,01-MAIN-CODE/ai_video_factory/v3_pipeline.py,01-MAIN-CODE/ai_video_factory/edit_planner.py,01-MAIN-CODE/ai_video_factory/effects_engine.py,01-MAIN-CODE/ai_video_factory/render_engine.py,01-MAIN-CODE/ai_video_factory/composer.py'
+        --fail-under=80
+
+    - name: Report production-boundary coverage
+      run: >-
+        uv run coverage report
+        --include='01-MAIN-CODE/dashboard_auth.py,01-MAIN-CODE/dashboard_worker.py,01-MAIN-CODE/dashboard_compat.py,01-MAIN-CODE/dashboard_optimizations.py,01-MAIN-CODE/resource_governor.py'
 
   windows-smoke:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
     - name: Set up Python 3.12
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
       with:
         python-version: '3.12'
     - name: Set up uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
       with:
         enable-cache: true
     - name: Install locked development environment
@@ -161,13 +181,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
     - name: Set up Python 3.12
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
       with:
         python-version: '3.12'
     - name: Set up uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
       with:
         enable-cache: true
     - name: Install locked audit environment
