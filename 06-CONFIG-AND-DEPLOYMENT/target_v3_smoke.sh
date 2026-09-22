@@ -11,6 +11,7 @@ docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" python - <<'PY'
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -114,6 +115,14 @@ if preview.status_code != 200 or not preview.content:
 
 print("[AIVF] target-host V3 smoke passed")
 print(json.dumps({"job_id": job_id, "package": package_name, "readiness_state": readiness.get("state")}, indent=2))
+
+state_dir = Path(os.environ.get("AIVF_STATE_DIR", "/app/state")).resolve()
+db_path = state_dir / "jobs.db"
 shutil.rmtree(package, ignore_errors=True)
 fixture.unlink(missing_ok=True)
+
+if db_path.is_file():
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,))
+        conn.execute("DELETE FROM jobs WHERE id=? AND status='done'", (job_id,))
 PY
