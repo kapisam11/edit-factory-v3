@@ -11,11 +11,13 @@ docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" python - <<'PY'
 import json
 import os
 import shutil
-import sqlite3
 import subprocess
+import sys
 import time
 from pathlib import Path
 import requests
+
+sys.path.insert(0, "/app/01-MAIN-CODE")
 
 BASE = "http://127.0.0.1:5000"
 TOKEN = os.environ.get("AIVF_DASHBOARD_TOKEN", "").strip()
@@ -116,13 +118,21 @@ if preview.status_code != 200 or not preview.content:
 print("[AIVF] target-host V3 smoke passed")
 print(json.dumps({"job_id": job_id, "package": package_name, "readiness_state": readiness.get("state")}, indent=2))
 
+from dashboard_store import DashboardStore
+
 state_dir = Path(os.environ.get("AIVF_STATE_DIR", "/app/state")).resolve()
 db_path = state_dir / "jobs.db"
-shutil.rmtree(package, ignore_errors=True)
-fixture.unlink(missing_ok=True)
+store = DashboardStore(db_path)
 
-if db_path.is_file():
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,))
-        conn.execute("DELETE FROM jobs WHERE id=? AND status='done'", (job_id,))
+deleted = store.write(
+    lambda conn: (
+        conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,)),
+        conn.execute("DELETE FROM jobs WHERE id=? AND status='done'", (job_id,)),
+    )
+)
+if not deleted[-1].rowcount:
+    raise SystemExit("target smoke could not remove its completed job record safely")
+
+shutil.rmtree(package, ignore_errors=False)
+fixture.unlink(missing_ok=True)
 PY
