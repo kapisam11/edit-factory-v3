@@ -79,7 +79,7 @@ jobs:
           provenance: mode=max
 
       - name: Attest container provenance
-        uses: actions/attest@1c5b675653bb5c22dbe9b12b556ec555138e09fd6
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
