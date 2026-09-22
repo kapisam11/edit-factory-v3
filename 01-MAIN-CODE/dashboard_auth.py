@@ -32,6 +32,13 @@ def _login_allowed(client: str) -> bool:
             return False
         recent.append(now)
         _login_attempts[client] = recent
+        if len(_login_attempts) > 1024:
+            cutoff = now - _LOGIN_WINDOW_SECONDS
+            for key in [
+                key for key, timestamps in _login_attempts.items()
+                if not any(ts >= cutoff for ts in timestamps)
+            ]:
+                _login_attempts.pop(key, None)
         return True
 
 
