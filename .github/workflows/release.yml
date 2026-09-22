@@ -131,6 +131,15 @@ jobs:
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p ${q_deploy_path}/06-CONFIG-AND-DEPLOYMENT"
 
       - name: Copy Compose configuration
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          scp 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/docker-compose.yml"
+
       - name: Copy target-host production smoke script
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -140,13 +149,6 @@ jobs:
           set -euo pipefail
           scp 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh"
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        run: |
-          scp 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/docker-compose.yml"
 
       - name: Log in to GHCR on remote host
         env:
