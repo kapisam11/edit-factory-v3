@@ -44,10 +44,10 @@ jobs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -55,7 +55,7 @@ jobs:
 
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -66,7 +66,7 @@ jobs:
 
       - name: Build and push
         id: push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
@@ -79,7 +79,7 @@ jobs:
           provenance: mode=max
 
       - name: Attest container provenance
-        uses: actions/attest@v4
+        uses: actions/attest@1c5b675653bb5c22dbe9b12b556ec555138e09fd6
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -99,7 +99,7 @@ jobs:
       packages: read
     steps:
       - name: Checkout deployment configuration
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Configure SSH
         env:
@@ -131,6 +131,15 @@ jobs:
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p ${q_deploy_path}/06-CONFIG-AND-DEPLOYMENT"
 
       - name: Copy Compose configuration
+      - name: Copy target-host production smoke script
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          scp 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh"
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -178,3 +187,13 @@ jobs:
           set -euo pipefail
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS http://127.0.0.1:5000/api/health && exit 0; sleep 3; done; exit 1"
+      - name: Run target-host V3 production smoke
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh"
+
