@@ -117,9 +117,20 @@ jobs:
           PACKAGE_DIR="$RUNNER_TEMP/aivf-output/$PACKAGE"
           test -d "$PACKAGE_DIR"
           test -f "$PACKAGE_DIR/final.v3.mp4"
+          test -f "$PACKAGE_DIR/thumbnail.png"
+          test -f "$PACKAGE_DIR/thumbnail_vertical.png"
           test -f "$PACKAGE_DIR/v3_readiness.json"
           test -f "$PACKAGE_DIR/v3_render_qc.json"
           test -f "$PACKAGE_DIR/scenes.json"
+          python - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          package = Path(__import__('os').environ['PACKAGE_DIR'])
+          with Image.open(package / 'thumbnail.png') as thumbnail:
+              assert thumbnail.size == (1280, 720)
+          with Image.open(package / 'thumbnail_vertical.png') as thumbnail:
+              assert thumbnail.size == (1080, 1920)
+          PY
           grep -Eqi "HOOK|CONTEXT|ESCALATION|SGALATION|PAYOFF|PAYO|FINAL|IMPACT" "$PACKAGE_DIR/scenes.json"
           cp "$PACKAGE_DIR/v3_readiness.json" "$RESULTS_DIR/v3-readiness.json"
           cp "$PACKAGE_DIR/v3_render_qc.json" "$RESULTS_DIR/v3-render-qc.json"
