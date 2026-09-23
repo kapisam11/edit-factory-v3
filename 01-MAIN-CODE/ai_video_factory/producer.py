@@ -234,8 +234,6 @@ def produce_package(
                     logger.warning("Fallback visuals.json write failed: %s", log_error)
             # Refresh the primary thumbnail with a real researched visual when one is available.
             try:
-                from .thumbnail import make_thumbnail, make_thumbnail_variants
-
                 background_path = None
                 for visual in saved:
                     candidate = visual.get("local_path") or visual.get("local_thumbnail")
