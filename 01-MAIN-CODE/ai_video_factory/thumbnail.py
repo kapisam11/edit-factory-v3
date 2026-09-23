@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import re
+import shutil
 import subprocess
 from typing import List, Optional
 
@@ -148,18 +149,16 @@ def extract_best_video_frame(video_path: str, out_dir: str, count: int = 7) -> O
     source = os.path.abspath(video_path)
     if not os.path.isfile(source):
         return None
-    ffmpeg = shutil.which("ffmpeg") if "shutil" in globals() else None
-    if not ffmpeg:
-        import shutil
-        ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
         return None
 
     os.makedirs(out_dir, exist_ok=True)
     duration = 0.0
     try:
         probe = subprocess.run(
-            [ffmpeg.replace("ffmpeg", "ffprobe"), "-v", "error", "-show_entries", "format=duration",
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", source],
             capture_output=True,
             text=True,
@@ -169,7 +168,7 @@ def extract_best_video_frame(video_path: str, out_dir: str, count: int = 7) -> O
     except Exception:
         try:
             probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                [ffprobe, "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=noprint_wrappers=1:nokey=1", source],
                 capture_output=True,
                 text=True,
@@ -376,35 +375,38 @@ def make_thumbnail(
     logger.info("[THUMB] Created: %s (%s; background=%s)", out_path, style, bool(background_path))
     return out_path
 
-def make_thumbnail_variants(subject: str, out_dir: str, count: int = 3, topic: Optional[str] = None) -> List[str]:
-    """Create multiple thumbnail variants with different styles.
-
-    If topic is provided, learns from top creators first.
-    """
+def make_thumbnail_variants(
+    subject: str,
+    out_dir: str,
+    count: int = 3,
+    topic: Optional[str] = None,
+    background_path: Optional[str] = None,
+) -> List[str]:
+    """Create distinct, text-safe thumbnail variants around one visual focal point."""
     os.makedirs(out_dir, exist_ok=True)
     style = None
     if topic:
         try:
             style = learn_style(topic)
-        except Exception as e:
-            logger.warning("Style learning failed: %s", e)
+        except Exception as exc:
+            logger.warning("Style learning failed: %s", exc)
 
     variants = []
-    for i in range(count):
-        out = os.path.join(out_dir, f"variant_{i+1}.png")
-        # Slightly vary the style per variant
-        if style:
-            # Modify saturation/contrast for variety
-            mod_style = style.copy()
-            mod_style["avg_saturation"] = min(1.0, style.get("avg_saturation", 0.6) + (i - 1) * 0.1)
-            mod_style["avg_contrast"] = min(0.5, style.get("avg_contrast", 0.15) + (i - 1) * 0.05)
+    for i in range(max(1, int(count))):
+        out = os.path.join(out_dir, f"variant_{i + 1}.png")
+        mod_style = style.copy() if style else None
+        if i == 0:
+            focus = (0.70, 0.50)
+        elif i == 1:
+            focus = (0.58, 0.46)
         else:
-            mod_style = None
-        make_thumbnail(subject, out, style_profile=mod_style)
+            focus = (0.78, 0.54)
+        make_thumbnail(
+            subject,
+            out,
+            style_profile=mod_style,
+            background_path=background_path,
+            background_focus=focus,
+        )
         variants.append(out)
     return variants
-
-
-def make_thumbnail_vertical(subject: str, out_path: str, size: tuple = (1080, 1920)) -> str:
-    """Create a vertical thumbnail optimized for Shorts/Reels."""
-    return make_thumbnail(subject, out_path, size=size)
