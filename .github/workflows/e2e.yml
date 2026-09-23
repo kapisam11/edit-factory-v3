@@ -122,10 +122,11 @@ jobs:
           test -f "$PACKAGE_DIR/v3_readiness.json"
           test -f "$PACKAGE_DIR/v3_render_qc.json"
           test -f "$PACKAGE_DIR/scenes.json"
-          python - <<'PY'
+          python - "$PACKAGE_DIR" <<'PY'
           from PIL import Image
           from pathlib import Path
-          package = Path(__import__('os').environ['PACKAGE_DIR'])
+          import sys
+          package = Path(sys.argv[1])
           with Image.open(package / 'thumbnail.png') as thumbnail:
               assert thumbnail.size == (1280, 720)
           with Image.open(package / 'thumbnail_vertical.png') as thumbnail:
