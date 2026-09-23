@@ -9,6 +9,7 @@ import os
 import shutil
 import sqlite3
 import time
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -324,24 +325,39 @@ class ThumbnailStage(PipelineStage):
         if not ctx.package_dir:
             ctx.thumbnail = None
             return ctx
-        from .thumbnail import make_thumbnail_variants, make_thumbnail_vertical
+        from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical
         subject = str((ctx.plan.get("title_options") or [ctx.topic])[0])[:80]
         thumb_dir = os.path.join(ctx.package_dir, "thumbnails")
-        ctx.thumbnail_variants = make_thumbnail_variants(subject, thumb_dir, count=3, topic=ctx.topic)
+
+        background_path = None
+        if ctx.raw_video and os.path.isfile(ctx.raw_video):
+            with tempfile.TemporaryDirectory(prefix="aivf-thumb-", dir=os.path.dirname(ctx.package_dir)) as work_dir:
+                background_path = extract_best_video_frame(ctx.raw_video, work_dir)
+                ctx.thumbnail_variants = make_thumbnail_variants(
+                    subject, thumb_dir, count=3, topic=ctx.topic, background_path=background_path
+                )
+                vertical_path = os.path.join(ctx.package_dir, "thumbnail_vertical.png")
+                make_thumbnail_vertical(
+                    subject, vertical_path, size=(1080, 1920), background_path=background_path
+                )
+        else:
+            ctx.thumbnail_variants = make_thumbnail_variants(subject, thumb_dir, count=3, topic=ctx.topic)
+            vertical_path = os.path.join(ctx.package_dir, "thumbnail_vertical.png")
+            make_thumbnail_vertical(subject, vertical_path, size=(1080, 1920))
+
         try:
             selected = ctx.thumbnail_variants[ctx.thumbnail_variant - 1]
         except (IndexError, TypeError):
             raise RuntimeError("Thumbnail generation returned too few variants")
         ctx.thumbnail = os.path.join(ctx.package_dir, "thumbnail.png")
         shutil.copyfile(selected, ctx.thumbnail)
-        vertical_path = os.path.join(ctx.package_dir, "thumbnail_vertical.png")
-        make_thumbnail_vertical(subject, vertical_path, size=(1080, 1920))
         with open(os.path.join(ctx.package_dir, "thumbnail_experiment.json"), "w", encoding="utf-8") as handle:
             json.dump(
                 {
                     "variants": [os.path.relpath(path, ctx.package_dir) for path in ctx.thumbnail_variants],
                     "selected_variant": ctx.thumbnail_variant,
                     "subject": subject,
+                    "background_source": "raw_video_frame" if ctx.raw_video and background_path else "designed_fallback",
                 },
                 handle,
                 indent=2,
