@@ -6,7 +6,10 @@ from top-performing videos in the same niche.
 Requires: pillow
 """
 import logging
+import math
 import os
+import re
+import subprocess
 from typing import List, Optional
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
@@ -90,97 +93,288 @@ def _add_text_with_outline(draw, text, pos, font, fill, outline_width=3, outline
     draw.text((x, y), text, font=font, fill=fill)
 
 
+
+
+def _fit_crop(img: Image.Image, size: tuple, focus=(0.68, 0.5)) -> Image.Image:
+    """Crop an image to an exact thumbnail size while preserving a focal area."""
+    target_w, target_h = size
+    src_w, src_h = img.size
+    if src_w <= 0 or src_h <= 0:
+        raise ValueError("background image has invalid dimensions")
+
+    target_ratio = target_w / target_h
+    source_ratio = src_w / src_h
+    if source_ratio > target_ratio:
+        crop_h = src_h
+        crop_w = int(src_h * target_ratio)
+    else:
+        crop_w = src_w
+        crop_h = int(src_w / target_ratio)
+
+    fx = min(1.0, max(0.0, float(focus[0]))) * src_w
+    fy = min(1.0, max(0.0, float(focus[1]))) * src_h
+    left = int(fx - crop_w / 2)
+    top = int(fy - crop_h / 2)
+    left = max(0, min(left, src_w - crop_w))
+    top = max(0, min(top, src_h - crop_h))
+    return img.crop((left, top, left + crop_w, top + crop_h)).resize(size, Image.Resampling.LANCZOS)
+
+
+def _score_image(path: str) -> float:
+    """Prefer sharp, moderately bright, colorful frames over flat/dark frames."""
+    try:
+        img = Image.open(path).convert("RGB").resize((256, 144))
+        pixels = list(img.getdata())
+        if not pixels:
+            return -1.0
+        brightness = sum((r + g + b) / 765.0 for r, g, b in pixels) / len(pixels)
+        saturation = sum((max(p) - min(p)) / 255.0 for p in pixels) / len(pixels)
+        mean = sum(sum(p) / 3.0 for p in pixels) / len(pixels)
+        variance = sum(((sum(p) / 3.0) - mean) ** 2 for p in pixels) / len(pixels)
+        contrast = min(1.0, math.sqrt(variance) / 64.0)
+        return round(
+            0.35 * contrast
+            + 0.30 * saturation
+            + 0.20 * (1.0 - abs(brightness - 0.52) / 0.52)
+            + 0.15 * min(1.0, variance / 1800.0),
+            6,
+        )
+    except Exception:
+        return -1.0
+
+
+def extract_best_video_frame(video_path: str, out_dir: str, count: int = 7) -> Optional[str]:
+    """Extract several candidate frames and return the strongest thumbnail frame."""
+    source = os.path.abspath(video_path)
+    if not os.path.isfile(source):
+        return None
+    ffmpeg = shutil.which("ffmpeg") if "shutil" in globals() else None
+    if not ffmpeg:
+        import shutil
+        ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+
+    os.makedirs(out_dir, exist_ok=True)
+    duration = 0.0
+    try:
+        probe = subprocess.run(
+            [ffmpeg.replace("ffmpeg", "ffprobe"), "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", source],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        duration = float(probe.stdout.strip())
+    except Exception:
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", source],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            duration = float(probe.stdout.strip())
+        except Exception:
+            return None
+
+    if not math.isfinite(duration) or duration <= 0:
+        return None
+
+    candidates = []
+    fractions = [0.10, 0.22, 0.35, 0.50, 0.65, 0.78, 0.90][:max(1, int(count))]
+    for idx, fraction in enumerate(fractions, start=1):
+        timestamp = max(0.0, min(duration - 0.05, duration * fraction))
+        frame_path = os.path.join(out_dir, f".thumbnail_frame_{idx}.jpg")
+        try:
+            subprocess.run(
+                [
+                    ffmpeg, "-y", "-ss", f"{timestamp:.3f}", "-i", source,
+                    "-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "2", frame_path,
+                ],
+                capture_output=True,
+                check=True,
+            )
+            score = _score_image(frame_path)
+            if score >= 0:
+                candidates.append((score, frame_path))
+        except Exception:
+            continue
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _prepare_thumbnail_text(subject: str, max_words: int = 5) -> str:
+    text = re.sub(r"\s+", " ", str(subject or "").strip())
+    text = re.sub(r"[|•]+", " ", text)
+    words = [word for word in text.split() if word]
+    if not words:
+        return "WATCH THIS"
+    if len(words) > max_words:
+        words = words[:max_words]
+    return " ".join(words).upper()
+
+
+def _wrap_thumbnail_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
+    words = text.split()
+    if len(words) <= 2:
+        return [" ".join(words)]
+
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        width = draw.textbbox((0, 0), candidate, font=font)[2]
+        if current and width > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+
+    if len(lines) <= 2:
+        return lines
+
+    # Keep the design at two lines max. The caller already caps the word count.
+    first = " ".join(lines[:-1])
+    return [first, lines[-1]]
+
+
+def _load_background(background_path: Optional[str], size: tuple, focus=(0.68, 0.5)) -> Image.Image:
+    if background_path and os.path.isfile(background_path):
+        try:
+            img = Image.open(background_path).convert("RGB")
+            img = _fit_crop(img, size, focus=focus)
+            img = ImageEnhance.Color(img).enhance(1.12)
+            img = ImageEnhance.Contrast(img).enhance(1.08)
+            return img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=110, threshold=3))
+        except Exception as exc:
+            logger.warning("Thumbnail background load failed: %s", exc)
+
+    # Strong, clean fallback when no real visual is available.
+    return _create_gradient_background(size, (18, 20, 28), (170, 22, 52))
+
+
+def _add_thumbnail_overlay(img: Image.Image, width_fraction: float = 0.56) -> Image.Image:
+    w, h = img.size
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    panel_w = int(w * width_fraction)
+    draw.rectangle((0, 0, panel_w, h), fill=(0, 0, 0, 155))
+    draw.rectangle((panel_w, 0, w, h), fill=(0, 0, 0, 35))
+    draw.polygon(
+        [(int(w * 0.36), 0), (int(w * 0.58), 0), (int(w * 0.42), h), (int(w * 0.20), h)],
+        fill=(0, 0, 0, 35),
+    )
+    return Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+
+
+def _draw_thumbnail_text(img: Image.Image, text: str, primary: tuple, accent: tuple) -> None:
+    w, h = img.size
+    draw = ImageDraw.Draw(img)
+
+    horizontal = w >= h
+    max_width = int(w * (0.52 if horizontal else 0.88))
+    font_size = int(h * (0.18 if horizontal else 0.075))
+    font_size = max(46, min(font_size, 150))
+    font = _get_font(font_size)
+
+    while font_size > 42:
+        lines = _wrap_thumbnail_text(draw, text, font, max_width)
+        widths = [draw.textbbox((0, 0), line, font=font)[2] for line in lines]
+        if max(widths, default=0) <= max_width:
+            break
+        font_size -= 4
+        font = _get_font(font_size)
+
+    lines = _wrap_thumbnail_text(draw, text, font, max_width)
+    line_gap = max(8, font_size // 8)
+    total_height = sum(draw.textbbox((0, 0), line, font=font)[3] for line in lines) + line_gap * (len(lines) - 1)
+
+    x = int(w * (0.07 if horizontal else 0.06))
+    y = int((h - total_height) * (0.46 if horizontal else 0.74))
+    if horizontal:
+        y = max(int(h * 0.16), y)
+
+    # Subtle top label gives the composition a deliberate editorial identity.
+    label_font = _get_font(max(24, min(34, int(h * 0.045))))
+    label = "EDIT FACTORY"
+    label_w = draw.textbbox((0, 0), label, font=label_font)[2]
+    draw.rounded_rectangle((x, max(20, y - label_font.size - 16), x + label_w + 28, max(50, y - 8)),
+                           radius=10, fill=(0, 0, 0))
+    draw.text((x + 14, max(20, y - label_font.size - 13)), label, font=label_font, fill=accent)
+
+    for idx, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_y = y + idx * (font_size + line_gap)
+        # Shadow first.
+        draw.text((x + 8, line_y + 8), line, font=font, fill=(0, 0, 0))
+        # Highlight the final word instead of alternating every word.
+        parts = line.split()
+        if len(parts) >= 2:
+            normal = " ".join(parts[:-1])
+            last = parts[-1]
+            normal_w = draw.textbbox((0, 0), normal + " ", font=font)[2]
+            draw.text((x, line_y), normal, font=font, fill=(248, 248, 248), stroke_width=3, stroke_fill=(0, 0, 0))
+            draw.text((x + normal_w, line_y), last, font=font, fill=accent, stroke_width=3, stroke_fill=(0, 0, 0))
+        else:
+            draw.text((x, line_y), line, font=font, fill=primary, stroke_width=3, stroke_fill=(0, 0, 0))
+
+
 def make_thumbnail(
     subject: str,
     out_path: str,
     size: tuple = (1280, 720),
     style_profile: Optional[dict] = None,
+    background_path: Optional[str] = None,
+    background_focus: tuple = (0.68, 0.5),
 ) -> str:
-    """Create a professional thumbnail with learned style.
-
-    Args:
-        subject: Thumbnail text (2-5 words recommended)
-        out_path: Output file path
-        size: Image dimensions
-        style_profile: Optional style profile from style_learner.learn_style()
-    """
+    """Create a polished thumbnail using a real focal image when available."""
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
-    # Determine style
     if style_profile:
-        brightness = style_profile.get("avg_brightness", 0.3)
-        saturation = style_profile.get("avg_saturation", 0.6)
-        contrast = style_profile.get("avg_contrast", 0.15)
         colors = style_profile.get("dominant_colors", [])
         style = style_profile.get("recommended_style", "dark_dramatic")
     else:
-        brightness, saturation, contrast = 0.3, 0.6, 0.15
-        colors = ["rgb(220,20,60)", "rgb(0,0,0)", "rgb(255,255,255)"]
+        colors = ["rgb(220,20,60)", "rgb(10,12,18)", "rgb(255,255,255)"]
         style = "dark_dramatic"
 
-    # Parse colors
     if colors:
         primary = _parse_rgb(colors[0])
-        secondary = _parse_rgb(colors[1]) if len(colors) > 1 else (0, 0, 0)
-        accent = _parse_rgb(colors[2]) if len(colors) > 2 else (255, 255, 255)
+        secondary = _parse_rgb(colors[1]) if len(colors) > 1 else (10, 12, 18)
+        accent = _parse_rgb(colors[2]) if len(colors) > 2 else (255, 210, 60)
     else:
-        primary, secondary, accent = (220, 20, 60), (0, 0, 0), (255, 255, 255)
+        primary, secondary, accent = (220, 20, 60), (10, 12, 18), (255, 210, 60)
 
-    # Adjust for dark/bright style
-    if "bright" in style:
-        bg1, bg2 = (255, 255, 240), (240, 240, 255)
-        text_color = (20, 20, 20)
-    else:
-        bg1, bg2 = secondary, primary
-        text_color = accent
+    # Avoid unreadable creator palettes.
+    if max(accent) < 120:
+        accent = (255, 210, 60)
+    if max(primary) < 100:
+        primary = (255, 255, 255)
+    if max(secondary) > 225:
+        secondary = (18, 20, 28)
 
-    # Create gradient background
-    img = _create_gradient_background(size, bg1, bg2)
+    img = _load_background(background_path, size, focus=background_focus)
+    img = _add_thumbnail_overlay(img, width_fraction=0.58 if size[0] >= size[1] else 1.0)
 
-    # Add subtle noise/texture for realism
-    enhancer = ImageEnhance.Contrast(img)
-    img = enhancer.enhance(1.0 + contrast)
-    enhancer = ImageEnhance.Color(img)
-    img = enhancer.enhance(1.0 + saturation)
+    if size[0] >= size[1]:
+        # Add a simple accent edge to make the card feel intentional without clutter.
+        draw = ImageDraw.Draw(img)
+        edge_w = max(6, int(size[0] * 0.008))
+        draw.rectangle((0, 0, edge_w, size[1]), fill=accent)
 
-    # Vignette
-    img = _add_vignette(img, strength=0.3 if "bright" in style else 0.5)
+    text = _prepare_thumbnail_text(subject, max_words=5)
+    _draw_thumbnail_text(img, text, primary=(248, 248, 248), accent=accent)
 
-    # Draw text
-    draw = ImageDraw.Draw(img)
-    words = subject.split()
-
-    # Font sizing based on word count
-    if len(words) <= 2:
-        font_size = 120
-    elif len(words) <= 4:
-        font_size = 90
-    else:
-        font_size = 70
-
-    font = _get_font(font_size)
-
-    # Layout: center text, keep in safe zone (away from edges)
-    safe_margin = int(size[1] * 0.15)
-    y_start = safe_margin + 20
-
-    for i, word in enumerate(words):
-        # Uppercase for impact
-        text = word.upper()
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_w = bbox[2] - bbox[0]
-        x = (size[0] - text_w) // 2
-        y = y_start + i * (font_size + 15)
-
-        # Alternate colors for emphasis
-        fill = text_color if i % 2 == 0 else primary
-        _add_text_with_outline(draw, text, (x, y), font, fill, outline_width=4)
-
-    # Save
-    img.save(out_path)
-    logger.info("[THUMB] Created: %s (%s)", out_path, style)
+    img.save(out_path, format="PNG", optimize=True)
+    logger.info("[THUMB] Created: %s (%s; background=%s)", out_path, style, bool(background_path))
     return out_path
-
 
 def make_thumbnail_variants(subject: str, out_dir: str, count: int = 3, topic: Optional[str] = None) -> List[str]:
     """Create multiple thumbnail variants with different styles.
