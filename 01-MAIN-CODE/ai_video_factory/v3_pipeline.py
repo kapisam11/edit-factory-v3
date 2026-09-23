@@ -260,6 +260,41 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     "V3 semantic QC: " + warning for warning in semantic_report["warnings"]
                 )
             try:
+                from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical
+
+                thumb_dir = package / "thumbnails"
+                thumb_dir.mkdir(parents=True, exist_ok=True)
+                thumbnail_work_dir = tempfile.mkdtemp(prefix="aivf-v3-thumb-", dir=str(package))
+                try:
+                    frame_path = extract_best_video_frame(input_video, thumbnail_work_dir)
+                    thumbnail_subject = str(
+                        baseline_summary.get("hook")
+                        or payload.get("thumbnail_concept")
+                        or topic
+                    ).strip()
+                    variants = make_thumbnail_variants(
+                        thumbnail_subject,
+                        str(thumb_dir),
+                        count=3,
+                        topic=topic,
+                        background_path=frame_path,
+                    )
+                    if not variants:
+                        raise RuntimeError("thumbnail generation returned no variants")
+                    thumbnail_path = package / "thumbnail.png"
+                    shutil.copyfile(variants[0], thumbnail_path)
+                    make_thumbnail_vertical(
+                        thumbnail_subject,
+                        str(package / "thumbnail_vertical.png"),
+                        size=(1080, 1920),
+                        background_path=frame_path,
+                    )
+                    baseline_summary["thumbnail"] = str(thumbnail_path)
+                    result.artifacts["thumbnail"] = str(thumbnail_path)
+                    result.artifacts["thumbnail_variants"] = str(thumb_dir)
+                finally:
+                    shutil.rmtree(thumbnail_work_dir, ignore_errors=True)
+
                 from .upload_package import finalize_upload_package
                 upload_manifest = finalize_upload_package(
                     package_dir,
