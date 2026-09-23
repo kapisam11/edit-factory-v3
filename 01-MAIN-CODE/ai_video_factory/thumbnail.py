@@ -410,3 +410,18 @@ def make_thumbnail_variants(
         )
         variants.append(out)
     return variants
+
+def make_thumbnail_vertical(
+    subject: str,
+    out_path: str,
+    size: tuple = (1080, 1920),
+    background_path: Optional[str] = None,
+) -> str:
+    """Create a vertical thumbnail using the same readable visual system."""
+    return make_thumbnail(
+        subject,
+        out_path,
+        size=size,
+        background_path=background_path,
+        background_focus=(0.5, 0.58),
+    )
