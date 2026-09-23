@@ -346,19 +346,15 @@ def make_thumbnail(
 
     if colors:
         primary = _parse_rgb(colors[0])
-        secondary = _parse_rgb(colors[1]) if len(colors) > 1 else (10, 12, 18)
         accent = _parse_rgb(colors[2]) if len(colors) > 2 else (255, 210, 60)
     else:
-        primary, secondary, accent = (220, 20, 60), (10, 12, 18), (255, 210, 60)
+        primary, accent = (220, 20, 60), (255, 210, 60)
 
     # Avoid unreadable creator palettes.
     if max(accent) < 120:
         accent = (255, 210, 60)
     if max(primary) < 100:
         primary = (255, 255, 255)
-    if max(secondary) > 225:
-        secondary = (18, 20, 28)
-
     img = _load_background(background_path, size, focus=background_focus)
     img = _add_thumbnail_overlay(img, width_fraction=0.58 if size[0] >= size[1] else 1.0)
 
