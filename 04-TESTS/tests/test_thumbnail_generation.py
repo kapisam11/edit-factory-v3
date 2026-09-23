@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from ai_video_factory.thumbnail import make_thumbnail, make_thumbnail_variants
 
@@ -10,7 +10,7 @@ def test_thumbnail_uses_real_background_and_readable_composition(tmp_path: Path)
     output = tmp_path / "thumbnail.png"
 
     image = Image.new("RGB", (1920, 1080), (30, 70, 150))
-    draw = __import__("PIL.ImageDraw", fromlist=["ImageDraw"]).ImageDraw(image)
+    draw = ImageDraw.Draw(image)
     draw.rectangle((1100, 180, 1800, 900), fill=(240, 160, 30))
     image.save(background)
 
