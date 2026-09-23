@@ -232,6 +232,37 @@ def produce_package(
                         json.dump(saved, vf, indent=2)
                 except Exception as log_error:
                     logger.warning("Fallback visuals.json write failed: %s", log_error)
+            # Refresh the primary thumbnail with a real researched visual when one is available.
+            try:
+                from .thumbnail import make_thumbnail, make_thumbnail_variants
+
+                background_path = None
+                for visual in saved:
+                    candidate = visual.get("local_path") or visual.get("local_thumbnail")
+                    if candidate and os.path.isfile(candidate):
+                        background_path = candidate
+                        break
+
+                if background_path and main_thumb:
+                    make_thumbnail(
+                        subject,
+                        main_thumb,
+                        size=(1280, 720),
+                        background_path=background_path,
+                    )
+                    if main_thumb_vertical:
+                        from .thumbnail import make_thumbnail_vertical
+
+                        make_thumbnail_vertical(
+                            subject,
+                            main_thumb_vertical,
+                            size=(1080, 1920),
+                            background_path=background_path,
+                        )
+                    logger.info("[THUMB] Refreshed thumbnail using downloaded visual: %s", background_path)
+            except Exception as exc:
+                logger.warning("Visual-backed thumbnail refresh failed: %s", exc)
+
     except Exception as e:
         logger.warning("Visual download pipeline failed: %s", e)
 
