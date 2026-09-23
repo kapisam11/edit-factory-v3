@@ -122,7 +122,7 @@ jobs:
           test -f "$PACKAGE_DIR/v3_readiness.json"
           test -f "$PACKAGE_DIR/v3_render_qc.json"
           test -f "$PACKAGE_DIR/scenes.json"
-          python - "$PACKAGE_DIR" <<'PY'
+          uv run python - "$PACKAGE_DIR" <<'PY'
           from PIL import Image
           from pathlib import Path
           import sys
