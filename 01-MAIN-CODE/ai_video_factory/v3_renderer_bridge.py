@@ -6,7 +6,7 @@ compatibility seam that remains intentionally versioned and testable.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Optional
 
 from .production_models import ProductionResult
@@ -34,7 +34,7 @@ class V3RenderPlan:
             clip_plan=tuple(dict(item) for item in blueprint.to_dict()["clip_plan"]),
             hooks=tuple(dict(item) for item in blueprint.to_dict()["hooks"]),
             retention_map=tuple(dict(item) for item in blueprint.to_dict()["retention_map"]) if include_retention else tuple(),
-            platform_profile=dict(blueprint.platform_profile.__dict__),
+            platform_profile=asdict(blueprint.platform_profile),
         )
 
     def to_directives(self) -> dict[str, Any]:
@@ -55,7 +55,6 @@ class V3RenderRequest:
     package_dir: str
     target_seconds: float
     research_summary: Mapping[str, Any]
-    render_plan: Optional[V3RenderPlan] = None
     model_key: Optional[str] = None
     skip_qc: bool = False
     music_path: Optional[str] = None
@@ -64,6 +63,7 @@ class V3RenderRequest:
     enable_diarization: bool = False
     diarization_token: Optional[str] = None
     platform: str = "youtube_shorts"
+    render_plan: Optional[V3RenderPlan] = None
 
 
 def render_v3(request: V3RenderRequest) -> ProductionResult:
