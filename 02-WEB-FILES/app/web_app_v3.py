@@ -28,6 +28,7 @@ from werkzeug.utils import secure_filename
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 from ai_video_factory.render_engine import run_ffprobe
 from ai_video_factory.runtime_capabilities import capabilities
+from ai_video_factory.runtime_config import runtime_config
 from app.job_service import build_job_params
 
 APP_DIR = Path(__file__).resolve().parent
@@ -40,6 +41,7 @@ if not (BASE_DIR / "templates").is_dir() or not (BASE_DIR / "static").is_dir():
 STATE_DIR = Path(os.environ.get("AIVF_STATE_DIR", BASE_DIR / "state")).resolve()
 UPLOAD_FOLDER = Path(os.environ.get("AIVF_UPLOAD_DIR", BASE_DIR / "uploads")).resolve()
 OUTPUT_FOLDER = Path(os.environ.get("AIVF_OUTPUT_DIR", BASE_DIR / "output")).resolve()
+RUNTIME_CONFIG = runtime_config()
 DB_PATH = STATE_DIR / "jobs.db"
 for directory in (STATE_DIR, UPLOAD_FOLDER, OUTPUT_FOLDER):
     directory.mkdir(parents=True, exist_ok=True)
@@ -51,7 +53,7 @@ app = Flask(
 )
 configured_secret = os.environ.get("FLASK_SECRET_KEY", "").strip()
 app.config.update(
-    MAX_CONTENT_LENGTH=int(os.environ.get("AIVF_MAX_UPLOAD_MB", "500")) * 1024 * 1024,
+    MAX_CONTENT_LENGTH=RUNTIME_CONFIG.max_upload_mb * 1024 * 1024,
     SECRET_KEY=configured_secret or None,
 )
 
@@ -61,7 +63,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
 INTERNAL_PARAM_KEYS = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
-RUNTIME_SECRET_TTL_SECONDS = max(300, int(os.environ.get("AIVF_RETRY_SECRET_TTL_SECONDS", "3600")))
+RUNTIME_SECRET_TTL_SECONDS = RUNTIME_CONFIG.retry_secret_ttl_seconds
 TERMINAL_STATUSES = {"done", "error", "cancelled", "interrupted"}
 SETTINGS_SCHEMA = {
     "default_target_seconds": ("float", 15.0, 120.0),
@@ -84,10 +86,10 @@ _package_cache: Optional[tuple[float, list]] = None
 _PACKAGE_CACHE_TTL = 2.0
 _SQLITE_WRITE_RETRIES = 3
 _SQLITE_RETRY_DELAY_SECONDS = 0.05
-_MAX_QUEUED_JOBS = max(1, int(os.environ.get("AIVF_MAX_QUEUED_JOBS", "20")))
+_MAX_QUEUED_JOBS = RUNTIME_CONFIG.max_queued_jobs
 _MIN_FREE_DISK_BYTES = max(
     256 * 1024 * 1024,
-    int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "1024")) * 1024 * 1024,
+    RUNTIME_CONFIG.min_free_disk_mb * 1024 * 1024,
 )
 
 
