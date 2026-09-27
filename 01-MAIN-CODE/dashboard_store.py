@@ -216,6 +216,9 @@ class DashboardStore:
                 "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
                 (job_id, max_attempts),
             ).rowcount)
+
+        return int(self.write(write))
+
     def get_job(self, job_id: str) -> Optional[dict]:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
