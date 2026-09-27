@@ -38,8 +38,7 @@ def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
                     artist = meta.get("Artist", {}).get("value") or meta.get("Credit", {}).get("value")
                     license_url = meta.get("LicenseUrl", {}).get("value")
                 license_text = str(license or "").lower()
-                cleared_cc = bool(license_text) and "cc by" in license_text and "nc" not in license_text and "nd" not in license_text
-                cleared_public_domain = "public domain" in license_text or license_text in {"cc0", "cc zero"}
+                cleared_cc = (\n                    bool(license_text)\n                    and "cc by" in license_text\n                    and "nc" not in license_text\n                    and "nd" not in license_text\n                    and "sa" not in license_text\n                )\n                cleared_public_domain = "public domain" in license_text or license_text in {"cc0", "cc zero"}
                 rights_status = "cleared" if (cleared_cc or cleared_public_domain) else ("license_identified" if license else "review_required")
                 rights_basis = "cc_license" if cleared_cc else ("public_domain" if cleared_public_domain else "")
                 results.append({"url": src, "source": "wikimedia", "title": title, "license": license, "artist": artist, "license_url": license_url, "rights_status": rights_status, "rights_basis": rights_basis})
