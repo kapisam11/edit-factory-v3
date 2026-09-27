@@ -21,6 +21,7 @@ def _create_schema(path):
                 params TEXT NOT NULL,
                 pkg_dir TEXT,
                 error TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -115,3 +116,18 @@ def test_dashboard_store_claim_is_atomic(tmp_path):
     for thread in threads:
         thread.join()
     assert sorted(results) == [False, True]
+
+
+
+def test_dashboard_store_retry_policy_is_bounded_and_rejects_deterministic_failure(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store = DashboardStore(db)
+    store.insert_job("job-1", "topic", {})
+    assert store.claim_job("job-1") is True
+    store.update_job("job-1", status="error", error="provider returned 429")
+    assert store.retry_job("job-1", max_attempts=1) == 1
+    assert store.get_job("job-1")["retry_count"] == 1
+    store.update_job("job-1", status="error", error="invalid configuration")
+    with pytest.raises(Exception, match="deterministic|maximum"):
+        store.retry_job("job-1", max_attempts=1)
