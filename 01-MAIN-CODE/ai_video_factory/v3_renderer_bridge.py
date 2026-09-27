@@ -27,13 +27,14 @@ class V3RenderPlan:
 
     @classmethod
     def from_blueprint(cls, blueprint: V3Blueprint, *, include_retention: bool = True) -> "V3RenderPlan":
+        payload = blueprint.to_dict()
         return cls(
             target_seconds=blueprint.duration,
             platform=blueprint.platform,
             edit_type=blueprint.edit_type,
-            clip_plan=tuple(dict(item) for item in blueprint.to_dict()["clip_plan"]),
-            hooks=tuple(dict(item) for item in blueprint.to_dict()["hooks"]),
-            retention_map=tuple(dict(item) for item in blueprint.to_dict()["retention_map"]) if include_retention else tuple(),
+            clip_plan=tuple(dict(item) for item in payload["clip_plan"]),
+            hooks=tuple(dict(item) for item in payload["hooks"]),
+            retention_map=tuple(dict(item) for item in payload["retention_map"]) if include_retention else tuple(),
             platform_profile=asdict(blueprint.platform_profile),
         )
 
