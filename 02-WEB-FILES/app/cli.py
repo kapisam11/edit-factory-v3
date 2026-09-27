@@ -215,7 +215,20 @@ def _run_one(args: argparse.Namespace, topic: str, overrides: Optional[Dict[str,
             upload_manifest = finalize_upload_package(
                 ctx.package_dir,
                 topic=topic,
-                summary={**ctx.research, **ctx.plan, "platform": platform, "thumbnail": ctx.thumbnail},
+                summary={
+                    **ctx.research,
+                    **ctx.plan,
+                    "platform": platform,
+                    "thumbnail": ctx.thumbnail,
+                    "source_metadata": {
+                        "creator": str(getattr(args, "source_creator", "")).strip(),
+                        "title": str(getattr(args, "source_title", "")).strip(),
+                        "url": str(getattr(args, "source_url", "")).strip(),
+                        "rights_basis": str(getattr(args, "rights_basis", "")).strip().lower(),
+                        "source": "user_provided",
+                    },
+                    "requires_rights_declaration": bool(getattr(args, "youtube_upload", False)),
+                },
                 script=ctx.script,
                 platform=platform,
                 final_video=ctx.final_video,
@@ -313,6 +326,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--youtube-client-secrets", default=None, help="OAuth client secrets JSON for YouTube")
     parser.add_argument("--youtube-token-path", default=None, help="Path for cached YouTube OAuth token")
     parser.add_argument("--youtube-privacy", default="private", choices=["private", "public", "unlisted"], help="YouTube privacy status")
+    parser.add_argument("--source-creator", default="", help="Creator of source footage/work used in the edit")
+    parser.add_argument("--source-title", default="", help="Title of source footage/work used in the edit")
+    parser.add_argument("--source-url", default="", help="URL of source footage/work used in the edit")
+    parser.add_argument(
+        "--rights-basis",
+        default="",
+        choices=["", "owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"],
+        help="Rights basis for the source footage; required for direct YouTube publishing",
+    )
     parser.add_argument("--export-nle", default=None, choices=["resolve", "premiere", "capcut", "all"])
     parser.add_argument("--skip-stages", default="", help="Comma-separated stages to skip")
     parser.add_argument("--use-groq", action="store_true", help="Enable Groq research enrichment")
