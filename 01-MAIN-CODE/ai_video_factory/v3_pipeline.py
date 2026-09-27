@@ -160,6 +160,16 @@ def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
             "required upload-package validation did not pass"
         )
 
+def _cleanup_v3_transients(package: Path) -> None:
+    """Remove only known V3 temporary artifacts; preserve canonical outputs for inspection."""
+    for name in ("final.v3.retention.mp4", ".final.v3.normalized.mp4"):
+        (package / name).unlink(missing_ok=True)
+    for child in package.glob(".aivf-*.partial"):
+        child.unlink(missing_ok=True)
+    for child in package.glob("aivf-v3-thumb-*"):
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+
 
 def _prepare_blueprint(
     topic: str, context: str, target_seconds: float, platform: str, audience: str, bpm: int,
@@ -212,33 +222,38 @@ def _finalize_v3_media(
 ) -> tuple[str, Path, Dict[str, Any]]:
     _validate_timeline_contract(package, payload, target_seconds)
     baseline_path = package / "v3_baseline.mp4"
-    if not result.final_video:
-        raise RenderContractError("renderer returned no final video")
-    shutil.copyfile(result.final_video, baseline_path)
     retention_path = package / "final.v3.retention.mp4"
-    enforce_retention_events(result.final_video, str(retention_path), payload.get("retention_map", []))
-    os.replace(retention_path, result.final_video)
-    canonical_final = package / "final.v3.mp4"
     normalized_path = package / ".final.v3.normalized.mp4"
-    normalize_duration(result.final_video, str(normalized_path), target_seconds)
-    previous_final = Path(result.final_video).resolve()
-    if previous_final != canonical_final.resolve():
-        canonical_final.unlink(missing_ok=True)
-        os.replace(normalized_path, canonical_final)
-        previous_final.unlink(missing_ok=True)
-    else:
-        os.replace(normalized_path, canonical_final)
-    profile = payload["platform_variants"][payload["platform"]]
-    report = strict_render_check(
-        str(canonical_final),
-        target_seconds=target_seconds,
-        platform_profile=profile,
-        retention_events=payload.get("retention_map", []),
-        retention_baseline=str(baseline_path),
-        require_independent_retention=True,
-    )
-    result.final_video = str(canonical_final)
-    return str(canonical_final), baseline_path, report
+    try:
+        if not result.final_video:
+            raise RenderContractError("renderer returned no final video")
+        shutil.copyfile(result.final_video, baseline_path)
+        enforce_retention_events(result.final_video, str(retention_path), payload.get("retention_map", []))
+        os.replace(retention_path, result.final_video)
+        canonical_final = package / "final.v3.mp4"
+        normalize_duration(result.final_video, str(normalized_path), target_seconds)
+        previous_final = Path(result.final_video).resolve()
+        if previous_final != canonical_final.resolve():
+            canonical_final.unlink(missing_ok=True)
+            os.replace(normalized_path, canonical_final)
+            previous_final.unlink(missing_ok=True)
+        else:
+            os.replace(normalized_path, canonical_final)
+        profile = payload["platform_variants"][payload["platform"]]
+        report = strict_render_check(
+            str(canonical_final),
+            target_seconds=target_seconds,
+            platform_profile=profile,
+            retention_events=payload.get("retention_map", []),
+            retention_baseline=str(baseline_path),
+            require_independent_retention=True,
+        )
+        result.final_video = str(canonical_final)
+        return str(canonical_final), baseline_path, report
+    except Exception:
+        retention_path.unlink(missing_ok=True)
+        normalized_path.unlink(missing_ok=True)
+        raise
 
 
 def _package_v3_assets(
@@ -316,6 +331,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     _validate_v3_inputs(input_video, topic, target_seconds, platform, audience, bpm)
     package = Path(package_dir)
     package.mkdir(parents=True, exist_ok=True)
+    _cleanup_v3_transients(package)
     blueprint, payload, blueprint_path = _prepare_blueprint(
         topic, context, target_seconds, platform, audience, bpm, package, edit_type, source_metadata
     )
@@ -377,4 +393,5 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
         "v3_renderer_bridge": "ai_video_factory.v3_renderer_bridge",
         "v3_acceptance_matrix": "00-INFO/24-POINT-ACCEPTANCE.md",
     })
+    _cleanup_v3_transients(package)
     return result
