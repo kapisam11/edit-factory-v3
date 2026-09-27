@@ -260,7 +260,6 @@ class V3Blueprint:
         required = {
             "version", "core_idea", "edit_type", "hooks", "clip_plan", "music",
             "retention_map", "thumbnail_concept", "title_options", "hashtags",
-            "platform_profile", "qc", "packaging", "metric_metadata",
             "description", "platform_variants", "quality", "metrics", "capabilities",
         }
         missing = sorted(required - set(payload))
@@ -285,10 +284,15 @@ class V3Blueprint:
             music = MusicPlan(**music_data)
             retention = tuple(RetentionEvent(**dict(item)) for item in payload["retention_map"])
             quality = QualityReport(**dict(payload["quality"]))
-            profile = PlatformProfile(**dict(payload["platform_profile"]))
-            qc = QCRequirements(**dict(payload["qc"]))
-            packaging = PackagingPlan(**dict(payload["packaging"]))
-            metric_metadata = MetricMetadata(**dict(payload["metric_metadata"]))
+            platform_name = str(payload.get("platform", "youtube_shorts"))
+            raw_profile = payload.get("platform_profile")
+            profile = PlatformProfile(**dict(raw_profile)) if isinstance(raw_profile, Mapping) else PlatformProfile(**dict(PLATFORM_PROFILES.get(platform_name, {})))
+            raw_qc = payload.get("qc")
+            qc = QCRequirements(**dict(raw_qc)) if isinstance(raw_qc, Mapping) else QCRequirements()
+            raw_packaging = payload.get("packaging")
+            packaging = PackagingPlan(**dict(raw_packaging)) if isinstance(raw_packaging, Mapping) else PackagingPlan()
+            raw_metric_metadata = payload.get("metric_metadata")
+            metric_metadata = MetricMetadata(**dict(raw_metric_metadata)) if isinstance(raw_metric_metadata, Mapping) else MetricMetadata()
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError("V3 blueprint contains malformed typed data") from exc
         result = cls(
