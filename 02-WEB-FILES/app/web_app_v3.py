@@ -130,6 +130,7 @@ def init_db() -> None:
                 params TEXT NOT NULL DEFAULT '{}',
                 pkg_dir TEXT,
                 error TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -157,6 +158,9 @@ def init_db() -> None:
                 SELECT RAISE(ABORT, 'invalid job status transition');
             END
         """)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "retry_count" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id ON job_logs(job_id, id)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (
