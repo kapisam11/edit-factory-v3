@@ -664,6 +664,19 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         raise ValueError("blueprint is missing a registered creative strategy")
     if not blueprint.retention_map:
         raise ValueError("blueprint retention map is empty")
+    previous_retention = -1e-6
+    for event in blueprint.retention_map:
+        try:
+            RetentionKind(event.kind)
+        except ValueError as exc:
+            raise ValueError(f"unsupported retention event kind: {event.kind}") from exc
+        if not math.isfinite(float(event.time)) or event.time < -0.001 or event.time > blueprint.duration + 0.001:
+            raise ValueError("retention event time is outside the blueprint timeline")
+        if event.time < previous_retention:
+            raise ValueError("retention map is not monotonic")
+        if not str(event.instruction).strip():
+            raise ValueError("retention event instruction is required")
+        previous_retention = event.time
     previous = -1e-6
     for expected_index, clip in enumerate(blueprint.clip_plan, start=1):
         if clip.index != expected_index:
@@ -700,6 +713,11 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
     if not any(set(_tokens(tag)).intersection(topic_tokens) for tag in blueprint.hashtags):
         raise ValueError("blueprint hashtags are not topic-specific")
 
+    if not 0 <= int(blueprint.quality.score) <= 100:
+        raise ValueError("blueprint quality score must be between 0 and 100")
+    for key, value in blueprint.metrics.items():
+        if not str(key).strip() or not math.isfinite(float(value)) or not 0 <= float(value) <= 100:
+            raise ValueError(f"invalid heuristic metric: {key}")
     if not blueprint.quality.passed:
         raise ValueError("blueprint failed strict editorial QC")
 
