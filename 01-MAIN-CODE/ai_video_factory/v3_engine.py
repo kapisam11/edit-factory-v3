@@ -231,6 +231,12 @@ class V3Blueprint:
             object.__setattr__(self, "platform_profile", PlatformProfile(**profile))
 
     @property
+    def platform_constraints(self) -> PlatformProfile:
+        profile = self.platform_profile
+        if profile is None:
+            raise ValueError("blueprint platform profile is missing")
+        return profile
+    @property
     def schema_version(self) -> str:
         return self.version
 
@@ -244,7 +250,7 @@ class V3Blueprint:
             "schema_version": self.schema_version,
             "platform": self.platform,
             "audience": self.audience,
-            "platform_profile": asdict(self.platform_profile),
+            "platform_profile": asdict(self.platform_constraints),
             "qc": asdict(self.qc),
             "packaging": asdict(self.packaging),
             "metric_metadata": asdict(self.metric_metadata),
@@ -727,7 +733,7 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
     if blueprint.platform not in PLATFORM_PROFILES:
         raise ValueError(f"unsupported blueprint platform: {blueprint.platform}")
     expected_profile = PLATFORM_PROFILES[blueprint.platform]
-    if asdict(blueprint.platform_profile) != dict(expected_profile):
+    if asdict(blueprint.platform_constraints) != dict(expected_profile):
         raise ValueError("blueprint platform profile does not match registered platform constraints")
     if not 0.01 <= float(blueprint.qc.target_tolerance_seconds) <= 1.0:
         raise ValueError("blueprint QC target tolerance is invalid")
