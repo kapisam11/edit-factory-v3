@@ -124,15 +124,58 @@ state_dir = Path(os.environ.get("AIVF_STATE_DIR", "/app/state")).resolve()
 db_path = state_dir / "jobs.db"
 store = DashboardStore(db_path)
 
-deleted = store.write(
-    lambda conn: (
-        conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,)),
-        conn.execute("DELETE FROM jobs WHERE id=? AND status='done'", (job_id,)),
-    )
-)
-if not deleted[-1].rowcount:
-    raise SystemExit("target smoke could not remove its completed job record safely")
+job_row = store.get_job(job_id)
+if not job_row or job_row.get("status") != "done":
+    raise SystemExit("target smoke could not find its completed job record")
+log_rows = store.logs_since(job_id, 0)
 
-shutil.rmtree(package, ignore_errors=False)
+quarantine = package.with_name(f".{package.name}.cleanup-{os.getpid()}")
+if quarantine.exists():
+    shutil.rmtree(quarantine, ignore_errors=True)
+
+os.replace(package, quarantine)
+
+try:
+    deleted = store.write(
+        lambda conn: (
+            conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,)),
+            conn.execute("DELETE FROM jobs WHERE id=? AND status='done'", (job_id,)),
+        )
+    )
+    if not deleted[-1].rowcount:
+        raise RuntimeError("target smoke could not remove its completed job record safely")
+
+    cleanup_error = None
+    for attempt in range(5):
+        try:
+            shutil.rmtree(quarantine, ignore_errors=False)
+            cleanup_error = None
+            break
+        except OSError as exc:
+            cleanup_error = exc
+            time.sleep(0.2 * (attempt + 1))
+    if cleanup_error is not None:
+        raise cleanup_error
+except Exception:
+    if not package.exists() and quarantine.exists():
+        os.replace(quarantine, package)
+
+    def restore(conn):
+        columns = list(job_row.keys())
+        quoted = ", ".join(f'"{column}"' for column in columns)
+        placeholders = ", ".join("?" for _ in columns)
+        conn.execute(
+            f"INSERT OR REPLACE INTO jobs ({quoted}) VALUES ({placeholders})",
+            [job_row[column] for column in columns],
+        )
+        for log in log_rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO job_logs (id, job_id, created_at, level, message) VALUES (?, ?, ?, ?, ?)",
+                (log["id"], job_id, log["created_at"], log["level"], log["message"]),
+            )
+
+    store.write(restore)
+    raise
+
 fixture.unlink(missing_ok=True)
 PY
