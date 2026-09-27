@@ -410,14 +410,29 @@ def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequenc
     }
 
 def _metadata(core: CoreIdea) -> tuple[str, List[str], List[str], str]:
-    thumb = f"Close emotional frame of {core.topic}; one focal subject; 2-4 word contrast text; no clutter."
-    titles = [_compact(core.emotional_angle,11), _compact(f"The {core.topic} moment nobody forgets",11), _compact(f"Why {core.topic} mattered more than people realized",11)]
-    tags = ["#shorts","#story","#edit","#videoediting"]
-    slug = re.sub(r"[^a-z0-9]+","",core.topic.lower())[:20]
+    """Create concise metadata that stays specific to the actual story."""
+    topic = _compact(core.topic, 8)
+    angle = _compact(core.emotional_angle, 10)
+    thumb = f"Strong focal frame of {topic}; bold 2-5 word hook; simple contrast; no clutter."
+    titles = [
+        _compact(f"{topic}: {angle}", 12),
+        _compact(f"What actually happened with {topic}", 12),
+        _compact(f"Why {topic} changed everything", 12),
+        _compact(f"The turning point in {topic}", 12),
+        _compact(f"{topic}: the moment it all changed", 12),
+    ]
+    tags = ["shorts", "story", "edit", "video editing"]
+    slug = re.sub(r"[^a-z0-9]+", "", core.topic.lower())[:24]
     if slug:
-        tags.append(f"#{slug}")
-    description = f"{core.emotional_angle}. {core.why_people_care} Watch through the payoff: {core.payoff}"
-    return thumb, titles, tags, description
+        tags.append(slug)
+    description = " ".join(
+        part for part in (
+            core.emotional_angle,
+            core.why_people_care,
+            core.payoff,
+        ) if part
+    ).strip()
+    return thumb, list(dict.fromkeys(titles)), list(dict.fromkeys(tags)), description
 
 def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | None = None, edit_type: str | None = None) -> V3Blueprint:
     cfg = config or V3Config()
