@@ -22,13 +22,7 @@ def write_package(base_dir: str, summary: Dict, idea: Dict, thumbnail_path: str)
     with open(os.path.join(base_dir, "script.txt"), "w", encoding="utf-8") as f:
         f.write(idea.get("script", ""))
 
-    # write title options
-    with open(os.path.join(base_dir, "title_options.txt"), "w", encoding="utf-8") as f:
-        for ranked in title_rankings:
-            f.write(str(ranked.get("title", "")) + "\n")
-
-    # write the same natural description used by the upload package
-    from .upload_package import build_description, generate_platform_tags, rank_title_candidates
+    # Build one canonical metadata set so title/description/tags stay consistent.
     summary_payload = {**summary, **idea}
     title_rankings = rank_title_candidates(
         str(summary.get("topic", "")),
@@ -40,6 +34,10 @@ def write_package(base_dir: str, summary: Dict, idea: Dict, thumbnail_path: str)
         title_limit=100,
     )
     desc = build_description(str(summary.get("topic", "")), summary_payload, str(idea.get("script", "")), "youtube_shorts")
+
+    with open(os.path.join(base_dir, "title_options.txt"), "w", encoding="utf-8") as f:
+        for ranked in title_rankings:
+            f.write(str(ranked.get("title", "")) + "\n")
     with open(os.path.join(base_dir, "description.txt"), "w", encoding="utf-8") as f:
         f.write(desc)
 
@@ -55,10 +53,7 @@ def write_package(base_dir: str, summary: Dict, idea: Dict, thumbnail_path: str)
 
     social_metadata = {
         "title_options": [item["title"] for item in title_rankings],
-        "description": (
-            f"{idea.get('hook', '').strip()} - {summary.get('why_care', '')} "
-            f"Watch till the end for the emotional payoff and the hidden reason."
-        ),
+        "description": desc,
         "tags": tags,
         "hashtags": hashtags,
         "platforms": [
