@@ -79,7 +79,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         cache.delete("jobs:list")
 
     def db_update_job(job_id: str, **kwargs: Any) -> int:
-        result = store.update_job(job_id, **kwargs)
+        result = store.update_job_compat(job_id, **kwargs)
         cache.delete("jobs:list")
         return result
 
