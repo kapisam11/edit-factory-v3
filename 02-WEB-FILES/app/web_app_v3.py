@@ -26,6 +26,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
+from ai_video_factory.render_engine import run_ffprobe
 
 APP_DIR = Path(__file__).resolve().parent
 SOURCE_WEB_DIR = APP_DIR.parent if (APP_DIR.parent / "templates").is_dir() else None
@@ -382,56 +383,14 @@ def _safe_package_dir(topic: str, output_root: str) -> Path:
 
 
 def _probe_video(path: Path) -> bool:
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        return False
     try:
-        result = subprocess.run(
-            [
-                ffprobe, "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=codec_type,width,height,duration",
-                "-show_entries", "format=duration", "-of", "json", str(path),
-            ],
-            capture_output=True, text=True, timeout=20, check=False,
-        )
-        data = json.loads(result.stdout or "{}")
-        streams = data.get("streams") or []
-        if result.returncode != 0 or not streams:
-            return False
-        stream = streams[0]
-        width = int(stream.get("width") or 0)
-        height = int(stream.get("height") or 0)
-        duration = stream.get("duration") or (data.get("format") or {}).get("duration")
-        duration = float(duration)
-        return width > 0 and height > 0 and width <= 7680 and height <= 7680 and duration > 0 and duration <= 3600
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError, json.JSONDecodeError):
-        return False
-
-
-def _save_and_validate_upload(upload, suffix: str) -> Path:
-    max_bytes = int(app.config["MAX_CONTENT_LENGTH"])
-    declared_size = getattr(upload, "content_length", None)
-    if declared_size and declared_size > max_bytes:
-        raise ValueError("Upload is too large")
-
-    temp_fd, temp_name = tempfile.mkstemp(prefix=".upload-", suffix=suffix, dir=UPLOAD_FOLDER)
-    os.close(temp_fd)
-    temp_path = Path(temp_name)
-    final_path = UPLOAD_FOLDER / f"{uuid.uuid4().hex}{suffix}"
-    try:
-        upload.save(temp_path)
-        if temp_path.stat().st_size > max_bytes or not _probe_video(temp_path):
-            raise ValueError("Upload is too large or is not a valid supported video stream")
-        os.replace(temp_path, final_path)
-        return final_path
-    finally:
-        temp_path.unlink(missing_ok=True)
-
-
-def _module_available(module_name: str) -> bool:
-    try:
-        return importlib.util.find_spec(module_name) is not None
-    except (ImportError, ModuleNotFoundError, ValueError):
+        result = run_ffprobe([
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=codec_type,width,height,duration",
+            "-of", "json", str(path),
+        ], timeout=30)
+        return result.returncode == 0 and bool((result.stdout or "").strip())
+    except (OSError, RuntimeError, ValueError):
         return False
 
 
