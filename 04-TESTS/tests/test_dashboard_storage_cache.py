@@ -6,7 +6,7 @@ import time
 import pytest
 
 from dashboard_cache import HybridCache
-from dashboard_store import DashboardStore
+from dashboard_store import DashboardStore, JobRetryNotAllowed
 
 
 def _create_schema(path):
@@ -129,5 +129,5 @@ def test_dashboard_store_retry_policy_is_bounded_and_rejects_deterministic_failu
     assert store.retry_job("job-1", max_attempts=1) == 1
     assert store.get_job("job-1")["retry_count"] == 1
     store.update_job("job-1", status="error", error="invalid configuration")
-    with pytest.raises(Exception, match="deterministic|maximum"):
+    with pytest.raises(JobRetryNotAllowed, match="deterministic|maximum"):
         store.retry_job("job-1", max_attempts=1)
