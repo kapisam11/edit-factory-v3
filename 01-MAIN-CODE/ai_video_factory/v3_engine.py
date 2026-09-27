@@ -549,10 +549,10 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         raise ValueError("blueprint top title is not specific to the requested topic")
     if len(str(blueprint.description).strip()) < 40:
         raise ValueError("blueprint description is too short")
-    if not blueprint.tags:
-        raise ValueError("blueprint tags are empty")
-    if not any(set(_tokens(tag)).intersection(topic_tokens) for tag in blueprint.tags):
-        raise ValueError("blueprint tags are not topic-specific")
+    if not blueprint.hashtags:
+        raise ValueError("blueprint hashtags are empty")
+    if not any(set(_tokens(tag)).intersection(topic_tokens) for tag in blueprint.hashtags):
+        raise ValueError("blueprint hashtags are not topic-specific")
 
     if not blueprint.quality.passed:
         raise ValueError("blueprint failed strict editorial QC")
