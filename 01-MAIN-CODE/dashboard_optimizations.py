@@ -417,7 +417,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 pkg_dir=previous_pkg_dir,
             )
             cache.delete("jobs:list")
-            return jsonify({"error": f"Retry could not start: {exc}"}), 500
+            app_module.logger.exception("Retry worker failed to start for %s", job_id)
+            return jsonify({"error": "Retry could not start. The worker could not be started."}), 500
 
         final_job = app_module.db_get_job(job_id) or {}
         if final_job.get("status") == "error":
