@@ -37,7 +37,7 @@ def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
                 if meta:
                     artist = meta.get("Artist", {}).get("value") or meta.get("Credit", {}).get("value")
                     license_url = meta.get("LicenseUrl", {}).get("value")
-                results.append({"url": src, "source": "wikimedia", "title": title, "license": license, "artist": artist, "license_url": license_url})
+                rights_status = "license_identified" if license else "review_required"\n                rights_basis = "cc_license" if license and license.lower().startswith("cc") else ""\n                results.append({"url": src, "source": "wikimedia", "title": title, "license": license, "artist": artist, "license_url": license_url, "rights_status": rights_status, "rights_basis": rights_basis})
     except Exception:
         return results
     return results
@@ -66,7 +66,7 @@ def _search_reddit(topic: str, limit: int = 8) -> List[Dict]:
                 if u and re.search(r"\.(jpg|jpeg|png|gif)$", u, flags=re.I):
                     url_candidate = u
             if url_candidate:
-                results.append({"url": url_candidate, "source": "reddit", "title": d.get("title"), "license": "reddit", "subreddit": d.get("subreddit"), "selftext": (d.get("selftext") or "")[:400]})
+                results.append({"url": url_candidate, "source": "reddit", "title": d.get("title"), "license": "reddit", "subreddit": d.get("subreddit"), "selftext": (d.get("selftext") or "")[:400], "rights_status": "review_required", "rights_basis": ""})
     except Exception:
         return results
     return results
@@ -89,7 +89,7 @@ def _search_youtube(topic: str, limit: int = 6) -> List[Dict]:
             title = e.get("title")
             thumb = e.get("thumbnail")
             url = f"https://www.youtube.com/watch?v={vid}"
-            results.append({"url": url, "source": "youtube", "title": title, "thumbnail": thumb})
+            results.append({"url": url, "source": "youtube", "title": title, "thumbnail": thumb, "rights_status": "unverified", "rights_basis": ""})
     except Exception:
         return results
     return results
@@ -114,7 +114,7 @@ def _search_youtube_fallback(topic: str, limit: int = 6) -> List[Dict]:
             seen.append(vid)
             vurl = f"https://www.youtube.com/watch?v={vid}"
             thumb = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
-            results.append({"url": vurl, "source": "youtube", "title": "", "thumbnail": thumb})
+            results.append({"url": vurl, "source": "youtube", "title": "", "thumbnail": thumb, "rights_status": "unverified", "rights_basis": ""})
             if len(results) >= limit:
                 break
     except Exception:
@@ -297,7 +297,18 @@ def _is_meme(item: Dict) -> bool:
     return False
 
 
-def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20) -> Dict:
+def _media_rights_cleared(item: Dict) -> bool:
+    basis = str(item.get("rights_basis") or "").strip().lower()
+    return basis in {
+        "owned",
+        "explicit_permission",
+        "commercial_license",
+        "public_domain",
+        "cc_license",
+    } or str(item.get("rights_status") or "").strip().lower() == "cleared"
+
+
+def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20, *, rights_cleared: bool = False) -> Dict:
     """Download a short clip from a YouTube URL using `yt-dlp` + `ffmpeg`.
 
     Returns metadata dict with `local_path`, `thumbnail`, `uploader`, `upload_date`, `source`.
@@ -307,6 +318,8 @@ def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20
     import shlex
     from datetime import datetime
 
+    if not rights_cleared:
+        return {}
     if not shutil.which("yt-dlp"):
         return {}
     os.makedirs(out_dir, exist_ok=True)
@@ -403,7 +416,7 @@ def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = T
                 continue
             if "youtube.com" in url or "youtu.be" in url:
                 if download_clips:
-                    meta = download_youtube_clip(url, out_dir, max_duration=clip_max_duration)
+                    meta = download_youtube_clip(url, out_dir, max_duration=clip_max_duration, rights_cleared=_media_rights_cleared(v))
                     if meta:
                         meta.update(v)
                         meta["downloaded_at"] = datetime.utcnow().isoformat() + "Z"
