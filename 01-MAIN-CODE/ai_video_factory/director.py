@@ -29,6 +29,7 @@ from .composer import compose_short_from_video
 from .factory import create_package
 from .hardware import choose_performance_profile, choose_encoder
 from .model_adapter import call_model
+from .ai_response_validation import parse_script_lines_response
 from .music_fetcher import get_track_for_emotion
 from .music_mixer import (
     detect_music_beats,
@@ -328,23 +329,10 @@ OUTPUT FORMAT — return ONLY valid JSON, no markdown:
             if not raw:
                 return None
 
-            # Extract JSON from potential markdown fences
-            text = raw.strip()
-            if text.startswith("```"):
-                lines = text.splitlines()
-                # Drop fence lines
-                while lines and lines[0].startswith("```"):
-                    lines.pop(0)
-                while lines and lines[-1].startswith("```"):
-                    lines.pop(-1)
-                text = "\n".join(lines).strip()
-
-            parsed = json.loads(text)
-            lines = parsed.get("lines", [])
-            if not lines:
+            parsed_lines = parse_script_lines_response(raw)
+            if not parsed_lines:
                 return None
-
-            script = "\n".join(str(l) for l in lines)
+            script = "\n".join(parsed_lines)
 
             # Validate against anti-slop rules
             violations = _validate_script_against_rules(script, hook)
