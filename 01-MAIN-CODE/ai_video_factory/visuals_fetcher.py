@@ -310,7 +310,7 @@ def _media_rights_cleared(item: Dict) -> bool:
         "commercial_license",
         "public_domain",
         "cc_license",
-    } or str(item.get("rights_status") or "").strip().lower() == "cleared"
+    }
 
 
 def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20, *, rights_cleared: bool = False) -> Dict:
@@ -427,7 +427,7 @@ def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = T
                         meta["downloaded_at"] = datetime.utcnow().isoformat() + "Z"
                         saved.append(meta)
                         continue
-                if v.get("thumbnail"):
+                if v.get("thumbnail") and _media_rights_cleared(v):
                     try:
                         r = requests.get(v["thumbnail"], timeout=12, headers={"User-Agent": "ai-video-factory/1.0"})
                         if r.ok:
@@ -439,6 +439,9 @@ def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = T
                         pass
                 v["source"] = v.get("source", "youtube")
                 saved.append(v)
+                continue
+            # Remote third-party images must have an explicit rights basis too.
+            if not _media_rights_cleared(v):
                 continue
             try:
                 r = requests.get(url, timeout=12, headers={"User-Agent": "ai-video-factory/1.0"})
