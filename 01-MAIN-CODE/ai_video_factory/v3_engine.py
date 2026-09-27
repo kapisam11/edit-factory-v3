@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 import math
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 from types import MappingProxyType
 
@@ -778,6 +779,30 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
     for key, value in blueprint.metrics.items():
         if not str(key).strip() or not math.isfinite(float(value)) or not 0 <= float(value) <= 100:
             raise ValueError(f"invalid heuristic metric: {key}")
+    for hook in blueprint.hooks:
+        if not all(isinstance(value, str) for value in (hook.visual, hook.text, hook.emotional)):
+            raise ValueError("hook fields must be strings")
+        if not math.isfinite(float(hook.score)) or not 0.0 <= float(hook.score) <= 1.0:
+            raise ValueError("hook score must be between 0 and 1")
+    for clip in blueprint.clip_plan:
+        if not all(str(value).strip() for value in (clip.purpose, clip.emotion, clip.visual_style, clip.text_overlay, clip.camera_motion, clip.transition)):
+            raise ValueError(f"clip {clip.index} contains empty creative fields")
+    if not 40 <= int(blueprint.music.bpm) <= 240 or not math.isfinite(float(blueprint.music.beat_seconds)) or float(blueprint.music.beat_seconds) <= 0:
+        raise ValueError("blueprint music settings are invalid")
+    if not all(isinstance(tag, str) and tag.strip() for tag in blueprint.hashtags):
+        raise ValueError("blueprint hashtags must be non-empty strings")
+    if not all(isinstance(title, str) and title.strip() for title in blueprint.title_options):
+        raise ValueError("blueprint title options must be non-empty strings")
+    package_names = (
+        blueprint.packaging.final_video_name,
+        blueprint.packaging.thumbnail_name,
+        blueprint.packaging.vertical_thumbnail_name,
+        blueprint.packaging.upload_manifest_name,
+    )
+    if any(not isinstance(name, str) or not name.strip() or Path(name).name != name for name in package_names):
+        raise ValueError("packaging artifact names must be simple filenames")
+    if not isinstance(blueprint.qc.require_video, bool) or not isinstance(blueprint.qc.require_audio, bool) or not isinstance(blueprint.qc.require_independent_retention, bool):
+        raise ValueError("blueprint QC flags must be booleans")
     if not blueprint.quality.passed:
         raise ValueError("blueprint failed strict editorial QC")
 
