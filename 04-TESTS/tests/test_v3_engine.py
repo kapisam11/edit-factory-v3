@@ -125,3 +125,49 @@ def test_requested_edit_type_is_exactly_one_supported_type():
     for edit_type in EditType:
         blueprint = create_v3_blueprint("A subject", edit_type=edit_type.value)
         assert blueprint.edit_type == edit_type.value
+
+
+
+def test_v3_blueprint_round_trip_is_strict_and_immutable():
+    blueprint = create_v3_blueprint("Wemmbu", context="A difficult choice", config=V3Config(target_seconds=30))
+    payload = blueprint.to_dict()
+    restored = blueprint.from_dict(payload)
+
+    assert restored.schema_version == "3.0.0"
+    assert restored.platform == "youtube_shorts"
+    assert restored.duration == blueprint.duration
+    assert isinstance(restored.hooks, tuple)
+    assert isinstance(restored.clip_plan, tuple)
+
+    with pytest.raises(TypeError):
+        restored.clip_plan += (restored.clip_plan[0],)
+    with pytest.raises(TypeError):
+        restored.platform_variants["youtube_shorts"] = {}
+
+    payload["clip_plan"][0]["start"] = -1
+    with pytest.raises(ValueError, match="monotonic|timing"):
+        blueprint.from_dict(payload)
+
+
+def test_v3_blueprint_deserialization_rejects_missing_and_wrong_schema():
+    blueprint = create_v3_blueprint("A subject")
+    payload = blueprint.to_dict()
+
+    del payload["music"]
+    with pytest.raises(ValueError, match="missing required fields"):
+        blueprint.from_dict(payload)
+
+    payload = blueprint.to_dict()
+    payload["schema_version"] = "2.0.0"
+    with pytest.raises(ValueError, match="schema version"):
+        blueprint.from_dict(payload)
+
+
+def test_v3_blueprint_exposes_contract_platform_and_duration():
+    blueprint = create_v3_blueprint(
+        "A subject",
+        config=V3Config(target_seconds=12, platform="tiktok"),
+    )
+    assert blueprint.platform == "tiktok"
+    assert blueprint.duration == 12.0
+    assert blueprint.schema_version == blueprint.version == "3.0.0"
