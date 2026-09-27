@@ -535,6 +535,25 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         previous = clip.end
     if abs(blueprint.clip_plan[-1].end - blueprint.music.sync_points[-1]) > 0.01:
         raise ValueError("clip plan does not exactly cover planned duration")
+
+    titles = [str(title).strip() for title in blueprint.title_options if str(title).strip()]
+    if len(titles) < 5:
+        raise ValueError("blueprint title laboratory returned fewer than five usable titles")
+    if len(set(title.lower() for title in titles)) != len(titles):
+        raise ValueError("blueprint title options contain duplicates")
+    if any(len(title) > 100 for title in titles):
+        raise ValueError("blueprint title option exceeds the standard title limit")
+    topic_tokens = set(_tokens(blueprint.core_idea.topic))
+    top_title_tokens = set(_tokens(titles[0]))
+    if topic_tokens and not topic_tokens.intersection(top_title_tokens):
+        raise ValueError("blueprint top title is not specific to the requested topic")
+    if len(str(blueprint.description).strip()) < 40:
+        raise ValueError("blueprint description is too short")
+    if not blueprint.tags:
+        raise ValueError("blueprint tags are empty")
+    if not any(set(_tokens(tag)).intersection(topic_tokens) for tag in blueprint.tags):
+        raise ValueError("blueprint tags are not topic-specific")
+
     if not blueprint.quality.passed:
         raise ValueError("blueprint failed strict editorial QC")
 
