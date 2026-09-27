@@ -186,17 +186,17 @@ class V3Blueprint:
     version: str
     core_idea: CoreIdea
     edit_type: str
-    hooks: List[HookPack]
-    clip_plan: List[ClipBeat]
+    hooks: Sequence[HookPack]
+    clip_plan: Sequence[ClipBeat]
     music: MusicPlan
-    retention_map: List[RetentionEvent]
+    retention_map: Sequence[RetentionEvent]
     thumbnail_concept: str
-    title_options: List[str]
-    hashtags: List[str]
+    title_options: Sequence[str]
+    hashtags: Sequence[str]
     description: str
-    platform_variants: Dict[str, Dict[str, Any]]
+    platform_variants: Mapping[str, Mapping[str, Any]]
     quality: QualityReport
-    metrics: Dict[str, float]
+    metrics: Mapping[str, float]
     capabilities: Sequence[str]
     platform: str = "youtube_shorts"
     audience: str = "general short-form viewers"
