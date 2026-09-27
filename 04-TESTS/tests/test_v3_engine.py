@@ -179,3 +179,34 @@ def test_v3_metrics_use_explicit_heuristic_metadata_and_bounded_scores():
     assert blueprint.metric_metadata.method == "heuristic"
     assert blueprint.metric_metadata.confidence == "low"
     assert all(0.0 <= float(value) <= 100.0 for value in blueprint.metrics.values())
+
+def test_v3_finalization_does_not_promote_failed_qc_output(tmp_path, monkeypatch):
+    import ai_video_factory.v3_pipeline as pipeline
+    from types import SimpleNamespace
+
+    package = tmp_path / "package"
+    package.mkdir()
+    rendered = package / "legacy-render.mp4"
+    rendered.write_bytes(b"rendered")
+    result = SimpleNamespace(final_video=str(rendered))
+    payload = {
+        "clip_plan": [{"start": 0.0, "end": 1.0}],
+        "retention_map": [],
+        "platform": "youtube_shorts",
+        "platform_variants": {"youtube_shorts": {"width": 1080, "height": 1920, "max_seconds": 60}},
+        "packaging": {"final_video_name": "final.v3.mp4"},
+    }
+    (package / "timeline.json").write_text(
+        '{"segments":[{"start":0.0,"end":1.0}],"duration":1.0}', encoding="utf-8"
+    )
+    monkeypatch.setattr(pipeline, "enforce_retention_events", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline, "normalize_duration", lambda _a, output, _d: Path(output).write_bytes(b"normalized"))
+    monkeypatch.setattr(
+        pipeline,
+        "strict_render_check",
+        lambda *_a, **_k: {"ok": False, "errors": ["bad codec"], "warnings": []},
+    )
+    with pytest.raises(RenderContractError, match="bad codec"):
+        pipeline._finalize_v3_media(result, package, payload, 1.0)
+    assert not (package / "final.v3.mp4").exists()
+    assert not (package / ".final.v3.normalized.mp4").exists()
