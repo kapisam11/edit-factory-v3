@@ -24,8 +24,8 @@ def write_package(base_dir: str, summary: Dict, idea: Dict, thumbnail_path: str)
 
     # write title options
     with open(os.path.join(base_dir, "title_options.txt"), "w", encoding="utf-8") as f:
-        for t in idea.get("title_options", []):
-            f.write(t + "\n")
+        for ranked in title_rankings:
+            f.write(str(ranked.get("title", "")) + "\n")
 
     # write the same natural description used by the upload package
     from .upload_package import build_description, generate_platform_tags, rank_title_candidates
@@ -54,7 +54,7 @@ def write_package(base_dir: str, summary: Dict, idea: Dict, thumbnail_path: str)
         f.write(" ".join(hashtags))
 
     social_metadata = {
-        "title_options": idea.get("title_options", []),
+        "title_options": [item["title"] for item in title_rankings],
         "description": (
             f"{idea.get('hook', '').strip()} - {summary.get('why_care', '')} "
             f"Watch till the end for the emotional payoff and the hidden reason."
