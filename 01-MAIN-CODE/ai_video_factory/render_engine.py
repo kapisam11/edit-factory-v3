@@ -12,6 +12,7 @@ from typing import List, Optional
 
 from .ffmpeg_budget import slot
 from .hardware import choose_encoder, ffmpeg_preset_for
+from .runtime_config import runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,13 @@ def _ensure_dir(p: str) -> None:
 
 
 def _bounded_timeout(env_name: str, default: int, maximum: int = 7200) -> int:
+    config = runtime_config()
+    known = {
+        "AIVF_FFMPEG_TIMEOUT_SECONDS": config.ffmpeg_timeout_seconds,
+        "AIVF_FFPROBE_TIMEOUT_SECONDS": config.ffprobe_timeout_seconds,
+    }
+    if env_name in known:
+        return known[env_name]
     try:
         timeout = int(os.environ.get(env_name, str(default)))
     except ValueError as exc:
@@ -28,7 +36,6 @@ def _bounded_timeout(env_name: str, default: int, maximum: int = 7200) -> int:
     if not 1 <= timeout <= maximum:
         raise ValueError(f"{env_name} must be between 1 and {maximum} seconds")
     return timeout
-
 
 def _ffmpeg_binary() -> str:
     binary = shutil.which("ffmpeg")
