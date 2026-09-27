@@ -16,6 +16,7 @@ from typing import List, Optional
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 from .style_learner import learn_style
+from .render_engine import run_ffmpeg, run_ffprobe
 
 logger = logging.getLogger(__name__)
 
@@ -192,34 +193,22 @@ def extract_best_video_frame(video_path: str, out_dir: str, count: int = 7) -> O
     source = os.path.abspath(video_path)
     if not os.path.isfile(source):
         return None
-    ffmpeg = shutil.which("ffmpeg")
-    ffprobe = shutil.which("ffprobe")
-    if not ffmpeg or not ffprobe:
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         return None
 
     os.makedirs(out_dir, exist_ok=True)
     duration = 0.0
     try:
-        probe = subprocess.run(
-            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+        probe = run_ffprobe(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", source],
-            capture_output=True,
-            text=True,
-            check=True,
+            timeout=30,
         )
-        duration = float(probe.stdout.strip())
-    except Exception:
-        try:
-            probe = subprocess.run(
-                [ffprobe, "-v", "error", "-show_entries", "format=duration",
-                 "-of", "default=noprint_wrappers=1:nokey=1", source],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            duration = float(probe.stdout.strip())
-        except Exception:
+        if probe.returncode != 0:
             return None
+        duration = float((probe.stdout or "").strip())
+    except Exception:
+        return None
 
     if not math.isfinite(duration) or duration <= 0:
         return None
