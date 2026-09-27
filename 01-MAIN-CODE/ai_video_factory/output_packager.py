@@ -27,19 +27,27 @@ def write_package(base_dir: str, summary: Dict, idea: Dict, thumbnail_path: str)
         for t in idea.get("title_options", []):
             f.write(t + "\n")
 
-    # write description template
-    desc = f"Short doc-style short about {summary.get('topic')}. Watch till the end to see the reveal."
+    # write the same natural description used by the upload package
+    from .upload_package import build_description, generate_platform_tags, rank_title_candidates
+    summary_payload = {**summary, **idea}
+    title_rankings = rank_title_candidates(
+        str(summary.get("topic", "")),
+        hook=str(idea.get("hook", "")),
+        strongest_angle=str(summary.get("strongest_angle", "")),
+        emotion=str(idea.get("emotion", summary.get("emotion", ""))),
+        candidates=idea.get("title_options") if isinstance(idea.get("title_options"), list) else None,
+        max_candidates=10,
+        title_limit=100,
+    )
+    desc = build_description(str(summary.get("topic", "")), summary_payload, str(idea.get("script", "")), "youtube_shorts")
     with open(os.path.join(base_dir, "description.txt"), "w", encoding="utf-8") as f:
         f.write(desc)
 
     # write tags and hashtags
     topic_text = summary.get("topic", "").strip()
-    tags = [tag for tag in [topic_text, "gaming", "shorts", summary.get("content_type", "story")] if tag]
-    hashtags = ["#Minecraft", "#SMP", "#Gaming", "#Shorts"]
-    if summary.get("content_type") == "Minecraft":
-        hashtags = ["#Minecraft", "#SMP", "#Gaming", "#Shorts"]
-    else:
-        hashtags = ["#Shorts", "#Story", "#Gaming", "#Viral"]
+    selected_title = title_rankings[0]["title"] if title_rankings else topic_text
+    tags = generate_platform_tags(selected_title, desc, topic_text, max_tags=15, source_records=summary.get("source_credits") if isinstance(summary.get("source_credits"), list) else None)
+    hashtags = [f"#{tag.replace(' ', '')}" for tag in tags[:8]]
     with open(os.path.join(base_dir, "tags.txt"), "w", encoding="utf-8") as f:
         f.write(", ".join(tags))
     with open(os.path.join(base_dir, "hashtags.txt"), "w", encoding="utf-8") as f:
