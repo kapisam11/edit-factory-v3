@@ -76,7 +76,8 @@ class DashboardStore:
                     (OLD.status = 'queued' AND NEW.status IN ('running','cancelling','cancelled','error','interrupted')) OR
                     (OLD.status = 'running' AND NEW.status IN ('cancelling','cancelled','done','error','interrupted')) OR
                     (OLD.status = 'cancelling' AND NEW.status IN ('cancelled','error','interrupted')) OR
-                    (OLD.status IN ('done','error','cancelled','interrupted'))
+                    (OLD.status IN ('done','cancelled')) OR
+                    (OLD.status IN ('error','interrupted') AND NEW.status = 'queued')
                 )
                 BEGIN
                     SELECT RAISE(ABORT, 'invalid job status transition');
