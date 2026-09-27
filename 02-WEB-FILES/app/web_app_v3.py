@@ -391,6 +391,25 @@ def _safe_package_dir(topic: str, output_root: str) -> Path:
     return path
 
 
+def _save_and_validate_upload(upload, suffix: str) -> Path:
+    max_bytes = int(app.config["MAX_CONTENT_LENGTH"])
+    declared_size = getattr(upload, "content_length", None)
+    if declared_size and declared_size > max_bytes:
+        raise ValueError("Upload is too large")
+
+    temp_fd, temp_name = tempfile.mkstemp(prefix=".upload-", suffix=suffix, dir=UPLOAD_FOLDER)
+    os.close(temp_fd)
+    temp_path = Path(temp_name)
+    final_path = UPLOAD_FOLDER / f"{uuid.uuid4().hex}{suffix}"
+    try:
+        upload.save(temp_path)
+        if temp_path.stat().st_size > max_bytes or not _probe_video(temp_path):
+            raise ValueError("Upload is too large or is not a valid supported video stream")
+        os.replace(temp_path, final_path)
+        return final_path
+    finally:
+        temp_path.unlink(missing_ok=True)
+
 def _probe_video(path: Path) -> bool:
     try:
         result = run_ffprobe([
