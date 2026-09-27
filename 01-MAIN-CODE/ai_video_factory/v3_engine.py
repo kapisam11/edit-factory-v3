@@ -192,6 +192,11 @@ def _tokens(text: str) -> List[str]:
 def _compact(text: str, max_words: int = 6) -> str:
     return " ".join(str(text).strip().split()[:max_words])
 
+
+def _normalize_sentence(text: str) -> str:
+    value = re.sub(r"\s+", " ", str(text or "").strip()).strip(" .,-")
+    return value + "." if value else ""
+
 def analyze_core_idea(topic: str, context: str = "", audience: str = "general short-form viewers") -> CoreIdea:
     topic = str(topic).strip()
     context = str(context).strip()
@@ -456,29 +461,41 @@ def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequenc
     }
 
 def _metadata(core: CoreIdea) -> tuple[str, List[str], List[str], str]:
-    """Create concise metadata that stays specific to the actual story."""
+    """Build compact, topic-specific metadata for every V3 downstream consumer."""
     topic = _compact(core.topic, 8)
     angle = _compact(core.emotional_angle, 10)
-    thumb = f"Strong focal frame of {topic}; bold 2-5 word hook; simple contrast; no clutter."
+    payoff = _compact(core.payoff, 12)
+    emotion = _compact(core.target_emotion, 3)
+
     titles = [
-        _compact(f"{topic}: {angle}", 12),
-        _compact(f"What actually happened with {topic}", 12),
-        _compact(f"Why {topic} changed everything", 12),
-        _compact(f"The turning point in {topic}", 12),
-        _compact(f"{topic}: the moment it all changed", 12),
+        _compact(f"{topic}: {angle}", 14),
+        _compact(f"The moment {topic} changed", 10),
+        _compact(f"What happened with {topic}", 10),
+        _compact(f"The part of {topic} most people miss", 12),
+        _compact(f"Why {topic} still matters", 10),
+        _compact(f"The turning point in {topic}", 11),
+        _compact(f"{topic}: the detail that changes the story", 12),
+        _compact(f"How {topic} changed everything", 10),
     ]
-    tags = ["shorts", "story", "edit", "video editing"]
-    slug = re.sub(r"[^a-z0-9]+", "", core.topic.lower())[:24]
-    if slug:
-        tags.append(slug)
-    description = " ".join(
-        part for part in (
-            core.emotional_angle,
-            core.why_people_care,
-            core.payoff,
-        ) if part
-    ).strip()
-    return thumb, list(dict.fromkeys(titles)), list(dict.fromkeys(tags)), description
+    titles = list(dict.fromkeys(title for title in titles if title))
+
+    topic_tags = [
+        token
+        for token in _tokens(core.topic)
+        if len(token) >= 3
+    ]
+    tags = list(dict.fromkeys([*topic_tags, emotion]))
+    description_parts = [
+        _normalize_sentence(core.emotional_angle),
+        _normalize_sentence(core.why_people_care),
+        _normalize_sentence(payoff),
+    ]
+    description = " ".join(part for part in description_parts if part).strip()
+    thumbnail = (
+        f"Use the strongest focal frame from {topic}, keep the subject clear, "
+        f"leave text-safe space, and use a bold 2-5 word hook tied to the story."
+    )
+    return thumbnail, titles[:10], tags[:12], description
 
 def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | None = None, edit_type: str | None = None) -> V3Blueprint:
     cfg = config or V3Config()
