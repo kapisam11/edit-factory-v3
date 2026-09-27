@@ -632,6 +632,24 @@ def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[Ho
     score = round(100 * sum(checks.values()) / len(checks)) if checks else 0
     return QualityReport(score >= 95 and all(checks[k] for k in ("emotion_defined","single_edit_type_strategy","duration_bounds","exact_duration","has_payoff")), score, checks, warnings)
 
+# Engineering heuristics, not trained model coefficients. Keep named so changes are auditable.
+HOOK_WEIGHT_RETENTION = 0.35
+PACE_WEIGHT_RETENTION = 0.30
+QUALITY_WEIGHT_RETENTION = 0.20
+EMOTION_WEIGHT_RETENTION = 0.15
+
+QUALITY_WEIGHT_COMPLETION = 0.45
+PACE_WEIGHT_COMPLETION = 0.30
+HOOK_WEIGHT_COMPLETION = 0.25
+
+HOOK_WEIGHT_REWATCH = 0.40
+EMOTION_WEIGHT_REWATCH = 0.35
+QUALITY_WEIGHT_REWATCH = 0.25
+
+EMOTION_WEIGHT_SHAREABILITY = 0.50
+QUALITY_WEIGHT_SHAREABILITY = 0.30
+HOOK_WEIGHT_SHAREABILITY = 0.20
+
 def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequence[ClipBeat], quality: QualityReport) -> Dict[str, float]:
     hook = hooks[0].score if hooks else 0.0
     avg = clips[-1].end / len(clips) if clips else 0.0
@@ -639,10 +657,10 @@ def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequenc
     q = quality.score / 100.0
     emotion = 0.9 if core.target_emotion in {"trust","dramatic","inspiring","nostalgic"} else 0.82
     return {
-        "retention_score": round(100 * (0.35 * hook + 0.30 * pace + 0.20 * q + 0.15 * emotion), 1),
-        "completion_score": round(100 * (0.45 * q + 0.30 * pace + 0.25 * hook), 1),
-        "rewatch_score": round(100 * (0.40 * hook + 0.35 * emotion + 0.25 * q), 1),
-        "shareability_score": round(100 * (0.50 * emotion + 0.30 * q + 0.20 * hook), 1),
+        "retention_score": round(100 * (HOOK_WEIGHT_RETENTION * hook + PACE_WEIGHT_RETENTION * pace + QUALITY_WEIGHT_RETENTION * q + EMOTION_WEIGHT_RETENTION * emotion), 1),
+        "completion_score": round(100 * (QUALITY_WEIGHT_COMPLETION * q + PACE_WEIGHT_COMPLETION * pace + HOOK_WEIGHT_COMPLETION * hook), 1),
+        "rewatch_score": round(100 * (HOOK_WEIGHT_REWATCH * hook + EMOTION_WEIGHT_REWATCH * emotion + QUALITY_WEIGHT_REWATCH * q), 1),
+        "shareability_score": round(100 * (EMOTION_WEIGHT_SHAREABILITY * emotion + QUALITY_WEIGHT_SHAREABILITY * q + HOOK_WEIGHT_SHAREABILITY * hook), 1),
     }
 
 def _metadata(core: CoreIdea) -> tuple[str, List[str], List[str], str]:
