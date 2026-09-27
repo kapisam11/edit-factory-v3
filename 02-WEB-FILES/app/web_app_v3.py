@@ -512,6 +512,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 enable_object_detection=params.get("enable_object_detection", True),
                 enable_diarization=params.get("enable_diarization", False),
                 diarization_token=secrets.get("diarization_token"),
+                source_metadata=params.get("source_metadata"),
             )
             result_payload = {
                 "errors": list(getattr(result, "errors", []) or []),
@@ -749,6 +750,13 @@ def create_job():
             "enable_ocr": str(data.get("enable_ocr", "")).lower() in {"1", "true", "on", "yes"},
             "enable_object_detection": str(data.get("enable_object_detection", "false")).lower() in {"1", "true", "on", "yes"},
             "enable_diarization": str(data.get("enable_diarization", "")).lower() in {"1", "true", "on", "yes"},
+            "source_metadata": {
+                "creator": str(data.get("source_creator", "")).strip()[:200],
+                "title": str(data.get("source_title", "")).strip()[:300],
+                "url": str(data.get("source_url", "")).strip()[:1000],
+                "rights_basis": str(data.get("rights_basis", "")).strip().lower(),
+                "source": "user_provided",
+            },
         })
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
