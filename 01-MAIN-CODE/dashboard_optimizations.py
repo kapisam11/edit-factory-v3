@@ -11,6 +11,7 @@ from flask import Response, abort, has_request_context, jsonify, request, send_f
 
 from dashboard_cache import HybridCache
 from dashboard_store import DashboardStore, JobAdmissionError, JobRetryNotAllowed
+from ai_video_factory.runtime_config import runtime_config
 from resource_governor import (
     MAX_JOB_STORAGE_BYTES,
     MAX_RENDER_WALLCLOCK_SECONDS,
@@ -261,11 +262,12 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     def _database_cleanup() -> None:
         import time
         now = time.monotonic()
-        interval = max(300.0, float(os.environ.get("AIVF_DB_CLEANUP_INTERVAL_SECONDS", "3600")))
+        config = runtime_config()
+        interval = float(config.db_cleanup_interval_seconds)
         if now - cleanup_state["last"] < interval:
             return
         cleanup_state["last"] = now
-        days = max(1.0, float(os.environ.get("AIVF_DB_RETENTION_DAYS", os.environ.get("AIVF_RETENTION_DAYS", "30"))))
+        days = float(config.db_retention_days)
         cutoff = time.time() - days * 86400
         with store.connect() as conn:
             stale = conn.execute(
@@ -391,7 +393,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         try:
             changed = store.retry_job(
                 job_id,
-                max_attempts=max(1, int(os.environ.get("AIVF_MAX_JOB_RETRIES", "3"))),
+                max_attempts=runtime_config().max_job_retries,
             )
         except JobRetryNotAllowed as exc:
             return jsonify({"error": str(exc), "job_id": job_id, "status": previous_status}), 409
