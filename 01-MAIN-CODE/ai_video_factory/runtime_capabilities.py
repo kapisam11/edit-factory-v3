@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import importlib.util
 import shutil
-import os
 
 
 @dataclass(frozen=True)
@@ -33,8 +32,8 @@ def capabilities() -> dict[str, CapabilityStatus]:
         "ocr": CapabilityStatus("ocr", vision and _module("pytesseract") and shutil.which("tesseract") is not None, "the 'ocr' extra and the tesseract executable", "OCR scene analysis"),
         "audio_analysis": CapabilityStatus("audio_analysis", _module("librosa"), "the 'beats' or 'full' extra", "music and beat analysis"),
         "embeddings": CapabilityStatus("embeddings", _module("sentence_transformers"), "the 'intelligence' or 'full' extra", "semantic similarity"),
-        "diarization": CapabilityStatus("diarization", _module("pyannote.audio") and bool(os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("PYANNOTE_AUTH_TOKEN")), "the diarization/full extra plus a provider token", "speaker diarization"),
-        "groq": CapabilityStatus("groq", _module("groq") and bool(os.environ.get("GROQ_API_KEY")), "the groq extra plus GROQ_API_KEY", "Groq AI provider"),
+        "diarization": CapabilityStatus("diarization", _module("pyannote.audio"), "the diarization/full extra plus a provider token", "speaker diarization"),
+        "groq": CapabilityStatus("groq", _module("groq"), "the groq extra plus GROQ_API_KEY", "Groq AI provider"),
         "ffmpeg": CapabilityStatus("ffmpeg", shutil.which("ffmpeg") is not None, "FFmpeg installed on PATH", "media rendering"),
         "ffprobe": CapabilityStatus("ffprobe", shutil.which("ffprobe") is not None, "FFmpeg/FFprobe installed on PATH", "media validation"),
     }
