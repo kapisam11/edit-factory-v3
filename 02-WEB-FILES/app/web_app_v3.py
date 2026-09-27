@@ -195,20 +195,34 @@ def db_insert_job(job_id: str, topic: str, params: dict) -> None:
 
 
 def db_update_job(job_id: str, **kwargs: Any) -> int:
+    """Legacy-compatible status update routed through the durable lifecycle rules."""
     if not kwargs:
         return 0
     allowed = {"status", "step", "params", "pkg_dir", "error"}
     invalid = set(kwargs) - allowed
     if invalid:
         raise ValueError(f"Invalid job fields: {sorted(invalid)}")
-    fields = ", ".join(f"{key}=?" for key in kwargs)
 
     def write(conn):
-        cursor = conn.execute(
+        row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            return 0
+        current = str(row["status"])
+        target = str(kwargs.get("status", current))
+        if current == "queued" and target == "done":
+            conn.execute(
+                "UPDATE jobs SET status='running', step='starting', updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'",
+                (job_id,),
+            )
+            current = "running"
+        if target != current:
+            from ai_video_factory.job_state import validate_transition
+            validate_transition(current, target)
+        fields = ", ".join(f"{key}=?" for key in kwargs)
+        return conn.execute(
             f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             list(kwargs.values()) + [job_id],
-        )
-        return cursor.rowcount
+        ).rowcount
 
     return _run_db_write(write)
 
