@@ -24,7 +24,10 @@ def is_retryable_error(error: Exception) -> bool:
     text = str(error).lower()
     if any(marker in text for marker in NON_RETRYABLE_TEXT):
         return False
-    return any(marker in text for marker in ("429", "temporarily unavailable", "timeout", "rate limit", "connection reset"))
+    if any(marker in text for marker in ("429", "temporarily unavailable", "timeout", "rate limit", "connection reset")):
+        return True
+    # Unknown runtime failures remain bounded by the caller retry budget.
+    return isinstance(error, RuntimeError)
 
 
 def backoff_seconds(attempt: int, *, base: float = 0.5, cap: float = 8.0) -> float:
