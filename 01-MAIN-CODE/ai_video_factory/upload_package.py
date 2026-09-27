@@ -110,8 +110,23 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     records = _source_records(summary)
     external = [
         item for item in records
-        if item.get("source") in {"youtube", "reddit", "wikimedia"} or item.get("creator")
+        if item.get("source") in {"youtube", "reddit", "wikimedia"}
+        or item.get("creator")
+        or item.get("url")
     ]
+
+    if summary.get("requires_rights_declaration") and not summary.get("source_metadata"):
+        external.append({
+            "title": "Input media",
+            "creator": "",
+            "url": "",
+            "license": "",
+            "license_url": "",
+            "rights_basis": "",
+            "rights_status": "review_required",
+            "source": "user_provided",
+        })
+
     cleared_bases = {
         "owned",
         "explicit_permission",
@@ -121,17 +136,20 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     }
     unresolved = [
         item for item in external
-        if item.get("rights_status") != "cleared" and item.get("rights_basis") not in cleared_bases
+        if item.get("rights_status") != "cleared"
+        and item.get("rights_basis") not in cleared_bases
     ]
+
     return {
-        "status": "cleared" if external and not unresolved else ("review_required" if external else "not_declared"),
+        "status": "cleared" if external and not unresolved else ("review_required" if unresolved else "not_declared"),
         "publish_blocked": bool(unresolved),
+        "requires_explicit_declaration": bool(summary.get("requires_rights_declaration")),
         "sources": records,
         "unverified_sources": unresolved,
         "message": (
-            "Third-party media is not upload-cleared until the license, public-domain status, or explicit permission is verified."
+            "Publishing is blocked until every third-party or user-provided source has a declared, valid rights basis."
             if unresolved
-            else "No unresolved third-party media rights were declared."
+            else "No unresolved media rights were declared."
         ),
     }
 
