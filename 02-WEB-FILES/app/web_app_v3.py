@@ -141,6 +141,20 @@ def init_db() -> None:
                 message TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS validate_job_status_transition
+            BEFORE UPDATE OF status ON jobs
+            WHEN NOT (
+                NEW.status = OLD.status OR
+                (OLD.status = 'queued' AND NEW.status IN ('running','cancelling','cancelled','error','interrupted')) OR
+                (OLD.status = 'running' AND NEW.status IN ('cancelling','cancelled','done','error','interrupted')) OR
+                (OLD.status = 'cancelling' AND NEW.status IN ('cancelled','error','interrupted')) OR
+                (OLD.status IN ('done','error','cancelled','interrupted'))
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'invalid job status transition');
+            END
+        """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id ON job_logs(job_id, id)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (
