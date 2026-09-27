@@ -172,18 +172,23 @@ class DashboardStore:
         invalid = set(kwargs) - allowed
         if invalid or not kwargs or not expected_statuses:
             raise ValueError("Invalid conditional job update")
-        fields = ", ".join(f"{key}=?" for key in kwargs)
-        placeholders = ",".join("?" for _ in expected_statuses)
-        values = list(kwargs.values()) + [job_id, *expected_statuses]
-        return int(
-            self.write(
-                lambda conn: conn.execute(
-                    f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
-                    f"WHERE id=? AND status IN ({placeholders})",
-                    values,
-                ).rowcount
-            )
-        )
+
+        def write(conn: sqlite3.Connection) -> int:
+            row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None or str(row["status"]) not in expected_statuses:
+                return 0
+            if "status" in kwargs:
+                validate_transition(str(row["status"]), str(kwargs["status"]))
+            fields = ", ".join(f"{key}=?" for key in kwargs)
+            values = list(kwargs.values()) + [job_id, *expected_statuses]
+            placeholders = ",".join("?" for _ in expected_statuses)
+            return int(conn.execute(
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
+                f"WHERE id=? AND status IN ({placeholders})",
+                values,
+            ).rowcount)
+
+        return int(self.write(write))
 
     def retry_job(self, job_id: str, *, max_attempts: int = 3) -> int:
         """Atomically requeue one failed/interrupted job after retry-policy checks."""
