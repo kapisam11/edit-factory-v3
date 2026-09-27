@@ -112,13 +112,15 @@ def validate_metadata_quality(
     title_rankings: Sequence[Mapping[str, Any]],
     description: str,
     tags: Sequence[str],
+    *,
+    title_limit: int = 100,
 ) -> Dict[str, Any]:
     """Reject obviously weak upload metadata before it can be marked publish-ready."""
     topic_tokens = set(_topic_tokens(topic))
     title_tokens = set(_topic_tokens(selected_title))
     checks: Dict[str, bool] = {
         "title_present": bool(_normalize_phrase(selected_title)),
-        "title_within_limit": len(selected_title) <= 100,
+        "title_within_limit": len(selected_title) <= int(title_limit),
         "title_topic_specific": bool(topic_tokens.intersection(title_tokens)) if topic_tokens else True,
         "title_not_generic": selected_title.strip().lower() not in {
             "the real reason",
@@ -473,6 +475,7 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         title_rankings,
         description,
         tags,
+        title_limit=profile.title_limit,
     )
 
     upload_dir = root / "upload" / profile.name
