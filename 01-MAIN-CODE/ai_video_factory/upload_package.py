@@ -115,7 +115,18 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
         or item.get("url")
     ]
 
-    if summary.get("requires_rights_declaration") and not summary.get("source_metadata"):
+    rights_declaration = summary.get("source_metadata")
+    declared_basis = ""
+    if isinstance(rights_declaration, Mapping):
+        declared_basis = _normalize_phrase(str(rights_declaration.get("rights_basis") or "")).lower()
+
+    if summary.get("requires_rights_declaration") and declared_basis not in {
+        "owned",
+        "explicit_permission",
+        "commercial_license",
+        "public_domain",
+        "cc_license",
+    }:
         external.append({
             "title": "Input media",
             "creator": "",
