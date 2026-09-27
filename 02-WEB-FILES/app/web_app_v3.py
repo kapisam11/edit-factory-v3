@@ -27,6 +27,7 @@ from werkzeug.utils import secure_filename
 
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 from ai_video_factory.render_engine import run_ffprobe
+from app.job_service import build_job_params
 
 APP_DIR = Path(__file__).resolve().parent
 SOURCE_WEB_DIR = APP_DIR.parent if (APP_DIR.parent / "templates").is_dir() else None
@@ -678,86 +679,25 @@ def create_job():
     if not check_rate_limit(client_ip):
         return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
     data = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
-    topic = str(data.get("topic", "")).strip()
-    if not 2 <= len(topic) <= 500:
-        return jsonify({"error": "Topic must be between 2 and 500 characters"}), 400
     settings_data = get_settings()
     try:
-        workflow = normalize_workflow(data.get("workflow", settings_data["default_workflow"]))
-        if workflow == "v3":
-            target_seconds = validate_v3_target_seconds(
-                data.get("target_seconds", settings_data.get("default_target_seconds", 45.0))
-            )
-        else:
-            target_seconds = validate_target_seconds(
-                data.get("target_seconds", settings_data["default_target_seconds"])
-            )
+        params = build_job_params(
+            data,
+            settings_data,
+            allow_skip_qc=os.environ.get("AIVF_ALLOW_SKIP_QC", "0") == "1",
+        )
     except (TypeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
+    topic = params["topic"]
+    workflow = params["workflow"]
+    target_seconds = params["target_seconds"]
     try:
         with get_db() as conn:
-            queued = int(conn.execute(
-                "SELECT COUNT(*) FROM jobs WHERE status='queued'"
-            ).fetchone()[0])
+            queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
         if queued >= _MAX_QUEUED_JOBS:
             return jsonify({"error": "Queue capacity reached. Retry later."}), 429
     except sqlite3.Error:
         return jsonify({"error": "Job queue is temporarily unavailable"}), 503
-
-    params = {
-        "topic": topic,
-        "target_seconds": target_seconds,
-        "workflow": workflow,
-        "use_groq": str(data.get("use_groq", "")).lower() in {"1", "true", "on", "yes"},
-        "skip_qc": (
-            os.environ.get("AIVF_ALLOW_SKIP_QC", "0") == "1"
-            and str(data.get("skip_qc", "")).lower() in {"1", "true", "on", "yes"}
-        ),
-    }
-    if workflow == "v3":
-        platform = str(data.get("platform", settings_data.get("default_v3_platform", "youtube_shorts"))).strip().lower()
-        audience = str(data.get("audience", settings_data.get("default_v3_audience", "general short-form viewers"))).strip()
-        edit_type = str(data.get("edit_type", "")).strip() or None
-        try:
-            bpm = int(data.get("bpm", settings_data.get("default_v3_bpm", 120)))
-        except (TypeError, ValueError):
-            return jsonify({"error": "bpm must be an integer between 40 and 240"}), 400
-        allowed_platforms = {"youtube_shorts", "tiktok", "instagram_reels", "square", "youtube"}
-        platform_max_seconds = {
-            "youtube_shorts": 60.0,
-            "tiktok": 180.0,
-            "instagram_reels": 90.0,
-            "square": 90.0,
-            "youtube": 180.0,
-        }
-        allowed_edit_types = {"Emotional", "Motivational", "Nostalgic", "Funny", "Dramatic", "Documentary", "Sigma", "Character Analysis", "Tribute", "Storytelling"}
-        if platform not in allowed_platforms:
-            return jsonify({"error": "Unsupported V3 platform"}), 400
-        if target_seconds > platform_max_seconds[platform]:
-            return jsonify({"error": f"target_seconds must be <= {platform_max_seconds[platform]:g} for {platform}"}), 400
-        if not audience or len(audience) > 500:
-            return jsonify({"error": "V3 audience must be between 1 and 500 characters"}), 400
-        if not 40 <= bpm <= 240:
-            return jsonify({"error": "V3 bpm must be between 40 and 240"}), 400
-        if edit_type and edit_type not in allowed_edit_types:
-            return jsonify({"error": "Unsupported V3 edit type"}), 400
-        params.update({
-            "platform": platform,
-            "audience": audience,
-            "bpm": bpm,
-            "edit_type": edit_type,
-            "context": str(data.get("context", "")).strip()[:2000],
-            "enable_ocr": str(data.get("enable_ocr", "")).lower() in {"1", "true", "on", "yes"},
-            "enable_object_detection": str(data.get("enable_object_detection", "false")).lower() in {"1", "true", "on", "yes"},
-            "enable_diarization": str(data.get("enable_diarization", "")).lower() in {"1", "true", "on", "yes"},
-            "source_metadata": {
-                "creator": str(data.get("source_creator", "")).strip()[:200],
-                "title": str(data.get("source_title", "")).strip()[:300],
-                "url": str(data.get("source_url", "")).strip()[:1000],
-                "rights_basis": str(data.get("rights_basis", "")).strip().lower(),
-                "source": "user_provided",
-            },
-        })
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
     params["_retry_secret_keys"] = [key for key in SECRET_PARAM_KEYS if data.get(key)]
