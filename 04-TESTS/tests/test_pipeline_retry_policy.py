@@ -40,3 +40,13 @@ def test_deterministic_errors_are_not_retried():
     except ValueError:
         pass
     assert stage.calls == 1
+
+
+
+def test_shared_retry_policy_rejects_deterministic_failures_and_backoffs():
+    from ai_video_factory.retry_policy import backoff_seconds, is_retryable_error
+
+    assert is_retryable_error(ValueError("invalid configuration")) is False
+    assert is_retryable_error(RuntimeError("provider returned 429")) is True
+    assert backoff_seconds(1) == 0.5
+    assert backoff_seconds(3) == 2.0
