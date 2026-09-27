@@ -214,8 +214,10 @@ class V3Blueprint:
         object.__setattr__(self, "capabilities", tuple(self.capabilities))
         object.__setattr__(self, "platform_variants", _freeze_mapping(self.platform_variants))
         object.__setattr__(self, "metrics", MappingProxyType({str(k): float(v) for k, v in dict(self.metrics).items()}))
+        platform_value = self.platform.value if isinstance(self.platform, Platform) else str(self.platform).strip().lower()
+        object.__setattr__(self, "platform", platform_value)
         if self.platform_profile is None:
-            profile = PLATFORM_PROFILES.get(str(self.platform))
+            profile = PLATFORM_PROFILES.get(platform_value)
             if profile is None:
                 raise ValueError(f"unsupported blueprint platform: {self.platform}")
             object.__setattr__(self, "platform_profile", PlatformProfile(**profile))
@@ -701,7 +703,8 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
     thumbnail, titles, tags, description = _metadata(core)
     quality = _human_editor_checks(core, selected, hooks, clips, retention, cfg)
     metrics = _heuristic_metrics(core, hooks, clips, quality)
-    blueprint = V3Blueprint("3.0.0", core, selected.value, hooks, clips, music, retention, thumbnail, titles, tags, description, platform_variants(cfg), quality, metrics, list(V3_CAPABILITIES), platform=str(cfg.platform), audience=cfg.audience)
+    platform_value = cfg.platform.value if isinstance(cfg.platform, Platform) else str(cfg.platform).strip().lower()
+    blueprint = V3Blueprint("3.0.0", core, selected.value, hooks, clips, music, retention, thumbnail, titles, tags, description, platform_variants(cfg), quality, metrics, list(V3_CAPABILITIES), platform=platform_value, audience=cfg.audience)
     validate_blueprint(blueprint)
     return blueprint
 
