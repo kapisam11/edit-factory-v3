@@ -79,6 +79,15 @@ def create_package(
         except Exception as exc:
             logger.warning("Could not read plan.json: %s", exc)
 
+    research_data = {}
+    research_path = os.path.join(pkg_dir, "research.json")
+    if os.path.isfile(research_path):
+        try:
+            with open(research_path, "r", encoding="utf-8") as f:
+                research_data = json.load(f)
+        except Exception as exc:
+            logger.warning("Could not read research.json: %s", exc)
+
     final_video = _first_existing(pkg_dir, ["final.mp4", "final_short_vo.mp4", "final_short.mp4"])
     thumbnail = next(
         (
@@ -96,7 +105,7 @@ def create_package(
             finalize_upload_package(
                 pkg_dir,
                 topic=topic,
-                summary={**plan, "platform": platform},
+                summary={**research_data, **plan, "platform": platform},
                 script=str(plan.get("script") or ""),
                 platform=platform,
                 final_video=final_video,
