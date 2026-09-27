@@ -249,6 +249,12 @@ def produce_package(
                 and str(visual.get("source") or "").lower() in {"youtube", "reddit", "wikimedia"}
                 and (visual.get("title") or visual.get("uploader") or visual.get("artist") or visual.get("url"))
             ]
+            try:
+                with open(os.path.join(pkg_dir, "research.json"), "w", encoding="utf-8") as vf:
+                    import json
+                    json.dump(summary, vf, indent=2, ensure_ascii=False)
+            except Exception as exc:
+                logger.warning("Research provenance write failed: %s", exc)
             # Refresh the primary thumbnail with a real researched visual when one is available.
             try:
                 background_path = None
