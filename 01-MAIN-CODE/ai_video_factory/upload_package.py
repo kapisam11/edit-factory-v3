@@ -248,16 +248,39 @@ def rank_title_candidates(
         hook_text,
         f"{base_topic}: {angle_short}" if angle_short else "",
         f"What actually happened with {base_topic}",
-        f"Why {base_topic} changed everything",
-        f"The moment {base_topic} turned",
-        f"How {base_topic} became the story",
-        f"The detail that changes {base_topic}",
-        f"Why {base_topic} still matters",
         f"The turning point in {base_topic}",
-        f"{base_topic} — the part nobody saw coming",
-        f"{base_topic}: the moment it all changed",
-        f"The story behind {base_topic}",
+        f"The part of {base_topic} most people miss",
+        f"Why {base_topic} still matters",
+        f"{base_topic}: the detail that changes the story",
+        f"{base_topic} — what happened next",
     ])
+    emotion_templates = {
+        "funny": [
+            f"The funniest moment in {base_topic}",
+            f"How {base_topic} went completely wrong",
+        ],
+        "dramatic": [
+            f"The moment {base_topic} nearly fell apart",
+            f"The decision that changed {base_topic}",
+        ],
+        "nostalgic": [
+            f"Why {base_topic} is still remembered",
+            f"The moment everyone remembers from {base_topic}",
+        ],
+        "inspiring": [
+            f"How {base_topic} kept going",
+            f"The comeback behind {base_topic}",
+        ],
+        "trust": [
+            f"Who {base_topic} could really trust",
+            f"The choice that tested {base_topic}",
+        ],
+        "curious": [
+            f"The detail everyone missed in {base_topic}",
+            f"What people get wrong about {base_topic}",
+        ],
+    }
+    generated.extend(emotion_templates.get(emotion.lower(), []))
 
     seen = set()
     ranked: List[Dict[str, Any]] = []
