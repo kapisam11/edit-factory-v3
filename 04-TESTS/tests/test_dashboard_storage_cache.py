@@ -52,8 +52,9 @@ def test_dashboard_store_indexes_and_job_roundtrip(tmp_path):
 
     with store.connect() as conn:
         conn.execute(
-            "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            ("job-1", "topic", "error", "failed", "{}", None, "broken"),
+            "INSERT INTO jobs (id, topic, status, step, params, pkg_dir, error, retry_count, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("job-1", "topic", "error", "failed", "{}", None, "broken", 0),
         )
     assert store.get_job("job-1")["status"] == "error"
     assert store.update_job("job-1", status="queued", step="waiting", error=None) == 1
