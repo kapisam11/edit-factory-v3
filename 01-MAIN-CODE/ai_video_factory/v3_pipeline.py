@@ -265,7 +265,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     "V3 semantic QC: " + warning for warning in semantic_report["warnings"]
                 )
             try:
-                from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical
+                from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical, select_best_thumbnail_variant
 
                 thumb_dir = package / "thumbnails"
                 thumb_dir.mkdir(parents=True, exist_ok=True)
@@ -286,8 +286,9 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     )
                     if not variants:
                         raise RuntimeError("thumbnail generation returned no variants")
+                    selected_variant = select_best_thumbnail_variant(variants)
                     thumbnail_path = package / "thumbnail.png"
-                    shutil.copyfile(variants[0], thumbnail_path)
+                    shutil.copyfile(variants[selected_variant - 1], thumbnail_path)
                     make_thumbnail_vertical(
                         thumbnail_subject,
                         str(package / "thumbnail_vertical.png"),
