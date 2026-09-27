@@ -177,7 +177,15 @@ class QualityReport:
     warnings: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "checks", MappingProxyType({str(k): bool(v) for k, v in dict(self.checks).items()}))
+        if not isinstance(self.passed, bool):
+            raise TypeError("quality.passed must be a boolean")
+        if isinstance(self.score, bool) or not isinstance(self.score, int):
+            raise TypeError("quality.score must be an integer")
+        if not isinstance(self.checks, Mapping):
+            raise TypeError("quality.checks must be an object")
+        if any(not isinstance(value, bool) for value in self.checks.values()):
+            raise TypeError("quality check values must be booleans")
+        object.__setattr__(self, "checks", MappingProxyType({str(k): value for k, value in self.checks.items()}))
         object.__setattr__(self, "warnings", tuple(str(item) for item in self.warnings))
 
 
