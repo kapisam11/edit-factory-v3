@@ -207,52 +207,48 @@ def annotate_purposes(visuals: List[Dict], summary: Dict) -> List[Dict]:
 
 
 def vet_with_model(visuals: List[Dict], summary: Dict, api_key: str) -> List[Dict]:
-    """Ask an optional model to re-classify visuals by purpose.
-
-    The model is asked to return JSON array of objects: {"url":..., "purpose":..., "confidence":0-1}
-    If the model call fails or returns invalid JSON, falls back to `annotate_purposes`.
-    """
+    """Apply optional model classification only after strict schema validation."""
+    allowed_purposes = {"hook", "conflict", "payoff", "reaction", "meme", "context", "gameplay_clip"}
     try:
         from .model_adapter import call_model
-        import json
-
         prompt = (
-            "You are given a research summary and a list of candidate visuals (url, title, thumbnail, source). "
-            "Return a JSON array where each item has keys: url, purpose (one of hook, conflict, payoff, reaction, meme, context, gameplay_clip), confidence (0-1). "
-            "Do not include extra text. Research summary:\n" + json.dumps(summary) + "\nVisuals:\n" + json.dumps(visuals) + "\n"
+            "You are given a research summary and candidate visuals. Return a JSON array only. "
+            "Each item must contain url, purpose, confidence where confidence is 0..1. "
+            "Do not include extra fields or extra text. Research summary:\\n"
+            + json.dumps(summary) + "\\nVisuals:\\n" + json.dumps(visuals) + "\\n"
         )
         resp = call_model(prompt, api_key)
         if not resp:
             return annotate_purposes(visuals, summary)
-        # try to extract JSON from response
-        jb = None
         try:
-            jb = json.loads(resp)
-        except Exception:
-            # try find first JSON block
-            m = re.search(r"(\[\s*\{[\s\S]*\}\s*\])", resp)
-            if m:
-                try:
-                    jb = json.loads(m.group(1))
-                except Exception:
-                    jb = None
-        if not jb or not isinstance(jb, list):
+            parsed = json.loads(resp)
+        except (TypeError, ValueError, json.JSONDecodeError):
             return annotate_purposes(visuals, summary)
-        # merge model outputs into visuals
+        if not isinstance(parsed, list) or len(parsed) > len(visuals):
+            return annotate_purposes(visuals, summary)
         url_to_v = {v.get("url"): v for v in visuals if v.get("url")}
         out = []
-        for item in jb:
+        seen_urls = set()
+        for item in parsed:
+            if not isinstance(item, dict) or set(item) != {"url", "purpose", "confidence"}:
+                return annotate_purposes(visuals, summary)
             url = item.get("url")
-            if not url:
-                continue
-            base = url_to_v.get(url, {})
-            merged = base.copy()
-            merged["purpose"] = item.get("purpose") or merged.get("purpose")
-            merged["model_confidence"] = float(item.get("confidence") or 0)
+            purpose = item.get("purpose")
+            try:
+                confidence = float(item.get("confidence"))
+            except (TypeError, ValueError):
+                return annotate_purposes(visuals, summary)
+            if url not in url_to_v or purpose not in allowed_purposes or not 0.0 <= confidence <= 1.0:
+                return annotate_purposes(visuals, summary)
+            if url in seen_urls:
+                return annotate_purposes(visuals, summary)
+            seen_urls.add(url)
+            merged = url_to_v[url].copy()
+            merged["purpose"] = purpose
+            merged["model_confidence"] = confidence
             out.append(merged)
-        # append any visuals not returned by model using heuristics
         for v in visuals:
-            if v.get("url") not in {o.get("url") for o in out}:
+            if v.get("url") not in seen_urls:
                 out.append(v)
         return out
     except Exception:
