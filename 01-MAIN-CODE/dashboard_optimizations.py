@@ -10,7 +10,7 @@ from typing import Any
 from flask import Response, abort, has_request_context, jsonify, request, send_file, send_from_directory
 
 from dashboard_cache import HybridCache
-from dashboard_store import DashboardStore, JobAdmissionError
+from dashboard_store import DashboardStore, JobAdmissionError, JobRetryNotAllowed
 from resource_governor import (
     MAX_JOB_STORAGE_BYTES,
     MAX_RENDER_WALLCLOCK_SECONDS,
@@ -388,16 +388,16 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 "required_secret_keys": required_secret_keys,
                 "missing_secret_keys": missing_secret_keys,
             }), 409
-        changed = store.update_job_if_status(
-            job_id,
-            ("error", "interrupted"),
-            status="queued",
-            step="waiting",
-            error=None,
-            pkg_dir=None,
-        )
+        try:
+            changed = store.retry_job(
+                job_id,
+                max_attempts=max(1, int(os.environ.get("AIVF_MAX_JOB_RETRIES", "3"))),
+            )
+        except JobRetryNotAllowed as exc:
+            return jsonify({"error": str(exc), "job_id": job_id, "status": previous_status}), 409
         if not changed:
             return jsonify({"error": "Job changed before retry could start"}), 409
+
 
         app_module._runtime_secrets[job_id] = secrets
         cache.delete("jobs:list")
