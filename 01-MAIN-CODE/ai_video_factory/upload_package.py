@@ -65,40 +65,132 @@ def _curiosity_score(text: str) -> float:
     return min(5.0, score)
 
 
-def rank_title_candidates(topic: str, *, hook: str = "", strongest_angle: str = "", emotion: str = "", candidates: Optional[Sequence[str]] = None, max_candidates: int = 20, title_limit: int = 100) -> List[Dict[str, Any]]:
-    """Generate and rank up to twenty deterministic title options."""
+def _source_records(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    seen = set()
+
+    def add(raw: Mapping[str, Any], default_source: str = "") -> None:
+        record = {
+            "title": _normalize_phrase(str(raw.get("title") or raw.get("source_title") or "")),
+            "creator": _normalize_phrase(str(raw.get("creator") or raw.get("uploader") or raw.get("source_creator") or raw.get("artist") or "")),
+            "url": str(raw.get("url") or raw.get("source_url") or "").strip(),
+            "license": _normalize_phrase(str(raw.get("license") or "")),
+            "license_url": str(raw.get("license_url") or "").strip(),
+            "rights_basis": _normalize_phrase(str(raw.get("rights_basis") or "")),
+            "rights_status": _normalize_phrase(str(raw.get("rights_status") or "review_required")).lower(),
+            "source": _normalize_phrase(str(raw.get("source") or default_source)).lower(),
+        }
+        key = record["url"] or (record["creator"], record["title"], record["source"])
+        if key and key not in seen and (record["title"] or record["creator"] or record["url"]):
+            seen.add(key)
+            records.append(record)
+
+    supplied = summary.get("source_credits") or []
+    if isinstance(supplied, Mapping):
+        add(supplied)
+    elif isinstance(supplied, Sequence) and not isinstance(supplied, (str, bytes)):
+        for raw in supplied:
+            if isinstance(raw, Mapping):
+                add(raw)
+
+    source_meta = summary.get("source_metadata")
+    if isinstance(source_meta, Mapping):
+        add(source_meta, default_source="user_provided")
+
+    visuals = summary.get("visuals") or []
+    if isinstance(visuals, Sequence) and not isinstance(visuals, (str, bytes)):
+        for raw in visuals:
+            if isinstance(raw, Mapping) and str(raw.get("source") or "").lower() in {"youtube", "reddit", "wikimedia"}:
+                add(raw)
+
+    return records
+
+
+def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
+    records = _source_records(summary)
+    external = [
+        item for item in records
+        if item.get("source") in {"youtube", "reddit", "wikimedia"} or item.get("creator")
+    ]
+    cleared_bases = {
+        "owned",
+        "explicit_permission",
+        "commercial_license",
+        "public_domain",
+        "cc_license",
+    }
+    unresolved = [
+        item for item in external
+        if item.get("rights_status") != "cleared" and item.get("rights_basis") not in cleared_bases
+    ]
+    return {
+        "status": "cleared" if external and not unresolved else ("review_required" if external else "not_declared"),
+        "publish_blocked": bool(unresolved),
+        "sources": records,
+        "unverified_sources": unresolved,
+        "message": (
+            "Third-party media is not upload-cleared until the license, public-domain status, or explicit permission is verified."
+            if unresolved
+            else "No unresolved third-party media rights were declared."
+        ),
+    }
+
+
+def _source_credit_block(records: Sequence[Mapping[str, Any]]) -> str:
+    lines: List[str] = []
+    for item in records:
+        title = str(item.get("title") or "").strip()
+        creator = str(item.get("creator") or "").strip()
+        url = str(item.get("url") or "").strip()
+        license_name = str(item.get("license") or "").strip()
+        label = title or "Source footage"
+        if creator:
+            label += f" — {creator}"
+        lines.append(f"Source: {label}")
+        if url:
+            lines.append(f"Source link: {url}")
+        if license_name:
+            lines.append(f"License: {license_name}")
+    return "\n".join(lines)
+
+
+def rank_title_candidates(
+    topic: str,
+    *,
+    hook: str = "",
+    strongest_angle: str = "",
+    emotion: str = "",
+    candidates: Optional[Sequence[str]] = None,
+    max_candidates: int = 20,
+    title_limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Generate natural, topic-specific title options and rank them."""
     base_topic = _normalize_phrase(topic)
     generated = list(candidates or [])
     angle = _normalize_phrase(strongest_angle)
+    hook_text = _normalize_phrase(hook)
+    angle_short = " ".join(angle.split()[:10])
     generated.extend([
-        _normalize_phrase(hook),
-        f"The real story behind {base_topic}",
-        f"What really happened with {base_topic}",
-        f"Nobody expected this: {base_topic}",
-        f"The hidden truth about {base_topic}",
+        hook_text,
+        f"{base_topic}: {angle_short}" if angle_short else "",
+        f"What actually happened with {base_topic}",
         f"Why {base_topic} changed everything",
-        f"The moment {base_topic} went wrong",
-        f"How {base_topic} became unforgettable",
-        f"The biggest thing people miss about {base_topic}",
-        f"What changed after {base_topic}",
-        f"The one detail that changes {base_topic}",
-        f"Before you watch {base_topic}, know this",
-        f"The untold part of {base_topic}",
-        f"The smartest way to understand {base_topic}",
-        f"The mistake that changed {base_topic}",
-        f"Why nobody saw {base_topic} coming",
-        f"The hidden reason {base_topic} matters",
+        f"The moment {base_topic} turned",
+        f"How {base_topic} became the story",
+        f"The detail that changes {base_topic}",
+        f"Why {base_topic} still matters",
         f"The turning point in {base_topic}",
-        f"What {base_topic} teaches us",
+        f"{base_topic} — the part nobody saw coming",
+        f"{base_topic}: the moment it all changed",
+        f"The story behind {base_topic}",
     ])
-    if angle:
-        generated.extend([f"{base_topic}: {angle}", f"The truth about {angle}"])
-    if emotion:
-        generated.append(f"The {emotion} story of {base_topic}")
 
     seen = set()
     ranked: List[Dict[str, Any]] = []
     topic_tokens = set(_topic_tokens(base_topic))
+    hook_tokens = set(_topic_tokens(hook_text))
+    angle_tokens = set(_topic_tokens(angle))
+
     for raw in generated:
         title = _normalize_phrase(raw).strip("-: ")
         if not title or len(title) > title_limit:
@@ -107,47 +199,133 @@ def rank_title_candidates(topic: str, *, hook: str = "", strongest_angle: str = 
         if key in seen:
             continue
         seen.add(key)
+
         words = title.split()
-        overlap = len(topic_tokens.intersection(_topic_tokens(title)))
-        specificity = min(4.0, overlap * 1.5)
-        readability = 2.0 if 4 <= len(words) <= 12 else (1.0 if len(words) <= 16 else 0.0)
+        tokens = set(_topic_tokens(title))
+        overlap = len(topic_tokens.intersection(tokens))
+        hook_overlap = len(hook_tokens.intersection(tokens))
+        angle_overlap = len(angle_tokens.intersection(tokens))
         curiosity = _curiosity_score(title)
-        information_gap = 1.5 if any(m in title.lower() for m in ("why", "how", "truth", "hidden", "real", "what really")) else 0.0
-        clickbait_penalty = 1.25 if any(m in title.lower() for m in ("you won't believe", "shocking!!!")) else 0.0
-        score = round(specificity + readability + curiosity + information_gap - clickbait_penalty, 3)
-        ranked.append({"title": title, "score": score, "reasons": {"topic_overlap": overlap, "specificity": specificity, "readability": readability, "curiosity": curiosity, "information_gap": information_gap, "clickbait_penalty": clickbait_penalty}})
+        readability = 2.0 if 5 <= len(words) <= 12 else (1.0 if 3 <= len(words) <= 15 else 0.0)
+        specificity = min(4.5, overlap * 1.4 + angle_overlap * 0.8)
+        continuity = min(2.0, hook_overlap * 0.75)
+
+        generic_penalty = 0.0
+        lower = title.lower()
+        if lower in {"the real reason", "the hidden legend", "lost forever", "the real story"}:
+            generic_penalty += 3.0
+        if any(marker in lower for marker in ("you won't believe", "shocking!!!", "insane!!!", "must watch!!!")):
+            generic_penalty += 2.0
+        if title.count("!") > 1:
+            generic_penalty += 1.0
+
+        score = round(
+            specificity + continuity + readability + curiosity - generic_penalty,
+            3,
+        )
+        ranked.append({
+            "title": title,
+            "score": score,
+            "reasons": {
+                "topic_overlap": overlap,
+                "hook_overlap": hook_overlap,
+                "angle_overlap": angle_overlap,
+                "specificity": specificity,
+                "readability": readability,
+                "curiosity": curiosity,
+                "generic_penalty": generic_penalty,
+            },
+        })
+
     ranked.sort(key=lambda item: (-item["score"], len(item["title"]), item["title"].lower()))
     return ranked[: max(1, int(max_candidates))]
 
 
-def generate_platform_tags(title: str, description: str, topic: str, *, max_tags: int = 30) -> List[str]:
-    text = " ".join((topic, title, description))
-    tokens = _topic_tokens(text)
+def generate_platform_tags(
+    title: str,
+    description: str,
+    topic: str,
+    *,
+    max_tags: int = 30,
+    source_records: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> List[str]:
+    """Generate focused tags from the topic, title, and relevant source metadata."""
+    chunks = [topic, title, description]
+    for item in list(source_records or []):
+        chunks.extend([str(item.get("creator") or ""), str(item.get("title") or "")])
+
+    text = " ".join(chunks)
     topic_tokens = set(_topic_tokens(topic))
+    title_tokens = set(_topic_tokens(title))
     scores: Dict[str, float] = {}
-    for token in tokens:
-        score = 1.0 + (2.0 if token in topic_tokens else 0.0) + (1.0 if token in title.lower().split() else 0.0)
+
+    for token in _topic_tokens(text):
+        score = 1.0
+        if token in topic_tokens:
+            score += 3.0
+        if token in title_tokens:
+            score += 1.5
         scores[token] = scores.get(token, 0.0) + score
-    for phrase in re.findall(r"[A-Za-z0-9][A-Za-z0-9'_-]{2,}(?: [A-Za-z0-9][A-Za-z0-9'_-]{2,}){1,3}", text.lower()):
+
+    for phrase in re.findall(
+        r"[A-Za-z0-9][A-Za-z0-9'_-]{2,}(?: [A-Za-z0-9][A-Za-z0-9'_-]{2,}){1,3}",
+        text.lower(),
+    ):
         phrase = _normalize_phrase(phrase)
-        if phrase and phrase not in _GENERIC_TAGS:
-            scores[phrase] = scores.get(phrase, 0.0) + 2.5
+        if phrase and all(word not in _GENERIC_TAGS for word in phrase.split()):
+            scores[phrase] = scores.get(phrase, 0.0) + (
+                3.5 if any(word in topic_tokens for word in phrase.split()) else 1.5
+            )
+
     ordered = sorted(scores, key=lambda item: (-scores[item], len(item), item))
-    return ordered[: max(1, int(max_tags))]
+    result: List[str] = []
+    seen = set()
+    for tag in ordered:
+        tag = tag.strip("#")
+        if len(tag) < 3 or tag in seen or len(tag) > 60:
+            continue
+        seen.add(tag)
+        result.append(tag)
+        if len(result) >= max(1, int(max_tags)):
+            break
+    return result
 
 
 def build_description(topic: str, summary: Mapping[str, Any], script: str, platform: str) -> str:
+    """Build a natural description and include source credits when third-party media is used."""
     angle = _normalize_phrase(str(summary.get("strongest_angle") or ""))
     why_care = _normalize_phrase(str(summary.get("why_care") or summary.get("why_viewers_care") or ""))
-    emotion = _normalize_phrase(str(summary.get("emotion") or ""))
-    pieces = [angle or _normalize_phrase(topic)]
-    if why_care:
-        pieces.append(why_care)
-    if emotion:
-        pieces.append(f"Tone: {emotion}.")
+    hook = _normalize_phrase(str(summary.get("hook") or ""))
+    payoff = _normalize_phrase(str(summary.get("payoff") or ""))
+    records = _source_records(summary)
+
+    opening = hook or angle or _normalize_phrase(topic)
+    paragraphs = [opening]
+
+    body = [
+        part
+        for part in (
+            angle if angle and angle.lower() != opening.lower() else "",
+            why_care,
+            payoff,
+        )
+        if part
+    ]
+    if body:
+        paragraphs.append(" ".join(body))
+    elif script:
+        script_lines = [line.strip() for line in str(script).splitlines() if line.strip()]
+        if script_lines:
+            paragraphs.append(" ".join(script_lines[:2]))
+
+    credit = _source_credit_block(records)
+    if credit:
+        paragraphs.append("Credits / source information:\n" + credit)
+
     if platform == "youtube_shorts":
-        pieces.append("#shorts")
-    description = "\n\n".join(piece for piece in pieces if piece)
+        paragraphs.append("#shorts")
+
+    description = "\n\n".join(paragraphs)
     return description[: get_output_profile(platform).description_limit].rstrip()
 
 
@@ -213,8 +391,10 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
     hook = str(summary.get("hook") or (hooks[0].get("hook") if hooks and isinstance(hooks[0], dict) else ""))
     title_rankings = rank_title_candidates(topic, hook=hook, strongest_angle=str(summary.get("strongest_angle") or ""), emotion=str(summary.get("emotion") or ""), title_limit=profile.title_limit, max_candidates=20)
     chosen_title = title_rankings[0]["title"] if title_rankings else _normalize_phrase(topic)[: profile.title_limit]
+    rights = media_rights_report(summary)
+    source_records = rights["sources"]
     description = build_description(topic, summary, script, platform)
-    tags = generate_platform_tags(chosen_title, description, topic, max_tags=profile.tag_limit)
+    tags = generate_platform_tags(chosen_title, description, topic, max_tags=profile.tag_limit, source_records=source_records)
 
     upload_dir = root / "upload" / profile.name
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -261,6 +441,8 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "files": files,
         "media_probe": media_probe,
         "ai_disclosure": disclosure,
+        "media_rights": rights,
+        "publish_ready": not rights["publish_blocked"],
         "artifacts": _collect_artifacts(root),
     }
     (upload_dir / "metadata.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
