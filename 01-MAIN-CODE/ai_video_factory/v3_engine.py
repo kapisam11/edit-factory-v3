@@ -6,8 +6,26 @@ from enum import Enum
 import math
 import re
 from typing import Any, Dict, List, Mapping, Sequence
+from types import MappingProxyType
 
 from .v3_semantics import combined_scores
+
+
+class Platform(str, Enum):
+    YOUTUBE_SHORTS = "youtube_shorts"
+    TIKTOK = "tiktok"
+    INSTAGRAM_REELS = "instagram_reels"
+    SQUARE = "square"
+    YOUTUBE = "youtube"
+
+
+class RetentionKind(str, Enum):
+    BEAT_DROP = "beat drop"
+    CLIP = "clip"
+    ZOOM = "zoom"
+    TEXT = "text"
+    MOTION = "motion"
+    ANGLE = "angle"
 
 
 class EditType(str, Enum):
@@ -112,15 +130,19 @@ class RetentionEvent:
     instruction: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class QualityReport:
     passed: bool
     score: int
-    checks: Dict[str, bool] = field(default_factory=dict)
-    warnings: List[str] = field(default_factory=list)
+    checks: Mapping[str, bool] = field(default_factory=dict)
+    warnings: Sequence[str] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "checks", MappingProxyType({str(k): bool(v) for k, v in dict(self.checks).items()}))
+        object.__setattr__(self, "warnings", tuple(str(item) for item in self.warnings))
 
 
-@dataclass
+@dataclass(frozen=True)
 class V3Blueprint:
     version: str
     core_idea: CoreIdea
@@ -136,10 +158,107 @@ class V3Blueprint:
     platform_variants: Dict[str, Dict[str, Any]]
     quality: QualityReport
     metrics: Dict[str, float]
-    capabilities: List[str]
+    capabilities: Sequence[str]
+    platform: str = "youtube_shorts"
+    audience: str = "general short-form viewers"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "hooks", tuple(self.hooks))
+        object.__setattr__(self, "clip_plan", tuple(self.clip_plan))
+        object.__setattr__(self, "retention_map", tuple(self.retention_map))
+        object.__setattr__(self, "title_options", tuple(self.title_options))
+        object.__setattr__(self, "hashtags", tuple(self.hashtags))
+        object.__setattr__(self, "capabilities", tuple(self.capabilities))
+        object.__setattr__(self, "platform_variants", _freeze_mapping(self.platform_variants))
+        object.__setattr__(self, "metrics", MappingProxyType({str(k): float(v) for k, v in dict(self.metrics).items()}))
+
+    @property
+    def schema_version(self) -> str:
+        return self.version
+
+    @property
+    def duration(self) -> float:
+        return float(self.clip_plan[-1].end) if self.clip_plan else 0.0
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        return {
+            "version": self.version,
+            "schema_version": self.schema_version,
+            "platform": self.platform,
+            "audience": self.audience,
+            "core_idea": asdict(self.core_idea),
+            "edit_type": self.edit_type,
+            "hooks": [asdict(item) for item in self.hooks],
+            "clip_plan": [asdict(item) for item in self.clip_plan],
+            "music": asdict(self.music),
+            "retention_map": [asdict(item) for item in self.retention_map],
+            "thumbnail_concept": self.thumbnail_concept,
+            "title_options": list(self.title_options),
+            "hashtags": list(self.hashtags),
+            "description": self.description,
+            "platform_variants": {str(k): dict(v) for k, v in self.platform_variants.items()},
+            "quality": asdict(self.quality),
+            "metrics": dict(self.metrics),
+            "capabilities": list(self.capabilities),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "V3Blueprint":
+        if not isinstance(payload, Mapping):
+            raise ValueError("V3 blueprint payload must be an object")
+        required = {
+            "version", "core_idea", "edit_type", "hooks", "clip_plan", "music",
+            "retention_map", "thumbnail_concept", "title_options", "hashtags",
+            "description", "platform_variants", "quality", "metrics", "capabilities",
+        }
+        missing = sorted(required - set(payload))
+        if missing:
+            raise ValueError(f"V3 blueprint is missing required fields: {', '.join(missing)}")
+        if payload.get("version") != "3.0.0" or payload.get("schema_version", "3.0.0") != "3.0.0":
+            raise ValueError("unsupported V3 blueprint schema version")
+        try:
+            core = CoreIdea(**dict(payload["core_idea"]))
+            hooks = tuple(HookPack(**dict(item)) for item in payload["hooks"])
+            clips = tuple(ClipBeat(**dict(item)) for item in payload["clip_plan"])
+            music_data = dict(payload["music"])
+            music_data["sync_points"] = tuple(float(x) for x in music_data["sync_points"])
+            music = MusicPlan(**music_data)
+            retention = tuple(RetentionEvent(**dict(item)) for item in payload["retention_map"])
+            quality = QualityReport(**dict(payload["quality"]))
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError("V3 blueprint contains malformed typed data") from exc
+        result = cls(
+            version=str(payload["version"]),
+            core_idea=core,
+            edit_type=str(payload["edit_type"]),
+            hooks=hooks,
+            clip_plan=clips,
+            music=music,
+            retention_map=retention,
+            thumbnail_concept=str(payload["thumbnail_concept"]),
+            title_options=tuple(payload["title_options"]),
+            hashtags=tuple(payload["hashtags"]),
+            description=str(payload["description"]),
+            platform_variants=dict(payload["platform_variants"]),
+            quality=quality,
+            metrics=dict(payload["metrics"]),
+            capabilities=tuple(payload["capabilities"]),
+            platform=str(payload.get("platform", "youtube_shorts")),
+            audience=str(payload.get("audience", "general short-form viewers")),
+        )
+        validate_blueprint(result)
+        return result
+
+
+def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("platform_variants must be an object")
+    frozen = {}
+    for key, item in value.items():
+        if not isinstance(item, Mapping):
+            raise ValueError("platform variant must be an object")
+        frozen[key] = MappingProxyType(dict(item))
+    return MappingProxyType(frozen)
 
 
 PLATFORM_PROFILES: Mapping[str, Dict[str, Any]] = {
@@ -509,15 +628,23 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
     thumbnail, titles, tags, description = _metadata(core)
     quality = _human_editor_checks(core, selected, hooks, clips, retention, cfg)
     metrics = _heuristic_metrics(core, hooks, clips, quality)
-    blueprint = V3Blueprint("3.0.0", core, selected.value, hooks, clips, music, retention, thumbnail, titles, tags, description, platform_variants(cfg), quality, metrics, list(V3_CAPABILITIES))
+    blueprint = V3Blueprint("3.0.0", core, selected.value, hooks, clips, music, retention, thumbnail, titles, tags, description, platform_variants(cfg), quality, metrics, list(V3_CAPABILITIES), platform=str(cfg.platform), audience=cfg.audience)
     validate_blueprint(blueprint)
     return blueprint
 
 def validate_blueprint(blueprint: V3Blueprint) -> None:
+    if not isinstance(blueprint, V3Blueprint):
+        raise ValueError("expected a V3Blueprint instance")
     if blueprint.version != "3.0.0":
         raise ValueError("unexpected blueprint version")
-    if len(blueprint.capabilities) != 40:
-        raise ValueError("v3 blueprint must expose exactly 40 tracked capabilities")
+    if len(blueprint.capabilities) != 40 or len(set(blueprint.capabilities)) != 40:
+        raise ValueError("v3 blueprint must expose exactly 40 unique tracked capabilities")
+    if blueprint.platform not in PLATFORM_PROFILES:
+        raise ValueError(f"unsupported blueprint platform: {blueprint.platform}")
+    if not str(blueprint.audience).strip():
+        raise ValueError("blueprint audience is required")
+    if not blueprint.platform_variants or blueprint.platform not in blueprint.platform_variants:
+        raise ValueError("blueprint platform variants are incomplete")
     try:
         edit_type = EditType(blueprint.edit_type)
     except ValueError as exc:
@@ -527,12 +654,20 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
     if not blueprint.retention_map:
         raise ValueError("blueprint retention map is empty")
     previous = -1e-6
-    for clip in blueprint.clip_plan:
+    for expected_index, clip in enumerate(blueprint.clip_plan, start=1):
+        if clip.index != expected_index:
+            raise ValueError("clip plan indices must be contiguous and 1-based")
+        if not all(math.isfinite(float(value)) for value in (clip.start, clip.end)):
+            raise ValueError(f"clip {clip.index} contains non-finite timing")
         if clip.start < previous or clip.end <= clip.start:
             raise ValueError("clip plan is not monotonic")
         if not 2 <= len(_tokens(clip.text_overlay)) <= 8:
             raise ValueError(f"invalid overlay word count at clip {clip.index}")
         previous = clip.end
+    if not blueprint.music.sync_points or any(not math.isfinite(float(t)) for t in blueprint.music.sync_points):
+        raise ValueError("blueprint music sync points are invalid")
+    if any(t < -0.001 or t > blueprint.duration + 0.001 for t in blueprint.music.sync_points):
+        raise ValueError("blueprint music sync point is outside the timeline")
     if abs(blueprint.clip_plan[-1].end - blueprint.music.sync_points[-1]) > 0.01:
         raise ValueError("clip plan does not exactly cover planned duration")
 
