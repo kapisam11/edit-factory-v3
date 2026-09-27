@@ -94,7 +94,7 @@ def _search_youtube(topic: str, limit: int = 6) -> List[Dict]:
             title = e.get("title")
             thumb = e.get("thumbnail")
             url = f"https://www.youtube.com/watch?v={vid}"
-            results.append({"url": url, "source": "youtube", "title": title, "thumbnail": thumb, "rights_status": "unverified", "rights_basis": ""})
+            results.append({"url": url, "source": "youtube", "title": title, "uploader": e.get("uploader"), "channel_url": e.get("channel_url"), "thumbnail": thumb, "rights_status": "unverified", "rights_basis": ""})
     except Exception:
         return results
     return results
