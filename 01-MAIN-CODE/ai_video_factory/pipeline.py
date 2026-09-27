@@ -17,6 +17,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 from .validation import validate_target_seconds
+from .retry_policy import backoff_seconds, is_retryable_error
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[int, int, str, float, float], None]
@@ -163,15 +164,7 @@ class PipelineStage(ABC):
 
     @staticmethod
     def is_retryable_error(error: Exception) -> bool:
-        if isinstance(error, (TimeoutError, ConnectionError)):
-            return True
-        if isinstance(error, sqlite3.OperationalError):
-            text = str(error).lower()
-            return "locked" in text or "busy" in text
-        if isinstance(error, OSError) and not isinstance(error, FileNotFoundError):
-            return True
-        text = str(error).lower()
-        return "429" in text or "temporarily unavailable" in text or "timeout" in text
+        return is_retryable_error(error)
 
     def on_error(self, ctx: PipelineContext, error: Exception) -> PipelineContext:
         ctx.errors.append(f"[{self.name}] {error}")
@@ -226,7 +219,7 @@ class Pipeline:
                         logger.info("[PIPELINE] %s failed with non-retryable error: %s", stage.name, exc)
                         break
                     if attempts <= allowed_retries:
-                        time.sleep(0.5 * attempts)
+                        time.sleep(backoff_seconds(attempts))
             if not success and last_error is not None:
                 ctx = stage.on_error(ctx, last_error)
             elapsed = time.monotonic() - start
