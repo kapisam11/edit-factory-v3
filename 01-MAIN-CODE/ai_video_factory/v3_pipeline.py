@@ -165,7 +165,8 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     platform: str = "youtube_shorts", audience: str = "general short-form viewers", bpm: int = 120,
                     edit_type: Optional[str] = None, model_key: Optional[str] = None, skip_qc: bool = False,
                     music_path: Optional[str] = None, enable_ocr: bool = False, enable_object_detection: bool = True,
-                    enable_diarization: bool = False, diarization_token: Optional[str] = None) -> ProductionResult:
+                    enable_diarization: bool = False, diarization_token: Optional[str] = None,
+                    source_metadata: Optional[Dict[str, Any]] = None) -> ProductionResult:
     validate_capabilities()
     _validate_v3_inputs(input_video, topic, target_seconds, platform, audience, bpm)
     config = V3Config(target_seconds=float(target_seconds), platform=platform, audience=audience, bpm=int(bpm))
@@ -176,6 +177,8 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     package.mkdir(parents=True, exist_ok=True)
     blueprint_path = package / "v3_blueprint.json"
     payload = blueprint.to_dict(); payload["platform"] = platform; payload["audience"] = audience
+    if source_metadata:
+        payload["source_metadata"] = dict(source_metadata)
     _atomic_json_write(blueprint_path, payload)
 
     environment = os.environ.get("AIVF_ENV", "production").strip().lower()
@@ -199,6 +202,8 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     baseline_payload = dict(payload)
     baseline_payload["retention_map"] = []
     baseline_summary = _research_summary_from_blueprint(baseline_payload, footage_evidence)
+    if source_metadata:
+        baseline_summary["source_metadata"] = dict(source_metadata)
     request = V3RenderRequest(
         input_video=input_video,
         topic=topic,
