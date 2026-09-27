@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from .artifact_readiness import evaluate_artifact
 from .production_models import ProductionResult
 from .scene_intelligence import analyze_video
-from .v3_renderer_bridge import V3RenderRequest, render_v3
+from .v3_renderer_bridge import V3RenderPlan, V3RenderRequest, render_v3
 from .v3_capabilities import validate_capabilities
 from .v3_engine import V3Blueprint, V3Config, create_v3_blueprint, validate_blueprint
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
@@ -182,7 +182,7 @@ def _prepare_blueprint(
 
 def _build_baseline_request(
     *, input_video: str, topic: str, package_dir: str, target_seconds: float, platform: str,
-    blueprint_payload: Dict[str, Any], footage_evidence: Dict[str, Any], model_key: Optional[str],
+    blueprint: V3Blueprint, blueprint_payload: Dict[str, Any], footage_evidence: Dict[str, Any], model_key: Optional[str],
     skip_qc: bool, music_path: Optional[str], enable_ocr: bool, enable_object_detection: bool,
     enable_diarization: bool, diarization_token: Optional[str],
 ) -> V3RenderRequest:
@@ -196,6 +196,7 @@ def _build_baseline_request(
         target_seconds=target_seconds,
         research_summary=summary,
         model_key=model_key,
+        render_plan=V3RenderPlan.from_blueprint(blueprint, include_retention=False),
         skip_qc=skip_qc,
         music_path=music_path,
         enable_ocr=enable_ocr,
@@ -331,7 +332,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
         raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
     baseline_request = _build_baseline_request(
         input_video=input_video, topic=topic, package_dir=package_dir, target_seconds=target_seconds,
-        platform=platform, blueprint_payload=payload, footage_evidence=footage_evidence, model_key=model_key,
+        platform=platform, blueprint=blueprint, blueprint_payload=payload, footage_evidence=footage_evidence, model_key=model_key,
         skip_qc=skip_qc, music_path=music_path, enable_ocr=enable_ocr,
         enable_object_detection=enable_object_detection, enable_diarization=enable_diarization,
         diarization_token=diarization_token,
