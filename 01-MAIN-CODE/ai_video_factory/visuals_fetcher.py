@@ -4,7 +4,7 @@ Provides Wikimedia Commons image search, Reddit image discovery, and
 optional YouTube discovery via `yt-dlp` if available. Returns a list of
 visual candidate dicts with metadata and a suggested `purpose` tag.
 """
-from typing import List, Dict
+from typing import List, Dict, Optional
 import os
 import requests
 import re
