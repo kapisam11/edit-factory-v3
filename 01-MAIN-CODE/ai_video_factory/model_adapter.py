@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .runtime_config import runtime_config
+from .retry_policy import backoff_seconds
 
 
 class ModelCallError(RuntimeError):
@@ -85,7 +86,7 @@ def _call_with_retry(prompt: str, key: str, provider: str, timeout: int, max_ret
         except _RetryableModelError as exc:
             if attempt >= max_retries:
                 return ModelResult(False, provider=provider, error_type=type(exc).__name__, message="model provider remained unavailable after bounded retries", attempts=attempts, retryable=True)
-            time.sleep(min(2 ** attempt, 4))
+            time.sleep(backoff_seconds(attempt + 1, base=1.0, cap=8.0))
         except ModelCallError as exc:
             return ModelResult(False, provider=provider, error_type=type(exc).__name__, message=str(exc), attempts=attempts, retryable=False)
     return ModelResult(False, provider=provider, error_type="unknown", message="model provider failed", attempts=attempts)
