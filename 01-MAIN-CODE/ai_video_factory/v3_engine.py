@@ -197,7 +197,7 @@ class V3Blueprint:
             "hashtags": list(self.hashtags),
             "description": self.description,
             "platform_variants": {str(k): dict(v) for k, v in self.platform_variants.items()},
-            "quality": asdict(self.quality),
+            "quality": {"passed": self.quality.passed, "score": self.quality.score, "checks": dict(self.quality.checks), "warnings": list(self.quality.warnings)},
             "metrics": dict(self.metrics),
             "capabilities": list(self.capabilities),
         }
