@@ -169,6 +169,33 @@ class DashboardStore:
 
         return int(self.write(write))
 
+    def update_job_compat(self, job_id: str, **kwargs: Any) -> int:
+        """Preserve the legacy direct-completion helper without weakening lifecycle rules."""
+        if kwargs.get("status") != "done":
+            return self.update_job(job_id, **kwargs)
+
+        def write(conn: sqlite3.Connection) -> int:
+            row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                return 0
+            current = str(row["status"])
+            if current == "queued":
+                changed = conn.execute(
+                    "UPDATE jobs SET status='running', step='starting', updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='queued'",
+                    (job_id,),
+                ).rowcount
+                if changed != 1:
+                    return 0
+                current = "running"
+            validate_transition(current, "done")
+            fields = ", ".join(f"{key}=?" for key in kwargs)
+            return int(conn.execute(
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                list(kwargs.values()) + [job_id],
+            ).rowcount)
+
+        return int(self.write(write))
     def claim_job(self, job_id: str) -> bool:
         """Atomically claim one queued job before starting a worker process."""
         changed = self.update_job_if_status(
