@@ -106,6 +106,49 @@ def _source_records(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
     return records
 
 
+def validate_metadata_quality(
+    topic: str,
+    selected_title: str,
+    title_rankings: Sequence[Mapping[str, Any]],
+    description: str,
+    tags: Sequence[str],
+) -> Dict[str, Any]:
+    """Reject obviously weak upload metadata before it can be marked publish-ready."""
+    topic_tokens = set(_topic_tokens(topic))
+    title_tokens = set(_topic_tokens(selected_title))
+    checks: Dict[str, bool] = {
+        "title_present": bool(_normalize_phrase(selected_title)),
+        "title_within_limit": len(selected_title) <= 100,
+        "title_topic_specific": bool(topic_tokens.intersection(title_tokens)) if topic_tokens else True,
+        "title_not_generic": selected_title.strip().lower() not in {
+            "the real reason",
+            "the hidden legend",
+            "lost forever",
+            "the real story",
+        },
+        "title_candidate_pool": len(title_rankings) >= 3,
+        "description_present": len(_normalize_phrase(description)) >= 40,
+        "tags_present": len(tags) >= 3,
+        "tags_not_spammy": not any(str(tag).strip().lower() in _GENERIC_TAGS for tag in tags),
+        "tags_topic_specific": any(
+            set(_topic_tokens(str(tag))).intersection(topic_tokens)
+            for tag in tags
+        ) if topic_tokens else True,
+    }
+    issues = [
+        name.replace("_", " ")
+        for name, passed in checks.items()
+        if not passed
+    ]
+    score = round(100.0 * sum(bool(value) for value in checks.values()) / max(1, len(checks)), 1)
+    return {
+        "passed": all(checks.values()),
+        "score": score,
+        "checks": checks,
+        "issues": issues,
+    }
+
+
 def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     records = _source_records(summary)
     external = [
@@ -424,6 +467,13 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
     source_records = rights["sources"]
     description = build_description(topic, summary, script, platform)
     tags = generate_platform_tags(chosen_title, description, topic, max_tags=profile.tag_limit, source_records=source_records)
+    metadata_quality = validate_metadata_quality(
+        topic,
+        chosen_title,
+        title_rankings,
+        description,
+        tags,
+    )
 
     upload_dir = root / "upload" / profile.name
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -471,7 +521,8 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "media_probe": media_probe,
         "ai_disclosure": disclosure,
         "media_rights": rights,
-        "publish_ready": not rights["publish_blocked"],
+        "metadata_quality": metadata_quality,
+        "publish_ready": bool(metadata_quality["passed"]) and not rights["publish_blocked"],
         "artifacts": _collect_artifacts(root),
     }
     (upload_dir / "metadata.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
