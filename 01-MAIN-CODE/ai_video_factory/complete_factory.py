@@ -348,7 +348,21 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
     for platform, video_path in formats.items():
         upload_packages[platform] = finalize_upload_package(
             str(root), topic=topic,
-            summary={**research, "hooks": hooks, "hook": hooks[0]["hook"] if hooks else "", "strongest_angle": topic, "emotion": research.get("emotion", {}).get("emotion", "")},
+            summary={
+                **research,
+                "hooks": hooks,
+                "hook": hooks[0]["hook"] if hooks else "",
+                "strongest_angle": topic,
+                "emotion": research.get("emotion", {}).get("emotion", ""),
+                "source_metadata": {
+                    "creator": str((youtube_options or {}).get("source_creator", "")).strip(),
+                    "title": str((youtube_options or {}).get("source_title", "")).strip(),
+                    "url": str((youtube_options or {}).get("source_url", "")).strip(),
+                    "rights_basis": str((youtube_options or {}).get("rights_basis", "")).strip().lower(),
+                    "source": "user_provided",
+                },
+                "requires_rights_declaration": bool(publish_youtube),
+            },
             script=script, platform=platform, final_video=video_path, thumbnail=thumbnail_rank.get("selected"),
             caption_path=str(Path(primary_result.package_dir) / "captions.ass") if Path(primary_result.package_dir, "captions.ass").exists() else None,
         )
