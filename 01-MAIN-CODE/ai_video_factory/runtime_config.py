@@ -26,6 +26,10 @@ class RuntimeConfig:
     max_job_retries: int = 3
     db_cleanup_interval_seconds: int = 3600
     db_retention_days: int = 30
+    retry_secret_ttl_seconds: int = 3600
+    max_upload_mb: int = 500
+    max_queued_jobs: int = 20
+    min_free_disk_mb: int = 1024
     openai_model: str = "gpt-4o-mini"
     groq_model: str = "llama-3.3-70b-versatile"
     cleanup_interval_seconds: int = 21600
@@ -43,6 +47,10 @@ class RuntimeConfig:
             max_job_retries=_int("AIVF_MAX_JOB_RETRIES", 3, 1, 10),
             db_cleanup_interval_seconds=_int("AIVF_DB_CLEANUP_INTERVAL_SECONDS", 3600, 300, 7 * 86400),
             db_retention_days=_int("AIVF_DB_RETENTION_DAYS", 30, 1, 3650),
+            retry_secret_ttl_seconds=_int("AIVF_RETRY_SECRET_TTL_SECONDS", 3600, 300, 86400),
+            max_upload_mb=_int("AIVF_MAX_UPLOAD_MB", 500, 1, 5000),
+            max_queued_jobs=_int("AIVF_MAX_QUEUED_JOBS", 20, 1, 10000),
+            min_free_disk_mb=_int("AIVF_MIN_FREE_DISK_MB", 1024, 256, 1024 * 1024),
             openai_model=os.environ.get("AIVF_OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
             groq_model=os.environ.get("AIVF_GROQ_MODEL", "llama-3.3-70b-versatile").strip() or "llama-3.3-70b-versatile",
             cleanup_interval_seconds=_int("AIVF_CLEANUP_INTERVAL_SECONDS", 21600, 60, 7 * 86400),
