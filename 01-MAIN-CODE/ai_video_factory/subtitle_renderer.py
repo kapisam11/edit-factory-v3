@@ -87,8 +87,15 @@ def burn_subtitles(input_video: str, output_video: str, script: str, style: str 
     if not drawtext:
         shutil.copy2(input_video, output_video)
         return output_video
-    _run_ffmpeg(["ffmpeg", "-y", "-i", input_video, "-vf", drawtext, "-c:a", "copy", "-c:v", "libx264", "-preset", "fast", "-crf", "23", output_video])
-    return output_video
+    try:
+        _run_ffmpeg(["ffmpeg", "-y", "-i", input_video, "-vf", drawtext, "-c:a", "copy", "-c:v", "libx264", "-preset", "fast", "-crf", "23", output_video])
+        return output_video
+    except Exception:
+        try:
+            Path(output_video).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def generate_ass_subtitle(word_timings: List[Dict], output_path: str, style: str = "bold_white", video_width: int = 1080, video_height: int = 1920) -> str:
