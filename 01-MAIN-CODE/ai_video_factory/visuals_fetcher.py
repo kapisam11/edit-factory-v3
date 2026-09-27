@@ -213,7 +213,6 @@ def vet_with_model(visuals: List[Dict], summary: Dict, api_key: str) -> List[Dic
     """Apply optional model classification only after strict schema validation."""
     allowed_purposes = {"hook", "conflict", "payoff", "reaction", "meme", "context", "gameplay_clip"}
     try:
-        from .model_adapter import call_model
         prompt = (
             "You are given a research summary and candidate visuals. Return a JSON array only. "
             "Each item must contain url, purpose, confidence where confidence is 0..1. "
