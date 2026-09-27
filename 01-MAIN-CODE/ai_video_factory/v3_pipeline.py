@@ -241,7 +241,7 @@ def _finalize_v3_media(
 
 
 def _package_v3_assets(
-    *, result: ProductionResult, package: Path, topic: str, platform: str, baseline_summary: Dict[str, Any],
+    *, result: ProductionResult, package: Path, topic: str, platform: str, source_video: str, baseline_summary: Dict[str, Any],
 ) -> None:
     try:
         from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical, select_best_thumbnail_variant
@@ -249,7 +249,7 @@ def _package_v3_assets(
         thumb_dir.mkdir(parents=True, exist_ok=True)
         thumbnail_work_dir = tempfile.mkdtemp(prefix="aivf-v3-thumb-", dir=str(package))
         try:
-            frame_path = extract_best_video_frame(str(baseline_summary["_source_video"]), thumbnail_work_dir)
+            frame_path = extract_best_video_frame(source_video, thumbnail_work_dir)
             thumbnail_subject = str(baseline_summary.get("hook") or baseline_summary.get("thumbnail") or topic).strip()
             variants = make_thumbnail_variants(
                 thumbnail_subject, str(thumb_dir), count=3, topic=topic, background_path=frame_path
@@ -343,7 +343,6 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             baseline_summary = _research_summary_from_blueprint(
                 {**payload, "retention_map": []}, footage_evidence
             )
-            baseline_summary["_source_video"] = input_video
             final_video, baseline_path, render_report = _finalize_v3_media(
                 result, package, payload, target_seconds
             )
@@ -353,7 +352,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 if not semantic_report["ok"]:
                     result.errors.extend("V3 semantic QC: " + e for e in semantic_report["errors"])
                 result.warnings.extend("V3 semantic QC: " + w for w in semantic_report["warnings"])
-            _package_v3_assets(result=result, package=package, topic=topic, platform=platform, baseline_summary=baseline_summary)
+            _package_v3_assets(result=result, package=package, topic=topic, platform=platform, source_video=input_video, baseline_summary=baseline_summary)
             readiness = evaluate_artifact(
                 final_video, target_seconds=target_seconds,
                 platform_profile=payload["platform_variants"][platform],
