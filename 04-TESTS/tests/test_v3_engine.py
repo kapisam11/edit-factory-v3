@@ -11,6 +11,7 @@ from ai_video_factory.v3_engine import (
     validate_blueprint,
 )
 from ai_video_factory.v3_pipeline import _research_summary_from_blueprint
+from ai_video_factory.v3_quality import RenderContractError
 
 
 def test_v3_blueprint_enforces_original_editor_contract():
