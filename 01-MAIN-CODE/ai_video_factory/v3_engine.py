@@ -46,7 +46,7 @@ class EditType(str, Enum):
 @dataclass(frozen=True)
 class V3Config:
     target_seconds: float = 30.0
-    platform: str = "youtube_shorts"
+    platform: str | Platform = "youtube_shorts"
     audience: str = "general short-form viewers"
     bpm: int = 120
     retention_interval: float = 2.0
