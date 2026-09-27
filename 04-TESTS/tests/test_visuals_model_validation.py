@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ai_video_factory import visuals_fetcher
-from ai_video_factory import model_adapter
+import ai_video_factory.model_adapter as model_adapter
 
 
 def test_model_visual_output_is_schema_validated(monkeypatch):
