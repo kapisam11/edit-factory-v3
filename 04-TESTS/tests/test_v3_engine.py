@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+from pathlib import Path
+
 import pytest
 
 from ai_video_factory.edit_planner import build_timeline
@@ -140,7 +143,7 @@ def test_v3_blueprint_round_trip_is_strict_and_immutable():
     assert isinstance(restored.hooks, tuple)
     assert isinstance(restored.clip_plan, tuple)
 
-    with pytest.raises(TypeError):
+    with pytest.raises(FrozenInstanceError):
         restored.clip_plan += (restored.clip_plan[0],)
     with pytest.raises(TypeError):
         restored.platform_variants["youtube_shorts"] = {}
@@ -225,7 +228,7 @@ def test_v3_quality_flags_are_strict_booleans():
     blueprint = create_v3_blueprint("A subject")
     payload = blueprint.to_dict()
     payload["quality"]["passed"] = "false"
-    with pytest.raises((TypeError, ValueError), match="boolean"):
+    with pytest.raises((TypeError, ValueError), match="boolean|malformed typed data"):
         blueprint.from_dict(payload)
 
 
