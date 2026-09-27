@@ -427,12 +427,34 @@ def _save_and_validate_upload(upload, suffix: str) -> Path:
 def _probe_video(path: Path) -> bool:
     try:
         result = run_ffprobe([
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
             "-show_entries", "stream=codec_type,width,height,duration",
-            "-of", "json", str(path),
+            "-show_entries", "format=duration",
+            "-of", "json",
+            str(path),
         ], timeout=30)
-        return result.returncode == 0 and bool((result.stdout or "").strip())
-    except (OSError, RuntimeError, ValueError):
+        if result.returncode != 0:
+            return False
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams") or []
+        if not streams:
+            return False
+        stream = streams[0]
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+        duration_raw = stream.get("duration") or (payload.get("format") or {}).get("duration")
+        duration = float(duration_raw)
+        return (
+            width > 0
+            and height > 0
+            and width <= 7680
+            and height <= 7680
+            and duration > 0
+            and duration <= 3600
+        )
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return False
 
 
