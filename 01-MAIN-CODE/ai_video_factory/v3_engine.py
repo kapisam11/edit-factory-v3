@@ -134,6 +134,39 @@ class RetentionEvent:
 
 
 @dataclass(frozen=True)
+class PlatformProfile:
+    width: int
+    height: int
+    max_seconds: float | None
+    safe_bottom: int
+    cta: str
+
+
+@dataclass(frozen=True)
+class QCRequirements:
+    target_tolerance_seconds: float = 0.08
+    require_video: bool = True
+    require_audio: bool = False
+    require_independent_retention: bool = True
+    semantic_qc_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class PackagingPlan:
+    final_video_name: str = "final.v3.mp4"
+    thumbnail_name: str = "thumbnail.png"
+    vertical_thumbnail_name: str = "thumbnail_vertical.png"
+    upload_manifest_name: str = "upload_package.json"
+
+
+@dataclass(frozen=True)
+class MetricMetadata:
+    method: str = "heuristic"
+    confidence: str = "low"
+    calibration_status: str = "uncalibrated"
+
+
+@dataclass(frozen=True)
 class QualityReport:
     passed: bool
     score: int
@@ -164,6 +197,10 @@ class V3Blueprint:
     capabilities: Sequence[str]
     platform: str = "youtube_shorts"
     audience: str = "general short-form viewers"
+    platform_profile: PlatformProfile | None = None
+    qc: QCRequirements = field(default_factory=QCRequirements)
+    packaging: PackagingPlan = field(default_factory=PackagingPlan)
+    metric_metadata: MetricMetadata = field(default_factory=MetricMetadata)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hooks", tuple(self.hooks))
@@ -174,6 +211,11 @@ class V3Blueprint:
         object.__setattr__(self, "capabilities", tuple(self.capabilities))
         object.__setattr__(self, "platform_variants", _freeze_mapping(self.platform_variants))
         object.__setattr__(self, "metrics", MappingProxyType({str(k): float(v) for k, v in dict(self.metrics).items()}))
+        if self.platform_profile is None:
+            profile = PLATFORM_PROFILES.get(str(self.platform))
+            if profile is None:
+                raise ValueError(f"unsupported blueprint platform: {self.platform}")
+            object.__setattr__(self, "platform_profile", PlatformProfile(**profile))
 
     @property
     def schema_version(self) -> str:
@@ -189,6 +231,10 @@ class V3Blueprint:
             "schema_version": self.schema_version,
             "platform": self.platform,
             "audience": self.audience,
+            "platform_profile": asdict(self.platform_profile),
+            "qc": asdict(self.qc),
+            "packaging": asdict(self.packaging),
+            "metric_metadata": asdict(self.metric_metadata),
             "core_idea": asdict(self.core_idea),
             "edit_type": self.edit_type,
             "hooks": [asdict(item) for item in self.hooks],
@@ -212,6 +258,7 @@ class V3Blueprint:
         required = {
             "version", "core_idea", "edit_type", "hooks", "clip_plan", "music",
             "retention_map", "thumbnail_concept", "title_options", "hashtags",
+            "platform_profile", "qc", "packaging", "metric_metadata",
             "description", "platform_variants", "quality", "metrics", "capabilities",
         }
         missing = sorted(required - set(payload))
@@ -236,6 +283,10 @@ class V3Blueprint:
             music = MusicPlan(**music_data)
             retention = tuple(RetentionEvent(**dict(item)) for item in payload["retention_map"])
             quality = QualityReport(**dict(payload["quality"]))
+            profile = PlatformProfile(**dict(payload["platform_profile"]))
+            qc = QCRequirements(**dict(payload["qc"]))
+            packaging = PackagingPlan(**dict(payload["packaging"]))
+            metric_metadata = MetricMetadata(**dict(payload["metric_metadata"]))
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError("V3 blueprint contains malformed typed data") from exc
         result = cls(
@@ -256,6 +307,10 @@ class V3Blueprint:
             capabilities=tuple(payload["capabilities"]),
             platform=str(payload.get("platform", "youtube_shorts")),
             audience=str(payload.get("audience", "general short-form viewers")),
+            platform_profile=profile,
+            qc=qc,
+            packaging=packaging,
+            metric_metadata=metric_metadata,
         )
         validate_blueprint(result)
         return result
@@ -652,6 +707,14 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         raise ValueError("v3 blueprint must expose exactly 40 unique tracked capabilities")
     if blueprint.platform not in PLATFORM_PROFILES:
         raise ValueError(f"unsupported blueprint platform: {blueprint.platform}")
+    expected_profile = PLATFORM_PROFILES[blueprint.platform]
+    if asdict(blueprint.platform_profile) != dict(expected_profile):
+        raise ValueError("blueprint platform profile does not match registered platform constraints")
+    if not 0.01 <= float(blueprint.qc.target_tolerance_seconds) <= 1.0:
+        raise ValueError("blueprint QC target tolerance is invalid")
+    if blueprint.metric_metadata.method != "heuristic" or blueprint.metric_metadata.confidence not in {"low", "medium", "high"}:
+        raise ValueError("blueprint metric metadata is invalid")
+
     if not str(blueprint.audience).strip():
         raise ValueError("blueprint audience is required")
     if not blueprint.platform_variants or blueprint.platform not in blueprint.platform_variants:
