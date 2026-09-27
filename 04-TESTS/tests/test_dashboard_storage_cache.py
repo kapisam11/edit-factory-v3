@@ -82,3 +82,36 @@ def test_hybrid_cache_expires_and_deletes():
     cache.set_json("k", {"value": 2}, 10)
     cache.delete("k")
     assert cache.get_json("k") is None
+
+
+
+def test_dashboard_store_rejects_illegal_status_transition(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store = DashboardStore(db)
+    store.insert_job("job-1", "topic", {})
+    assert store.claim_job("job-1") is True
+    assert store.claim_job("job-1") is False
+    assert store.update_job("job-1", status="done") == 1
+    with pytest.raises(ValueError, match="Invalid job status transition"):
+        store.update_job("job-1", status="running")
+
+
+def test_dashboard_store_claim_is_atomic(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store_a = DashboardStore(db)
+    store_b = DashboardStore(db)
+    store_a.insert_job("job-1", "topic", {})
+    results = []
+    import threading
+
+    def claim(store):
+        results.append(store.claim_job("job-1"))
+
+    threads = [threading.Thread(target=claim, args=(store_a,)), threading.Thread(target=claim, args=(store_b,))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(results) == [False, True]
