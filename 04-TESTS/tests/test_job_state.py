@@ -50,3 +50,14 @@ def test_invalid_transitions(current, target):
 def test_same_state_transition_is_idempotent():
     assert is_valid_transition(JobStatus.RUNNING.value, JobStatus.RUNNING.value)
     assert allowed_transitions(JobStatus.RUNNING.value)
+
+
+
+def test_failed_job_states_can_be_requeued_for_bounded_retry():
+    from ai_video_factory.job_state import is_valid_transition, RETRYABLE_STATUSES
+
+    assert RETRYABLE_STATUSES == {"error", "interrupted"}
+    assert is_valid_transition("error", "queued")
+    assert is_valid_transition("interrupted", "queued")
+    assert not is_valid_transition("done", "queued")
+    assert not is_valid_transition("cancelled", "queued")
