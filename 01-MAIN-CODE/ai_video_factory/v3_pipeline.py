@@ -14,7 +14,7 @@ from .production_models import ProductionResult
 from .scene_intelligence import analyze_video
 from .v3_renderer_bridge import V3RenderRequest, render_v3
 from .v3_capabilities import validate_capabilities
-from .v3_engine import V3Config, create_v3_blueprint, validate_blueprint
+from .v3_engine import V3Blueprint, V3Config, create_v3_blueprint, validate_blueprint
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
 from .v3_semantic_qc import analyze_render_semantics
 
@@ -180,6 +180,15 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     if source_metadata:
         payload["source_metadata"] = dict(source_metadata)
     _atomic_json_write(blueprint_path, payload)
+    # Re-read the persisted artifact and validate it through the same domain contract
+    # the renderer is expected to consume. This catches serialization drift before FFmpeg.
+    persisted_payload = json.loads(blueprint_path.read_text(encoding="utf-8"))
+    persisted_blueprint = V3Blueprint.from_dict(persisted_payload)
+    payload = persisted_blueprint.to_dict()
+    payload["platform"] = platform
+    payload["audience"] = audience
+    if source_metadata:
+        payload["source_metadata"] = dict(source_metadata)
 
     environment = os.environ.get("AIVF_ENV", "production").strip().lower()
     qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
