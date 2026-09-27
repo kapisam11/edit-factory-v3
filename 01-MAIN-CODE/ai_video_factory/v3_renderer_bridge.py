@@ -11,7 +11,42 @@ from typing import Any, Mapping, Optional
 
 from .production_models import ProductionResult
 from .production_pipeline import run_production_pipeline
+from .v3_engine import V3Blueprint
 
+
+@dataclass(frozen=True)
+class V3RenderPlan:
+    """Typed rendering instructions derived from one validated V3 blueprint."""
+    target_seconds: float
+    platform: str
+    edit_type: str
+    clip_plan: tuple[Mapping[str, Any], ...]
+    hooks: tuple[Mapping[str, Any], ...]
+    retention_map: tuple[Mapping[str, Any], ...]
+    platform_profile: Mapping[str, Any]
+
+    @classmethod
+    def from_blueprint(cls, blueprint: V3Blueprint, *, include_retention: bool = True) -> "V3RenderPlan":
+        return cls(
+            target_seconds=blueprint.duration,
+            platform=blueprint.platform,
+            edit_type=blueprint.edit_type,
+            clip_plan=tuple(dict(item) for item in blueprint.to_dict()["clip_plan"]),
+            hooks=tuple(dict(item) for item in blueprint.to_dict()["hooks"]),
+            retention_map=tuple(dict(item) for item in blueprint.to_dict()["retention_map"]) if include_retention else tuple(),
+            platform_profile=dict(blueprint.platform_profile.__dict__),
+        )
+
+    def to_directives(self) -> dict[str, Any]:
+        return {
+            "edit_type": self.edit_type,
+            "clip_plan": [dict(item) for item in self.clip_plan],
+            "hooks": [dict(item) for item in self.hooks],
+            "retention_map": [dict(item) for item in self.retention_map],
+            "platform": self.platform,
+            "platform_profile": dict(self.platform_profile),
+            "blueprint_contract": "3.0.0",
+        }
 
 @dataclass(frozen=True)
 class V3RenderRequest:
@@ -20,6 +55,7 @@ class V3RenderRequest:
     package_dir: str
     target_seconds: float
     research_summary: Mapping[str, Any]
+    render_plan: Optional[V3RenderPlan] = None
     model_key: Optional[str] = None
     skip_qc: bool = False
     music_path: Optional[str] = None
@@ -37,7 +73,7 @@ def render_v3(request: V3RenderRequest) -> ProductionResult:
         request.topic,
         request.package_dir,
         target_seconds=request.target_seconds,
-        research_summary=dict(request.research_summary),
+        research_summary={**dict(request.research_summary), **({"v3_render_plan": request.render_plan.to_directives()} if request.render_plan else {})},
         enable_ocr=request.enable_ocr,
         model_key=request.model_key,
         skip_qc=request.skip_qc,
@@ -51,4 +87,4 @@ def render_v3(request: V3RenderRequest) -> ProductionResult:
     )
 
 
-__all__=["V3RenderRequest","render_v3"]
+__all__=["V3RenderPlan","V3RenderRequest","render_v3"]
