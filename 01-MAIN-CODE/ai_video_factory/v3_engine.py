@@ -120,7 +120,10 @@ class MusicPlan:
     emotional_tone: str
     beat_seconds: float
     drop_time: float
-    sync_points: List[float]
+    sync_points: Sequence[float]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sync_points", tuple(float(value) for value in self.sync_points))
 
 
 @dataclass(frozen=True)
@@ -216,6 +219,14 @@ class V3Blueprint:
             raise ValueError(f"V3 blueprint is missing required fields: {', '.join(missing)}")
         if payload.get("version") != "3.0.0" or payload.get("schema_version", "3.0.0") != "3.0.0":
             raise ValueError("unsupported V3 blueprint schema version")
+        if not isinstance(payload["hooks"], (list, tuple)) or not isinstance(payload["clip_plan"], (list, tuple)):
+            raise ValueError("V3 blueprint hooks and clip_plan must be arrays")
+        if not isinstance(payload["retention_map"], (list, tuple)) or not isinstance(payload["capabilities"], (list, tuple)):
+            raise ValueError("V3 blueprint retention_map and capabilities must be arrays")
+        if not isinstance(payload["title_options"], (list, tuple)) or not isinstance(payload["hashtags"], (list, tuple)):
+            raise ValueError("V3 blueprint title_options and hashtags must be arrays")
+        if not isinstance(payload["metrics"], Mapping) or not isinstance(payload["platform_variants"], Mapping):
+            raise ValueError("V3 blueprint metrics and platform_variants must be objects")
         try:
             core = CoreIdea(**dict(payload["core_idea"]))
             hooks = tuple(HookPack(**dict(item)) for item in payload["hooks"])
