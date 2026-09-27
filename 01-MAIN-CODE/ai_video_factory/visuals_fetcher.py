@@ -10,6 +10,8 @@ import re
 import shutil
 import subprocess
 import json
+import tempfile
+from urllib.parse import urlparse
 
 from .render_engine import run_ffmpeg
 
@@ -315,80 +317,58 @@ def _media_rights_cleared(item: Dict) -> bool:
     }
 
 
+def _valid_youtube_url(value: str) -> bool:
+    try:
+        parsed = urlparse(str(value))
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return parsed.scheme == "https" and host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+
+
 def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20, *, rights_cleared: bool = False) -> Dict:
-    """Download a short clip from a YouTube URL using `yt-dlp` + `ffmpeg`.
-
-    Returns metadata dict with `local_path`, `thumbnail`, `uploader`, `upload_date`, `source`.
-    Requires `yt-dlp` and `ffmpeg` on PATH. If not available, returns empty dict.
-    """
-    import os
-    import shlex
-    from datetime import datetime
-
-    if not rights_cleared:
+    """Download a rights-cleared YouTube clip through a temporary staging directory."""
+    if not rights_cleared or not _valid_youtube_url(youtube_url):
         return {}
-    if not shutil.which("yt-dlp"):
+    if not 1 <= int(max_duration) <= 600 or not shutil.which("yt-dlp"):
         return {}
     os.makedirs(out_dir, exist_ok=True)
+    staging_dir = tempfile.mkdtemp(prefix="aivf-ytdlp-", dir=out_dir)
     try:
         proc = subprocess.run(["yt-dlp", "--dump-single-json", youtube_url], capture_output=True, text=True, timeout=40)
         if proc.returncode != 0 or not proc.stdout:
             return {}
         info = json.loads(proc.stdout)
-        video_id = info.get("id")
+        video_id = str(info.get("id") or "").strip()
+        if not video_id or not re.fullmatch(r"[A-Za-z0-9_-]{5,32}", video_id):
+            return {}
         title = info.get("title")
         uploader = info.get("uploader")
         upload_date = info.get("upload_date")
-        tmp_name = os.path.join(out_dir, f"{video_id}.%(ext)s")
-        dl = subprocess.run(["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio/best", "-o", tmp_name, youtube_url], capture_output=True, text=True, timeout=300)
+        tmp_name = os.path.join(staging_dir, f"{video_id}.%(ext)s")
+        dl = subprocess.run(
+            ["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio/best", "-o", tmp_name, youtube_url],
+            capture_output=True, text=True, timeout=300
+        )
         if dl.returncode != 0:
             return {}
-        downloaded = None
-        for f in os.listdir(out_dir):
-            if f.startswith(video_id + "."):
-                downloaded = os.path.join(out_dir, f)
-                break
-        if not downloaded:
-            for f in os.listdir(out_dir):
-                if video_id in f:
-                    downloaded = os.path.join(out_dir, f)
-                    break
-        if not downloaded:
+        downloaded = next((os.path.join(staging_dir, name) for name in os.listdir(staging_dir) if name.startswith(video_id + ".")), None)
+        if not downloaded or not os.path.isfile(downloaded):
             return {}
-        out_clip = os.path.join(out_dir, f"{video_id}_clip_{max_duration}s.mp4")
-        if shutil.which("ffmpeg"):
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                downloaded,
-                "-ss",
-                "0",
-                "-t",
-                str(int(max_duration)),
-                "-c:v",
-                "libx264",
-                "-c:a",
-                "aac",
-                out_clip,
-            ]
-            try:
-                run_ffmpeg(cmd, timeout=120)
-            except (OSError, RuntimeError):
-                out_clip = downloaded
-        else:
-            out_clip = downloaded
+        out_clip = os.path.join(out_dir, f"{video_id}_clip_{int(max_duration)}s.mp4")
+        run_ffmpeg([
+            "ffmpeg", "-y", "-i", downloaded, "-ss", "0", "-t", str(int(max_duration)),
+            "-c:v", "libx264", "-c:a", "aac", out_clip,
+        ], timeout=120)
         thumb = None
         if shutil.which("ffmpeg"):
             thumb_path = os.path.join(out_dir, f"{video_id}_thumb.jpg")
-            cmd = ["ffmpeg", "-y", "-i", out_clip, "-ss", "00:00:01", "-vframes", "1", thumb_path]
-            try:
-                subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-                if os.path.exists(thumb_path):
-                    thumb = thumb_path
-            except Exception:
-                thumb = None
-        meta = {
+            run_ffmpeg([
+                "ffmpeg", "-y", "-i", out_clip, "-ss", "00:00:01", "-vframes", "1", thumb_path,
+            ], timeout=20)
+            if os.path.exists(thumb_path):
+                thumb = thumb_path
+        return {
             "local_path": out_clip,
             "thumbnail": thumb,
             "source": "youtube",
@@ -397,9 +377,10 @@ def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20
             "upload_date": upload_date,
             "url": youtube_url,
         }
-        return meta
-    except Exception:
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
         return {}
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = True, clip_max_duration: int = 20) -> List[Dict]:
