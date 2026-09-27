@@ -221,33 +221,28 @@ def _finalize_v3_media(
     result: ProductionResult, package: Path, payload: Dict[str, Any], target_seconds: float,
 ) -> tuple[str, Path, Dict[str, Any]]:
     _validate_timeline_contract(package, payload, target_seconds)
+    if not result.final_video:
+        raise RenderContractError("renderer returned no final video")
     baseline_path = package / "v3_baseline.mp4"
     retention_path = package / "final.v3.retention.mp4"
     normalized_path = package / ".final.v3.normalized.mp4"
+    canonical_final = package / payload.get("packaging", {}).get("final_video_name", "final.v3.mp4")
     try:
-        if not result.final_video:
-            raise RenderContractError("renderer returned no final video")
         shutil.copyfile(result.final_video, baseline_path)
         enforce_retention_events(result.final_video, str(retention_path), payload.get("retention_map", []))
-        os.replace(retention_path, result.final_video)
-        canonical_final = package / "final.v3.mp4"
-        normalize_duration(result.final_video, str(normalized_path), target_seconds)
-        previous_final = Path(result.final_video).resolve()
-        if previous_final != canonical_final.resolve():
-            canonical_final.unlink(missing_ok=True)
-            os.replace(normalized_path, canonical_final)
-            previous_final.unlink(missing_ok=True)
-        else:
-            os.replace(normalized_path, canonical_final)
+        normalize_duration(str(retention_path), str(normalized_path), target_seconds)
         profile = payload["platform_variants"][payload["platform"]]
         report = strict_render_check(
-            str(canonical_final),
+            str(normalized_path),
             target_seconds=target_seconds,
             platform_profile=profile,
             retention_events=payload.get("retention_map", []),
             retention_baseline=str(baseline_path),
             require_independent_retention=True,
         )
+        if not report["ok"]:
+            raise RenderContractError("; ".join(str(error) for error in report.get("errors", [])) or "V3 render QC failed")
+        os.replace(normalized_path, canonical_final)
         result.final_video = str(canonical_final)
         return str(canonical_final), baseline_path, report
     except Exception:
