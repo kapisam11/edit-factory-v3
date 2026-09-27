@@ -772,8 +772,13 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         previous = clip.end
     if not blueprint.music.sync_points or any(not math.isfinite(float(t)) for t in blueprint.music.sync_points):
         raise ValueError("blueprint music sync points are invalid")
-    if any(t < -0.001 or t > blueprint.duration + 0.001 for t in blueprint.music.sync_points):
-        raise ValueError("blueprint music sync point is outside the timeline")
+    previous_sync = -1e-6
+    for sync_point in blueprint.music.sync_points:
+        if sync_point < previous_sync:
+            raise ValueError("blueprint music sync points are not monotonic")
+        if sync_point < -0.001 or sync_point > blueprint.duration + 0.001:
+            raise ValueError("blueprint music sync point is outside the timeline")
+        previous_sync = sync_point
     if abs(blueprint.clip_plan[-1].end - blueprint.music.sync_points[-1]) > 0.01:
         raise ValueError("clip plan does not exactly cover planned duration")
 
