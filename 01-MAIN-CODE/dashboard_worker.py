@@ -25,6 +25,7 @@ def _skip_stages_for_workflow(workflow: str) -> list[str]:
 
 
 def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str) -> None:
+    """Spawn-safe worker entrypoint; all pipeline choices are explicit arguments."""
     os.environ["AIVF_WORKER_PROCESS"] = "1"
     if os.name != "nt":
         try:
@@ -34,19 +35,13 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
     from app import web_app_v3
     from ai_video_factory.validation import validate_target_seconds, validate_v3_target_seconds
     params = dict(params)
-    if str(params.get("workflow", "default")).strip().lower() == "v3":
+    workflow = str(params.get("workflow", "default")).strip().lower()
+    if workflow == "v3":
         params["target_seconds"] = validate_v3_target_seconds(params.get("target_seconds", 30.0))
     else:
         params["target_seconds"] = validate_target_seconds(params.get("target_seconds", 45.0))
-    params["workflow"] = str(params.get("workflow", "default"))
-    skip_stages = _skip_stages_for_workflow(params["workflow"])
-    if not skip_stages:
-        web_app_v3._run_job_worker_impl(job_id, params, secrets, output_root, db_path)
-        return
-    import ai_video_factory.pipeline as pipeline_module
-    original_builder = pipeline_module.build_director_pipeline
-    pipeline_module.build_director_pipeline = lambda: original_builder(skip_stages=skip_stages)
-    try:
-        web_app_v3._run_job_worker_impl(job_id, params, secrets, output_root, db_path)
-    finally:
-        pipeline_module.build_director_pipeline = original_builder
+    params["workflow"] = workflow
+    skip_stages = _skip_stages_for_workflow(workflow)
+    web_app_v3._run_job_worker_impl(
+        job_id, params, secrets, output_root, db_path, skip_stages=skip_stages
+    )
