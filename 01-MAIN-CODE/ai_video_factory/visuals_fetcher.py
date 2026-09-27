@@ -334,6 +334,8 @@ def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20
         return {}
     os.makedirs(out_dir, exist_ok=True)
     staging_dir = tempfile.mkdtemp(prefix="aivf-ytdlp-", dir=out_dir)
+    out_clip: Optional[str] = None
+    thumb_path: Optional[str] = None
     try:
         proc = subprocess.run(["yt-dlp", "--dump-single-json", youtube_url], capture_output=True, text=True, timeout=40)
         if proc.returncode != 0 or not proc.stdout:
@@ -346,41 +348,33 @@ def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20
         uploader = info.get("uploader")
         upload_date = info.get("upload_date")
         tmp_name = os.path.join(staging_dir, f"{video_id}.%(ext)s")
-        dl = subprocess.run(
-            ["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio/best", "-o", tmp_name, youtube_url],
-            capture_output=True, text=True, timeout=300
-        )
+        dl = subprocess.run(["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio/best", "-o", tmp_name, youtube_url], capture_output=True, text=True, timeout=300)
         if dl.returncode != 0:
             return {}
         downloaded = next((os.path.join(staging_dir, name) for name in os.listdir(staging_dir) if name.startswith(video_id + ".")), None)
         if not downloaded or not os.path.isfile(downloaded):
             return {}
         out_clip = os.path.join(out_dir, f"{video_id}_clip_{int(max_duration)}s.mp4")
-        run_ffmpeg([
-            "ffmpeg", "-y", "-i", downloaded, "-ss", "0", "-t", str(int(max_duration)),
-            "-c:v", "libx264", "-c:a", "aac", out_clip,
-        ], timeout=120)
+        run_ffmpeg(["ffmpeg", "-y", "-i", downloaded, "-ss", "0", "-t", str(int(max_duration)), "-c:v", "libx264", "-c:a", "aac", out_clip], timeout=120)
+        if not os.path.isfile(out_clip) or os.path.getsize(out_clip) == 0:
+            return {}
         thumb = None
         if shutil.which("ffmpeg"):
             thumb_path = os.path.join(out_dir, f"{video_id}_thumb.jpg")
-            run_ffmpeg([
-                "ffmpeg", "-y", "-i", out_clip, "-ss", "00:00:01", "-vframes", "1", thumb_path,
-            ], timeout=20)
+            run_ffmpeg(["ffmpeg", "-y", "-i", out_clip, "-ss", "00:00:01", "-vframes", "1", thumb_path], timeout=20)
             if os.path.exists(thumb_path):
                 thumb = thumb_path
-        return {
-            "local_path": out_clip,
-            "thumbnail": thumb,
-            "source": "youtube",
-            "title": title,
-            "uploader": uploader,
-            "upload_date": upload_date,
-            "url": youtube_url,
-        }
+        return {"local_path": out_clip, "thumbnail": thumb, "source": "youtube", "title": title, "uploader": uploader, "upload_date": upload_date, "url": youtube_url}
     except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
         return {}
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
+        if out_clip and os.path.exists(out_clip) and (not os.path.isfile(out_clip) or os.path.getsize(out_clip) == 0):
+            try: os.unlink(out_clip)
+            except OSError: pass
+        if thumb_path and os.path.exists(thumb_path) and (not out_clip or not os.path.isfile(out_clip)):
+            try: os.unlink(thumb_path)
+            except OSError: pass
 
 
 def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = True, clip_max_duration: int = 20) -> List[Dict]:
