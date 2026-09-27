@@ -15,6 +15,7 @@ import tempfile
 from urllib.parse import urlparse
 
 from .render_engine import run_ffmpeg, validate_media_output
+from .model_adapter import call_model
 
 
 def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
