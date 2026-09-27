@@ -224,6 +224,8 @@ def _run_one(args: argparse.Namespace, topic: str, overrides: Optional[Dict[str,
             )
             logger.info("Upload package ready: %s", os.path.join(ctx.package_dir, "upload"))
             logger.info("Selected title: %s", upload_manifest.get("selected_title", ""))
+            if upload_manifest.get("media_rights", {}).get("publish_blocked"):
+                logger.warning("Publishing is blocked until third-party media rights are cleared.")
         except Exception:
             logger.exception("Upload package generation failed for %s", topic)
 
@@ -233,6 +235,12 @@ def _run_one(args: argparse.Namespace, topic: str, overrides: Optional[Dict[str,
             manifest_path = os.path.join(ctx.package_dir, "upload", "metadata.json")
             with open(manifest_path, "r", encoding="utf-8") as handle:
                 manifest = json.load(handle)
+            if not manifest.get("publish_ready", False):
+                logger.error(
+                    "YouTube upload blocked: third-party media rights are unresolved. "
+                    "Verify ownership, permission, license, or public-domain status first."
+                )
+                return 1
             result = upload_video(
                 ctx.final_video or os.path.join(ctx.package_dir, "final.mp4"),
                 title=str(manifest.get("selected_title", topic)),
