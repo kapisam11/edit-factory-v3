@@ -171,3 +171,11 @@ def test_v3_blueprint_exposes_contract_platform_and_duration():
     assert blueprint.platform == "tiktok"
     assert blueprint.duration == 12.0
     assert blueprint.schema_version == blueprint.version == "3.0.0"
+
+
+
+def test_v3_metrics_use_explicit_heuristic_metadata_and_bounded_scores():
+    blueprint = create_v3_blueprint("A subject")
+    assert blueprint.metric_metadata.method == "heuristic"
+    assert blueprint.metric_metadata.confidence == "low"
+    assert all(0.0 <= float(value) <= 100.0 for value in blueprint.metrics.values())
