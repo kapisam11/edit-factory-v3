@@ -35,7 +35,7 @@ class V3RenderPlan:
             clip_plan=tuple(dict(item) for item in payload["clip_plan"]),
             hooks=tuple(dict(item) for item in payload["hooks"]),
             retention_map=tuple(dict(item) for item in payload["retention_map"]) if include_retention else tuple(),
-            platform_profile=asdict(blueprint.platform_profile),
+            platform_profile=asdict(blueprint.platform_constraints),
         )
 
     def to_directives(self) -> dict[str, Any]:
