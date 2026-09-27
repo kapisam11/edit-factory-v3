@@ -96,8 +96,12 @@ if output_root not in package.parents or not package.is_dir():
 
 final_video = package / "final.v3.mp4"
 readiness_path = package / "v3_readiness.json"
-if not final_video.is_file() or not readiness_path.is_file():
-    raise SystemExit("target smoke final V3 artifact or readiness report is missing")
+metadata_path = package / "upload" / "youtube_shorts" / "metadata.json"
+thumbnail_path = package / "thumbnail.png"
+thumbnail_vertical_path = package / "thumbnail_vertical.png"
+for required in (final_video, readiness_path, metadata_path, thumbnail_path, thumbnail_vertical_path):
+    if not required.is_file():
+        raise SystemExit(f"target smoke required artifact is missing: {required}")
 
 subprocess.run([
     "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -110,6 +114,23 @@ for key in ("MEDIA_VALID", "MEDIA_CONTRACT_VALID", "UPLOAD_PACKAGE_VALID"):
         raise SystemExit(f"target smoke readiness {key} failed")
 if readiness.get("state") != "UPLOAD_PACKAGE_VALID":
     raise SystemExit(f"target smoke readiness state was {readiness.get('state')!r}")
+
+metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+if metadata.get("metadata_quality", {}).get("passed") is not True:
+    raise SystemExit("target smoke metadata quality gate failed")
+if metadata.get("publish_ready") is not True:
+    raise SystemExit("target smoke upload package is not publish-ready")
+if metadata.get("media_rights", {}).get("publish_blocked") is True:
+    raise SystemExit("target smoke media rights gate unexpectedly blocked synthetic fixture")
+
+from PIL import Image
+for image_path, expected in (
+    (thumbnail_path, (1280, 720)),
+    (thumbnail_vertical_path, (1080, 1920)),
+):
+    with Image.open(image_path) as image:
+        if image.size != expected:
+            raise SystemExit(f"target smoke thumbnail size mismatch for {image_path}: {image.size} != {expected}")
 
 preview = session.get(f"{BASE}/api/jobs/{job_id}/preview", timeout=90)
 if preview.status_code != 200 or not preview.content:
