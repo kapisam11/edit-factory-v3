@@ -516,7 +516,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             }
             with open(pkg_dir / "v3_job_result.json", "w", encoding="utf-8") as handle:
                 json.dump(result_payload, handle, indent=2, ensure_ascii=False)
-            if result_payload["errors"]:
+            if result_payload["errors"] or not _artifact_is_valid(result_payload.get("final_video")):
+                if not result_payload["errors"]:
+                    result_payload["errors"].append("V3 final artifact failed media validation")
                 message = "; ".join(str(error) for error in result_payload["errors"])
                 if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
                     log("ERROR", message)
@@ -542,7 +544,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             return
         log("INFO", "→ Running Pipeline")
         ctx = build_director_pipeline().run(ctx)
-        if ctx.errors:
+        if ctx.errors or not _artifact_is_valid(ctx.final_video):
+            if not ctx.errors:
+                ctx.errors.append("Final artifact failed media validation")
             message = "; ".join(str(error) for error in ctx.errors)
             if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
                 log("ERROR", message)
@@ -556,6 +560,17 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         except Exception:
             logger.exception("Could not record worker failure for %s", job_id)
 
+
+def _artifact_is_valid(final_video: Any) -> bool:
+    """Require a probeable video artifact before the durable job reaches DONE."""
+    if not final_video:
+        return False
+    try:
+        from ai_video_factory.render_engine import validate_media_output
+        validate_media_output(str(final_video), require_video=True, require_audio=False)
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 def _invalidate_package_cache() -> None:
     global _package_cache
