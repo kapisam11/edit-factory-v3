@@ -375,8 +375,13 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
 
     if publish_youtube:
         opts = dict(youtube_options or {})
-        from .youtube_publisher import add_video_to_playlist, ensure_playlist, fetch_video_statistics, upload_video
         short_package = upload_packages.get("youtube_shorts", {})
+        if not short_package.get("publish_ready", False):
+            raise RuntimeError(
+                "YouTube publishing blocked: third-party media rights are not cleared; "
+                "verify ownership, permission, license, or public-domain status first."
+            )
+        from .youtube_publisher import add_video_to_playlist, ensure_playlist, fetch_video_statistics, upload_video
         caption_file = short_package.get("files", {}).get("captions_srt")
         disclosure_reviewed = bool(opts.get("disclosure_reviewed", False))
         upload_result = upload_video(
