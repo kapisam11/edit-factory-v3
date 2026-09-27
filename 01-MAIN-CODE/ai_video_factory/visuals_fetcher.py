@@ -14,7 +14,7 @@ import json
 import tempfile
 from urllib.parse import urlparse
 
-from .render_engine import run_ffmpeg
+from .render_engine import run_ffmpeg, validate_media_output
 
 
 def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
@@ -355,15 +355,28 @@ def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20
         if not downloaded or not os.path.isfile(downloaded):
             return {}
         out_clip = os.path.join(out_dir, f"{video_id}_clip_{int(max_duration)}s.mp4")
-        run_ffmpeg(["ffmpeg", "-y", "-i", downloaded, "-ss", "0", "-t", str(int(max_duration)), "-c:v", "libx264", "-c:a", "aac", out_clip], timeout=120)
+        run_ffmpeg(
+            ["ffmpeg", "-y", "-i", downloaded, "-ss", "0", "-t", str(int(max_duration)), "-c:v", "libx264", "-c:a", "aac", out_clip],
+            timeout=120,
+        )
         if not os.path.isfile(out_clip) or os.path.getsize(out_clip) == 0:
+            return {}
+        media = validate_media_output(out_clip, require_video=True, require_audio=False)
+        duration = float((media.get("format") or {}).get("duration") or 0.0)
+        if duration <= 0.0 or duration > float(max_duration) + 0.5:
             return {}
         thumb = None
         if shutil.which("ffmpeg"):
             thumb_path = os.path.join(out_dir, f"{video_id}_thumb.jpg")
-            run_ffmpeg(["ffmpeg", "-y", "-i", out_clip, "-ss", "00:00:01", "-vframes", "1", thumb_path], timeout=20)
-            if os.path.exists(thumb_path):
-                thumb = thumb_path
+            try:
+                run_ffmpeg(
+                    ["ffmpeg", "-y", "-i", out_clip, "-ss", "00:00:01", "-vframes", "1", thumb_path],
+                    timeout=20,
+                )
+                if os.path.exists(thumb_path):
+                    thumb = thumb_path
+            except Exception:
+                thumb_path = None
         return {"local_path": out_clip, "thumbnail": thumb, "source": "youtube", "title": title, "uploader": uploader, "upload_date": upload_date, "url": youtube_url}
     except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
         return {}
