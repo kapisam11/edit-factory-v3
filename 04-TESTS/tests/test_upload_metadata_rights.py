@@ -82,3 +82,19 @@ def test_explicit_permission_clears_publish_gate():
     report = media_rights_report(summary)
     assert report["publish_blocked"] is False
     assert report["status"] == "cleared"
+
+
+def test_publish_gate_requires_explicit_input_media_rights():
+    summary = {
+        "requires_rights_declaration": True,
+        "source_metadata": {
+            "creator": "",
+            "title": "",
+            "url": "",
+            "rights_basis": "",
+            "source": "user_provided",
+        },
+    }
+    report = media_rights_report(summary)
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
