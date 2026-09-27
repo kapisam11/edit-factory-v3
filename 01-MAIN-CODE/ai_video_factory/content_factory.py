@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from .render_engine import run_ffprobe
+
 
 # ---------------------------------------------------------------------------
 # 1-4: speech/caption/audio-first editing
@@ -326,15 +328,18 @@ def plan_source_aware_crop(frame_width: int, frame_height: int, layout: LayoutPr
 
 
 def validate_render(path: str, *, expected_width: Optional[int] = None, expected_height: Optional[int] = None, min_duration: float = 0.5) -> Dict[str, Any]:
-    """Verify codec, streams, duration, resolution and corruption with ffprobe."""
+    """Verify codec, streams, duration, resolution and corruption with the shared FFprobe boundary."""
     target = Path(path)
     if not target.is_file():
         return {"ok": False, "errors": ["missing_file"]}
     try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,width,height,duration", "-of", "json", str(target)],
-            capture_output=True, text=True, check=True, timeout=20,
-        )
+        result = run_ffprobe([
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,width,height,duration",
+            "-of", "json", str(target),
+        ], timeout=20)
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or "").strip()[-1000:])
         payload = json.loads(result.stdout or "{}")
     except Exception as exc:
         return {"ok": False, "errors": [f"ffprobe:{exc}"]}
