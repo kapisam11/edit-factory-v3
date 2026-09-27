@@ -161,64 +161,40 @@ def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
         )
 
 
-def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: str = "", target_seconds: float = 30.0,
-                    platform: str = "youtube_shorts", audience: str = "general short-form viewers", bpm: int = 120,
-                    edit_type: Optional[str] = None, model_key: Optional[str] = None, skip_qc: bool = False,
-                    music_path: Optional[str] = None, enable_ocr: bool = False, enable_object_detection: bool = True,
-                    enable_diarization: bool = False, diarization_token: Optional[str] = None,
-                    source_metadata: Optional[Dict[str, Any]] = None) -> ProductionResult:
-    validate_capabilities()
-    _validate_v3_inputs(input_video, topic, target_seconds, platform, audience, bpm)
+def _prepare_blueprint(
+    topic: str, context: str, target_seconds: float, platform: str, audience: str, bpm: int,
+    package: Path, edit_type: Optional[str], source_metadata: Optional[Dict[str, Any]],
+) -> tuple[V3Blueprint, Dict[str, Any], Path]:
     config = V3Config(target_seconds=float(target_seconds), platform=platform, audience=audience, bpm=int(bpm))
     blueprint = create_v3_blueprint(topic, context=context, config=config, edit_type=edit_type)
     validate_blueprint(blueprint)
-
-    package = Path(package_dir)
-    package.mkdir(parents=True, exist_ok=True)
     blueprint_path = package / "v3_blueprint.json"
-    payload = blueprint.to_dict(); payload["platform"] = platform; payload["audience"] = audience
+    payload = blueprint.to_dict()
     if source_metadata:
         payload["source_metadata"] = dict(source_metadata)
     _atomic_json_write(blueprint_path, payload)
-    # Re-read the persisted artifact and validate it through the same domain contract
-    # the renderer is expected to consume. This catches serialization drift before FFmpeg.
-    persisted_payload = json.loads(blueprint_path.read_text(encoding="utf-8"))
-    persisted_blueprint = V3Blueprint.from_dict(persisted_payload)
-    payload = persisted_blueprint.to_dict()
-    payload["platform"] = platform
-    payload["audience"] = audience
+    persisted = V3Blueprint.from_dict(json.loads(blueprint_path.read_text(encoding="utf-8")))
+    persisted_payload = persisted.to_dict()
     if source_metadata:
-        payload["source_metadata"] = dict(source_metadata)
+        persisted_payload["source_metadata"] = dict(source_metadata)
+    return persisted, persisted_payload, blueprint_path
 
-    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
-    qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
-    if skip_qc and (environment not in {"development", "test"} or not qc_override):
-        raise ValueError("skip_qc is disabled for production; use development/test with AIVF_ALLOW_SKIP_QC=1")
-    semantic_qc_disabled = os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0"
-    if semantic_qc_disabled and (environment not in {"development", "test"} or not qc_override):
-        raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
-    try:
-        footage_evidence = _build_footage_evidence(
-            input_video,
-            enable_ocr,
-            min_scenes=len(blueprint.clip_plan),
-        )
-    except Exception as exc:
-        raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
 
-    # Render the contract once with retention directives removed. This is the
-    # independent baseline; retention effects are added only after this render.
-    baseline_payload = dict(payload)
+def _build_baseline_request(
+    *, input_video: str, topic: str, package_dir: str, target_seconds: float, platform: str,
+    blueprint_payload: Dict[str, Any], footage_evidence: Dict[str, Any], model_key: Optional[str],
+    skip_qc: bool, music_path: Optional[str], enable_ocr: bool, enable_object_detection: bool,
+    enable_diarization: bool, diarization_token: Optional[str],
+) -> V3RenderRequest:
+    baseline_payload = dict(blueprint_payload)
     baseline_payload["retention_map"] = []
-    baseline_summary = _research_summary_from_blueprint(baseline_payload, footage_evidence)
-    if source_metadata:
-        baseline_summary["source_metadata"] = dict(source_metadata)
-    request = V3RenderRequest(
+    summary = _research_summary_from_blueprint(baseline_payload, footage_evidence)
+    return V3RenderRequest(
         input_video=input_video,
         topic=topic,
         package_dir=package_dir,
         target_seconds=target_seconds,
-        research_summary=baseline_summary,
+        research_summary=summary,
         model_key=model_key,
         skip_qc=skip_qc,
         music_path=music_path,
@@ -228,143 +204,177 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
         diarization_token=diarization_token,
         platform=platform,
     )
-    result = render_v3(request)
 
+
+def _finalize_v3_media(
+    result: ProductionResult, package: Path, payload: Dict[str, Any], target_seconds: float,
+) -> tuple[str, Path, Dict[str, Any]]:
+    _validate_timeline_contract(package, payload, target_seconds)
+    baseline_path = package / "v3_baseline.mp4"
+    if not result.final_video:
+        raise RenderContractError("renderer returned no final video")
+    shutil.copyfile(result.final_video, baseline_path)
+    retention_path = package / "final.v3.retention.mp4"
+    enforce_retention_events(result.final_video, str(retention_path), payload.get("retention_map", []))
+    os.replace(retention_path, result.final_video)
+    canonical_final = package / "final.v3.mp4"
+    normalized_path = package / ".final.v3.normalized.mp4"
+    normalize_duration(result.final_video, str(normalized_path), target_seconds)
+    previous_final = Path(result.final_video).resolve()
+    if previous_final != canonical_final.resolve():
+        canonical_final.unlink(missing_ok=True)
+        os.replace(normalized_path, canonical_final)
+        previous_final.unlink(missing_ok=True)
+    else:
+        os.replace(normalized_path, canonical_final)
+    profile = payload["platform_variants"][payload["platform"]]
+    report = strict_render_check(
+        str(canonical_final),
+        target_seconds=target_seconds,
+        platform_profile=profile,
+        retention_events=payload.get("retention_map", []),
+        retention_baseline=str(baseline_path),
+        require_independent_retention=True,
+    )
+    result.final_video = str(canonical_final)
+    return str(canonical_final), baseline_path, report
+
+
+def _package_v3_assets(
+    *, result: ProductionResult, package: Path, topic: str, platform: str, baseline_summary: Dict[str, Any],
+) -> None:
+    try:
+        from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical, select_best_thumbnail_variant
+        thumb_dir = package / "thumbnails"
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        thumbnail_work_dir = tempfile.mkdtemp(prefix="aivf-v3-thumb-", dir=str(package))
+        try:
+            frame_path = extract_best_video_frame(str(baseline_summary["_source_video"]), thumbnail_work_dir)
+            thumbnail_subject = str(baseline_summary.get("hook") or baseline_summary.get("thumbnail") or topic).strip()
+            variants = make_thumbnail_variants(
+                thumbnail_subject, str(thumb_dir), count=3, topic=topic, background_path=frame_path
+            )
+            if not variants:
+                raise RuntimeError("thumbnail generation returned no variants")
+            selected_variant = select_best_thumbnail_variant(variants)
+            thumbnail_path = package / "thumbnail.png"
+            shutil.copyfile(variants[selected_variant - 1], thumbnail_path)
+            make_thumbnail_vertical(
+                thumbnail_subject, str(package / "thumbnail_vertical.png"),
+                size=(1080, 1920), background_path=frame_path,
+            )
+            baseline_summary["thumbnail"] = str(thumbnail_path)
+            result.artifacts["thumbnail"] = str(thumbnail_path)
+            result.artifacts["thumbnail_variants"] = str(thumb_dir)
+        finally:
+            shutil.rmtree(thumbnail_work_dir, ignore_errors=True)
+        from .upload_package import finalize_upload_package
+        finalize_upload_package(
+            str(package),
+            topic=topic,
+            summary=baseline_summary,
+            script=str(baseline_summary.get("script", "")),
+            platform=platform,
+            final_video=result.final_video,
+            thumbnail=str(baseline_summary.get("thumbnail") or "") or None,
+            caption_path=str(package / "captions.ass") if (package / "captions.ass").exists() else None,
+        )
+        result.artifacts["upload_package_manifest"] = str(package / "upload_package.json")
+    except Exception as exc:
+        result.errors.append(f"V3 upload package finalization failed: {exc}")
+
+
+def _persist_v3_reports(
+    package: Path, result: ProductionResult, render_report: Dict[str, Any],
+    semantic_report: Dict[str, Any], readiness: Any,
+) -> None:
+    _atomic_json_write(package / "v3_render_qc.json", render_report)
+    _atomic_json_write(package / "v3_semantic_qc.json", semantic_report)
+    _atomic_json_write(package / "v3_readiness.json", readiness.to_dict())
+    metadata_path = package / "metadata.json"
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata.update({
+            "v3_render_qc": render_report,
+            "v3_semantic_qc": semantic_report,
+            "v3_readiness": readiness.to_dict(),
+            "v3_timeline_contract": "passed",
+            "warnings": result.warnings,
+            "errors": result.errors,
+        })
+        _atomic_json_write(metadata_path, metadata)
+
+
+def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: str = "", target_seconds: float = 30.0,
+                    platform: str = "youtube_shorts", audience: str = "general short-form viewers", bpm: int = 120,
+                    edit_type: Optional[str] = None, model_key: Optional[str] = None, skip_qc: bool = False,
+                    music_path: Optional[str] = None, enable_ocr: bool = False, enable_object_detection: bool = True,
+                    enable_diarization: bool = False, diarization_token: Optional[str] = None,
+                    source_metadata: Optional[Dict[str, Any]] = None) -> ProductionResult:
+    validate_capabilities()
+    _validate_v3_inputs(input_video, topic, target_seconds, platform, audience, bpm)
+    package = Path(package_dir)
+    package.mkdir(parents=True, exist_ok=True)
+    blueprint, payload, blueprint_path = _prepare_blueprint(
+        topic, context, target_seconds, platform, audience, bpm, package, edit_type, source_metadata
+    )
+    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+    qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
+    if skip_qc and (environment not in {"development", "test"} or not qc_override):
+        raise ValueError("skip_qc is disabled for production; use development/test with AIVF_ALLOW_SKIP_QC=1")
+    semantic_qc_disabled = os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0"
+    if semantic_qc_disabled and (environment not in {"development", "test"} or not qc_override):
+        raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
+    try:
+        footage_evidence = _build_footage_evidence(input_video, enable_ocr, min_scenes=len(blueprint.clip_plan))
+    except Exception as exc:
+        raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
+    baseline_request = _build_baseline_request(
+        input_video=input_video, topic=topic, package_dir=package_dir, target_seconds=target_seconds,
+        platform=platform, blueprint_payload=payload, footage_evidence=footage_evidence, model_key=model_key,
+        skip_qc=skip_qc, music_path=music_path, enable_ocr=enable_ocr,
+        enable_object_detection=enable_object_detection, enable_diarization=enable_diarization,
+        diarization_token=diarization_token,
+    )
+    result = render_v3(baseline_request)
+    result.artifacts = getattr(result, "artifacts", {}) or {}
     if result.final_video and not result.errors:
         try:
-            _validate_timeline_contract(package, payload, target_seconds)
-            baseline_path = package / "v3_baseline.mp4"
-            shutil.copyfile(result.final_video, baseline_path)
-            retention_path = str(package / "final.v3.retention.mp4")
-            enforce_retention_events(result.final_video, retention_path, payload.get("retention_map", []))
-            os.replace(retention_path, result.final_video)
-
-            # The V3 contract has one canonical final artifact. Do not write it
-            # as a temporary alias and then move it back to the legacy renderer
-            # filename; the dashboard/API/package layer must see final.v3.mp4.
-            canonical_final = package / "final.v3.mp4"
-            normalized_path = package / ".final.v3.normalized.mp4"
-            normalize_duration(result.final_video, str(normalized_path), target_seconds)
-            previous_final = Path(result.final_video).resolve()
-            if previous_final != canonical_final.resolve():
-                canonical_final.unlink(missing_ok=True)
-                os.replace(normalized_path, canonical_final)
-                previous_final.unlink(missing_ok=True)
-            else:
-                os.replace(normalized_path, canonical_final)
-            result.final_video = str(canonical_final)
-
-            profile = payload["platform_variants"][platform]
-            render_report = strict_render_check(
-                result.final_video,
-                target_seconds=target_seconds,
-                platform_profile=profile,
-                retention_events=payload.get("retention_map", []),
-                retention_baseline=str(baseline_path),
-                require_independent_retention=True,
+            baseline_summary = _research_summary_from_blueprint(
+                {**payload, "retention_map": []}, footage_evidence
             )
-            semantic_report = {"ok": True, "mode": "disabled"}
+            baseline_summary["_source_video"] = input_video
+            final_video, baseline_path, render_report = _finalize_v3_media(
+                result, package, payload, target_seconds
+            )
+            semantic_report: Dict[str, Any] = {"ok": True, "mode": "disabled"}
             if not semantic_qc_disabled:
-                semantic_report = analyze_render_semantics(result.final_video)
+                semantic_report = analyze_render_semantics(final_video)
                 if not semantic_report["ok"]:
-                    result.errors.extend(
-                        "V3 semantic QC: " + error for error in semantic_report["errors"]
-                    )
-                result.warnings.extend(
-                    "V3 semantic QC: " + warning for warning in semantic_report["warnings"]
-                )
-            try:
-                from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical, select_best_thumbnail_variant
-
-                thumb_dir = package / "thumbnails"
-                thumb_dir.mkdir(parents=True, exist_ok=True)
-                thumbnail_work_dir = tempfile.mkdtemp(prefix="aivf-v3-thumb-", dir=str(package))
-                try:
-                    frame_path = extract_best_video_frame(input_video, thumbnail_work_dir)
-                    thumbnail_subject = str(
-                        baseline_summary.get("hook")
-                        or payload.get("thumbnail_concept")
-                        or topic
-                    ).strip()
-                    variants = make_thumbnail_variants(
-                        thumbnail_subject,
-                        str(thumb_dir),
-                        count=3,
-                        topic=topic,
-                        background_path=frame_path,
-                    )
-                    if not variants:
-                        raise RuntimeError("thumbnail generation returned no variants")
-                    selected_variant = select_best_thumbnail_variant(variants)
-                    thumbnail_path = package / "thumbnail.png"
-                    shutil.copyfile(variants[selected_variant - 1], thumbnail_path)
-                    make_thumbnail_vertical(
-                        thumbnail_subject,
-                        str(package / "thumbnail_vertical.png"),
-                        size=(1080, 1920),
-                        background_path=frame_path,
-                    )
-                    baseline_summary["thumbnail"] = str(thumbnail_path)
-                    result.artifacts["thumbnail"] = str(thumbnail_path)
-                    result.artifacts["thumbnail_variants"] = str(thumb_dir)
-                finally:
-                    shutil.rmtree(thumbnail_work_dir, ignore_errors=True)
-
-                from .upload_package import finalize_upload_package
-                upload_manifest = finalize_upload_package(
-                    package_dir,
-                    topic=topic,
-                    summary=baseline_summary,
-                    script=str(baseline_summary.get("script", "")),
-                    platform=platform,
-                    final_video=result.final_video,
-                    thumbnail=str(baseline_summary.get("thumbnail") or "") or None,
-                    caption_path=str(package / "captions.ass") if (package / "captions.ass").exists() else None,
-                )
-                result.artifacts["upload_package_manifest"] = str(package / "upload_package.json")
-            except Exception as exc:
-                upload_manifest = None
-                result.errors.append(f"V3 upload package finalization failed: {exc}")
-
+                    result.errors.extend("V3 semantic QC: " + e for e in semantic_report["errors"])
+                result.warnings.extend("V3 semantic QC: " + w for w in semantic_report["warnings"])
+            _package_v3_assets(result=result, package=package, topic=topic, platform=platform, baseline_summary=baseline_summary)
             readiness = evaluate_artifact(
-                result.final_video,
-                target_seconds=target_seconds,
-                platform_profile=profile,
-                package_dir=package_dir,
-                upload_package_required=True,
-                publish_required=False,
+                final_video, target_seconds=target_seconds,
+                platform_profile=payload["platform_variants"][platform],
+                package_dir=package_dir, upload_package_required=True, publish_required=False,
             )
-            _atomic_json_write(package / "v3_render_qc.json", render_report)
-            _atomic_json_write(package / "v3_semantic_qc.json", semantic_report)
-            _atomic_json_write(package / "v3_readiness.json", readiness.to_dict())
             if not render_report["ok"]:
-                result.errors.extend("V3 render QC: " + error for error in render_report["errors"])
-            result.warnings.extend("V3 render QC: " + warning for warning in render_report["warnings"])
+                result.errors.extend("V3 render QC: " + e for e in render_report["errors"])
+            result.warnings.extend("V3 render QC: " + w for w in render_report["warnings"])
             _apply_readiness_contract(result, readiness)
             if readiness.state == "UPLOAD_PACKAGE_VALID":
-                result.warnings.append(
-                    "V3 artifact readiness: upload package validated; publish readiness is intentionally not claimed"
-                )
-            metadata_path = package / "metadata.json"
-            if metadata_path.exists():
-                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-                metadata["v3_render_qc"] = render_report
-                metadata["v3_semantic_qc"] = semantic_report
-                metadata["v3_readiness"] = readiness.to_dict()
-                metadata["v3_timeline_contract"] = "passed"
-                metadata["warnings"] = result.warnings
-                metadata["errors"] = result.errors
-                _atomic_json_write(metadata_path, metadata)
+                result.warnings.append("V3 artifact readiness: upload package validated; publish readiness is intentionally not claimed")
+            _persist_v3_reports(package, result, render_report, semantic_report, readiness)
         except RenderContractError as exc:
             result.errors.append(f"V3 render contract failed: {exc}")
-
-    result.artifacts = getattr(result, "artifacts", {}) or {}
-    if isinstance(result.artifacts, dict):
-        result.artifacts["v3_blueprint"] = str(blueprint_path)
-        result.artifacts["v3_render_qc"] = str(package / "v3_render_qc.json")
-        result.artifacts["v3_semantic_qc"] = str(package / "v3_semantic_qc.json")
-        result.artifacts["v3_readiness"] = str(package / "v3_readiness.json")
-        result.artifacts["v3_baseline"] = str(package / "v3_baseline.mp4")
-        result.artifacts["v3_renderer_bridge"] = "ai_video_factory.v3_renderer_bridge"
-        result.artifacts["v3_acceptance_matrix"] = "00-INFO/24-POINT-ACCEPTANCE.md"
+    result.artifacts.update({
+        "v3_blueprint": str(blueprint_path),
+        "v3_render_qc": str(package / "v3_render_qc.json"),
+        "v3_semantic_qc": str(package / "v3_semantic_qc.json"),
+        "v3_readiness": str(package / "v3_readiness.json"),
+        "v3_baseline": str(package / "v3_baseline.mp4"),
+        "v3_renderer_bridge": "ai_video_factory.v3_renderer_bridge",
+        "v3_acceptance_matrix": "00-INFO/24-POINT-ACCEPTANCE.md",
+    })
     return result
