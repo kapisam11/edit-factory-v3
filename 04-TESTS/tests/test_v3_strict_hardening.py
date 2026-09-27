@@ -267,3 +267,30 @@ def test_v3_input_validation_rejects_invalid_contract_values(tmp_path):
     for invoke, error in cases:
         with pytest.raises(error):
             invoke()
+
+
+
+def test_v3_render_plan_is_derived_from_validated_blueprint():
+    from ai_video_factory.v3_renderer_bridge import V3RenderPlan
+
+    blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=12))
+    plan = V3RenderPlan.from_blueprint(blueprint, include_retention=False)
+
+    assert plan.target_seconds == blueprint.duration
+    assert plan.platform == blueprint.platform
+    assert plan.edit_type == blueprint.edit_type
+    assert plan.retention_map == ()
+    directives = plan.to_directives()
+    assert directives["blueprint_contract"] == "3.0.0"
+    assert len(directives["clip_plan"]) == len(blueprint.clip_plan)
+
+
+def test_legacy_v3_blueprint_fields_remain_deserializable():
+    blueprint = create_v3_blueprint("A subject")
+    payload = blueprint.to_dict()
+    for field in ("platform_profile", "qc", "packaging", "metric_metadata"):
+        payload.pop(field, None)
+
+    restored = blueprint.from_dict(payload)
+    assert restored.schema_version == "3.0.0"
+    assert restored.platform_profile.width == 1080
