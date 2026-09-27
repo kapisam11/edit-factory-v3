@@ -17,6 +17,12 @@ class JobStatus(str, Enum):
     INTERRUPTED = "interrupted"
 
 
+RETRYABLE_STATUSES: FrozenSet[str] = frozenset({
+    JobStatus.ERROR.value,
+    JobStatus.INTERRUPTED.value,
+})
+
+
 TERMINAL_STATUSES: FrozenSet[str] = frozenset({
     JobStatus.CANCELLED.value,
     JobStatus.DONE.value,
@@ -46,8 +52,8 @@ _ALLOWED_TRANSITIONS: Mapping[str, FrozenSet[str]] = {
     }),
     JobStatus.CANCELLED.value: frozenset(),
     JobStatus.DONE.value: frozenset(),
-    JobStatus.ERROR.value: frozenset(),
-    JobStatus.INTERRUPTED.value: frozenset(),
+    JobStatus.ERROR.value: frozenset({JobStatus.QUEUED.value}),
+    JobStatus.INTERRUPTED.value: frozenset({JobStatus.QUEUED.value}),
 }
 
 
