@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from .runtime_config import runtime_config
+
 
 class ModelCallError(RuntimeError):
     """Raised when a configured model provider cannot complete a request."""
@@ -66,9 +68,10 @@ class _RetryableModelError(ModelCallError):
 
 
 def _call_with_retry(prompt: str, key: str, provider: str, timeout: int, max_retries: int = 2) -> ModelResult:
+    config = runtime_config()
     endpoints = {
-        "openai": ("https://api.openai.com/v1/chat/completions", os.environ.get("AIVF_OPENAI_MODEL", "gpt-4o-mini")),
-        "groq": ("https://api.groq.com/openai/v1/chat/completions", os.environ.get("AIVF_GROQ_MODEL", "llama-3.3-70b-versatile")),
+        "openai": ("https://api.openai.com/v1/chat/completions", config.openai_model),
+        "groq": ("https://api.groq.com/openai/v1/chat/completions", config.groq_model),
     }
     url, model = endpoints[provider]
     attempts = 0
