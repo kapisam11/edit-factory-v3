@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Mapping, Sequence
 from types import MappingProxyType
 
 from .v3_semantics import combined_scores
+from .v3_scoring import heuristic_metrics
 
 
 class Platform(str, Enum):
@@ -632,36 +633,14 @@ def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[Ho
     score = round(100 * sum(checks.values()) / len(checks)) if checks else 0
     return QualityReport(score >= 95 and all(checks[k] for k in ("emotion_defined","single_edit_type_strategy","duration_bounds","exact_duration","has_payoff")), score, checks, warnings)
 
-# Engineering heuristics, not trained model coefficients. Keep named so changes are auditable.
-HOOK_WEIGHT_RETENTION = 0.35
-PACE_WEIGHT_RETENTION = 0.30
-QUALITY_WEIGHT_RETENTION = 0.20
-EMOTION_WEIGHT_RETENTION = 0.15
-
-QUALITY_WEIGHT_COMPLETION = 0.45
-PACE_WEIGHT_COMPLETION = 0.30
-HOOK_WEIGHT_COMPLETION = 0.25
-
-HOOK_WEIGHT_REWATCH = 0.40
-EMOTION_WEIGHT_REWATCH = 0.35
-QUALITY_WEIGHT_REWATCH = 0.25
-
-EMOTION_WEIGHT_SHAREABILITY = 0.50
-QUALITY_WEIGHT_SHAREABILITY = 0.30
-HOOK_WEIGHT_SHAREABILITY = 0.20
-
 def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequence[ClipBeat], quality: QualityReport) -> Dict[str, float]:
     hook = hooks[0].score if hooks else 0.0
     avg = clips[-1].end / len(clips) if clips else 0.0
     pace = min(1.0, 2.8 / max(avg, 0.1))
     q = quality.score / 100.0
     emotion = 0.9 if core.target_emotion in {"trust","dramatic","inspiring","nostalgic"} else 0.82
-    return {
-        "retention_score": round(100 * (HOOK_WEIGHT_RETENTION * hook + PACE_WEIGHT_RETENTION * pace + QUALITY_WEIGHT_RETENTION * q + EMOTION_WEIGHT_RETENTION * emotion), 1),
-        "completion_score": round(100 * (QUALITY_WEIGHT_COMPLETION * q + PACE_WEIGHT_COMPLETION * pace + HOOK_WEIGHT_COMPLETION * hook), 1),
-        "rewatch_score": round(100 * (HOOK_WEIGHT_REWATCH * hook + EMOTION_WEIGHT_REWATCH * emotion + QUALITY_WEIGHT_REWATCH * q), 1),
-        "shareability_score": round(100 * (EMOTION_WEIGHT_SHAREABILITY * emotion + QUALITY_WEIGHT_SHAREABILITY * q + HOOK_WEIGHT_SHAREABILITY * hook), 1),
-    }
+    return heuristic_metrics(hook=hook, pace=pace, quality=q, emotion=emotion)
+
 
 def _metadata(core: CoreIdea) -> tuple[str, List[str], List[str], str]:
     """Build compact, topic-specific metadata for every V3 downstream consumer."""
