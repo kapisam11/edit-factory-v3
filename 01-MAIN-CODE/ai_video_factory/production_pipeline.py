@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
 
+from .ai_response_validation import parse_script_lines_response
 from .composer import compose_short_from_video
 from .edit_planner import build_timeline, timeline_to_composer_plan, save_timeline
 from .learning_recommender import load_experiments, recommend
