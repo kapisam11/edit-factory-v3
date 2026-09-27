@@ -37,26 +37,27 @@ def _terminate_process_tree(process):
 
 def cancel_process(job_id):
     import web_app_v3
-    with web_app_v3.get_db() as conn:
-        cursor = conn.execute(
-            "UPDATE jobs SET status='cancelling', step='cancelling', updated_at=CURRENT_TIMESTAMP "
-            "WHERE id=? AND status NOT IN ('done','error','cancelled','interrupted','cancelling')", (job_id,),
-        )
-        if cursor.rowcount == 0:
-            row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
-            if not row:
-                return jsonify({"error": "Job not found"}), 404
-            return jsonify({"job_id": job_id, "status": row["status"]}), 409
-    process = web_app_v3._active_processes.get(job_id)
-    if process:
-        _terminate_process_tree(process)
-        if process.is_alive():
-            return jsonify({"error": "Worker termination timed out"}), 503
-    web_app_v3._active_processes.pop(job_id, None)
-    web_app_v3._runtime_secrets.pop(job_id, None)
-    web_app_v3.db_update_job(job_id, status="cancelled", step="cancelled")
-    web_app_v3.db_append_log(job_id, "INFO", "Job cancelled")
-    return jsonify({"job_id": job_id, "status": "cancelled"})
+    with web_app_v3._active_processes_lock:
+        with web_app_v3.get_db() as conn:
+            cursor = conn.execute(
+                "UPDATE jobs SET status='cancelling', step='cancelling', updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND status NOT IN ('done','error','cancelled','interrupted','cancelling')", (job_id,),
+            )
+            if cursor.rowcount == 0:
+                row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+                if not row:
+                    return jsonify({"error": "Job not found"}), 404
+                return jsonify({"job_id": job_id, "status": row["status"]}), 409
+        process = web_app_v3._active_processes.get(job_id)
+        if process:
+            _terminate_process_tree(process)
+            if process.is_alive():
+                return jsonify({"error": "Worker termination timed out"}), 503
+        web_app_v3._active_processes.pop(job_id, None)
+        web_app_v3._runtime_secrets.pop(job_id, None)
+        web_app_v3.db_update_job(job_id, status="cancelled", step="cancelled")
+        web_app_v3.db_append_log(job_id, "INFO", "Job cancelled")
+        return jsonify({"job_id": job_id, "status": "cancelled"})
 
 
 def _cleanup_old_packages(web_app_v3, max_age_days):
