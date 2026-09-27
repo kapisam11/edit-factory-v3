@@ -27,6 +27,7 @@ from werkzeug.utils import secure_filename
 
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 from ai_video_factory.render_engine import run_ffprobe
+from ai_video_factory.runtime_capabilities import capabilities
 from app.job_service import build_job_params
 
 APP_DIR = Path(__file__).resolve().parent
@@ -400,16 +401,15 @@ def _probe_video(path: Path) -> bool:
 
 
 def _runtime_capabilities() -> dict[str, bool]:
-    vision = _module_available("cv2")
-    ocr = vision and _module_available("pytesseract") and shutil.which("tesseract") is not None
-    diarization = _module_available("pyannote.audio")
+    detected = capabilities()
+    vision = detected["vision"].available
     model_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_MODEL", ".models/mobilenet_ssd/mobilenet.caffemodel"))
     config_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_CONFIG", ".models/mobilenet_ssd/deploy.prototxt"))
     object_detection = vision and model_path.is_file() and config_path.is_file()
     return {
-        "ocr": ocr,
+        "ocr": detected["ocr"].available,
         "object_detection": object_detection,
-        "diarization": diarization,
+        "diarization": detected["diarization"].available,
     }
 
 
