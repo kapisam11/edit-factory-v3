@@ -219,13 +219,13 @@ def extract_best_video_frame(video_path: str, out_dir: str, count: int = 7) -> O
         timestamp = max(0.0, min(duration - 0.05, duration * fraction))
         frame_path = os.path.join(out_dir, f".thumbnail_frame_{idx}.jpg")
         try:
-            subprocess.run(
+            run_ffmpeg(
                 [
-                    ffmpeg, "-y", "-ss", f"{timestamp:.3f}", "-i", source,
+                    "ffmpeg", "-y", "-ss", f"{timestamp:.3f}", "-i", source,
                     "-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "2", frame_path,
                 ],
                 capture_output=True,
-                check=True,
+                timeout=60,
             )
             score = _score_image(frame_path)
             if score >= 0:
