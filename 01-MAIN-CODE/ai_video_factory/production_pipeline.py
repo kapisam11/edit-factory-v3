@@ -41,34 +41,8 @@ def _write_text(path: str, text: str) -> str:
 
 
 def _normalize_model_script(response: str) -> str:
-    """Accept only the documented structured model response."""
-    text = str(response or "").strip()
-    if not text or len(text) > 20_000:
-        return ""
-    if text.startswith("```"):
-        parts = text.splitlines()
-        if parts and parts[0].strip().startswith("```"):
-            parts = parts[1:]
-        if parts and parts[-1].strip() == "```":
-            parts = parts[:-1]
-        text = "\n".join(parts).strip()
-    try:
-        payload = json.loads(text)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return ""
-    if not isinstance(payload, dict) or set(payload) - {"lines", "script"}:
-        return ""
-    value = payload.get("lines")
-    if value is not None:
-        if not isinstance(value, list) or not (2 <= len(value) <= 40):
-            return ""
-        if any(not isinstance(line, str) or not line.strip() or len(line) > 300 for line in value):
-            return ""
-        return "\n".join(line.strip() for line in value)
-    value = payload.get("script")
-    if not isinstance(value, str) or not value.strip() or len(value) > 10_000:
-        return ""
-    return value.strip()
+    lines = parse_script_lines_response(response)
+    return "\n".join(lines) if lines else ""
 
 
 def _generate_script(topic: str, summary: Dict[str, Any], target_seconds: float, model_key: Optional[str]) -> tuple[str, str]:
