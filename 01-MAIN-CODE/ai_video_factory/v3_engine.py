@@ -262,6 +262,10 @@ class V3Blueprint:
             "retention_map", "thumbnail_concept", "title_options", "hashtags",
             "description", "platform_variants", "quality", "metrics", "capabilities",
         }
+        allowed = required | {"schema_version", "platform", "audience", "platform_profile", "qc", "packaging", "metric_metadata", "source_metadata"}
+        unknown = sorted(set(payload) - allowed)
+        if unknown:
+            raise ValueError(f"V3 blueprint contains unknown fields: {', '.join(unknown)}")
         missing = sorted(required - set(payload))
         if missing:
             raise ValueError(f"V3 blueprint is missing required fields: {', '.join(missing)}")
