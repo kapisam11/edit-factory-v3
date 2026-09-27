@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["version", "active_pipeline", "active_style", "hardware", "pipelines", "style_profiles", "heuristics"],
+  "properties": {
+    "version": {"type": "string", "minLength": 1},
+    "active_pipeline": {"type": "string", "minLength": 1},
+    "active_style": {"type": "string", "minLength": 1},
+    "output_root": {"type": "string", "minLength": 1},
+    "upload_root": {"type": "string", "minLength": 1},
+    "asset_root": {"type": "string", "minLength": 1},
+    "templates_root": {"type": "string", "minLength": 1},
+    "knowledge_root": {"type": "string", "minLength": 1},
+    "hardware": {
+      "type": "object",
+      "required": ["encoder", "gpu_memory_mb", "max_parallel_jobs", "use_gpu_for_filters"],
+      "properties": {
+        "encoder": {"type": "string", "minLength": 1},
+        "gpu_memory_mb": {"type": "integer", "minimum": 0},
+        "max_parallel_jobs": {"type": "integer", "minimum": 1, "maximum": 8},
+        "use_gpu_for_filters": {"type": "boolean"}
+      }
+    },
+    "pipelines": {"type": "object", "minProperties": 1},
+    "style_profiles": {"type": "object", "minProperties": 1},
+    "heuristics": {"type": "object"}
+  },
+  "additionalProperties": true
+}
