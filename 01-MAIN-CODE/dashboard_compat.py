@@ -179,7 +179,7 @@ def register_dashboard_compat(app):
                     try:
                         with web_app_v3.get_db() as conn:
                             cursor = conn.execute(
-                                "UPDATE jobs SET status='error', step='failed', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'",
+                                "UPDATE jobs SET status='error', step='failed', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('queued','running')",
                                 (f"Worker failed to start: {exc}", job_id),
                             )
                         if cursor.rowcount:
