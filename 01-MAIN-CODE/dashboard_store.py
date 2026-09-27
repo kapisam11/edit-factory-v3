@@ -63,7 +63,8 @@ class DashboardStore:
         raise AssertionError("unreachable")
 
     def ensure_indexes(self) -> None:
-        """Add indexes that match the dashboard's queue/history query patterns."""
+        """Add indexes, retry state migration, and lifecycle guards."""
+        with self.connect() as conn:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
             if "retry_count" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
@@ -80,8 +81,7 @@ class DashboardStore:
                 BEGIN
                     SELECT RAISE(ABORT, 'invalid job status transition');
                 END
-            )
-        with self.connect() as conn:
+            """)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_created "
                 "ON jobs(status, created_at)"
