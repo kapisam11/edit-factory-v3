@@ -67,7 +67,8 @@ class V3Config:
             raise ValueError("V3Config contains invalid numeric values") from exc
         if not math.isfinite(target) or not 8.0 <= target <= 180.0:
             raise ValueError("target_seconds must be between 8 and 180")
-        profile = PLATFORM_PROFILES.get(str(self.platform).lower())
+        platform_value = self.platform.value if isinstance(self.platform, Platform) else str(self.platform)
+        profile = PLATFORM_PROFILES.get(platform_value.lower())
         if profile is None:
             raise ValueError(f"unsupported platform: {self.platform}")
         maximum_platform = profile["max_seconds"]
