@@ -82,6 +82,11 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         cache.delete("jobs:list")
         return result
 
+    def db_claim_job(job_id: str) -> bool:
+        result = store.claim_job(job_id)
+        cache.delete("jobs:list")
+        return result
+
     def db_get_job(job_id: str) -> dict | None:
         return store.get_job(job_id)
 
@@ -118,6 +123,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     app_module.init_db = init_db
     app_module.db_insert_job = db_insert_job
     app_module.db_update_job = db_update_job
+    app_module.db_claim_job = db_claim_job
     app_module.db_get_job = db_get_job
     app_module.db_append_log = db_append_log
     app_module.db_logs_since = db_logs_since
