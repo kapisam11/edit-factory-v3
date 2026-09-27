@@ -18,6 +18,7 @@ import subprocess
 from typing import Optional
 
 from .render_engine import run_ffprobe
+from .runtime_config import runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ def _generate_edge_tts(text: str, out_path: str, voice: Optional[str] = None) ->
         "--write-media", out_path,
     ]
     logger.info("[TTS] Edge TTS: voice=%s", v)
-    subprocess.run(cmd, check=True, capture_output=True, timeout=120, text=True)
+    subprocess.run(cmd, check=True, capture_output=True, timeout=runtime_config().edge_tts_timeout_seconds, text=True)
     return _validate_audio_output(out_path)
 
 
@@ -142,7 +143,7 @@ def _pyttsx3_worker(text: str, out_path: str) -> None:
 
 def _generate_pyttsx3(text: str, out_path: str) -> str:
     """Offline fallback using pyttsx3 with a hard process timeout."""
-    timeout_seconds = max(10, int(os.environ.get("AIVF_PYTTSX3_TIMEOUT_SECONDS", "120")))
+    timeout_seconds = runtime_config().pyttsx3_timeout_seconds
     ctx = multiprocessing.get_context("spawn")
     process = ctx.Process(target=_pyttsx3_worker, args=(text, out_path), daemon=True)
     process.start()
@@ -169,7 +170,7 @@ def generate_high_quality_voiceover(text: str, out_path: str, elevenlabs_key: st
         "model_id": "eleven_monolingual_v1",
         "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
     }
-    r = requests.post(url, json=payload, headers=headers, timeout=60)
+    r = requests.post(url, json=payload, headers=headers, timeout=runtime_config().elevenlabs_timeout_seconds)
     r.raise_for_status()
     with open(out_path, "wb") as f:
         f.write(r.content)
