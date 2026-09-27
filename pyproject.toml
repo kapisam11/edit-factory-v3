@@ -53,6 +53,7 @@ files = [
   "01-MAIN-CODE/ai_video_factory/v3_pipeline.py",
   "01-MAIN-CODE/ai_video_factory/v3_engine.py",
   "01-MAIN-CODE/ai_video_factory/v3_scoring.py",
+  "01-MAIN-CODE/ai_video_factory/ai_response_validation.py",
   "01-MAIN-CODE/ai_video_factory/v3_quality.py",
   "01-MAIN-CODE/ai_video_factory/v3_renderer_bridge.py",
   "01-MAIN-CODE/ai_video_factory/artifact_readiness.py",
@@ -61,6 +62,7 @@ files = [
   "01-MAIN-CODE/ai_video_factory/runtime_config.py",
   "01-MAIN-CODE/ai_video_factory/runtime_capabilities.py",
   "01-MAIN-CODE/ai_video_factory/retry_policy.py",
+  "01-MAIN-CODE/job_state.py",
   "01-MAIN-CODE/dashboard_store.py",
   "02-WEB-FILES/app/job_service.py",
 ]
