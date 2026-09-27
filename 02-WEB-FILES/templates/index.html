@@ -109,6 +109,29 @@
                                 <div class="form-group">
                                     <label for="context">Creative Context / Direction</label>
                                     <textarea id="context" name="context" maxlength="2000" rows="3" placeholder="Optional creative direction, story context, or constraints"></textarea>
+                                </div>                                <div class="form-group">
+                                    <label for="source_creator">Source Creator (optional)</label>
+                                    <input type="text" id="source_creator" name="source_creator" maxlength="200" placeholder="e.g. Wemmbu">
+                                </div>
+                                <div class="form-group">
+                                    <label for="source_title">Source Video / Work Title (optional)</label>
+                                    <input type="text" id="source_title" name="source_title" maxlength="300" placeholder="e.g. Unstable Universe">
+                                </div>
+                                <div class="form-group">
+                                    <label for="source_url">Source URL (optional)</label>
+                                    <input type="url" id="source_url" name="source_url" maxlength="1000" placeholder="https://...">
+                                </div>
+                                <div class="form-group">
+                                    <label for="rights_basis">Rights basis</label>
+                                    <select id="rights_basis" name="rights_basis">
+                                        <option value="">Not declared — publishing will require review</option>
+                                        <option value="owned">I own this media</option>
+                                        <option value="explicit_permission">I have explicit permission</option>
+                                        <option value="commercial_license">Commercial license</option>
+                                        <option value="public_domain">Public domain</option>
+                                        <option value="cc_license">Creative Commons license (verified)</option>
+                                    </select>
+                                    <small>Credit is not permission. Only choose a cleared option when it is actually true.</small>
                                 </div>
                                 <div class="toggles">
                                     <label class="toggle">
@@ -667,6 +690,10 @@
             if (p.bpm !== undefined) document.getElementById('bpm').value = p.bpm;
             if (p.edit_type !== undefined) document.getElementById('edit_type').value = p.edit_type || '';
             if (p.context !== undefined) document.getElementById('context').value = p.context || '';
+            if (p.source_creator !== undefined) document.getElementById('source_creator').value = p.source_creator || '';
+            if (p.source_title !== undefined) document.getElementById('source_title').value = p.source_title || '';
+            if (p.source_url !== undefined) document.getElementById('source_url').value = p.source_url || '';
+            if (p.rights_basis !== undefined) document.getElementById('rights_basis').value = p.rights_basis || '';
             if (p.enable_ocr !== undefined) document.getElementById('enable_ocr').checked = Boolean(p.enable_ocr);
             if (p.enable_object_detection !== undefined) document.getElementById('enable_object_detection').checked = Boolean(p.enable_object_detection);
             if (p.enable_diarization !== undefined) document.getElementById('enable_diarization').checked = Boolean(p.enable_diarization);
@@ -686,6 +713,10 @@
                 bpm: parseInt(document.getElementById('bpm').value, 10),
                 edit_type: document.getElementById('edit_type').value,
                 context: document.getElementById('context').value.trim(),
+                source_creator: document.getElementById('source_creator').value.trim(),
+                source_title: document.getElementById('source_title').value.trim(),
+                source_url: document.getElementById('source_url').value.trim(),
+                rights_basis: document.getElementById('rights_basis').value,
                 enable_ocr: document.getElementById('enable_ocr').checked,
                 enable_object_detection: document.getElementById('enable_object_detection').checked,
                 enable_diarization: document.getElementById('enable_diarization').checked,
