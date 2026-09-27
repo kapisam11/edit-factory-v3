@@ -453,39 +453,43 @@ OUTPUT FORMAT — return ONLY valid JSON, no markdown:
 
     def generate_metadata(self, pkg_dir: str) -> Dict:
         brief = self.creative_brief
-        topic = brief.get("topic", "")
-        hook = brief.get("hook", "")
-        emotion = brief.get("emotion", "")
+        topic = str(brief.get("topic", "")).strip()
+        hook = str(brief.get("hook", "")).strip()
+        angle = str(brief.get("strongest_angle", "")).strip()
+        emotion = str(brief.get("emotion", "")).strip()
 
-        titles = [
-            f"{hook} — {topic}",
-            f"{hook}",
-            f"The Real Story of {topic}",
-            f"{topic} — {hook}",
-        ]
-        description = (
-            f"{hook}\n\n"
-            f"This is the story of {topic}.\n"
-            f"What do you think? Let us know in the comments.\n\n"
-            f"#Shorts #YouTubeShorts"
+        from .upload_package import build_description, generate_platform_tags, rank_title_candidates
+
+        title_rankings = rank_title_candidates(
+            topic,
+            hook=hook,
+            strongest_angle=angle,
+            emotion=emotion,
+            max_candidates=10,
+            title_limit=100,
         )
-        tags = [
-            topic.replace(" ", ""), "Shorts", "YouTubeShorts", "TikTok", "Reels",
-            emotion.title(), "Gaming", "Minecraft", "SMP",
-        ]
-        hashtags = [
-            f"#{topic.replace(' ', '')}", "#Shorts", "#YouTubeShorts", "#TikTok", "#Reels",
-            f"#{emotion.title()}", "#Gaming", "#Minecraft", "#SMP", "#Lore",
-        ]
+        titles = [item["title"] for item in title_rankings]
+        description = build_description(topic, brief, str(brief.get("script", "")), "youtube_shorts")
+        source_records = brief.get("source_credits") or []
+        tags = generate_platform_tags(
+            titles[0] if titles else topic,
+            description,
+            topic,
+            max_tags=15,
+            source_records=source_records if isinstance(source_records, list) else None,
+        )
+        hashtags = [f"#{tag.replace(' ', '')}" for tag in tags[:8]]
 
         meta = {
             "titles": titles,
+            "title_rankings": title_rankings,
             "description": description,
             "tags": tags,
             "hashtags": " ".join(hashtags),
             "platforms": ["YouTube Shorts", "TikTok", "Instagram Reels"],
             "aspect_ratio": "9:16",
             "resolution": "1080x1920",
+            "source_credits": source_records,
             "safe_zones": {
                 "top_percent": SAFE_ZONE_TOP * 100,
                 "bottom_percent": SAFE_ZONE_BOTTOM * 100,
@@ -495,9 +499,10 @@ OUTPUT FORMAT — return ONLY valid JSON, no markdown:
         with open(os.path.join(pkg_dir, "metadata.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
         with open(os.path.join(pkg_dir, "title_options.txt"), "w", encoding="utf-8") as f:
-            for t in titles:
-                f.write(t + "\n")
+            for title in titles:
+                f.write(title + "\n")
         return meta
+
 
     # ── 9. HUMAN CHECK ───────────────────────────
 
