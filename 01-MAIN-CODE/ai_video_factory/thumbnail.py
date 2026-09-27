@@ -121,6 +121,49 @@ def _fit_crop(img: Image.Image, size: tuple, focus=(0.68, 0.5)) -> Image.Image:
     return img.crop((left, top, left + crop_w, top + crop_h)).resize(size, Image.Resampling.LANCZOS)
 
 
+def thumbnail_quality_report(path: str, expected_size: Optional[tuple] = None) -> dict:
+    """Score a finished thumbnail for basic visual legibility and integrity."""
+    try:
+        img = Image.open(path).convert("RGB")
+        width, height = img.size
+        pixels = list(img.resize((256, 256)).getdata())
+        if not pixels:
+            return {"passed": False, "score": 0.0, "checks": {"nonempty": False}}
+        brightness = sum((r + g + b) / 765.0 for r, g, b in pixels) / len(pixels)
+        mean = sum(sum(p) / 3.0 for p in pixels) / len(pixels)
+        variance = sum(((sum(p) / 3.0) - mean) ** 2 for p in pixels) / len(pixels)
+        contrast = min(1.0, math.sqrt(variance) / 72.0)
+        size_ok = expected_size is None or tuple(img.size) == tuple(expected_size)
+        checks = {
+            "nonempty": True,
+            "size": size_ok,
+            "contrast": contrast >= 0.18,
+            "brightness": 0.18 <= brightness <= 0.88,
+        }
+        score = round(
+            25.0 * float(checks["nonempty"])
+            + 25.0 * float(checks["size"])
+            + 30.0 * contrast
+            + 20.0 * (1.0 - min(1.0, abs(brightness - 0.52) / 0.52)),
+            1,
+        )
+        return {"passed": all(checks.values()), "score": score, "checks": checks}
+    except Exception as exc:
+        return {"passed": False, "score": 0.0, "checks": {"readable": False}, "error": str(exc)}
+
+
+def select_best_thumbnail_variant(paths: List[str]) -> int:
+    """Return a 1-based variant index using the finished image, not just the background."""
+    if not paths:
+        raise ValueError("No thumbnail variants were supplied")
+    scored = []
+    for index, path in enumerate(paths, start=1):
+        report = thumbnail_quality_report(path)
+        scored.append((float(report["score"]), -index, index))
+    scored.sort(reverse=True)
+    return scored[0][2]
+
+
 def _score_image(path: str) -> float:
     """Prefer sharp, moderately bright, colorful frames over flat/dark frames."""
     try:
