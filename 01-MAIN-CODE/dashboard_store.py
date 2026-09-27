@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ai_video_factory.job_state import validate_transition
+
 
 class JobAdmissionError(RuntimeError):
     """Raised when an atomic dashboard admission limit rejects a new job."""
@@ -129,15 +131,31 @@ class DashboardStore:
             raise ValueError(f"Invalid job fields: {sorted(invalid)}")
         if not kwargs:
             return 0
-        fields = ", ".join(f"{key}=?" for key in kwargs)
-        return int(
-            self.write(
-                lambda conn: conn.execute(
-                    f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    list(kwargs.values()) + [job_id],
-                ).rowcount
-            )
+
+        def write(conn: sqlite3.Connection) -> int:
+            if "status" in kwargs:
+                row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+                if row is None:
+                    return 0
+                validate_transition(str(row["status"]), str(kwargs["status"]))
+            fields = ", ".join(f"{key}=?" for key in kwargs)
+            return int(conn.execute(
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                list(kwargs.values()) + [job_id],
+            ).rowcount)
+
+        return int(self.write(write))
+
+    def claim_job(self, job_id: str) -> bool:
+        """Atomically claim one queued job before starting a worker process."""
+        changed = self.update_job_if_status(
+            job_id,
+            ("queued",),
+            status="running",
+            step="starting",
+            error=None,
         )
+        return changed == 1
 
     def update_job_if_status(
         self,
