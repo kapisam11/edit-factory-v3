@@ -13,10 +13,15 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ai_video_factory.job_state import validate_transition
+from ai_video_factory.retry_policy import is_retryable_error
 
 
 class JobAdmissionError(RuntimeError):
     """Raised when an atomic dashboard admission limit rejects a new job."""
+
+
+class JobRetryNotAllowed(RuntimeError):
+    """Raised when a retry is exhausted or the recorded failure is deterministic."""
 
 
 
@@ -180,6 +185,32 @@ class DashboardStore:
             )
         )
 
+    def retry_job(self, job_id: str, *, max_attempts: int = 3) -> int:
+        """Atomically requeue one failed/interrupted job after retry-policy checks."""
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+
+        def write(conn: sqlite3.Connection) -> int:
+            row = conn.execute(
+                "SELECT status, error, retry_count FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return 0
+            status = str(row["status"])
+            if status not in {"error", "interrupted"}:
+                raise JobRetryNotAllowed("only failed or interrupted jobs can be retried")
+            attempts = int(row["retry_count"] or 0)
+            if attempts >= max_attempts:
+                raise JobRetryNotAllowed("maximum retry attempts reached")
+            if status == "error" and row["error"]:
+                if not is_retryable_error(RuntimeError(str(row["error"]))):
+                    raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
+            return int(conn.execute(
+                "UPDATE jobs SET status='queued', step='waiting', error=NULL, pkg_dir=NULL, "
+                "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
+                (job_id, max_attempts),
+            ).rowcount)
     def get_job(self, job_id: str) -> Optional[dict]:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
