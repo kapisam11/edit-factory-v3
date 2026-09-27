@@ -451,7 +451,8 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         f"Platform profile: `{profile.name}`\n\n"
         "1. Upload the listed video.\n2. Use `title.txt`, `description.txt`, and `tags.txt`.\n"
         "3. Use `captions.srt` when supplied.\n4. Review AI/altered-content disclosure before publishing.\n"
-        "5. `metadata.json` contains all twenty ranked title candidates and artifact fingerprints.\n",
+        "5. Review `metadata.json` for ranked titles, source credits, rights status, and artifact fingerprints.\n"
+        "6. Do not publish while `media_rights.publish_blocked` is true.\n",
         encoding="utf-8",
     )
     root_manifest = root / "upload_package.json"
@@ -466,4 +467,4 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
     return manifest
 
 
-__all__ = ["OutputProfile", "OUTPUT_PROFILES", "get_output_profile", "rank_title_candidates", "generate_platform_tags", "build_description", "finalize_upload_package"]
+__all__ = ["OutputProfile", "OUTPUT_PROFILES", "get_output_profile", "rank_title_candidates", "generate_platform_tags", "build_description", "media_rights_report", "finalize_upload_package"]
