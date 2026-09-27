@@ -205,12 +205,42 @@ def analyze_core_idea(topic: str, context: str = "", audience: str = "general sh
         scores["curious"] += 0.05
     emotion = max(scores, key=scores.get) if any(scores.values()) else "curious"
     angles = {
-        "trust": (f"Why {topic} became the person people could rely on","Loyalty under pressure creates immediate human stakes.","Trust can be earned quickly and lost in one decision.",f"The moment that proves what {topic} meant to everyone."),
-        "dramatic": (f"The decision that changed everything for {topic}","Conflict and consequences create an immediate information gap.","Something valuable can be lost before the viewer understands why.","Reveal the consequence viewers were waiting to understand."),
-        "inspiring": (f"How {topic} kept going when quitting was easier","Effort matters when failure feels possible and progress is visible.","The attempt only matters if the outcome is uncertain.","Show the result that makes the struggle worth it."),
-        "nostalgic": (f"Why people still remember {topic}","Recognition and shared memory create instant emotional pull.","The memory only works when the details feel specific.","Return to the moment viewers wanted to remember."),
-        "funny": (f"The moment {topic} went completely off the rails","Fast setup plus escalation makes the reversal worth waiting for.","The joke dies when setup overwhelms the punchline.","Deliver the cleanest reaction or reversal last."),
-        "curious": (f"The part of {topic} most people miss","A knowledge gap gives the viewer a reason to stay.","The answer must be more valuable than the setup.","Resolve the question with one clear memorable insight."),
+        "trust": (
+            f"Why {topic} became impossible to ignore",
+            "Loyalty under pressure creates immediate human stakes.",
+            "Trust can be earned quickly and lost in one decision.",
+            f"The final proof that changes how viewers read {topic}.",
+        ),
+        "dramatic": (
+            f"The decision that changed everything in {topic}",
+            "Conflict and consequences create an immediate information gap.",
+            "Something valuable can be lost before the viewer understands why.",
+            "Reveal the consequence viewers were waiting to understand.",
+        ),
+        "inspiring": (
+            f"How {topic} kept going when quitting was easier",
+            "Effort matters when failure feels possible and progress is visible.",
+            "The attempt only matters if the outcome is uncertain.",
+            "Show the result that makes the struggle worth it.",
+        ),
+        "nostalgic": (
+            f"Why {topic} still feels unforgettable",
+            "Recognition and shared memory create instant emotional pull.",
+            "The memory only works when the details feel specific.",
+            "Return to the moment viewers wanted to remember.",
+        ),
+        "funny": (
+            f"The moment {topic} went completely off the rails",
+            "Fast setup plus escalation makes the reversal worth waiting for.",
+            "The joke dies when setup overwhelms the punchline.",
+            "Deliver the cleanest reaction or reversal last.",
+        ),
+        "curious": (
+            f"The part of {topic} most people miss",
+            "A knowledge gap gives the viewer a reason to stay.",
+            "The answer must be more valuable than the setup.",
+            "Resolve the question with one clear memorable insight.",
+        ),
     }
     angle, care, stakes, payoff = angles[emotion]
     return CoreIdea(topic, care, angle, emotion, f"The viewer needs the final proof behind: {angle}.", payoff, stakes)
@@ -225,10 +255,26 @@ def choose_edit_type(core: CoreIdea, requested: str | None = None) -> EditType:
 
 def generate_hooks(core: CoreIdea, edit_type: EditType) -> List[HookPack]:
     strategy = EDIT_STRATEGIES[edit_type]
+    topic = _compact(core.topic, 7)
     hooks = [
-        HookPack(strategy["visual_styles"][0], _compact(f"Nobody expected {core.topic}"), core.stakes, 0.93),
-        HookPack(f"Open on {strategy['visual_styles'][2]} before context.", "This changed everything", core.emotional_angle, 0.89),
-        HookPack(f"Use a contrast built around {strategy['purposes'][2].lower()}.", _compact(f"Everyone misread {core.topic}"), core.watch_to_end_reason, 0.86),
+        HookPack(
+            strategy["visual_styles"][0],
+            _compact(f"The moment {topic} changed"),
+            core.stakes,
+            0.94,
+        ),
+        HookPack(
+            f"Open on {strategy['visual_styles'][2]} before context.",
+            _compact(f"This changed {topic}"),
+            core.emotional_angle,
+            0.90,
+        ),
+        HookPack(
+            f"Use a contrast built around {strategy['purposes'][2].lower()}.",
+            _compact(f"What they missed about {topic}"),
+            core.watch_to_end_reason,
+            0.87,
+        ),
     ]
     if edit_type == EditType.FUNNY:
         hooks[0] = HookPack("Cold-open on the reaction before the result.", "This got worse", "Anticipation before the punchline.", 0.97)
