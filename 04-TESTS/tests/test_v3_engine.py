@@ -210,3 +210,27 @@ def test_v3_finalization_does_not_promote_failed_qc_output(tmp_path, monkeypatch
         pipeline._finalize_v3_media(result, package, payload, 1.0)
     assert not (package / "final.v3.mp4").exists()
     assert not (package / ".final.v3.normalized.mp4").exists()
+
+def test_v3_platform_deserialization_normalizes_case_variants():
+    blueprint = create_v3_blueprint("A subject")
+    payload = blueprint.to_dict()
+    payload["platform"] = "TikTok"
+    payload.pop("platform_profile", None)
+    restored = blueprint.from_dict(payload)
+    assert restored.platform == "tiktok"
+
+
+def test_v3_quality_flags_are_strict_booleans():
+    blueprint = create_v3_blueprint("A subject")
+    payload = blueprint.to_dict()
+    payload["quality"]["passed"] = "false"
+    with pytest.raises((TypeError, ValueError), match="boolean"):
+        blueprint.from_dict(payload)
+
+
+def test_v3_music_sync_points_must_be_monotonic():
+    blueprint = create_v3_blueprint("A subject")
+    payload = blueprint.to_dict()
+    payload["music"]["sync_points"] = [0.0, 4.0, 3.0, blueprint.duration]
+    with pytest.raises(ValueError, match="monotonic"):
+        blueprint.from_dict(payload)
