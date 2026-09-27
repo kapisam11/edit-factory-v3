@@ -40,7 +40,7 @@ class RuntimeConfig:
             edge_tts_timeout_seconds=_int("AIVF_EDGE_TTS_TIMEOUT_SECONDS", 120, 10, 1800),
             pyttsx3_timeout_seconds=_int("AIVF_PYTTSX3_TIMEOUT_SECONDS", 120, 10, 3600),
             elevenlabs_timeout_seconds=_int("AIVF_ELEVENLABS_TIMEOUT_SECONDS", 60, 10, 1800),
-            max_job_retries=_int("AIVF_MAX_JOB_RETRIES", 3, 0, 10),
+            max_job_retries=_int("AIVF_MAX_JOB_RETRIES", 3, 1, 10),
             db_cleanup_interval_seconds=_int("AIVF_DB_CLEANUP_INTERVAL_SECONDS", 3600, 300, 7 * 86400),
             db_retention_days=_int("AIVF_DB_RETENTION_DAYS", 30, 1, 3650),
             openai_model=os.environ.get("AIVF_OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
