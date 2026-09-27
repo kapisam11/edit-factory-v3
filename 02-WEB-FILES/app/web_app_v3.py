@@ -189,6 +189,22 @@ def db_update_job(job_id: str, **kwargs: Any) -> int:
     return _run_db_write(write)
 
 
+def db_claim_job(job_id: str) -> bool:
+    """Atomically transition a queued job to running before worker creation."""
+    current = db_get_job(job_id)
+    if not current:
+        return False
+    from ai_video_factory.job_state import validate_transition
+    validate_transition(str(current["status"]), "running")
+    def write(conn):
+        return conn.execute(
+            "UPDATE jobs SET status='running', step='starting', error=NULL, updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND status='queued'",
+            (job_id,),
+        ).rowcount == 1
+    return bool(_run_db_write(write))
+
+
 def db_get_job(job_id: str) -> Optional[dict]:
     with get_db() as conn:
         row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -611,6 +627,8 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
     with _active_processes_lock:
         if _running_count() >= max(1, int(get_settings()["max_concurrent_jobs"])):
             return False
+        if not db_claim_job(job_id):
+            return False
         from dashboard_worker import run_job
         ctx = multiprocessing.get_context("spawn")
         process = ctx.Process(
@@ -618,7 +636,16 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
             args=(job_id, params, secrets, str(OUTPUT_FOLDER), str(DB_PATH)),
             daemon=False,
         )
-        process.start()
+        try:
+            process.start()
+        except Exception:
+            db_update_job(
+                job_id,
+                status="error",
+                step="failed",
+                error="Worker failed to start",
+            )
+            raise
         _active_processes[job_id] = process
         threading.Thread(
             target=_watch_job_process,
