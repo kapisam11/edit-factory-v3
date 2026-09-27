@@ -451,7 +451,7 @@ def _redact_job(job: dict, include_logs: bool = False) -> dict:
     return result
 
 
-def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str) -> None:
+def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str, skip_stages: Optional[list[str]] = None) -> None:
     def update(**kwargs: Any) -> bool:
         allowed = {"status", "step", "params", "pkg_dir", "error"}
         if set(kwargs) - allowed:
@@ -544,7 +544,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         if not update(step="Running Pipeline", pkg_dir=str(pkg_dir)):
             return
         log("INFO", "→ Running Pipeline")
-        ctx = build_director_pipeline().run(ctx)
+        ctx = build_director_pipeline(skip_stages=skip_stages).run(ctx)
         if ctx.errors or not _artifact_is_valid(ctx.final_video):
             if not ctx.errors:
                 ctx.errors.append("Final artifact failed media validation")
