@@ -3,6 +3,8 @@ import json
 import os
 from typing import Dict
 
+from .upload_package import build_description, generate_platform_tags, rank_title_candidates
+
 
 def write_package(base_dir: str, summary: Dict, idea: Dict, thumbnail_path: str) -> str:
     """Create output directory and write package files.
