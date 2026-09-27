@@ -316,7 +316,7 @@ class V3Blueprint:
             raw_metric_metadata = payload.get("metric_metadata")
             metric_metadata = MetricMetadata(**dict(raw_metric_metadata)) if isinstance(raw_metric_metadata, Mapping) else MetricMetadata()
         except (TypeError, ValueError, KeyError) as exc:
-            raise ValueError("V3 blueprint contains malformed typed data") from exc
+            raise ValueError(f"V3 blueprint contains malformed typed data: {exc}") from exc
         result = cls(
             version=str(payload["version"]),
             core_idea=core,
