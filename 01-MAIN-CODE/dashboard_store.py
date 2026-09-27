@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ai_video_factory.job_state import validate_transition
-from ai_video_factory.retry_policy import is_retryable_error
+from ai_video_factory.retry_policy import backoff_seconds, is_retryable_error
 
 
 class JobAdmissionError(RuntimeError):
@@ -59,11 +59,28 @@ class DashboardStore:
             except sqlite3.OperationalError as exc:
                 if attempt >= self.WRITE_RETRIES or not self._is_busy(exc):
                     raise
-                time.sleep(self.RETRY_DELAY_SECONDS * (2**attempt))
+                time.sleep(backoff_seconds(attempt + 1, base=self.RETRY_DELAY_SECONDS, cap=1.0))
         raise AssertionError("unreachable")
 
     def ensure_indexes(self) -> None:
         """Add indexes that match the dashboard's queue/history query patterns."""
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+            if "retry_count" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
+                BEFORE UPDATE OF status ON jobs
+                WHEN NOT (
+                    NEW.status = OLD.status OR
+                    (OLD.status = 'queued' AND NEW.status IN ('running','cancelling','cancelled','error','interrupted')) OR
+                    (OLD.status = 'running' AND NEW.status IN ('cancelling','cancelled','done','error','interrupted')) OR
+                    (OLD.status = 'cancelling' AND NEW.status IN ('cancelled','error','interrupted')) OR
+                    (OLD.status IN ('done','error','cancelled','interrupted'))
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid job status transition');
+                END
+            )
         with self.connect() as conn:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_created "
