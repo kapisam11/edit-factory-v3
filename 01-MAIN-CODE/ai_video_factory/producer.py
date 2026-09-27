@@ -232,11 +232,41 @@ def produce_package(
                         json.dump(saved, vf, indent=2)
                 except Exception as log_error:
                     logger.warning("Fallback visuals.json write failed: %s", log_error)
+            # Persist provenance for third-party visuals used by this package.
+            summary["source_credits"] = [
+                {
+                    "title": visual.get("title"),
+                    "creator": visual.get("uploader") or visual.get("artist"),
+                    "url": visual.get("url"),
+                    "source": visual.get("source"),
+                    "license": visual.get("license"),
+                    "license_url": visual.get("license_url"),
+                    "rights_status": visual.get("rights_status", "review_required"),
+                    "rights_basis": visual.get("rights_basis", ""),
+                }
+                for visual in saved
+                if isinstance(visual, dict)
+                and str(visual.get("source") or "").lower() in {"youtube", "reddit", "wikimedia"}
+                and (visual.get("title") or visual.get("uploader") or visual.get("artist") or visual.get("url"))
+            ]
             # Refresh the primary thumbnail with a real researched visual when one is available.
             try:
                 background_path = None
+                cleared_bases = {"owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"}
                 for visual in saved:
-                    candidate = visual.get("local_path") or visual.get("local_thumbnail")
+                    if not isinstance(visual, dict):
+                        continue
+                    source = str(visual.get("source") or "").lower()
+                    rights_cleared = (
+                        source not in {"youtube", "reddit", "wikimedia"}
+                        or str(visual.get("rights_status") or "").lower() == "cleared"
+                        or str(visual.get("rights_basis") or "").lower() in cleared_bases
+                    )
+                    if not rights_cleared:
+                        continue
+                    candidate = visual.get("local_path") or (
+                        visual.get("local_thumbnail") if source == "wikimedia" else None
+                    )
                     if candidate and os.path.isfile(candidate):
                         background_path = candidate
                         break
