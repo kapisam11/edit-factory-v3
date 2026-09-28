@@ -6,7 +6,7 @@ import re
 import subprocess
 
 from .ffmpeg_budget import run_ffmpeg_subprocess
-from .render_engine import run_ffprobe
+from .render_engine import run_ffprobe, validate_media_output
 import shutil
 from typing import Dict, List, Optional
 
@@ -87,9 +87,11 @@ def burn_subtitles(input_video: str, output_video: str, script: str, style: str 
     drawtext = build_drawtext_filter(word_timings, style)
     if not drawtext:
         shutil.copy2(input_video, output_video)
+        validate_media_output(output_video, require_video=True, require_audio=False)
         return output_video
     try:
         _run_ffmpeg(["ffmpeg", "-y", "-i", input_video, "-vf", drawtext, "-c:a", "copy", "-c:v", "libx264", "-preset", "fast", "-crf", "23", output_video])
+        validate_media_output(output_video, require_video=True, require_audio=False)
         return output_video
     except Exception:
         try:
