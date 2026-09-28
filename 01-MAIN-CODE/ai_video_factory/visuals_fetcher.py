@@ -362,9 +362,17 @@ def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20
         )
         if not os.path.isfile(out_clip) or os.path.getsize(out_clip) == 0:
             return {}
-        media = validate_media_output(out_clip, require_video=True, require_audio=False)
-        duration = float((media.get("format") or {}).get("duration") or 0.0)
-        if duration <= 0.0 or duration > float(max_duration) + 0.5:
+        try:
+            media = validate_media_output(out_clip, require_video=True, require_audio=False)
+            duration = float((media.get("format") or {}).get("duration") or 0.0)
+            if duration <= 0.0 or duration > float(max_duration) + 0.5:
+                raise RuntimeError("downloaded YouTube clip has invalid duration")
+        except RuntimeError:
+            try:
+                os.unlink(out_clip)
+            except OSError:
+                pass
+            out_clip = None
             return {}
         thumb = None
         if shutil.which("ffmpeg"):
