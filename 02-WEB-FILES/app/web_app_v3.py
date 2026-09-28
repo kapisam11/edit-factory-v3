@@ -26,6 +26,10 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
+from ai_video_factory.render_engine import run_ffprobe
+from ai_video_factory.runtime_capabilities import capabilities
+from ai_video_factory.runtime_config import runtime_config
+from app.job_service import build_job_params
 
 APP_DIR = Path(__file__).resolve().parent
 SOURCE_WEB_DIR = APP_DIR.parent if (APP_DIR.parent / "templates").is_dir() else None
@@ -37,6 +41,7 @@ if not (BASE_DIR / "templates").is_dir() or not (BASE_DIR / "static").is_dir():
 STATE_DIR = Path(os.environ.get("AIVF_STATE_DIR", BASE_DIR / "state")).resolve()
 UPLOAD_FOLDER = Path(os.environ.get("AIVF_UPLOAD_DIR", BASE_DIR / "uploads")).resolve()
 OUTPUT_FOLDER = Path(os.environ.get("AIVF_OUTPUT_DIR", BASE_DIR / "output")).resolve()
+RUNTIME_CONFIG = runtime_config()
 DB_PATH = STATE_DIR / "jobs.db"
 for directory in (STATE_DIR, UPLOAD_FOLDER, OUTPUT_FOLDER):
     directory.mkdir(parents=True, exist_ok=True)
@@ -48,7 +53,7 @@ app = Flask(
 )
 configured_secret = os.environ.get("FLASK_SECRET_KEY", "").strip()
 app.config.update(
-    MAX_CONTENT_LENGTH=int(os.environ.get("AIVF_MAX_UPLOAD_MB", "500")) * 1024 * 1024,
+    MAX_CONTENT_LENGTH=RUNTIME_CONFIG.max_upload_mb * 1024 * 1024,
     SECRET_KEY=configured_secret or None,
 )
 
@@ -58,7 +63,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
 INTERNAL_PARAM_KEYS = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
-RUNTIME_SECRET_TTL_SECONDS = max(300, int(os.environ.get("AIVF_RETRY_SECRET_TTL_SECONDS", "3600")))
+RUNTIME_SECRET_TTL_SECONDS = RUNTIME_CONFIG.retry_secret_ttl_seconds
 TERMINAL_STATUSES = {"done", "error", "cancelled", "interrupted"}
 SETTINGS_SCHEMA = {
     "default_target_seconds": ("float", 15.0, 120.0),
@@ -81,10 +86,10 @@ _package_cache: Optional[tuple[float, list]] = None
 _PACKAGE_CACHE_TTL = 2.0
 _SQLITE_WRITE_RETRIES = 3
 _SQLITE_RETRY_DELAY_SECONDS = 0.05
-_MAX_QUEUED_JOBS = max(1, int(os.environ.get("AIVF_MAX_QUEUED_JOBS", "20")))
+_MAX_QUEUED_JOBS = RUNTIME_CONFIG.max_queued_jobs
 _MIN_FREE_DISK_BYTES = max(
     256 * 1024 * 1024,
-    int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "1024")) * 1024 * 1024,
+    RUNTIME_CONFIG.min_free_disk_mb * 1024 * 1024,
 )
 
 
@@ -128,6 +133,7 @@ def init_db() -> None:
                 params TEXT NOT NULL DEFAULT '{}',
                 pkg_dir TEXT,
                 error TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -141,6 +147,24 @@ def init_db() -> None:
                 message TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS validate_job_status_transition
+            BEFORE UPDATE OF status ON jobs
+            WHEN NOT (
+                NEW.status = OLD.status OR
+                (OLD.status = 'queued' AND NEW.status IN ('running','cancelling','cancelled','error','interrupted')) OR
+                (OLD.status = 'running' AND NEW.status IN ('cancelling','cancelled','done','error','interrupted')) OR
+                (OLD.status = 'cancelling' AND NEW.status IN ('cancelled','error','interrupted')) OR
+                (OLD.status IN ('done','cancelled')) OR
+                (OLD.status IN ('error','interrupted') AND NEW.status = 'queued')
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'invalid job status transition');
+            END
+        """)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "retry_count" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id ON job_logs(job_id, id)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS settings (
@@ -171,22 +195,52 @@ def db_insert_job(job_id: str, topic: str, params: dict) -> None:
 
 
 def db_update_job(job_id: str, **kwargs: Any) -> int:
+    """Legacy-compatible status update routed through the durable lifecycle rules."""
     if not kwargs:
         return 0
     allowed = {"status", "step", "params", "pkg_dir", "error"}
     invalid = set(kwargs) - allowed
     if invalid:
         raise ValueError(f"Invalid job fields: {sorted(invalid)}")
-    fields = ", ".join(f"{key}=?" for key in kwargs)
 
     def write(conn):
-        cursor = conn.execute(
+        row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            return 0
+        current = str(row["status"])
+        target = str(kwargs.get("status", current))
+        if current == "queued" and target == "done":
+            conn.execute(
+                "UPDATE jobs SET status='running', step='starting', updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'",
+                (job_id,),
+            )
+            current = "running"
+        if target != current:
+            from ai_video_factory.job_state import validate_transition
+            validate_transition(current, target)
+        fields = ", ".join(f"{key}=?" for key in kwargs)
+        return conn.execute(
             f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             list(kwargs.values()) + [job_id],
-        )
-        return cursor.rowcount
+        ).rowcount
 
     return _run_db_write(write)
+
+
+def db_claim_job(job_id: str) -> bool:
+    """Atomically transition a queued job to running before worker creation."""
+    current = db_get_job(job_id)
+    if not current:
+        return False
+    from ai_video_factory.job_state import validate_transition
+    validate_transition(str(current["status"]), "running")
+    def write(conn):
+        return conn.execute(
+            "UPDATE jobs SET status='running', step='starting', error=NULL, updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND status='queued'",
+            (job_id,),
+        ).rowcount == 1
+    return bool(_run_db_write(write))
 
 
 def db_get_job(job_id: str) -> Optional[dict]:
@@ -351,33 +405,6 @@ def _safe_package_dir(topic: str, output_root: str) -> Path:
     return path
 
 
-def _probe_video(path: Path) -> bool:
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        return False
-    try:
-        result = subprocess.run(
-            [
-                ffprobe, "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=codec_type,width,height,duration",
-                "-show_entries", "format=duration", "-of", "json", str(path),
-            ],
-            capture_output=True, text=True, timeout=20, check=False,
-        )
-        data = json.loads(result.stdout or "{}")
-        streams = data.get("streams") or []
-        if result.returncode != 0 or not streams:
-            return False
-        stream = streams[0]
-        width = int(stream.get("width") or 0)
-        height = int(stream.get("height") or 0)
-        duration = stream.get("duration") or (data.get("format") or {}).get("duration")
-        duration = float(duration)
-        return width > 0 and height > 0 and width <= 7680 and height <= 7680 and duration > 0 and duration <= 3600
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError, json.JSONDecodeError):
-        return False
-
-
 def _save_and_validate_upload(upload, suffix: str) -> Path:
     max_bytes = int(app.config["MAX_CONTENT_LENGTH"])
     declared_size = getattr(upload, "content_length", None)
@@ -397,25 +424,50 @@ def _save_and_validate_upload(upload, suffix: str) -> Path:
     finally:
         temp_path.unlink(missing_ok=True)
 
-
-def _module_available(module_name: str) -> bool:
+def _probe_video(path: Path) -> bool:
     try:
-        return importlib.util.find_spec(module_name) is not None
-    except (ImportError, ModuleNotFoundError, ValueError):
+        result = run_ffprobe([
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_type,width,height,duration",
+            "-show_entries", "format=duration",
+            "-of", "json",
+            str(path),
+        ], timeout=30)
+        if result.returncode != 0:
+            return False
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams") or []
+        if not streams:
+            return False
+        stream = streams[0]
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+        duration_raw = stream.get("duration") or (payload.get("format") or {}).get("duration")
+        duration = float(duration_raw)
+        return (
+            width > 0
+            and height > 0
+            and width <= 7680
+            and height <= 7680
+            and duration > 0
+            and duration <= 3600
+        )
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return False
 
 
 def _runtime_capabilities() -> dict[str, bool]:
-    vision = _module_available("cv2")
-    ocr = vision and _module_available("pytesseract") and shutil.which("tesseract") is not None
-    diarization = _module_available("pyannote.audio")
+    detected = capabilities()
+    vision = detected["vision"].available
     model_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_MODEL", ".models/mobilenet_ssd/mobilenet.caffemodel"))
     config_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_CONFIG", ".models/mobilenet_ssd/deploy.prototxt"))
     object_detection = vision and model_path.is_file() and config_path.is_file()
     return {
-        "ocr": ocr,
+        "ocr": detected["ocr"].available,
         "object_detection": object_detection,
-        "diarization": diarization,
+        "diarization": detected["diarization"].available,
     }
 
 
@@ -456,7 +508,7 @@ def _redact_job(job: dict, include_logs: bool = False) -> dict:
     return result
 
 
-def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str) -> None:
+def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str, skip_stages: Optional[list[str]] = None) -> None:
     def update(**kwargs: Any) -> bool:
         allowed = {"status", "step", "params", "pkg_dir", "error"}
         if set(kwargs) - allowed:
@@ -522,7 +574,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             }
             with open(pkg_dir / "v3_job_result.json", "w", encoding="utf-8") as handle:
                 json.dump(result_payload, handle, indent=2, ensure_ascii=False)
-            if result_payload["errors"]:
+            if result_payload["errors"] or not _artifact_is_valid(result_payload.get("final_video")):
+                if not result_payload["errors"]:
+                    result_payload["errors"].append("V3 final artifact failed media validation")
                 message = "; ".join(str(error) for error in result_payload["errors"])
                 if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
                     log("ERROR", message)
@@ -547,8 +601,10 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         if not update(step="Running Pipeline", pkg_dir=str(pkg_dir)):
             return
         log("INFO", "→ Running Pipeline")
-        ctx = build_director_pipeline().run(ctx)
-        if ctx.errors:
+        ctx = build_director_pipeline(skip_stages=skip_stages).run(ctx)
+        if ctx.errors or not _artifact_is_valid(ctx.final_video):
+            if not ctx.errors:
+                ctx.errors.append("Final artifact failed media validation")
             message = "; ".join(str(error) for error in ctx.errors)
             if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
                 log("ERROR", message)
@@ -562,6 +618,17 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         except Exception:
             logger.exception("Could not record worker failure for %s", job_id)
 
+
+def _artifact_is_valid(final_video: Any) -> bool:
+    """Require a probeable video artifact before the durable job reaches DONE."""
+    if not final_video:
+        return False
+    try:
+        from ai_video_factory.render_engine import validate_media_output
+        validate_media_output(str(final_video), require_video=True, require_audio=False)
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 def _invalidate_package_cache() -> None:
     global _package_cache
@@ -611,6 +678,8 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
     with _active_processes_lock:
         if _running_count() >= max(1, int(get_settings()["max_concurrent_jobs"])):
             return False
+        if not db_claim_job(job_id):
+            return False
         from dashboard_worker import run_job
         ctx = multiprocessing.get_context("spawn")
         process = ctx.Process(
@@ -618,7 +687,16 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
             args=(job_id, params, secrets, str(OUTPUT_FOLDER), str(DB_PATH)),
             daemon=False,
         )
-        process.start()
+        try:
+            process.start()
+        except Exception:
+            db_update_job(
+                job_id,
+                status="error",
+                step="failed",
+                error="Worker failed to start",
+            )
+            raise
         _active_processes[job_id] = process
         threading.Thread(
             target=_watch_job_process,
@@ -678,86 +756,25 @@ def create_job():
     if not check_rate_limit(client_ip):
         return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
     data = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
-    topic = str(data.get("topic", "")).strip()
-    if not 2 <= len(topic) <= 500:
-        return jsonify({"error": "Topic must be between 2 and 500 characters"}), 400
     settings_data = get_settings()
     try:
-        workflow = normalize_workflow(data.get("workflow", settings_data["default_workflow"]))
-        if workflow == "v3":
-            target_seconds = validate_v3_target_seconds(
-                data.get("target_seconds", settings_data.get("default_target_seconds", 45.0))
-            )
-        else:
-            target_seconds = validate_target_seconds(
-                data.get("target_seconds", settings_data["default_target_seconds"])
-            )
+        params = build_job_params(
+            data,
+            settings_data,
+            allow_skip_qc=os.environ.get("AIVF_ALLOW_SKIP_QC", "0") == "1",
+        )
     except (TypeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
+    topic = params["topic"]
+    workflow = params["workflow"]
+    target_seconds = params["target_seconds"]
     try:
         with get_db() as conn:
-            queued = int(conn.execute(
-                "SELECT COUNT(*) FROM jobs WHERE status='queued'"
-            ).fetchone()[0])
+            queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
         if queued >= _MAX_QUEUED_JOBS:
             return jsonify({"error": "Queue capacity reached. Retry later."}), 429
     except sqlite3.Error:
         return jsonify({"error": "Job queue is temporarily unavailable"}), 503
-
-    params = {
-        "topic": topic,
-        "target_seconds": target_seconds,
-        "workflow": workflow,
-        "use_groq": str(data.get("use_groq", "")).lower() in {"1", "true", "on", "yes"},
-        "skip_qc": (
-            os.environ.get("AIVF_ALLOW_SKIP_QC", "0") == "1"
-            and str(data.get("skip_qc", "")).lower() in {"1", "true", "on", "yes"}
-        ),
-    }
-    if workflow == "v3":
-        platform = str(data.get("platform", settings_data.get("default_v3_platform", "youtube_shorts"))).strip().lower()
-        audience = str(data.get("audience", settings_data.get("default_v3_audience", "general short-form viewers"))).strip()
-        edit_type = str(data.get("edit_type", "")).strip() or None
-        try:
-            bpm = int(data.get("bpm", settings_data.get("default_v3_bpm", 120)))
-        except (TypeError, ValueError):
-            return jsonify({"error": "bpm must be an integer between 40 and 240"}), 400
-        allowed_platforms = {"youtube_shorts", "tiktok", "instagram_reels", "square", "youtube"}
-        platform_max_seconds = {
-            "youtube_shorts": 60.0,
-            "tiktok": 180.0,
-            "instagram_reels": 90.0,
-            "square": 90.0,
-            "youtube": 180.0,
-        }
-        allowed_edit_types = {"Emotional", "Motivational", "Nostalgic", "Funny", "Dramatic", "Documentary", "Sigma", "Character Analysis", "Tribute", "Storytelling"}
-        if platform not in allowed_platforms:
-            return jsonify({"error": "Unsupported V3 platform"}), 400
-        if target_seconds > platform_max_seconds[platform]:
-            return jsonify({"error": f"target_seconds must be <= {platform_max_seconds[platform]:g} for {platform}"}), 400
-        if not audience or len(audience) > 500:
-            return jsonify({"error": "V3 audience must be between 1 and 500 characters"}), 400
-        if not 40 <= bpm <= 240:
-            return jsonify({"error": "V3 bpm must be between 40 and 240"}), 400
-        if edit_type and edit_type not in allowed_edit_types:
-            return jsonify({"error": "Unsupported V3 edit type"}), 400
-        params.update({
-            "platform": platform,
-            "audience": audience,
-            "bpm": bpm,
-            "edit_type": edit_type,
-            "context": str(data.get("context", "")).strip()[:2000],
-            "enable_ocr": str(data.get("enable_ocr", "")).lower() in {"1", "true", "on", "yes"},
-            "enable_object_detection": str(data.get("enable_object_detection", "false")).lower() in {"1", "true", "on", "yes"},
-            "enable_diarization": str(data.get("enable_diarization", "")).lower() in {"1", "true", "on", "yes"},
-            "source_metadata": {
-                "creator": str(data.get("source_creator", "")).strip()[:200],
-                "title": str(data.get("source_title", "")).strip()[:300],
-                "url": str(data.get("source_url", "")).strip()[:1000],
-                "rights_basis": str(data.get("rights_basis", "")).strip().lower(),
-                "source": "user_provided",
-            },
-        })
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
     params["_retry_secret_keys"] = [key for key in SECRET_PARAM_KEYS if data.get(key)]

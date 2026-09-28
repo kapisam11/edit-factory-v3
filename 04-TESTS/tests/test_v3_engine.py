@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+from pathlib import Path
+
 import pytest
 
 from ai_video_factory.edit_planner import build_timeline
@@ -11,6 +14,7 @@ from ai_video_factory.v3_engine import (
     validate_blueprint,
 )
 from ai_video_factory.v3_pipeline import _research_summary_from_blueprint
+from ai_video_factory.v3_quality import RenderContractError
 
 
 def test_v3_blueprint_enforces_original_editor_contract():
@@ -125,3 +129,112 @@ def test_requested_edit_type_is_exactly_one_supported_type():
     for edit_type in EditType:
         blueprint = create_v3_blueprint("A subject", edit_type=edit_type.value)
         assert blueprint.edit_type == edit_type.value
+
+
+
+def test_v3_blueprint_round_trip_is_strict_and_immutable():
+    blueprint = create_v3_blueprint("Wemmbu", context="A difficult choice", config=V3Config(target_seconds=30))
+    payload = blueprint.to_dict()
+    restored = blueprint.from_dict(payload)
+
+    assert restored.schema_version == "3.0.0"
+    assert restored.platform == "youtube_shorts"
+    assert restored.duration == blueprint.duration
+    assert isinstance(restored.hooks, tuple)
+    assert isinstance(restored.clip_plan, tuple)
+
+    with pytest.raises(FrozenInstanceError):
+        restored.clip_plan += (restored.clip_plan[0],)
+    with pytest.raises(TypeError):
+        restored.platform_variants["youtube_shorts"] = {}
+
+    payload["clip_plan"][0]["start"] = -1
+    with pytest.raises(ValueError, match="monotonic|timing"):
+        blueprint.from_dict(payload)
+
+
+def test_v3_blueprint_deserialization_rejects_missing_and_wrong_schema():
+    blueprint = create_v3_blueprint("A subject")
+    payload = blueprint.to_dict()
+
+    del payload["music"]
+    with pytest.raises(ValueError, match="missing required fields"):
+        blueprint.from_dict(payload)
+
+    payload = blueprint.to_dict()
+    payload["schema_version"] = "2.0.0"
+    with pytest.raises(ValueError, match="schema version"):
+        blueprint.from_dict(payload)
+
+
+def test_v3_blueprint_exposes_contract_platform_and_duration():
+    blueprint = create_v3_blueprint(
+        "A subject",
+        config=V3Config(target_seconds=12, platform="tiktok"),
+    )
+    assert blueprint.platform == "tiktok"
+    assert blueprint.duration == 12.0
+    assert blueprint.schema_version == blueprint.version == "3.0.0"
+
+
+
+def test_v3_metrics_use_explicit_heuristic_metadata_and_bounded_scores():
+    blueprint = create_v3_blueprint("A subject")
+    assert blueprint.metric_metadata.method == "heuristic"
+    assert blueprint.metric_metadata.confidence == "low"
+    assert all(0.0 <= float(value) <= 100.0 for value in blueprint.metrics.values())
+
+def test_v3_finalization_does_not_promote_failed_qc_output(tmp_path, monkeypatch):
+    import ai_video_factory.v3_pipeline as pipeline
+    from types import SimpleNamespace
+
+    package = tmp_path / "package"
+    package.mkdir()
+    rendered = package / "legacy-render.mp4"
+    rendered.write_bytes(b"rendered")
+    result = SimpleNamespace(final_video=str(rendered))
+    payload = {
+        "clip_plan": [{"start": 0.0, "end": 1.0}],
+        "retention_map": [],
+        "platform": "youtube_shorts",
+        "platform_variants": {"youtube_shorts": {"width": 1080, "height": 1920, "max_seconds": 60}},
+        "packaging": {"final_video_name": "final.v3.mp4"},
+    }
+    (package / "timeline.json").write_text(
+        '{"segments":[{"start":0.0,"end":1.0}],"duration":1.0}', encoding="utf-8"
+    )
+    monkeypatch.setattr(pipeline, "enforce_retention_events", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline, "normalize_duration", lambda _a, output, _d: Path(output).write_bytes(b"normalized"))
+    monkeypatch.setattr(
+        pipeline,
+        "strict_render_check",
+        lambda *_a, **_k: {"ok": False, "errors": ["bad codec"], "warnings": []},
+    )
+    with pytest.raises(RenderContractError, match="bad codec"):
+        pipeline._finalize_v3_media(result, package, payload, 1.0)
+    assert not (package / "final.v3.mp4").exists()
+    assert not (package / ".final.v3.normalized.mp4").exists()
+
+def test_v3_platform_deserialization_normalizes_case_variants():
+    blueprint = create_v3_blueprint("A subject")
+    payload = blueprint.to_dict()
+    payload["platform"] = "TikTok"
+    payload.pop("platform_profile", None)
+    restored = blueprint.from_dict(payload)
+    assert restored.platform == "tiktok"
+
+
+def test_v3_quality_flags_are_strict_booleans():
+    blueprint = create_v3_blueprint("A subject")
+    payload = blueprint.to_dict()
+    payload["quality"]["passed"] = "false"
+    with pytest.raises((TypeError, ValueError), match="boolean|malformed typed data"):
+        blueprint.from_dict(payload)
+
+
+def test_v3_music_sync_points_must_be_monotonic():
+    blueprint = create_v3_blueprint("A subject")
+    payload = blueprint.to_dict()
+    payload["music"]["sync_points"] = [0.0, 4.0, 3.0, blueprint.duration]
+    with pytest.raises(ValueError, match="monotonic"):
+        blueprint.from_dict(payload)

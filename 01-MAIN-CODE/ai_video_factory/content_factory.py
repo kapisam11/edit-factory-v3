@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from .render_engine import run_ffprobe
+
 
 # ---------------------------------------------------------------------------
 # 1-4: speech/caption/audio-first editing
@@ -118,6 +120,13 @@ class ShotScore:
     semantic_similarity: float = 0.0
 
 
+# Explainable shot-ranking heuristics; these are editorial weights, not learned probabilities.
+SHOT_MOTION_WEIGHT = 0.20
+SHOT_FACE_WEIGHT = 0.10
+SHOT_BRIGHTNESS_WEIGHT = 0.10
+SHOT_UNIQUENESS_WEIGHT = 0.20
+SHOT_AUDIO_WEIGHT = 0.15
+SHOT_SEMANTIC_WEIGHT = 0.25
 def score_shots(shots: Sequence[Mapping[str, Any]], topic: str = "") -> List[Dict[str, Any]]:
     """Rank candidate shots using explainable visual/audio/semantic signals."""
     topic_words = set(_words(topic.lower()))
@@ -127,16 +136,20 @@ def score_shots(shots: Sequence[Mapping[str, Any]], topic: str = "") -> List[Dic
         overlap = len(topic_words.intersection(_words(text)))
         semantic = min(1.0, overlap / max(1, len(topic_words))) if topic_words else 0.0
         values = {
-            "motion": float(shot.get("motion", shot.get("motion_score", 0.0))),
-            "faces": float(shot.get("faces", shot.get("face_score", 0.0))),
-            "brightness": float(shot.get("brightness", 0.5)),
-            "uniqueness": float(shot.get("uniqueness", shot.get("novelty", 0.5))),
-            "audio_relevance": float(shot.get("audio_relevance", 0.5)),
+            "motion": max(0.0, min(1.0, float(shot.get("motion", shot.get("motion_score", 0.0))))),
+            "faces": max(0.0, min(1.0, float(shot.get("faces", shot.get("face_score", 0.0))))),
+            "brightness": max(0.0, min(1.0, float(shot.get("brightness", 0.5)))),
+            "uniqueness": max(0.0, min(1.0, float(shot.get("uniqueness", shot.get("novelty", 0.5))))),
+            "audio_relevance": max(0.0, min(1.0, float(shot.get("audio_relevance", 0.5)))),
             "semantic_similarity": semantic,
         }
         total = (
-            values["motion"] * 0.20 + values["faces"] * 0.10 + values["brightness"] * 0.10
-            + values["uniqueness"] * 0.20 + values["audio_relevance"] * 0.15 + values["semantic_similarity"] * 0.25
+            values["motion"] * SHOT_MOTION_WEIGHT
+            + values["faces"] * SHOT_FACE_WEIGHT
+            + values["brightness"] * SHOT_BRIGHTNESS_WEIGHT
+            + values["uniqueness"] * SHOT_UNIQUENESS_WEIGHT
+            + values["audio_relevance"] * SHOT_AUDIO_WEIGHT
+            + values["semantic_similarity"] * SHOT_SEMANTIC_WEIGHT
         )
         scored.append(ShotScore(str(shot.get("id", index)), round(total, 5), **values))
     return [asdict(item) for item in sorted(scored, key=lambda item: (-item.score, item.shot_id))]
@@ -326,15 +339,18 @@ def plan_source_aware_crop(frame_width: int, frame_height: int, layout: LayoutPr
 
 
 def validate_render(path: str, *, expected_width: Optional[int] = None, expected_height: Optional[int] = None, min_duration: float = 0.5) -> Dict[str, Any]:
-    """Verify codec, streams, duration, resolution and corruption with ffprobe."""
+    """Verify codec, streams, duration, resolution and corruption with the shared FFprobe boundary."""
     target = Path(path)
     if not target.is_file():
         return {"ok": False, "errors": ["missing_file"]}
     try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,width,height,duration", "-of", "json", str(target)],
-            capture_output=True, text=True, check=True, timeout=20,
-        )
+        result = run_ffprobe([
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,width,height,duration",
+            "-of", "json", str(target),
+        ], timeout=20)
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or "").strip()[-1000:])
         payload = json.loads(result.stdout or "{}")
     except Exception as exc:
         return {"ok": False, "errors": [f"ffprobe:{exc}"]}

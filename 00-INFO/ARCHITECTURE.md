@@ -3,9 +3,7 @@
 Edit Factory v3 is a single-host production application with one canonical CLI (`cli.py`, exposed
 as `aivf`) and one V3 emotion-first planner/CLI (`v3_cli.py`, exposed as `aivf-v3`) plus one
 production dashboard entry point (`wsgi.py`). The implementations for the web entry points now
-live in `app/`; the root files are compatibility launchers. Legacy compatibility modules remain
-available where existing integrations depend on their import paths. The web dashboard is served
-by Flask through one Gunicorn worker.
+live in `app/`; the root files are compatibility launchers. Legacy compatibility modules remain available where existing integrations depend on their import paths. The web dashboard is served by Flask through one Gunicorn worker. The dashboard route layer delegates job-parameter business validation to app/job_service.py, while SQLite lifecycle and admission rules live in dashboard_store.py.
 
 ## Dashboard execution
 
@@ -19,7 +17,7 @@ Browser -> Gunicorn (1 worker) -> Flask
                                   +-> SQLite (WAL/busy timeout)
                                   +-> spawned job process -> pipeline -> FFmpeg/FFprobe
 
-V3 planner -> emotion/core -> edit type -> hooks -> clip plan -> music -> retention plan -> independent baseline render -> retention render -> baseline-delta QC -> semantic QC -> artifact readiness -> `v3_renderer_bridge` -> legacy media renderer
+V3 planner -> typed/immutable V3Blueprint -> persisted round-trip validation -> typed V3RenderPlan -> v3_renderer_bridge -> legacy media renderer -> independent render QC -> artifact readiness
           -> packaging -> existing production renderer
 ```
 
@@ -55,3 +53,31 @@ Use one Gunicorn worker while job execution remains process-local. Docker Compos
 output, uploads, knowledge data, and SQLite state under `/app/state`. The container requires a
 real `FLASK_SECRET_KEY` and dashboard token; it does not ship runtime FFmpeg bundles from the
 repository.
+
+## Enforced boundaries
+
+The V3 planner owns creative decisions: emotion, hooks, edit type, pacing, clip purposes, overlays, music intent, retention intent, and packaging metadata. It does not invoke FFmpeg.
+
+The V3 blueprint is immutable after construction. Rendering receives a derived V3RenderPlan; the legacy renderer is reached only through v3_renderer_bridge.py. The persisted blueprint is read back and validated before rendering, so JSON serialization is part of the contract boundary.
+
+## Job lifecycle
+
+Durable status transitions are defined in ai_video_factory/job_state.py, checked by DashboardStore, and guarded by a SQLite trigger in the dashboard database. A queued job is atomically claimed before a worker process is spawned. A worker may only reach done after its final artifact passes media validation.
+
+```text
+queued -> running -> done
+              \-> error
+              \-> interrupted
+queued/running -> cancelling -> cancelled
+error/interrupted -> queued (bounded retry)
+```
+
+Retry attempts are bounded and deterministic failures are not retried by the dashboard retry policy.
+
+## Configuration and capabilities
+
+High-value execution settings such as media/provider timeouts are represented by the typed RuntimeConfig boundary. Optional runtime capabilities are reported by ai_video_factory.runtime_capabilities; feature code can fail with an actionable installation requirement instead of an opaque import error.
+
+## Media safety
+
+Production FFmpeg/FFprobe work is routed through validated argv-based helpers with bounded timeouts. Temporary artifacts use atomic/finalization patterns where practical, and failure paths remove known partial outputs before reporting failure.

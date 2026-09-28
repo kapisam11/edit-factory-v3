@@ -13,6 +13,8 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .runtime_capabilities import require
+
 
 @dataclass
 class Detection:
@@ -52,6 +54,7 @@ MOBILENET_LABELS = [
 
 
 def detect_objects_mobilenet(frame: Any, *, model_path: Optional[str] = None, config_path: Optional[str] = None, confidence_threshold: float = 0.35) -> List[Detection]:
+    require("vision")
     import cv2  # type: ignore
 
     model_path = model_path or os.environ.get("EDIT_FACTORY_MOBILENET_MODEL", ".models/mobilenet_ssd/mobilenet.caffemodel")
@@ -76,6 +79,7 @@ def detect_objects_mobilenet(frame: Any, *, model_path: Optional[str] = None, co
 
 
 def extract_faces(frame: Any) -> List[Tuple[float, float, float, float]]:
+    require("vision")
     import cv2  # type: ignore
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     cascade = cv2.CascadeClassifier(os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml"))
@@ -127,6 +131,7 @@ def generate_word_timestamps(text: str, output_audio: str, *, voice: str = "en-U
 
 def diarize_audio(audio_path: str, *, hf_token: Optional[str] = None) -> List[WordTimestamp]:
     """Run pyannote speaker diarization; requires a Hugging Face token."""
+    require("diarization")
     from pyannote.audio import Pipeline  # type: ignore
     token = hf_token or os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("PYANNOTE_AUTH_TOKEN")
     if not token:
@@ -204,6 +209,7 @@ def write_ass_captions(cues: Sequence[CaptionCue], output_path: str, *, width: i
 
 
 def analyze_music_profile(audio_path: str) -> Dict[str, Any]:
+    require("audio_analysis")
     import librosa  # type: ignore
     import numpy as np  # type: ignore
     y, sr = librosa.load(audio_path, sr=None, mono=True, duration=180)

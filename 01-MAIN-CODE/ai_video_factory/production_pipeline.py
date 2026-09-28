@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
 
+from .ai_response_validation import parse_script_lines_response
 from .composer import compose_short_from_video
 from .edit_planner import build_timeline, timeline_to_composer_plan, save_timeline
 from .learning_recommender import load_experiments, recommend
@@ -41,22 +42,8 @@ def _write_text(path: str, text: str) -> str:
 
 
 def _normalize_model_script(response: str) -> str:
-    text = str(response or "").strip()
-    if not text: return ""
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines and lines[0].strip().startswith("```"): lines = lines[1:]
-        if lines and lines[-1].strip() == "```": lines = lines[:-1]
-        text = "\n".join(lines).strip()
-    try:
-        payload = json.loads(text)
-        if isinstance(payload, dict):
-            value = payload.get("lines") or payload.get("script")
-            if isinstance(value, list): return "\n".join(str(v).strip() for v in value if str(v).strip())
-            if isinstance(value, str): return value.strip()
-    except (TypeError, ValueError, json.JSONDecodeError):
-        pass
-    return text
+    lines = parse_script_lines_response(response)
+    return "\n".join(lines) if lines else ""
 
 
 def _generate_script(topic: str, summary: Dict[str, Any], target_seconds: float, model_key: Optional[str]) -> tuple[str, str]:

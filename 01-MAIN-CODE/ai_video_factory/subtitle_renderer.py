@@ -1,10 +1,12 @@
 """AI Video Factory — Styled Subtitle Burn-In."""
 import json
 import math
+from pathlib import Path
 import re
 import subprocess
 
 from .ffmpeg_budget import run_ffmpeg_subprocess
+from .render_engine import run_ffprobe, validate_media_output
 import shutil
 from typing import Dict, List, Optional
 
@@ -69,10 +71,15 @@ def build_drawtext_filter(word_timings: List[Dict], style: str = "bold_white") -
 def burn_subtitles(input_video: str, output_video: str, script: str, style: str = "bold_white", total_duration: Optional[float] = None) -> str:
     if total_duration is None:
         try:
-            probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", input_video], capture_output=True, text=True, check=True, timeout=30)
+            probe = run_ffprobe([
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "json", input_video,
+            ], timeout=30)
+            if probe.returncode != 0:
+                raise RuntimeError((probe.stderr or "").strip()[-500:])
             info = json.loads(probe.stdout or "{}")
             total_duration = float(info.get("format", {}).get("duration", 0) or 0)
-        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError, RuntimeError) as exc:
             raise RuntimeError(f"Could not probe subtitle input duration: {exc}") from exc
         if not math.isfinite(total_duration) or total_duration <= 0:
             raise RuntimeError("Input video has no valid positive duration")
@@ -80,9 +87,18 @@ def burn_subtitles(input_video: str, output_video: str, script: str, style: str 
     drawtext = build_drawtext_filter(word_timings, style)
     if not drawtext:
         shutil.copy2(input_video, output_video)
+        validate_media_output(output_video, require_video=True, require_audio=False)
         return output_video
-    _run_ffmpeg(["ffmpeg", "-y", "-i", input_video, "-vf", drawtext, "-c:a", "copy", "-c:v", "libx264", "-preset", "fast", "-crf", "23", output_video])
-    return output_video
+    try:
+        _run_ffmpeg(["ffmpeg", "-y", "-i", input_video, "-vf", drawtext, "-c:a", "copy", "-c:v", "libx264", "-preset", "fast", "-crf", "23", output_video])
+        validate_media_output(output_video, require_video=True, require_audio=False)
+        return output_video
+    except Exception:
+        try:
+            Path(output_video).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def generate_ass_subtitle(word_timings: List[Dict], output_path: str, style: str = "bold_white", video_width: int = 1080, video_height: int = 1920) -> str:

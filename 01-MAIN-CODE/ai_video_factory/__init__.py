@@ -16,8 +16,9 @@ from .factory import create_package
 from .composer import compose_short_from_video
 from .production_pipeline import run_production_pipeline
 from .production_models import EditTimeline, Scene, TimelineSegment
-from .v3_engine import EditType, V3Blueprint, V3Config, create_v3_blueprint, validate_blueprint
+from .v3_engine import EditType, Platform, RetentionKind, V3Blueprint, V3Config, create_v3_blueprint, validate_blueprint
 from .v3_pipeline import run_v3_pipeline
+from .v3_renderer_bridge import V3RenderPlan
 
 
 class _LazyVideoDirector:
@@ -100,11 +101,14 @@ __all__ = [
     "compose_short_from_video",
     "run_production_pipeline",
     "run_v3_pipeline",
+    "V3RenderPlan",
     "create_v3_blueprint",
     "validate_blueprint",
     "V3Blueprint",
     "V3Config",
     "EditType",
+    "Platform",
+    "RetentionKind",
     "Scene",
     "TimelineSegment",
     "EditTimeline",

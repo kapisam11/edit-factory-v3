@@ -1,6 +1,7 @@
 """AI Video Factory configuration models and safe JSON persistence."""
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -96,6 +97,30 @@ class AIVFConfig:
         "climax_position_pct": [0.60, 0.75],
     })
 
+    def validate(self) -> None:
+        if not str(self.version).strip():
+            raise ValueError("config version is required")
+        if not self.pipelines or self.active_pipeline not in self.pipelines:
+            raise ValueError("active_pipeline must reference a configured pipeline")
+        if not self.style_profiles or self.active_style not in self.style_profiles:
+            raise ValueError("active_style must reference a configured style profile")
+        if self.hardware.max_parallel_jobs < 1 or self.hardware.max_parallel_jobs > 8:
+            raise ValueError("hardware.max_parallel_jobs must be between 1 and 8")
+        if self.hardware.gpu_memory_mb < 0:
+            raise ValueError("hardware.gpu_memory_mb cannot be negative")
+        for name, pipeline in self.pipelines.items():
+            if not str(name).strip() or not pipeline.stages:
+                raise ValueError("configured pipelines require a name and at least one stage")
+        for name, profile in self.style_profiles.items():
+            if not str(name).strip() or profile.cuts_per_minute <= 0 or profile.avg_shot_seconds <= 0:
+                raise ValueError("style profiles require positive pacing values")
+        heuristic = self.heuristics
+        if not isinstance(heuristic, dict):
+            raise ValueError("heuristics must be an object")
+        if "optimal_length_seconds" in heuristic and float(heuristic["optimal_length_seconds"]) <= 0:
+            raise ValueError("optimal_length_seconds must be positive")
+        if any(not str(value).strip() for value in (self.output_root, self.upload_root, self.asset_root, self.templates_root, self.knowledge_root)):
+            raise ValueError("configured runtime paths cannot be empty")
     def to_dict(self, redact_secrets: bool = False) -> dict:
         data = asdict(self)
         if redact_secrets:
@@ -103,11 +128,24 @@ class AIVFConfig:
         return data
 
     def save(self, path: str = str(_DEFAULT_CONFIG_PATH)) -> None:
-        """Persist configuration without writing API credentials to disk."""
+        """Persist configuration atomically without writing API credentials."""
+        self.validate()
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(redact_secrets=True), f, indent=2)
+        fd, temp_path = tempfile.mkstemp(prefix=".aivf-config-", suffix=".partial", dir=str(target.parent), text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(self.to_dict(redact_secrets=True), handle, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, target)
+        except BaseException:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
 
     @classmethod
     def load(cls, path: str = str(_DEFAULT_CONFIG_PATH)) -> "AIVFConfig":
@@ -131,7 +169,9 @@ class AIVFConfig:
             name: StyleProfile(**value) if isinstance(value, dict) else StyleProfile(name=name)
             for name, value in (data.get("style_profiles") or {}).items()
         }
-        return cls(**data)
+        config = cls(**data)
+        config.validate()
+        return config
 
     def get_pipeline(self, name: Optional[str] = None) -> PipelineConfig:
         return self.pipelines.get(name or self.active_pipeline, self.pipelines["default"])

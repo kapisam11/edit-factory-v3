@@ -13,6 +13,9 @@ import subprocess
 import shutil
 import math
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '01-MAIN-CODE'))
+from ai_video_factory.render_engine import run_ffmpeg
+
 
 def ensure_opencv():
     try:
@@ -33,26 +36,24 @@ def detect_faces_in_image(img_path, face_cascade):
 
 
 def sample_video_and_detect(video_path, tmp_dir, face_cascade, fps=1):
-    # extract frames at given fps to tmp_dir
+    """Extract frames through the shared FFmpeg boundary and always clean up."""
     os.makedirs(tmp_dir, exist_ok=True)
     out_pattern = os.path.join(tmp_dir, "frame_%04d.jpg")
-    cmd = ["ffmpeg", "-y", "-i", video_path, "-vf", f"fps={fps}", out_pattern]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+        run_ffmpeg(["ffmpeg", "-y", "-i", video_path, "-vf", f"fps={fps}", out_pattern], timeout=300, capture_output=True)
+        faces_total = 0
+        frames = sorted([os.path.join(tmp_dir, f) for f in os.listdir(tmp_dir) if f.lower().endswith('.jpg')])
+        for frame in frames:
+            faces_total += detect_faces_in_image(frame, face_cascade)
+        motion_score = compute_motion_score_from_frames(frames)
+        return faces_total, motion_score
     except Exception:
         return 0, 0.0
-    # detect faces across frames
-    faces_total = 0
-    frames = sorted([os.path.join(tmp_dir, f) for f in os.listdir(tmp_dir) if f.lower().endswith('.jpg')])
-    for f in frames:
-        faces_total += detect_faces_in_image(f, face_cascade)
-    motion_score = compute_motion_score_from_frames(frames)
-    # cleanup
-    try:
-        shutil.rmtree(tmp_dir)
-    except Exception:
-        pass
-    return faces_total, motion_score
+    finally:
+        try:
+            shutil.rmtree(tmp_dir)
+        except OSError:
+            pass
 
 
 def compute_motion_score_from_frames(frames):

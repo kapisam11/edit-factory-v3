@@ -6,7 +6,7 @@ import time
 import pytest
 
 from dashboard_cache import HybridCache
-from dashboard_store import DashboardStore
+from dashboard_store import DashboardStore, JobRetryNotAllowed
 
 
 def _create_schema(path):
@@ -21,6 +21,7 @@ def _create_schema(path):
                 params TEXT NOT NULL,
                 pkg_dir TEXT,
                 error TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -51,8 +52,9 @@ def test_dashboard_store_indexes_and_job_roundtrip(tmp_path):
 
     with store.connect() as conn:
         conn.execute(
-            "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            ("job-1", "topic", "error", "failed", "{}", None, "broken"),
+            "INSERT INTO jobs (id, topic, status, step, params, pkg_dir, error, retry_count, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("job-1", "topic", "error", "failed", "{}", None, "broken", 0),
         )
     assert store.get_job("job-1")["status"] == "error"
     assert store.update_job("job-1", status="queued", step="waiting", error=None) == 1
@@ -82,3 +84,51 @@ def test_hybrid_cache_expires_and_deletes():
     cache.set_json("k", {"value": 2}, 10)
     cache.delete("k")
     assert cache.get_json("k") is None
+
+
+
+def test_dashboard_store_rejects_illegal_status_transition(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store = DashboardStore(db)
+    store.insert_job("job-1", "topic", {})
+    assert store.claim_job("job-1") is True
+    assert store.claim_job("job-1") is False
+    assert store.update_job("job-1", status="done") == 1
+    with pytest.raises(ValueError, match="Invalid job status transition"):
+        store.update_job("job-1", status="running")
+
+
+def test_dashboard_store_claim_is_atomic(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store_a = DashboardStore(db)
+    store_b = DashboardStore(db)
+    store_a.insert_job("job-1", "topic", {})
+    results = []
+    import threading
+
+    def claim(store):
+        results.append(store.claim_job("job-1"))
+
+    threads = [threading.Thread(target=claim, args=(store_a,)), threading.Thread(target=claim, args=(store_b,))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(results) == [False, True]
+
+
+
+def test_dashboard_store_retry_policy_is_bounded_and_rejects_deterministic_failure(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store = DashboardStore(db)
+    store.insert_job("job-1", "topic", {})
+    assert store.claim_job("job-1") is True
+    store.update_job("job-1", status="error", error="provider returned 429")
+    assert store.retry_job("job-1", max_attempts=1) == 1
+    assert store.get_job("job-1")["retry_count"] == 1
+    store.update_job("job-1", status="error", error="invalid configuration")
+    with pytest.raises(JobRetryNotAllowed, match="deterministic|maximum"):
+        store.retry_job("job-1", max_attempts=1)

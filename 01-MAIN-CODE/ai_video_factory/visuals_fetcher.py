@@ -4,14 +4,18 @@ Provides Wikimedia Commons image search, Reddit image discovery, and
 optional YouTube discovery via `yt-dlp` if available. Returns a list of
 visual candidate dicts with metadata and a suggested `purpose` tag.
 """
-from typing import List, Dict
+from typing import List, Dict, Optional
+import os
 import requests
 import re
 import shutil
 import subprocess
 import json
+import tempfile
+from urllib.parse import urlparse
 
-from .render_engine import run_ffmpeg
+from .render_engine import run_ffmpeg, validate_media_output
+from .model_adapter import call_model
 
 
 def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
@@ -207,52 +211,47 @@ def annotate_purposes(visuals: List[Dict], summary: Dict) -> List[Dict]:
 
 
 def vet_with_model(visuals: List[Dict], summary: Dict, api_key: str) -> List[Dict]:
-    """Ask an optional model to re-classify visuals by purpose.
-
-    The model is asked to return JSON array of objects: {"url":..., "purpose":..., "confidence":0-1}
-    If the model call fails or returns invalid JSON, falls back to `annotate_purposes`.
-    """
+    """Apply optional model classification only after strict schema validation."""
+    allowed_purposes = {"hook", "conflict", "payoff", "reaction", "meme", "context", "gameplay_clip"}
     try:
-        from .model_adapter import call_model
-        import json
-
         prompt = (
-            "You are given a research summary and a list of candidate visuals (url, title, thumbnail, source). "
-            "Return a JSON array where each item has keys: url, purpose (one of hook, conflict, payoff, reaction, meme, context, gameplay_clip), confidence (0-1). "
-            "Do not include extra text. Research summary:\n" + json.dumps(summary) + "\nVisuals:\n" + json.dumps(visuals) + "\n"
+            "You are given a research summary and candidate visuals. Return a JSON array only. "
+            "Each item must contain url, purpose, confidence where confidence is 0..1. "
+            "Do not include extra fields or extra text. Research summary:\\n"
+            + json.dumps(summary) + "\\nVisuals:\\n" + json.dumps(visuals) + "\\n"
         )
         resp = call_model(prompt, api_key)
         if not resp:
             return annotate_purposes(visuals, summary)
-        # try to extract JSON from response
-        jb = None
         try:
-            jb = json.loads(resp)
-        except Exception:
-            # try find first JSON block
-            m = re.search(r"(\[\s*\{[\s\S]*\}\s*\])", resp)
-            if m:
-                try:
-                    jb = json.loads(m.group(1))
-                except Exception:
-                    jb = None
-        if not jb or not isinstance(jb, list):
+            parsed = json.loads(resp)
+        except (TypeError, ValueError, json.JSONDecodeError):
             return annotate_purposes(visuals, summary)
-        # merge model outputs into visuals
+        if not isinstance(parsed, list) or len(parsed) > len(visuals):
+            return annotate_purposes(visuals, summary)
         url_to_v = {v.get("url"): v for v in visuals if v.get("url")}
         out = []
-        for item in jb:
+        seen_urls = set()
+        for item in parsed:
+            if not isinstance(item, dict) or set(item) != {"url", "purpose", "confidence"}:
+                return annotate_purposes(visuals, summary)
             url = item.get("url")
-            if not url:
-                continue
-            base = url_to_v.get(url, {})
-            merged = base.copy()
-            merged["purpose"] = item.get("purpose") or merged.get("purpose")
-            merged["model_confidence"] = float(item.get("confidence") or 0)
+            purpose = item.get("purpose")
+            try:
+                confidence = float(item.get("confidence"))
+            except (TypeError, ValueError):
+                return annotate_purposes(visuals, summary)
+            if url not in url_to_v or purpose not in allowed_purposes or not 0.0 <= confidence <= 1.0:
+                return annotate_purposes(visuals, summary)
+            if url in seen_urls:
+                return annotate_purposes(visuals, summary)
+            seen_urls.add(url)
+            merged = url_to_v[url].copy()
+            merged["purpose"] = purpose
+            merged["model_confidence"] = confidence
             out.append(merged)
-        # append any visuals not returned by model using heuristics
         for v in visuals:
-            if v.get("url") not in {o.get("url") for o in out}:
+            if v.get("url") not in seen_urls:
                 out.append(v)
         return out
     except Exception:
@@ -319,91 +318,85 @@ def _media_rights_cleared(item: Dict) -> bool:
     }
 
 
+def _valid_youtube_url(value: str) -> bool:
+    try:
+        parsed = urlparse(str(value))
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return parsed.scheme == "https" and host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+
+
 def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20, *, rights_cleared: bool = False) -> Dict:
-    """Download a short clip from a YouTube URL using `yt-dlp` + `ffmpeg`.
-
-    Returns metadata dict with `local_path`, `thumbnail`, `uploader`, `upload_date`, `source`.
-    Requires `yt-dlp` and `ffmpeg` on PATH. If not available, returns empty dict.
-    """
-    import os
-    import shlex
-    from datetime import datetime
-
-    if not rights_cleared:
+    """Download a rights-cleared YouTube clip through a temporary staging directory."""
+    if not rights_cleared or not _valid_youtube_url(youtube_url):
         return {}
-    if not shutil.which("yt-dlp"):
+    if not 1 <= int(max_duration) <= 600 or not shutil.which("yt-dlp"):
         return {}
     os.makedirs(out_dir, exist_ok=True)
+    staging_dir = tempfile.mkdtemp(prefix="aivf-ytdlp-", dir=out_dir)
+    out_clip: Optional[str] = None
+    thumb_path: Optional[str] = None
     try:
         proc = subprocess.run(["yt-dlp", "--dump-single-json", youtube_url], capture_output=True, text=True, timeout=40)
         if proc.returncode != 0 or not proc.stdout:
             return {}
         info = json.loads(proc.stdout)
-        video_id = info.get("id")
+        video_id = str(info.get("id") or "").strip()
+        if not video_id or not re.fullmatch(r"[A-Za-z0-9_-]{5,32}", video_id):
+            return {}
         title = info.get("title")
         uploader = info.get("uploader")
         upload_date = info.get("upload_date")
-        tmp_name = os.path.join(out_dir, f"{video_id}.%(ext)s")
+        tmp_name = os.path.join(staging_dir, f"{video_id}.%(ext)s")
         dl = subprocess.run(["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio/best", "-o", tmp_name, youtube_url], capture_output=True, text=True, timeout=300)
         if dl.returncode != 0:
             return {}
-        downloaded = None
-        for f in os.listdir(out_dir):
-            if f.startswith(video_id + "."):
-                downloaded = os.path.join(out_dir, f)
-                break
-        if not downloaded:
-            for f in os.listdir(out_dir):
-                if video_id in f:
-                    downloaded = os.path.join(out_dir, f)
-                    break
-        if not downloaded:
+        downloaded = next((os.path.join(staging_dir, name) for name in os.listdir(staging_dir) if name.startswith(video_id + ".")), None)
+        if not downloaded or not os.path.isfile(downloaded):
             return {}
-        out_clip = os.path.join(out_dir, f"{video_id}_clip_{max_duration}s.mp4")
-        if shutil.which("ffmpeg"):
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                downloaded,
-                "-ss",
-                "0",
-                "-t",
-                str(int(max_duration)),
-                "-c:v",
-                "libx264",
-                "-c:a",
-                "aac",
-                out_clip,
-            ]
+        out_clip = os.path.join(out_dir, f"{video_id}_clip_{int(max_duration)}s.mp4")
+        run_ffmpeg(
+            ["ffmpeg", "-y", "-i", downloaded, "-ss", "0", "-t", str(int(max_duration)), "-c:v", "libx264", "-c:a", "aac", out_clip],
+            timeout=120,
+        )
+        if not os.path.isfile(out_clip) or os.path.getsize(out_clip) == 0:
+            return {}
+        try:
+            media = validate_media_output(out_clip, require_video=True, require_audio=False)
+            duration = float((media.get("format") or {}).get("duration") or 0.0)
+            if duration <= 0.0 or duration > float(max_duration) + 0.5:
+                raise RuntimeError("downloaded YouTube clip has invalid duration")
+        except RuntimeError:
             try:
-                run_ffmpeg(cmd, timeout=120)
-            except (OSError, RuntimeError):
-                out_clip = downloaded
-        else:
-            out_clip = downloaded
+                os.unlink(out_clip)
+            except OSError:
+                pass
+            out_clip = None
+            return {}
         thumb = None
         if shutil.which("ffmpeg"):
             thumb_path = os.path.join(out_dir, f"{video_id}_thumb.jpg")
-            cmd = ["ffmpeg", "-y", "-i", out_clip, "-ss", "00:00:01", "-vframes", "1", thumb_path]
             try:
-                subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                run_ffmpeg(
+                    ["ffmpeg", "-y", "-i", out_clip, "-ss", "00:00:01", "-vframes", "1", thumb_path],
+                    timeout=20,
+                )
                 if os.path.exists(thumb_path):
                     thumb = thumb_path
             except Exception:
-                thumb = None
-        meta = {
-            "local_path": out_clip,
-            "thumbnail": thumb,
-            "source": "youtube",
-            "title": title,
-            "uploader": uploader,
-            "upload_date": upload_date,
-            "url": youtube_url,
-        }
-        return meta
-    except Exception:
+                thumb_path = None
+        return {"local_path": out_clip, "thumbnail": thumb, "source": "youtube", "title": title, "uploader": uploader, "upload_date": upload_date, "url": youtube_url}
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
         return {}
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        if out_clip and os.path.exists(out_clip) and (not os.path.isfile(out_clip) or os.path.getsize(out_clip) == 0):
+            try: os.unlink(out_clip)
+            except OSError: pass
+        if thumb_path and os.path.exists(thumb_path) and (not out_clip or not os.path.isfile(out_clip)):
+            try: os.unlink(thumb_path)
+            except OSError: pass
 
 
 def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = True, clip_max_duration: int = 20) -> List[Dict]:

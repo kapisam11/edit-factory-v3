@@ -5,9 +5,29 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 import math
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
+from types import MappingProxyType
 
 from .v3_semantics import combined_scores
+from .v3_scoring import heuristic_metrics
+
+
+class Platform(str, Enum):
+    YOUTUBE_SHORTS = "youtube_shorts"
+    TIKTOK = "tiktok"
+    INSTAGRAM_REELS = "instagram_reels"
+    SQUARE = "square"
+    YOUTUBE = "youtube"
+
+
+class RetentionKind(str, Enum):
+    BEAT_DROP = "beat drop"
+    CLIP = "clip"
+    ZOOM = "zoom"
+    TEXT = "text"
+    MOTION = "motion"
+    ANGLE = "angle"
 
 
 class EditType(str, Enum):
@@ -26,7 +46,7 @@ class EditType(str, Enum):
 @dataclass(frozen=True)
 class V3Config:
     target_seconds: float = 30.0
-    platform: str = "youtube_shorts"
+    platform: str | Platform = "youtube_shorts"
     audience: str = "general short-form viewers"
     bpm: int = 120
     retention_interval: float = 2.0
@@ -47,7 +67,8 @@ class V3Config:
             raise ValueError("V3Config contains invalid numeric values") from exc
         if not math.isfinite(target) or not 8.0 <= target <= 180.0:
             raise ValueError("target_seconds must be between 8 and 180")
-        profile = PLATFORM_PROFILES.get(str(self.platform).lower())
+        platform_value = self.platform.value if isinstance(self.platform, Platform) else str(self.platform)
+        profile = PLATFORM_PROFILES.get(platform_value.lower())
         if profile is None:
             raise ValueError(f"unsupported platform: {self.platform}")
         maximum_platform = profile["max_seconds"]
@@ -102,7 +123,10 @@ class MusicPlan:
     emotional_tone: str
     beat_seconds: float
     drop_time: float
-    sync_points: List[float]
+    sync_points: Sequence[float]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sync_points", tuple(float(value) for value in self.sync_points))
 
 
 @dataclass(frozen=True)
@@ -112,34 +136,223 @@ class RetentionEvent:
     instruction: str
 
 
-@dataclass
+@dataclass(frozen=True)
+class PlatformProfile:
+    width: int
+    height: int
+    max_seconds: float | None
+    safe_bottom: int
+    cta: str
+
+
+@dataclass(frozen=True)
+class QCRequirements:
+    target_tolerance_seconds: float = 0.08
+    require_video: bool = True
+    require_audio: bool = False
+    require_independent_retention: bool = True
+    semantic_qc_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class PackagingPlan:
+    final_video_name: str = "final.v3.mp4"
+    thumbnail_name: str = "thumbnail.png"
+    vertical_thumbnail_name: str = "thumbnail_vertical.png"
+    upload_manifest_name: str = "upload_package.json"
+
+
+@dataclass(frozen=True)
+class MetricMetadata:
+    method: str = "heuristic"
+    confidence: str = "low"
+    calibration_status: str = "uncalibrated"
+
+
+@dataclass(frozen=True)
 class QualityReport:
     passed: bool
     score: int
-    checks: Dict[str, bool] = field(default_factory=dict)
-    warnings: List[str] = field(default_factory=list)
+    checks: Mapping[str, bool] = field(default_factory=dict)
+    warnings: Sequence[str] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.passed, bool):
+            raise TypeError("quality.passed must be a boolean")
+        if isinstance(self.score, bool) or not isinstance(self.score, int):
+            raise TypeError("quality.score must be an integer")
+        if not isinstance(self.checks, Mapping):
+            raise TypeError("quality.checks must be an object")
+        if any(not isinstance(value, bool) for value in self.checks.values()):
+            raise TypeError("quality check values must be booleans")
+        object.__setattr__(self, "checks", MappingProxyType({str(k): value for k, value in self.checks.items()}))
+        object.__setattr__(self, "warnings", tuple(str(item) for item in self.warnings))
 
 
-@dataclass
+@dataclass(frozen=True)
 class V3Blueprint:
     version: str
     core_idea: CoreIdea
     edit_type: str
-    hooks: List[HookPack]
-    clip_plan: List[ClipBeat]
+    hooks: Sequence[HookPack]
+    clip_plan: Sequence[ClipBeat]
     music: MusicPlan
-    retention_map: List[RetentionEvent]
+    retention_map: Sequence[RetentionEvent]
     thumbnail_concept: str
-    title_options: List[str]
-    hashtags: List[str]
+    title_options: Sequence[str]
+    hashtags: Sequence[str]
     description: str
-    platform_variants: Dict[str, Dict[str, Any]]
+    platform_variants: Mapping[str, Mapping[str, Any]]
     quality: QualityReport
-    metrics: Dict[str, float]
-    capabilities: List[str]
+    metrics: Mapping[str, float]
+    capabilities: Sequence[str]
+    platform: str = "youtube_shorts"
+    audience: str = "general short-form viewers"
+    platform_profile: PlatformProfile | None = None
+    qc: QCRequirements = field(default_factory=QCRequirements)
+    packaging: PackagingPlan = field(default_factory=PackagingPlan)
+    metric_metadata: MetricMetadata = field(default_factory=MetricMetadata)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "hooks", tuple(self.hooks))
+        object.__setattr__(self, "clip_plan", tuple(self.clip_plan))
+        object.__setattr__(self, "retention_map", tuple(self.retention_map))
+        object.__setattr__(self, "title_options", tuple(self.title_options))
+        object.__setattr__(self, "hashtags", tuple(self.hashtags))
+        object.__setattr__(self, "capabilities", tuple(self.capabilities))
+        object.__setattr__(self, "platform_variants", _freeze_mapping(self.platform_variants))
+        object.__setattr__(self, "metrics", MappingProxyType({str(k): float(v) for k, v in dict(self.metrics).items()}))
+        platform_value = self.platform.value if isinstance(self.platform, Platform) else str(self.platform).strip().lower()
+        object.__setattr__(self, "platform", platform_value)
+        if self.platform_profile is None:
+            profile = PLATFORM_PROFILES.get(platform_value)
+            if profile is None:
+                raise ValueError(f"unsupported blueprint platform: {self.platform}")
+            object.__setattr__(self, "platform_profile", PlatformProfile(**profile))
+
+    @property
+    def platform_constraints(self) -> PlatformProfile:
+        profile = self.platform_profile
+        if profile is None:
+            raise ValueError("blueprint platform profile is missing")
+        return profile
+    @property
+    def schema_version(self) -> str:
+        return self.version
+
+    @property
+    def duration(self) -> float:
+        return float(self.clip_plan[-1].end) if self.clip_plan else 0.0
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        return {
+            "version": self.version,
+            "schema_version": self.schema_version,
+            "platform": self.platform,
+            "audience": self.audience,
+            "platform_profile": asdict(self.platform_constraints),
+            "qc": asdict(self.qc),
+            "packaging": asdict(self.packaging),
+            "metric_metadata": asdict(self.metric_metadata),
+            "core_idea": asdict(self.core_idea),
+            "edit_type": self.edit_type,
+            "hooks": [asdict(item) for item in self.hooks],
+            "clip_plan": [asdict(item) for item in self.clip_plan],
+            "music": asdict(self.music),
+            "retention_map": [asdict(item) for item in self.retention_map],
+            "thumbnail_concept": self.thumbnail_concept,
+            "title_options": list(self.title_options),
+            "hashtags": list(self.hashtags),
+            "description": self.description,
+            "platform_variants": {str(k): dict(v) for k, v in self.platform_variants.items()},
+            "quality": {"passed": self.quality.passed, "score": self.quality.score, "checks": dict(self.quality.checks), "warnings": list(self.quality.warnings)},
+            "metrics": dict(self.metrics),
+            "capabilities": list(self.capabilities),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "V3Blueprint":
+        if not isinstance(payload, Mapping):
+            raise ValueError("V3 blueprint payload must be an object")
+        required = {
+            "version", "core_idea", "edit_type", "hooks", "clip_plan", "music",
+            "retention_map", "thumbnail_concept", "title_options", "hashtags",
+            "description", "platform_variants", "quality", "metrics", "capabilities",
+        }
+        allowed = required | {"schema_version", "platform", "audience", "platform_profile", "qc", "packaging", "metric_metadata", "source_metadata"}
+        unknown = sorted(set(payload) - allowed)
+        if unknown:
+            raise ValueError(f"V3 blueprint contains unknown fields: {', '.join(unknown)}")
+        missing = sorted(required - set(payload))
+        if missing:
+            raise ValueError(f"V3 blueprint is missing required fields: {', '.join(missing)}")
+        if payload.get("version") != "3.0.0" or payload.get("schema_version", "3.0.0") != "3.0.0":
+            raise ValueError("unsupported V3 blueprint schema version")
+        if not isinstance(payload["hooks"], (list, tuple)) or not isinstance(payload["clip_plan"], (list, tuple)):
+            raise ValueError("V3 blueprint hooks and clip_plan must be arrays")
+        if not isinstance(payload["retention_map"], (list, tuple)) or not isinstance(payload["capabilities"], (list, tuple)):
+            raise ValueError("V3 blueprint retention_map and capabilities must be arrays")
+        if not isinstance(payload["title_options"], (list, tuple)) or not isinstance(payload["hashtags"], (list, tuple)):
+            raise ValueError("V3 blueprint title_options and hashtags must be arrays")
+        if not isinstance(payload["metrics"], Mapping) or not isinstance(payload["platform_variants"], Mapping):
+            raise ValueError("V3 blueprint metrics and platform_variants must be objects")
+        try:
+            core = CoreIdea(**dict(payload["core_idea"]))
+            hooks = tuple(HookPack(**dict(item)) for item in payload["hooks"])
+            clips = tuple(ClipBeat(**dict(item)) for item in payload["clip_plan"])
+            music_data = dict(payload["music"])
+            music_data["sync_points"] = tuple(float(x) for x in music_data["sync_points"])
+            music = MusicPlan(**music_data)
+            retention = tuple(RetentionEvent(**dict(item)) for item in payload["retention_map"])
+            quality = QualityReport(**dict(payload["quality"]))
+            raw_platform = payload.get("platform", "youtube_shorts")
+            platform_name = raw_platform.value if isinstance(raw_platform, Platform) else str(raw_platform).strip().lower()
+            raw_profile = payload.get("platform_profile")
+            profile = PlatformProfile(**dict(raw_profile)) if isinstance(raw_profile, Mapping) else PlatformProfile(**dict(PLATFORM_PROFILES.get(platform_name, {})))
+            raw_qc = payload.get("qc")
+            qc = QCRequirements(**dict(raw_qc)) if isinstance(raw_qc, Mapping) else QCRequirements()
+            raw_packaging = payload.get("packaging")
+            packaging = PackagingPlan(**dict(raw_packaging)) if isinstance(raw_packaging, Mapping) else PackagingPlan()
+            raw_metric_metadata = payload.get("metric_metadata")
+            metric_metadata = MetricMetadata(**dict(raw_metric_metadata)) if isinstance(raw_metric_metadata, Mapping) else MetricMetadata()
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError(f"V3 blueprint contains malformed typed data: {exc}") from exc
+        result = cls(
+            version=str(payload["version"]),
+            core_idea=core,
+            edit_type=str(payload["edit_type"]),
+            hooks=hooks,
+            clip_plan=clips,
+            music=music,
+            retention_map=retention,
+            thumbnail_concept=str(payload["thumbnail_concept"]),
+            title_options=tuple(payload["title_options"]),
+            hashtags=tuple(payload["hashtags"]),
+            description=str(payload["description"]),
+            platform_variants=dict(payload["platform_variants"]),
+            quality=quality,
+            metrics=dict(payload["metrics"]),
+            capabilities=tuple(payload["capabilities"]),
+            platform=str(payload.get("platform", "youtube_shorts")),
+            audience=str(payload.get("audience", "general short-form viewers")),
+            platform_profile=profile,
+            qc=qc,
+            packaging=packaging,
+            metric_metadata=metric_metadata,
+        )
+        validate_blueprint(result)
+        return result
+
+
+def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("platform_variants must be an object")
+    frozen = {}
+    for key, item in value.items():
+        if not isinstance(item, Mapping):
+            raise ValueError("platform variant must be an object")
+        frozen[key] = MappingProxyType(dict(item))
+    return MappingProxyType(frozen)
 
 
 PLATFORM_PROFILES: Mapping[str, Dict[str, Any]] = {
@@ -453,12 +666,8 @@ def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequenc
     pace = min(1.0, 2.8 / max(avg, 0.1))
     q = quality.score / 100.0
     emotion = 0.9 if core.target_emotion in {"trust","dramatic","inspiring","nostalgic"} else 0.82
-    return {
-        "retention_score": round(100 * (0.35 * hook + 0.30 * pace + 0.20 * q + 0.15 * emotion), 1),
-        "completion_score": round(100 * (0.45 * q + 0.30 * pace + 0.25 * hook), 1),
-        "rewatch_score": round(100 * (0.40 * hook + 0.35 * emotion + 0.25 * q), 1),
-        "shareability_score": round(100 * (0.50 * emotion + 0.30 * q + 0.20 * hook), 1),
-    }
+    return heuristic_metrics(hook=hook, pace=pace, quality=q, emotion=emotion)
+
 
 def _metadata(core: CoreIdea) -> tuple[str, List[str], List[str], str]:
     """Build compact, topic-specific metadata for every V3 downstream consumer."""
@@ -509,15 +718,32 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
     thumbnail, titles, tags, description = _metadata(core)
     quality = _human_editor_checks(core, selected, hooks, clips, retention, cfg)
     metrics = _heuristic_metrics(core, hooks, clips, quality)
-    blueprint = V3Blueprint("3.0.0", core, selected.value, hooks, clips, music, retention, thumbnail, titles, tags, description, platform_variants(cfg), quality, metrics, list(V3_CAPABILITIES))
+    platform_value = cfg.platform.value if isinstance(cfg.platform, Platform) else str(cfg.platform).strip().lower()
+    blueprint = V3Blueprint("3.0.0", core, selected.value, hooks, clips, music, retention, thumbnail, titles, tags, description, platform_variants(cfg), quality, metrics, list(V3_CAPABILITIES), platform=platform_value, audience=cfg.audience)
     validate_blueprint(blueprint)
     return blueprint
 
 def validate_blueprint(blueprint: V3Blueprint) -> None:
+    if not isinstance(blueprint, V3Blueprint):
+        raise ValueError("expected a V3Blueprint instance")
     if blueprint.version != "3.0.0":
         raise ValueError("unexpected blueprint version")
-    if len(blueprint.capabilities) != 40:
-        raise ValueError("v3 blueprint must expose exactly 40 tracked capabilities")
+    if len(blueprint.capabilities) != 40 or len(set(blueprint.capabilities)) != 40:
+        raise ValueError("v3 blueprint must expose exactly 40 unique tracked capabilities")
+    if blueprint.platform not in PLATFORM_PROFILES:
+        raise ValueError(f"unsupported blueprint platform: {blueprint.platform}")
+    expected_profile = PLATFORM_PROFILES[blueprint.platform]
+    if asdict(blueprint.platform_constraints) != dict(expected_profile):
+        raise ValueError("blueprint platform profile does not match registered platform constraints")
+    if not 0.01 <= float(blueprint.qc.target_tolerance_seconds) <= 1.0:
+        raise ValueError("blueprint QC target tolerance is invalid")
+    if blueprint.metric_metadata.method != "heuristic" or blueprint.metric_metadata.confidence not in {"low", "medium", "high"}:
+        raise ValueError("blueprint metric metadata is invalid")
+
+    if not str(blueprint.audience).strip():
+        raise ValueError("blueprint audience is required")
+    if not blueprint.platform_variants or blueprint.platform not in blueprint.platform_variants:
+        raise ValueError("blueprint platform variants are incomplete")
     try:
         edit_type = EditType(blueprint.edit_type)
     except ValueError as exc:
@@ -526,13 +752,39 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         raise ValueError("blueprint is missing a registered creative strategy")
     if not blueprint.retention_map:
         raise ValueError("blueprint retention map is empty")
+    previous_retention = -1e-6
+    for event in blueprint.retention_map:
+        try:
+            RetentionKind(event.kind)
+        except ValueError as exc:
+            raise ValueError(f"unsupported retention event kind: {event.kind}") from exc
+        if not math.isfinite(float(event.time)) or event.time < -0.001 or event.time > blueprint.duration + 0.001:
+            raise ValueError("retention event time is outside the blueprint timeline")
+        if event.time < previous_retention:
+            raise ValueError("retention map is not monotonic")
+        if not str(event.instruction).strip():
+            raise ValueError("retention event instruction is required")
+        previous_retention = event.time
     previous = -1e-6
-    for clip in blueprint.clip_plan:
+    for expected_index, clip in enumerate(blueprint.clip_plan, start=1):
+        if clip.index != expected_index:
+            raise ValueError("clip plan indices must be contiguous and 1-based")
+        if not all(math.isfinite(float(value)) for value in (clip.start, clip.end)):
+            raise ValueError(f"clip {clip.index} contains non-finite timing")
         if clip.start < previous or clip.end <= clip.start:
             raise ValueError("clip plan is not monotonic")
         if not 2 <= len(_tokens(clip.text_overlay)) <= 8:
             raise ValueError(f"invalid overlay word count at clip {clip.index}")
         previous = clip.end
+    if not blueprint.music.sync_points or any(not math.isfinite(float(t)) for t in blueprint.music.sync_points):
+        raise ValueError("blueprint music sync points are invalid")
+    previous_sync = -1e-6
+    for sync_point in blueprint.music.sync_points:
+        if sync_point < previous_sync:
+            raise ValueError("blueprint music sync points are not monotonic")
+        if sync_point < -0.001 or sync_point > blueprint.duration + 0.001:
+            raise ValueError("blueprint music sync point is outside the timeline")
+        previous_sync = sync_point
     if abs(blueprint.clip_plan[-1].end - blueprint.music.sync_points[-1]) > 0.01:
         raise ValueError("clip plan does not exactly cover planned duration")
 
@@ -554,6 +806,35 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
     if not any(set(_tokens(tag)).intersection(topic_tokens) for tag in blueprint.hashtags):
         raise ValueError("blueprint hashtags are not topic-specific")
 
+    if not 0 <= int(blueprint.quality.score) <= 100:
+        raise ValueError("blueprint quality score must be between 0 and 100")
+    for key, value in blueprint.metrics.items():
+        if not str(key).strip() or not math.isfinite(float(value)) or not 0 <= float(value) <= 100:
+            raise ValueError(f"invalid heuristic metric: {key}")
+    for hook in blueprint.hooks:
+        if not all(isinstance(value, str) for value in (hook.visual, hook.text, hook.emotional)):
+            raise ValueError("hook fields must be strings")
+        if not math.isfinite(float(hook.score)) or not 0.0 <= float(hook.score) <= 1.0:
+            raise ValueError("hook score must be between 0 and 1")
+    for clip in blueprint.clip_plan:
+        if not all(str(value).strip() for value in (clip.purpose, clip.emotion, clip.visual_style, clip.text_overlay, clip.camera_motion, clip.transition)):
+            raise ValueError(f"clip {clip.index} contains empty creative fields")
+    if not 40 <= int(blueprint.music.bpm) <= 240 or not math.isfinite(float(blueprint.music.beat_seconds)) or float(blueprint.music.beat_seconds) <= 0:
+        raise ValueError("blueprint music settings are invalid")
+    if not all(isinstance(tag, str) and tag.strip() for tag in blueprint.hashtags):
+        raise ValueError("blueprint hashtags must be non-empty strings")
+    if not all(isinstance(title, str) and title.strip() for title in blueprint.title_options):
+        raise ValueError("blueprint title options must be non-empty strings")
+    package_names = (
+        blueprint.packaging.final_video_name,
+        blueprint.packaging.thumbnail_name,
+        blueprint.packaging.vertical_thumbnail_name,
+        blueprint.packaging.upload_manifest_name,
+    )
+    if any(not isinstance(name, str) or not name.strip() or Path(name).name != name for name in package_names):
+        raise ValueError("packaging artifact names must be simple filenames")
+    if not isinstance(blueprint.qc.require_video, bool) or not isinstance(blueprint.qc.require_audio, bool) or not isinstance(blueprint.qc.require_independent_retention, bool):
+        raise ValueError("blueprint QC flags must be booleans")
     if not blueprint.quality.passed:
         raise ValueError("blueprint failed strict editorial QC")
 

@@ -43,3 +43,13 @@ uploads, knowledge data, and `/app/state/jobs.db` across container replacement.
 Before a production release, CI must pass Python tests, lint, dependency audit, CLI smoke tests,
 and the Docker build. A release should also include a real end-to-end render, cancellation/restart
 smoke tests, and human visual acceptance on the target operating system.
+
+## V3 contract and job-state guarantees
+
+V3 persists a typed, immutable blueprint and reads it back through `V3Blueprint.from_dict()` before rendering. The renderer consumes a derived `V3RenderPlan`; creative planning does not call FFmpeg.
+
+Job lifecycle transitions are enforced by the application storage boundary and SQLite trigger. Worker startup claims a queued job atomically, and a job only reaches `done` after its final artifact passes media validation. `error` and `interrupted` jobs can return to `queued` only through the bounded retry policy.
+
+Runtime configuration for timeouts, queue limits, retry limits, upload limits, disk thresholds, and cleanup windows is exposed through the typed `RuntimeConfig` boundary. Optional capabilities are reported independently from credentials.
+
+Transient media files are cleaned on V3 startup/failure. Final artifacts are promoted only after render validation; known temporary names use atomic replacement where supported.

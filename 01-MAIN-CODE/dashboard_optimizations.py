@@ -10,7 +10,8 @@ from typing import Any
 from flask import Response, abort, has_request_context, jsonify, request, send_file, send_from_directory
 
 from dashboard_cache import HybridCache
-from dashboard_store import DashboardStore, JobAdmissionError
+from dashboard_store import DashboardStore, JobAdmissionError, JobRetryNotAllowed
+from ai_video_factory.runtime_config import runtime_config
 from resource_governor import (
     MAX_JOB_STORAGE_BYTES,
     MAX_RENDER_WALLCLOCK_SECONDS,
@@ -78,7 +79,12 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         cache.delete("jobs:list")
 
     def db_update_job(job_id: str, **kwargs: Any) -> int:
-        result = store.update_job(job_id, **kwargs)
+        result = store.update_job_compat(job_id, **kwargs)
+        cache.delete("jobs:list")
+        return result
+
+    def db_claim_job(job_id: str) -> bool:
+        result = store.claim_job(job_id)
         cache.delete("jobs:list")
         return result
 
@@ -118,6 +124,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     app_module.init_db = init_db
     app_module.db_insert_job = db_insert_job
     app_module.db_update_job = db_update_job
+    app_module.db_claim_job = db_claim_job
     app_module.db_get_job = db_get_job
     app_module.db_append_log = db_append_log
     app_module.db_logs_since = db_logs_since
@@ -255,11 +262,12 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     def _database_cleanup() -> None:
         import time
         now = time.monotonic()
-        interval = max(300.0, float(os.environ.get("AIVF_DB_CLEANUP_INTERVAL_SECONDS", "3600")))
+        config = runtime_config()
+        interval = float(config.db_cleanup_interval_seconds)
         if now - cleanup_state["last"] < interval:
             return
         cleanup_state["last"] = now
-        days = max(1.0, float(os.environ.get("AIVF_DB_RETENTION_DAYS", os.environ.get("AIVF_RETENTION_DAYS", "30"))))
+        days = float(config.db_retention_days)
         cutoff = time.time() - days * 86400
         with store.connect() as conn:
             stale = conn.execute(
@@ -382,16 +390,16 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 "required_secret_keys": required_secret_keys,
                 "missing_secret_keys": missing_secret_keys,
             }), 409
-        changed = store.update_job_if_status(
-            job_id,
-            ("error", "interrupted"),
-            status="queued",
-            step="waiting",
-            error=None,
-            pkg_dir=None,
-        )
+        try:
+            changed = store.retry_job(
+                job_id,
+                max_attempts=runtime_config().max_job_retries,
+            )
+        except JobRetryNotAllowed as exc:
+            return jsonify({"error": str(exc), "job_id": job_id, "status": previous_status}), 409
         if not changed:
             return jsonify({"error": "Job changed before retry could start"}), 409
+
 
         app_module._runtime_secrets[job_id] = secrets
         cache.delete("jobs:list")
@@ -409,7 +417,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 pkg_dir=previous_pkg_dir,
             )
             cache.delete("jobs:list")
-            return jsonify({"error": f"Retry could not start: {exc}"}), 500
+            app_module.logger.exception("Retry worker failed to start for %s", job_id)
+            return jsonify({"error": "Retry could not start. The worker could not be started."}), 500
 
         final_job = app_module.db_get_job(job_id) or {}
         if final_job.get("status") == "error":

@@ -36,7 +36,8 @@ def test_apply_overlay_uses_argv_not_shell(monkeypatch, tmp_path):
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
 
-    monkeypatch.setattr(templates.subprocess, "run", fake_run)
+    monkeypatch.setattr(templates, "run_ffmpeg", fake_run)
+    monkeypatch.setattr(templates, "validate_media_output", lambda *args, **kwargs: None)
     input_clip = str(tmp_path / "clip; touch PWNED.mp4")
     overlay = str(tmp_path / "overlay.png")
     output = str(tmp_path / "out; touch PWNED.mp4")
@@ -49,9 +50,8 @@ def test_apply_overlay_uses_argv_not_shell(monkeypatch, tmp_path):
     assert input_clip in cmd
     assert overlay in cmd
     assert output in cmd
-    assert kwargs["check"] is True
     assert kwargs["timeout"] == 3600
-
+    assert isinstance(cmd, list)
 
 def test_mix_voiceover_preserves_program_audio_and_duration(monkeypatch, tmp_path):
     video = tmp_path / "video.mp4"

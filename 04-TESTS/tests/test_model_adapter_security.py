@@ -66,3 +66,18 @@ def test_model_input_is_bounded():
         model_adapter.call_model_result("x" * 100_001)
     with pytest.raises(ValueError, match="between 1 and 300"):
         model_adapter.call_model_result("hello", timeout=301)
+
+def test_model_script_parser_rejects_unstructured_or_malformed_output():
+    from ai_video_factory.production_pipeline import _normalize_model_script
+
+    assert _normalize_model_script("just write the script") == ""
+    assert _normalize_model_script('{"lines":["only one line"]}') == ""
+    assert _normalize_model_script('{"lines":[1, "two"]}') == ""
+    assert _normalize_model_script('{"lines":["one", "two"], "unexpected":"field"}') == ""
+
+
+def test_model_script_parser_accepts_strict_documented_shape():
+    from ai_video_factory.production_pipeline import _normalize_model_script
+
+    assert _normalize_model_script('{"lines":["Hook", "Payoff"]}') == "Hook\nPayoff"
+    assert _normalize_model_script('```json\n{"lines":["Hook", "Payoff"]}\n```') == "Hook\nPayoff"

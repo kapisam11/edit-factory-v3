@@ -12,9 +12,16 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ai_video_factory.job_state import validate_transition
+from ai_video_factory.retry_policy import backoff_seconds, is_retryable_error
+
 
 class JobAdmissionError(RuntimeError):
     """Raised when an atomic dashboard admission limit rejects a new job."""
+
+
+class JobRetryNotAllowed(RuntimeError):
+    """Raised when a retry is exhausted or the recorded failure is deterministic."""
 
 
 
@@ -52,12 +59,30 @@ class DashboardStore:
             except sqlite3.OperationalError as exc:
                 if attempt >= self.WRITE_RETRIES or not self._is_busy(exc):
                     raise
-                time.sleep(self.RETRY_DELAY_SECONDS * (2**attempt))
+                time.sleep(backoff_seconds(attempt + 1, base=self.RETRY_DELAY_SECONDS, cap=1.0))
         raise AssertionError("unreachable")
 
     def ensure_indexes(self) -> None:
-        """Add indexes that match the dashboard's queue/history query patterns."""
+        """Add indexes, retry state migration, and lifecycle guards."""
         with self.connect() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+            if "retry_count" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
+                BEFORE UPDATE OF status ON jobs
+                WHEN NOT (
+                    NEW.status = OLD.status OR
+                    (OLD.status = 'queued' AND NEW.status IN ('running','cancelling','cancelled','error','interrupted')) OR
+                    (OLD.status = 'running' AND NEW.status IN ('cancelling','cancelled','done','error','interrupted')) OR
+                    (OLD.status = 'cancelling' AND NEW.status IN ('cancelled','error','interrupted')) OR
+                    (OLD.status IN ('done','cancelled')) OR
+                    (OLD.status IN ('error','interrupted') AND NEW.status = 'queued')
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid job status transition');
+                END
+            """)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_created "
                 "ON jobs(status, created_at)"
@@ -129,15 +154,58 @@ class DashboardStore:
             raise ValueError(f"Invalid job fields: {sorted(invalid)}")
         if not kwargs:
             return 0
-        fields = ", ".join(f"{key}=?" for key in kwargs)
-        return int(
-            self.write(
-                lambda conn: conn.execute(
-                    f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    list(kwargs.values()) + [job_id],
+
+        def write(conn: sqlite3.Connection) -> int:
+            if "status" in kwargs:
+                row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+                if row is None:
+                    return 0
+                validate_transition(str(row["status"]), str(kwargs["status"]))
+            fields = ", ".join(f"{key}=?" for key in kwargs)
+            return int(conn.execute(
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                list(kwargs.values()) + [job_id],
+            ).rowcount)
+
+        return int(self.write(write))
+
+    def update_job_compat(self, job_id: str, **kwargs: Any) -> int:
+        """Preserve the legacy direct-completion helper without weakening lifecycle rules."""
+        if kwargs.get("status") != "done":
+            return self.update_job(job_id, **kwargs)
+
+        def write(conn: sqlite3.Connection) -> int:
+            row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                return 0
+            current = str(row["status"])
+            if current == "queued":
+                changed = conn.execute(
+                    "UPDATE jobs SET status='running', step='starting', updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='queued'",
+                    (job_id,),
                 ).rowcount
-            )
+                if changed != 1:
+                    return 0
+                current = "running"
+            validate_transition(current, "done")
+            fields = ", ".join(f"{key}=?" for key in kwargs)
+            return int(conn.execute(
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                list(kwargs.values()) + [job_id],
+            ).rowcount)
+
+        return int(self.write(write))
+    def claim_job(self, job_id: str) -> bool:
+        """Atomically claim one queued job before starting a worker process."""
+        changed = self.update_job_if_status(
+            job_id,
+            ("queued",),
+            status="running",
+            step="starting",
+            error=None,
         )
+        return changed == 1
 
     def update_job_if_status(
         self,
@@ -149,18 +217,52 @@ class DashboardStore:
         invalid = set(kwargs) - allowed
         if invalid or not kwargs or not expected_statuses:
             raise ValueError("Invalid conditional job update")
-        fields = ", ".join(f"{key}=?" for key in kwargs)
-        placeholders = ",".join("?" for _ in expected_statuses)
-        values = list(kwargs.values()) + [job_id, *expected_statuses]
-        return int(
-            self.write(
-                lambda conn: conn.execute(
-                    f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
-                    f"WHERE id=? AND status IN ({placeholders})",
-                    values,
-                ).rowcount
-            )
-        )
+
+        def write(conn: sqlite3.Connection) -> int:
+            row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None or str(row["status"]) not in expected_statuses:
+                return 0
+            if "status" in kwargs:
+                validate_transition(str(row["status"]), str(kwargs["status"]))
+            fields = ", ".join(f"{key}=?" for key in kwargs)
+            values = list(kwargs.values()) + [job_id, *expected_statuses]
+            placeholders = ",".join("?" for _ in expected_statuses)
+            return int(conn.execute(
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
+                f"WHERE id=? AND status IN ({placeholders})",
+                values,
+            ).rowcount)
+
+        return int(self.write(write))
+
+    def retry_job(self, job_id: str, *, max_attempts: int = 3) -> int:
+        """Atomically requeue one failed/interrupted job after retry-policy checks."""
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+
+        def write(conn: sqlite3.Connection) -> int:
+            row = conn.execute(
+                "SELECT status, error, retry_count FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return 0
+            status = str(row["status"])
+            if status not in {"error", "interrupted"}:
+                raise JobRetryNotAllowed("only failed or interrupted jobs can be retried")
+            attempts = int(row["retry_count"] or 0)
+            if attempts >= max_attempts:
+                raise JobRetryNotAllowed("maximum retry attempts reached")
+            if status == "error" and row["error"]:
+                if not is_retryable_error(RuntimeError(str(row["error"]))):
+                    raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
+            return int(conn.execute(
+                "UPDATE jobs SET status='queued', step='waiting', error=NULL, pkg_dir=NULL, "
+                "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
+                (job_id, max_attempts),
+            ).rowcount)
+
+        return int(self.write(write))
 
     def get_job(self, job_id: str) -> Optional[dict]:
         with self.connect() as conn:

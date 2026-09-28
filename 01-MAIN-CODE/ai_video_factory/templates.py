@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 from typing import List
 from . import psd_utils
+from .render_engine import run_ffmpeg, validate_media_output
 
 
 def find_templates(search_dirs: List[str] = None) -> List[str]:
@@ -58,7 +59,8 @@ def apply_overlay(input_clip: str, overlay_png: str, out_clip: str) -> None:
             "-c:a", "copy",
             out_clip,
         ]
-        subprocess.run(cmd, check=True, timeout=3600)
+        run_ffmpeg(cmd, timeout=3600)
+        validate_media_output(out_clip, require_video=True, require_audio=False)
     finally:
         if tmp_png and os.path.exists(tmp_png):
             try:

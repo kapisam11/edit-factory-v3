@@ -31,3 +31,33 @@ def test_unknown_provider_is_rejected():
         pass
     else:
         raise AssertionError("unknown providers must be rejected")
+
+
+
+def test_config_validation_rejects_unknown_active_pipeline():
+    config = AIVFConfig(active_pipeline="missing")
+    try:
+        config.validate()
+    except ValueError as exc:
+        assert "active_pipeline" in str(exc)
+    else:
+        raise AssertionError("unknown active pipeline must be rejected")
+
+
+def test_config_save_is_not_left_with_partial_file_on_failure(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    config = AIVFConfig()
+    original_replace = __import__("os").replace
+    def fail_replace(*args, **kwargs):
+        raise OSError("simulated replace failure")
+    monkeypatch.setattr(__import__("os"), "replace", fail_replace)
+    try:
+        config.save(str(path))
+    except OSError:
+        pass
+    else:
+        raise AssertionError("simulated atomic replace failure must propagate")
+    partials = list(tmp_path.glob(".aivf-config-*.partial"))
+    assert not partials
+    assert not path.exists()
+    monkeypatch.setattr(__import__("os"), "replace", original_replace)

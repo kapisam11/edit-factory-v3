@@ -105,7 +105,7 @@ result = run_v3_pipeline(
 )
 ```
 
-`run_v3_pipeline()` writes `v3_blueprint.json` first and then hands the creative brief to the existing production renderer so v3 planning does not duplicate the proven media execution path.
+`run_v3_pipeline()` atomically writes `v3_blueprint.json`, reads it back through the strict V3 contract, validates the deserialized blueprint, and only then hands a serialized creative brief to the existing production renderer. This keeps V3 planning separate from the proven media execution path.
 
 ## Repository map
 
@@ -130,7 +130,7 @@ Edit Factory v3
 └── 99-ARCHIVE/                       <- retired material
 ```
 
-Start with **[00-INFO/00-START-HERE.md](00-INFO/00-START-HERE.md)**. The concrete 40-point implementation mapping is documented in **[00-INFO/40-POINT-IMPLEMENTATION.md](00-INFO/40-POINT-IMPLEMENTATION.md)**.
+Start with **[00-INFO/00-START-HERE.md](00-INFO/00-START-HERE.md)**. The V3 intermediate-representation contract is documented in **[00-INFO/V3-BLUEPRINT-CONTRACT.md](00-INFO/V3-BLUEPRINT-CONTRACT.md)**, and the concrete 40-point implementation mapping is documented in **[00-INFO/40-POINT-IMPLEMENTATION.md](00-INFO/40-POINT-IMPLEMENTATION.md)**.
 
 ## Dashboard
 

@@ -129,6 +129,7 @@ def test_worker_dispatches_v3_to_real_v3_pipeline(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(v3_pipeline, "run_v3_pipeline", fake_run_v3_pipeline)
+    monkeypatch.setattr(appmod, "_artifact_is_valid", lambda _path: True)
 
     appmod._run_job_worker_impl(
         "job-v3-worker",
