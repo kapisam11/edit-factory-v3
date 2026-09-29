@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from .ai_gateway import reject_prompt_injection
+
 def parse_script_lines_response(response: str, *, min_lines: int = 2, max_lines: int = 40) -> Optional[list[str]]:
     """Parse only a JSON object containing a bounded list of non-empty strings."""
     text = str(response or "").strip()
@@ -27,6 +29,9 @@ def parse_script_lines_response(response: str, *, min_lines: int = 2, max_lines:
         return None
     if any(not isinstance(line, str) or not line.strip() or len(line) > 300 for line in lines):
         return None
-    return [line.strip() for line in lines]
+    cleaned = [line.strip() for line in lines]
+    if any(reject_prompt_injection(line) for line in cleaned):
+        return None
+    return cleaned
 
 __all__ = ["parse_script_lines_response"]
