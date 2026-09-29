@@ -83,6 +83,10 @@ def _source_records(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "rights_basis": _normalize_phrase(str(raw.get("rights_basis") or "")),
             "rights_status": _normalize_phrase(str(raw.get("rights_status") or "review_required")).lower(),
             "source": _normalize_phrase(str(raw.get("source") or default_source)).lower(),
+            "evidence_url": str(raw.get("evidence_url") or raw.get("permission_url") or "").strip(),
+            "declared_by": _normalize_phrase(str(raw.get("declared_by") or "")),
+            "declared_at": str(raw.get("declared_at") or "").strip(),
+            "attribution": _normalize_phrase(str(raw.get("attribution") or "")),
         }
         key = record["url"] or (record["creator"], record["title"], record["source"])
         if key and key not in seen and (record["title"] or record["creator"] or record["url"]):
