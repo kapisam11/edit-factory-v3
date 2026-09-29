@@ -181,3 +181,28 @@ def test_dashboard_emits_nonce_based_csp(monkeypatch):
     assert "script-src 'self' 'nonce-" in policy
     assert "script-src-attr 'unsafe-inline'" in policy
     assert "'unsafe-inline'" not in policy.split("script-src ", 1)[1].split(";", 1)[0]
+
+
+def test_multi_user_tokens_set_identity_and_role(monkeypatch):
+    import json
+    monkeypatch.setenv(
+        "AIVF_DASHBOARD_USERS",
+        json.dumps({
+            "alice": {"token": "alice-token", "role": "editor"},
+            "bob": {"token": "bob-token", "role": "viewer"},
+        }),
+    )
+    app = _load(monkeypatch)
+    alice = app.test_client()
+    response = alice.post("/login", data={"token": "alice-token"})
+    assert response.status_code == 302
+    with alice.session_transaction() as state:
+        assert state["aivf_user_id"] == "alice"
+        assert state["aivf_role"] == "editor"
+
+    bob = app.test_client()
+    response = bob.post("/login", data={"token": "bob-token"})
+    assert response.status_code == 302
+    with bob.session_transaction() as state:
+        assert state["aivf_user_id"] == "bob"
+        assert state["aivf_role"] == "viewer"
