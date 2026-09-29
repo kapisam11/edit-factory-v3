@@ -110,15 +110,28 @@ def diagnose_environment(*, required_tools: Iterable[str] = ("ffmpeg", "ffprobe"
     return results
 
 def redact_mapping(payload: Mapping[str, Any], *, secret_names: Iterable[str] = ()) -> dict[str, Any]:
+    """Recursively redact secret-like keys in mappings and nested sequences."""
     secrets = {str(name).lower() for name in secret_names}
-    out = {}
-    for key, value in payload.items():
-        normalized = str(key).lower()
-        if normalized in secrets or any(x in normalized for x in ("token","secret","password","api_key","authorization")):
-            out[str(key)] = "[REDACTED]"
-        else:
-            out[str(key)] = value
-    return out
+    markers = ("token", "secret", "password", "api_key", "authorization")
+
+    def clean(value: Any, depth: int) -> Any:
+        if depth > 8:
+            return "[TRUNCATED]"
+        if isinstance(value, Mapping):
+            result: dict[str, Any] = {}
+            for key, item in value.items():
+                normalized = str(key).lower()
+                if normalized in secrets or any(marker in normalized for marker in markers):
+                    result[str(key)] = "[REDACTED]"
+                else:
+                    result[str(key)] = clean(item, depth + 1)
+            return result
+        if isinstance(value, (list, tuple)):
+            return [clean(item, depth + 1) for item in value]
+        return value
+
+    result = clean(payload, 0)
+    return dict(result)
 
 __all__ = ["Diagnostic","GuardrailError","ToolResult","atomic_write_bytes","atomic_write_json","diagnose_environment",
            "executable_path","free_disk_bytes","redact_mapping","require_free_disk","run_tool","safe_filename",
