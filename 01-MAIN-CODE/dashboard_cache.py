@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import os
 import time
 from typing import Any, Optional
 
@@ -18,9 +19,14 @@ logger = logging.getLogger(__name__)
 class HybridCache:
     """Thread-safe local TTL cache with optional Redis backing."""
 
-    def __init__(self, redis_url: Optional[str] = None):
+    def __init__(self, redis_url: Optional[str] = None, *, max_entries: int | None = None):
         self._local: dict[str, tuple[float, Any]] = {}
         self._lock = threading.RLock()
+        configured = os.environ.get("AIVF_CACHE_MAX_ENTRIES", "512") if max_entries is None else str(max_entries)
+        try:
+            self._max_entries = max(16, min(int(configured), 10000))
+        except ValueError:
+            self._max_entries = 512
         self._redis = None
         self._redis_url = (redis_url or "").strip()
         if self._redis_url:
@@ -71,6 +77,13 @@ class HybridCache:
         expires_at = time.monotonic() + ttl_seconds
         with self._lock:
             self._local[key] = (expires_at, value)
+            if len(self._local) > self._max_entries:
+                oldest_key = min(
+                    self._local,
+                    key=lambda cache_key: self._local[cache_key][0],
+                )
+                if oldest_key != key:
+                    self._local.pop(oldest_key, None)
         if self._redis is not None:
             try:
                 self._redis.setex(key, self._remaining_ttl(expires_at), json.dumps(value))
@@ -89,3 +102,19 @@ class HybridCache:
     def clear(self) -> None:
         with self._lock:
             self._local.clear()
+        if self._redis is not None:
+            try:
+                self._redis.flushdb()
+            except Exception as exc:
+                logger.debug("Redis cache clear failed: %s", exc)
+
+    def prune(self) -> int:
+        """Remove expired local entries and return the number removed."""
+        now = time.monotonic()
+        removed = 0
+        with self._lock:
+            for key, (expires_at, _) in list(self._local.items()):
+                if expires_at <= now:
+                    self._local.pop(key, None)
+                    removed += 1
+        return removed
