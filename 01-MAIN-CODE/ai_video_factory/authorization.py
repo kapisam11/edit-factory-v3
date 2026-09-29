@@ -1,9 +1,9 @@
 """Small role-based authorization contract shared by dashboard and workers."""
 from __future__ import annotations
-from enum import StrEnum
+from enum import Enum
 from typing import Iterable
 
-class Role(StrEnum):
+class Role(str, Enum):
     VIEWER="viewer"
     EDITOR="editor"
     ADMIN="admin"
