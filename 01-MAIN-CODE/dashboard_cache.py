@@ -29,6 +29,7 @@ class HybridCache:
             self._max_entries = 512
         self._redis = None
         self._redis_url = (redis_url or "").strip()
+        self._redis_prefix = "aivf:dashboard:"
         if self._redis_url:
             self._connect_redis()
 
@@ -53,6 +54,9 @@ class HybridCache:
     def _remaining_ttl(expires_at: float) -> int:
         return max(1, int(expires_at - time.monotonic()))
 
+    def _redis_key(self, key: str) -> str:
+        return f"{self._redis_prefix}{key}"
+
     def get_json(self, key: str) -> Any:
         now = time.monotonic()
         with self._lock:
@@ -65,7 +69,7 @@ class HybridCache:
 
         if self._redis is not None:
             try:
-                payload = self._redis.get(key)
+                payload = self._redis.get(self._redis_key(key))
                 if payload:
                     return json.loads(payload)
             except Exception as exc:
@@ -86,7 +90,7 @@ class HybridCache:
                     self._local.pop(oldest_key, None)
         if self._redis is not None:
             try:
-                self._redis.setex(key, self._remaining_ttl(expires_at), json.dumps(value))
+                self._redis.setex(self._redis_key(key), self._remaining_ttl(expires_at), json.dumps(value))
             except Exception as exc:
                 logger.debug("Redis cache write failed for %s: %s", key, exc)
 
@@ -95,7 +99,7 @@ class HybridCache:
             self._local.pop(key, None)
         if self._redis is not None:
             try:
-                self._redis.delete(key)
+                self._redis.delete(self._redis_key(key))
             except Exception as exc:
                 logger.debug("Redis cache delete failed for %s: %s", key, exc)
 
@@ -104,7 +108,9 @@ class HybridCache:
             self._local.clear()
         if self._redis is not None:
             try:
-                self._redis.flushdb()
+                keys = list(self._redis.scan_iter(match=f"{self._redis_prefix}*"))
+                if keys:
+                    self._redis.delete(*keys)
             except Exception as exc:
                 logger.debug("Redis cache clear failed: %s", exc)
 
