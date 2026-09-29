@@ -34,7 +34,7 @@ def build_asset_record(
         raise FileNotFoundError(target)
     record: dict[str, Any] = {
         "asset_id": str(asset_id),
-        "path": str(target),
+        "path": target.name,
         "source": str(source or "unknown"),
         "source_url": str(source_url or ""),
         "rights_status": normalize_rights_status(rights_status),
