@@ -1,7 +1,6 @@
 """Deterministic thumbnail quality scoring and variant selection."""
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from typing import Iterable
 
