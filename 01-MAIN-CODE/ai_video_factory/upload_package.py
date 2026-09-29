@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -198,7 +199,7 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
         if item.get("rights_status") != "cleared"
         and item.get("rights_basis") not in cleared_bases
     ]
-    strict_rights = str(__import__("os").environ.get("AIVF_STRICT_RIGHTS", "1")) == "1"
+    strict_rights = os.environ.get("AIVF_STRICT_RIGHTS", "1") == "1"
     evidence_records = []
     for item in records:
         evidence_records.append({
@@ -525,11 +526,9 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         fact_reviewed=bool(summary.get("facts_reviewed", False)),
     )
     human_review = review_gate(summary.get("human_review"))
-    require_human_review = str(__import__("os").environ.get("AIVF_REQUIRE_HUMAN_REVIEW", "1")) == "1"
-    if not human_review["publish_blocked"] and human_review["status"] == "approved":
-        human_review["required"] = require_human_review
-    else:
-        human_review["required"] = require_human_review
+    require_human_review = os.environ.get("AIVF_REQUIRE_HUMAN_REVIEW", "1") == "1"
+    human_review["required"] = require_human_review
+    upload_dir = root / "upload" / profile.name
     upload_dir.mkdir(parents=True, exist_ok=True)
     (upload_dir / "title.txt").write_text(chosen_title + "\n", encoding="utf-8")
     (upload_dir / "description.txt").write_text(description + "\n", encoding="utf-8")
