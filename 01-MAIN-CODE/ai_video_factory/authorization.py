@@ -11,8 +11,12 @@ class Role(str, Enum):
 _RANK={Role.VIEWER:10,Role.EDITOR:20,Role.ADMIN:30}
 
 def normalize_role(value:str|Role|None)->Role:
-    try: return Role(str(value or "viewer").strip().lower())
-    except ValueError as exc: raise ValueError(f"unsupported role: {value!r}") from exc
+    if isinstance(value, Role):
+        return value
+    try:
+        return Role(str(value or "viewer").strip().lower())
+    except ValueError as exc:
+        raise ValueError(f"unsupported role: {value!r}") from exc
 
 def role_allows(role:str|Role, required:str|Role)->bool:
     return _RANK[normalize_role(role)] >= _RANK[normalize_role(required)]
