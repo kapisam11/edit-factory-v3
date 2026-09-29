@@ -24,7 +24,6 @@ dev = ["pytest>=7.0", "pytest-cov>=5.0", "mypy>=1.0", "ruff>=0.6.0", "build>=1.2
 audit = ["pip-audit>=2.9.0"]
 beats = ["librosa>=0.10.0"]
 vision = ["opencv-python-headless>=4.8.0"]
-scenes = ["scenedetect>=0.6.6"]
 ocr = ["pytesseract>=0.3.10", "opencv-python-headless>=4.8.0"]
 diarization = ["pyannote.audio>=3.1.0"]
 intelligence = ["sentence-transformers>=3.0.0"]
