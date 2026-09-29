@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .hardware import choose_encoder, ffmpeg_preset_for, hardware_capability_report
+from .render_engine import validate_media_output
 
 
 def encode_smoke(output: str | Path, duration: float = 2.0) -> dict[str, Any]:
@@ -23,12 +24,25 @@ def encode_smoke(output: str | Path, duration: float = 2.0) -> dict[str, Any]:
     if "bitrate" in preset: command += ["-b:v",preset["bitrate"]]
     command.append(str(target))
     result=subprocess.run(command,capture_output=True,text=True,timeout=max(30,int(duration*20)),check=False)
+    valid = False
+    duration_report = None
+    validation_error = ""
+    if result.returncode == 0 and target.is_file() and target.stat().st_size > 0:
+        try:
+            duration_report = validate_media_output(str(target), require_video=True, require_audio=False)
+            valid = abs(float(duration_report["format"]["duration"]) - float(duration)) <= 0.5
+            if not valid:
+                validation_error = "encoded duration differs from requested duration"
+        except (OSError, RuntimeError, ValueError) as exc:
+            validation_error = str(exc)
     return {
-        "encoder":encoder,
-        "success":result.returncode==0 and target.is_file() and target.stat().st_size>0,
-        "returncode":result.returncode,
-        "stderr":(result.stderr or "")[-2000:],
-        "output":str(target),
+        "encoder": encoder,
+        "success": valid,
+        "returncode": result.returncode,
+        "stderr": (result.stderr or "")[-2000:],
+        "output": str(target),
+        "validation": duration_report,
+        "validation_error": validation_error,
     }
 
 
