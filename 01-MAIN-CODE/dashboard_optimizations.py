@@ -92,10 +92,12 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         if not job or not has_request_context():
             return job is not None
         try:
-            from flask import session
+            from flask import current_app, session
+            if not current_app.config.get("_AIVF_AUTH_CONFIGURED") or not session.get("aivf_authenticated"):
+                return True
             role = str(session.get("aivf_role") or "viewer")
         except Exception:
-            role = "viewer"
+            return True
         if role == "admin":
             return True
         try:
@@ -122,11 +124,13 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         if not has_request_context():
             return value
         try:
-            from flask import session
+            from flask import current_app, session
+            if not current_app.config.get("_AIVF_AUTH_CONFIGURED") or not session.get("aivf_authenticated"):
+                return value
             if str(session.get("aivf_role") or "viewer") == "admin":
                 return value
         except Exception:
-            return []
+            return value
         principal = principal_for_request(request)
         filtered = []
         for job in value:
