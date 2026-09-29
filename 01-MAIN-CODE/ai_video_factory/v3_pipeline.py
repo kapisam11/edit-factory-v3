@@ -17,6 +17,11 @@ from .v3_capabilities import validate_capabilities
 from .v3_engine import V3Blueprint, V3Config, create_v3_blueprint, validate_blueprint
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
 from .v3_semantic_qc import analyze_render_semantics
+from .media_health import MediaHealthError, analyze_media
+from .metadata_guardrails import build_upload_metadata
+from .provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest, write_provenance
+from .system_diagnostics import diagnostics_report, write_diagnostics
+from .production_guardrails import atomic_write_json, require_free_disk
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
@@ -108,17 +113,7 @@ def _validate_timeline_contract(package: Path, blueprint_payload: Dict[str, Any]
 
 
 def _atomic_json_write(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_path = tempfile.mkstemp(prefix=".aivf-", suffix=".partial", dir=str(path.parent), text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, indent=2, ensure_ascii=False)
-            handle.flush(); os.fsync(handle.fileno())
-        os.replace(temp_path, path)
-    except BaseException:
-        try: os.unlink(temp_path)
-        except OSError: pass
-        raise
+    atomic_write_json(path, payload)
 
 
 def _validate_v3_inputs(input_video: str, topic: str, target_seconds: float, platform: str, audience: str, bpm: int) -> None:
@@ -326,6 +321,13 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     _validate_v3_inputs(input_video, topic, target_seconds, platform, audience, bpm)
     package = Path(package_dir)
     package.mkdir(parents=True, exist_ok=True)
+    try:
+        minimum_free_mb = int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "512"))
+    except ValueError as exc:
+        raise ValueError("AIVF_MIN_FREE_DISK_MB must be an integer") from exc
+    if minimum_free_mb < 0:
+        raise ValueError("AIVF_MIN_FREE_DISK_MB cannot be negative")
+    require_free_disk(package, minimum_free_mb * 1024 * 1024)
     _cleanup_v3_transients(package)
     blueprint, payload, blueprint_path = _prepare_blueprint(
         topic, context, target_seconds, platform, audience, bpm, package, edit_type, source_metadata
@@ -338,6 +340,8 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     if semantic_qc_disabled and (environment not in {"development", "test"} or not qc_override):
         raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
     try:
+        source_health = analyze_media(input_video, deep=False)
+        _atomic_json_write(package / "source_media_health.json", source_health)
         footage_evidence = _build_footage_evidence(input_video, enable_ocr, min_scenes=len(blueprint.clip_plan))
     except Exception as exc:
         raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
@@ -358,6 +362,16 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             final_video, baseline_path, render_report = _finalize_v3_media(
                 result, package, payload, target_seconds
             )
+            final_health = analyze_media(
+                final_video,
+                deep=os.environ.get("AIVF_DEEP_FINAL_MEDIA_QC", "1").strip() != "0",
+            )
+            _atomic_json_write(package / "final_media_health.json", final_health)
+            if not final_health.get("ok", False):
+                result.errors.extend(
+                    f"V3 final media health: {warning}"
+                    for warning in (final_health.get("warnings") or ["technical media defects detected"])
+                )
             semantic_report: Dict[str, Any] = {"ok": True, "mode": "disabled"}
             if not semantic_qc_disabled:
                 semantic_report = analyze_render_semantics(final_video)
@@ -374,6 +388,46 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 result.errors.extend("V3 render QC: " + e for e in render_report["errors"])
             result.warnings.extend("V3 render QC: " + w for w in render_report["warnings"])
             _apply_readiness_contract(result, readiness)
+
+            source_meta = source_metadata or {}
+            source_rights = str(source_meta.get("rights_status") or "review_required")
+            source_record = build_asset_record(
+                input_video,
+                asset_id="source_video",
+                source="user_upload",
+                source_url=str(source_meta.get("source_url") or ""),
+                rights_status=source_rights,
+                license_name=str(source_meta.get("license_name") or ""),
+                license_url=str(source_meta.get("license_url") or ""),
+                attribution=str(source_meta.get("attribution") or ""),
+            )
+            provenance = provenance_manifest(
+                package,
+                final_video=final_video,
+                assets=[source_record],
+                pipeline_version="3.0.0",
+            )
+            write_provenance(package / "provenance.json", provenance)
+            if manifest_needs_rights_review(provenance):
+                result.warnings.append("Media provenance contains assets requiring rights review")
+
+            metadata_report = build_upload_metadata(
+                topic,
+                summary=baseline_summary,
+                hook=str(baseline_summary.get("hook") or ""),
+            )
+            _atomic_json_write(package / "metadata_guardrails.json", metadata_report)
+            if not metadata_report["quality"]["ok"]:
+                result.warnings.extend(
+                    f"Metadata guardrail: {error}"
+                    for error in metadata_report["quality"]["errors"]
+                )
+
+            diagnostics = diagnostics_report(directories=[package])
+            write_diagnostics(package / "diagnostics.json", diagnostics)
+            if not diagnostics["ok"]:
+                result.warnings.append("Environment diagnostics reported one or more failed checks")
+
             if readiness.state == "UPLOAD_PACKAGE_VALID":
                 result.warnings.append("V3 artifact readiness: upload package validated; publish readiness is intentionally not claimed")
             _persist_v3_reports(package, result, render_report, semantic_report, readiness)
@@ -385,6 +439,11 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
         "v3_semantic_qc": str(package / "v3_semantic_qc.json"),
         "v3_readiness": str(package / "v3_readiness.json"),
         "v3_baseline": str(package / "v3_baseline.mp4"),
+        "source_media_health": str(package / "source_media_health.json"),
+        "final_media_health": str(package / "final_media_health.json"),
+        "provenance": str(package / "provenance.json"),
+        "metadata_guardrails": str(package / "metadata_guardrails.json"),
+        "diagnostics": str(package / "diagnostics.json"),
         "v3_renderer_bridge": "ai_video_factory.v3_renderer_bridge",
         "v3_acceptance_matrix": "00-INFO/24-POINT-ACCEPTANCE.md",
     })

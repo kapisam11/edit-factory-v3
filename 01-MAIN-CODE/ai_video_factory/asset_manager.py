@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .production_guardrails import safe_filename, validate_path_inside
+
 
 class AssetManager:
     """Central manager for reusable media assets."""
@@ -21,14 +23,30 @@ class AssetManager:
                        "sfx", "fonts", "overlays"]:
             (self.root / subdir).mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _component(value: str, label: str) -> str:
+        component = str(value or "").strip()
+        if not component or component in {".", ".."} or "/" in component or "\\" in component or ":" in component:
+            raise ValueError(f"invalid asset {label}")
+        return component
+
+    def _safe_asset_path(self, *parts: str) -> Path:
+        validated = [self._component(part, "path component") for part in parts]
+        candidate = self.root.joinpath(*validated)
+        return validate_path_inside(self.root, candidate)
+
     def resolve(self, uri: str) -> Optional[Path]:
         if not uri.startswith("assets://"):
             p = Path(uri)
             return p if p.exists() else None
-        parts = uri.replace("assets://", "").split("/")
-        path = self.root
-        for part in parts:
-            path = path / part
+        raw = uri[len("assets://"):].strip("/")
+        parts = [part for part in raw.split("/") if part]
+        if not parts:
+            return None
+        try:
+            path = self._safe_asset_path(*parts)
+        except ValueError:
+            return None
         return path if path.exists() else None
 
     def list_assets(self, category: str, subcategory: Optional[str] = None) -> List[Dict]:
@@ -56,15 +74,19 @@ class AssetManager:
     def import_asset(self, source_path: str, category: str, subcategory: Optional[str] = None,
                      metadata: Optional[Dict] = None) -> str:
         src = Path(source_path)
-        dest_dir = self.root / category
-        if subcategory:
-            dest_dir = dest_dir / subcategory
+        if not src.is_file():
+            raise FileNotFoundError(src)
+        category = self._component(category, "category")
+        sub = self._component(subcategory, "subcategory") if subcategory else None
+        dest_dir = self._safe_asset_path(category, *( [sub] if sub else [] ))
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / src.name
+        filename = safe_filename(src.name, fallback="asset")
+        dest = validate_path_inside(self.root, dest_dir / filename)
         shutil.copy2(src, dest)
         if metadata:
             dest.with_suffix(".json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        return f"assets://{category}/{subcategory or ''}/{src.name}".replace("//", "/")
+        uri_parts = [category] + ([sub] if sub else []) + [filename]
+        return "assets://" + "/".join(uri_parts)
 
     def get_random_music(self, mood: str) -> Optional[str]:
         tracks = self.list_assets("music", mood)

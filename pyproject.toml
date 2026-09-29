@@ -13,6 +13,7 @@ dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "edge-tts>=6.1.0", "numpy>=
 
 [project.scripts]
 aivf = "app.cli:main"
+aivf-diagnose = "ai_video_factory.diagnostics_cli:main"
 aivf-content = "app.content_factory_cli:main"
 aivf-v3 = "ai_video_factory.v3_cli:main"
 
