@@ -92,16 +92,25 @@ def run_completeness(root: str | Path = ".") -> list[CompletenessCheck]:
             "PASS" if cleanup["orphans"] >= 1 else "BLOCKED",
             json.dumps(cleanup, sort_keys=True),
         ))
-        # Keep a tiny media artifact benchmark local and deterministic when FFmpeg
-        # integration is not being exercised by this command.
-        sample = Path(tmp) / "sample.txt"
-        sample.write_bytes(b"benchmark")
-        benchmark = benchmark_many([sample])
-        checks.append(CompletenessCheck(
-            "benchmark-suite",
-            "PASS" if benchmark["count"] == 1 else "BLOCKED",
-            f"{benchmark['total_bytes']} bytes measured",
-        ))
+        sample = Path(tmp) / "sample.mp4"
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            from .render_engine import run_ffmpeg
+            run_ffmpeg([
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
+                "-t", "1", "-an", "-c:v", "libx264", str(sample),
+            ], timeout=120)
+            benchmark = benchmark_many([sample])
+            checks.append(CompletenessCheck(
+                "benchmark-suite",
+                "PASS" if benchmark["count"] == 1 and benchmark["results"][0]["probe"]["streams"] else "BLOCKED",
+                f"{benchmark['total_bytes']} bytes measured",
+            ))
+        else:
+            checks.append(CompletenessCheck(
+                "benchmark-suite", "ENVIRONMENT", "FFmpeg is required for media benchmark execution"
+            ))
 
     copyright_result = copyright_gate(
         [CopyrightEvidence(
