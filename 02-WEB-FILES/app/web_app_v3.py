@@ -739,6 +739,9 @@ def index():
 @app.route("/api/settings", methods=["GET", "POST"])
 def settings():
     if request.method == "POST":
+        role_gate = app.extensions.get("aivf_require_role")
+        if callable(role_gate):
+            role_gate("admin")
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
             return jsonify({"error": "Settings payload must be a JSON object"}), 400
