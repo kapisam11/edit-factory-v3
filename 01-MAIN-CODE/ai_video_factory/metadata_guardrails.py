@@ -5,6 +5,8 @@ import re
 from collections import Counter
 from typing import Any, Mapping, Sequence
 
+from .factuality_guard import metadata_fact_gate
+
 def _clean(text: str, max_length: int) -> str:
     value = re.sub(r"[\x00-\x1f\x7f]", " ", str(text or ""))
     value = re.sub(r"\s+", " ", value).strip()
@@ -79,11 +81,29 @@ def build_upload_metadata(
     hook: str = "",
     attribution: str = "",
 ) -> dict[str, Any]:
+    data = summary or {}
     title = normalize_title(topic, hook)
-    description = build_description(topic, summary, attribution)
-    text = " ".join([topic, hook, str((summary or {}).get("strongest_angle", ""))])
+    description = build_description(topic, data, attribution)
+    text = " ".join([topic, hook, str(data.get("strongest_angle", ""))])
     hashtags = hashtags_from_text(text)
-    return {"title": title, "description": description, "hashtags": hashtags, "quality": validate_metadata(title, description, hashtags)}
+    quality = validate_metadata(title, description, hashtags)
+    evidence = data.get("factual_evidence") or data.get("research_evidence") or []
+    factuality = metadata_fact_gate(
+        title,
+        description,
+        evidence=evidence if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)) else [],
+        fact_reviewed=bool(data.get("facts_reviewed", False)),
+    )
+    if factuality["publish_blocked"]:
+        quality["ok"] = False
+        quality["errors"].append("metadata contains numeric/date claims without verified evidence or explicit fact review")
+    return {
+        "title": title,
+        "description": description,
+        "hashtags": hashtags,
+        "factuality": factuality,
+        "quality": quality,
+    }
 
 def source_attribution_note(source: Mapping[str, Any]) -> str:
     status = str(source.get("rights_status") or "review_required")
