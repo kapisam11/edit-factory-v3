@@ -37,14 +37,15 @@ def build_description(topic: str, summary: Mapping[str, Any] | None = None, attr
 def duplicate_phrase_score(values: Sequence[str], phrase_words: int = 3) -> float:
     """Measure repetition inside individual fields, not intentional title/topic overlap."""
     n = max(2, int(phrase_words))
-    ratios = []
+    all_grams: list[tuple[str, ...]] = []
     for value in values:
         words = re.findall(r"[a-z0-9]+", str(value).lower())
-        grams = [tuple(words[i:i+n]) for i in range(max(0, len(words) - n + 1))]
-        if grams:
-            repeated = sum(count - 1 for count in Counter(grams).values() if count > 1)
-            ratios.append(repeated / max(1, len(grams)))
-    return round(min(1.0, sum(ratios) / max(1, len(ratios))), 4)
+        all_grams.extend(tuple(words[i:i+n]) for i in range(max(0, len(words) - n + 1)))
+    if not all_grams:
+        return 0.0
+    counts = Counter(all_grams)
+    repeated = sum(count - 1 for count in counts.values() if count > 1)
+    return round(min(1.0, repeated / max(1, len(all_grams))), 4)
 
 def metadata_quality_score(title: str, description: str, hashtags: Sequence[str]) -> float:
     score = 0.35 * (12 <= len(title.strip()) <= 100)
