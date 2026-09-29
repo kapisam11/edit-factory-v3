@@ -40,7 +40,14 @@ RESOURCE_RECONCILE_INTERVAL_SECONDS = max(
 
 
 def principal_for_request(request: Any) -> str:
-    """Return a stable principal without trusting spoofable proxy headers by default."""
+    """Return the authenticated user identity, falling back to the network peer."""
+    try:
+        from flask import session
+        user_id = str(session.get("aivf_user_id") or "").strip()
+        if user_id:
+            return user_id
+    except Exception:
+        pass
     remote = str(getattr(request, "remote_addr", None) or "unknown")
     if os.environ.get("AIVF_TRUST_PROXY_HEADERS", "0") == "1":
         forwarded = getattr(getattr(request, "headers", None), "get", lambda *_: None)("X-Forwarded-For")
