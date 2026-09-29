@@ -6,7 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any
-from .render_engine import run_ffmpeg
+from .render_engine import run_ffmpeg, validate_media_output
 
 class AudioNormalizationError(RuntimeError):
     pass
