@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ai_video_factory.ai_gateway import AIResponseError, classify_api_failure, parse_json_object, reject_prompt_injection, validate_confidence
-from ai_video_factory.job_recovery import classify_failure, idempotency_key, recovery_action, retry_delay
+from ai_video_factory.retry_policy import backoff_seconds, classify_failure, idempotency_key, is_stale, retry_after
 from ai_video_factory.metadata_guardrails import build_upload_metadata, duplicate_phrase_score, hashtags_from_text, validate_metadata
 from ai_video_factory.production_guardrails import GuardrailError, atomic_write_json, redact_mapping, safe_filename, validate_path_inside
 from ai_video_factory.provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest
@@ -41,9 +41,10 @@ def test_ai_output_guards() -> None:
 def test_retry_is_bounded_and_idempotent() -> None:
     assert classify_failure('connection timeout').retryable is True
     assert classify_failure('malformed input').retryable is False
-    assert retry_delay(1, key='job-a') <= retry_delay(4, key='job-a')
+    assert retry_after(1, key='job-a') <= retry_after(4, key='job-a')
+    assert backoff_seconds(3, base=1, cap=10) == 4
     assert idempotency_key({'topic': 'x'}) == idempotency_key({'topic': 'x'})
-    assert recovery_action('interrupted', retry_count=0) == 'retry'
+    assert is_stale(100, now=3700, stale_after_seconds=3600)
 
 def test_metadata_quality_guards() -> None:
     tags = hashtags_from_text('Minecraft survival clutch win final reveal')
