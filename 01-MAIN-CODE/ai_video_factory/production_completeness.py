@@ -34,6 +34,7 @@ class CompletenessCheck:
 def run_completeness(root: str | Path = ".") -> list[CompletenessCheck]:
     base = Path(root).resolve()
     checks: list[CompletenessCheck] = []
+    manual: list[str] = []
 
     findings = scan_repository(base)
     severe = high_severity(findings)
@@ -63,6 +64,9 @@ def run_completeness(root: str | Path = ".") -> list[CompletenessCheck]:
         "PASS" if "libx264" in encoders else "ENVIRONMENT",
         f"detected encoders: {', '.join(sorted(encoders)) or 'none'}",
     ))
+    for external_encoder in ("h264_nvenc", "h264_amf", "h264_qsv", "h264_vaapi"):
+        if external_encoder not in encoders:
+            manual.append(f"target hardware encoder unavailable in this runner: {external_encoder}")
 
     checks.append(CompletenessCheck(
         "human-quality-model",
@@ -126,6 +130,14 @@ def run_completeness(root: str | Path = ".") -> list[CompletenessCheck]:
         "PASS" if not copyright_result["publish_blocked"] else "BLOCKED",
         "rights and provider status are evaluated fail-closed",
     ))
+    checks.append(CompletenessCheck(
+        "external-copyright-verification",
+        "MANUAL",
+        "An external fingerprint/content-rights provider must be configured for live asset verification.",
+    ))
+    manual.append("configure and run an external copyright/content-rights provider for publish verification")
+    manual.append("run target-GPU hardware validation on the deployment host")
+    manual.append("run the optional 10+ GB valid-media decode/render workflow on the deployment host")
 
     return checks
 
@@ -133,10 +145,12 @@ def run_completeness(root: str | Path = ".") -> list[CompletenessCheck]:
 def report(root: str | Path = ".") -> dict[str, Any]:
     checks = run_completeness(root)
     blocked = [item for item in checks if item.status == "BLOCKED"]
+    manual = [item for item in checks if item.status in {"MANUAL", "ENVIRONMENT"}]
     return {
         "status": "ready" if not blocked else "blocked",
         "checks": [asdict(item) for item in checks],
         "blocked": len(blocked),
+        "manual_gates": len(manual),
     }
 
 
