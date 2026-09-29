@@ -12,6 +12,7 @@ from flask import Response, abort, has_request_context, jsonify, request, send_f
 from dashboard_cache import HybridCache
 from dashboard_store import DashboardStore, JobAdmissionError, JobRetryNotAllowed
 from ai_video_factory.runtime_config import runtime_config
+from ai_video_factory.job_recovery import should_recover
 from resource_governor import (
     MAX_JOB_STORAGE_BYTES,
     MAX_RENDER_WALLCLOCK_SECONDS,
@@ -296,6 +297,54 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     cleanup_state = {"last": 0.0}
 
+    def _reconcile_stale_jobs() -> int:
+        """Mark orphaned running jobs interrupted after a bounded stale timeout."""
+        try:
+            timeout_seconds = max(60.0, float(os.environ.get("AIVF_STALE_JOB_TIMEOUT_SECONDS", "3600")))
+        except (TypeError, ValueError):
+            timeout_seconds = 3600.0
+        now = __import__("time").time()
+        recovered = 0
+        try:
+            with store.connect() as conn:
+                rows = conn.execute(
+                    "SELECT id, status, updated_at FROM jobs WHERE status IN ('running','cancelling')"
+                ).fetchall()
+                for row in rows:
+                    job_id = str(row["id"])
+                    process = app_module._active_processes.get(job_id)
+                    if process is not None and process.is_alive():
+                        continue
+                    updated = str(row["updated_at"] or "").strip()
+                    try:
+                        seen = __import__("datetime").datetime.fromisoformat(updated).replace(
+                            tzinfo=__import__("datetime").timezone.utc
+                        ).timestamp()
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if not should_recover(
+                        heartbeat_epoch=None,
+                        last_seen_epoch=seen,
+                        now=now,
+                        timeout_seconds=timeout_seconds,
+                    ):
+                        continue
+                    cursor = conn.execute(
+                        "UPDATE jobs SET status='interrupted', step='interrupted', "
+                        "error=?, updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=? AND status IN ('running','cancelling')",
+                        ("Worker heartbeat expired and worker process is not running", job_id),
+                    )
+                    if cursor.rowcount:
+                        recovered += 1
+                        conn.execute(
+                            "INSERT INTO job_logs (job_id, level, message) VALUES (?, ?, ?)",
+                            (job_id, "ERROR", "Recovered stale worker job after heartbeat timeout"),
+                        )
+        except Exception:
+            app_module.logger.exception("Stale job reconciliation failed")
+        return recovered
+
     def _database_cleanup() -> None:
         import time
         now = time.monotonic()
@@ -349,6 +398,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         app_module._cleanup_runtime_secrets()
         if _is_media_request():
             return
+        _reconcile_stale_jobs()
         _database_cleanup()
 
     @app_module.app.get("/api/jobs/<job_id>/preview")
