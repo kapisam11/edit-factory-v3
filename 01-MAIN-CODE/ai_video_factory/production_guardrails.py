@@ -114,7 +114,7 @@ def redact_log_message(message: object, *, max_length: int = 4000) -> str:
         r"(?i)(\b(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+",
     )
     for pattern in patterns:
-        value = re.sub(pattern, r"\\1<REDACTED>", value)
+        value = re.sub(pattern, r"\1<REDACTED>", value)
     return value[:max(256, int(max_length))]
 
 
