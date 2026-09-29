@@ -417,7 +417,9 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 hook=str(baseline_summary.get("hook") or ""),
             )
             _atomic_json_write(package / "metadata_guardrails.json", metadata_report)
-            metadata_ok = bool(metadata_report["quality"]["ok"])
+            metadata_ok = bool(metadata_report["quality"]["ok"]) and not bool(
+                (metadata_report.get("factuality") or {}).get("publish_blocked")
+            )
             if not metadata_ok:
                 result.errors.extend(
                     f"Metadata guardrail: {error}"
