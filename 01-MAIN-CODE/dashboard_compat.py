@@ -37,8 +37,15 @@ def _terminate_process_tree(process):
 
 
 def _request_role() -> str:
-    from flask import session
-    return str(session.get("aivf_role") or "viewer").strip().lower()
+    from flask import current_app, has_request_context, session
+    if not has_request_context():
+        return "admin"
+    try:
+        if not current_app.config.get("_AIVF_AUTH_CONFIGURED") or not session.get("aivf_authenticated"):
+            return "admin"
+        return str(session.get("aivf_role") or "viewer").strip().lower()
+    except RuntimeError:
+        return "admin"
 
 
 def _package_access_allowed(web_app_v3, package) -> bool:
