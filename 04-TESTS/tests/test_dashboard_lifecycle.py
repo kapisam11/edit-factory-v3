@@ -409,7 +409,7 @@ def test_editor_cannot_cancel_another_principals_job(monkeypatch, tmp_path):
         session["aivf_authenticated"] = True
         session["aivf_user_id"] = "editor-user"
         session["aivf_role"] = "editor"
-        response = dashboard_compat.cancel_process("job-owner")
+        response = appmod.app.view_functions["cancel_process"]("job-owner")
 
     assert response[1] == 404
     assert appmod.db_get_job("job-owner") is None
@@ -432,14 +432,14 @@ def test_viewer_cannot_edit_package_or_cancel(monkeypatch, tmp_path):
         session["aivf_authenticated"] = True
         session["aivf_user_id"] = "viewer-user"
         session["aivf_role"] = "viewer"
-        response = dashboard_compat.compat_script(package.name)
+        response = appmod.app.view_functions["compat_script"](package.name)
         assert response[1] == 403
 
     with appmod.app.test_request_context(f"/api/jobs/{package.name}/cancel", method="POST"):
         session["aivf_authenticated"] = True
         session["aivf_user_id"] = "viewer-user"
         session["aivf_role"] = "viewer"
-        response = dashboard_compat.cancel_process("job-owner")
+        response = appmod.app.view_functions["cancel_process"]("job-owner")
         assert response[1] == 403
 
 
@@ -454,5 +454,5 @@ def test_admin_cleanup_requires_admin_role(monkeypatch, tmp_path):
         session["aivf_authenticated"] = True
         session["aivf_user_id"] = "viewer-user"
         session["aivf_role"] = "viewer"
-        response = dashboard_compat.cleanup_packages_admin()
+        response = appmod.app.view_functions["cleanup_packages_admin"]()
         assert response[1] == 403
