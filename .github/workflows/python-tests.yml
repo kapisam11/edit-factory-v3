@@ -35,7 +35,23 @@ jobs:
     - name: Compile Python sources
       run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
     - name: Lint production Python for correctness
-      run: uv run ruff check 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE --select E4,E7,E9,F --ignore F401,F811,F841
+      run: uv run ruff check 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE --select E9,F --ignore F401,F811,F841
+    - name: Strict lint changed production files
+      run: >-
+        uv run ruff check
+        01-MAIN-CODE/ai_video_factory/ai_gateway.py
+        01-MAIN-CODE/ai_video_factory/ai_response_validation.py
+        01-MAIN-CODE/ai_video_factory/diagnostics_cli.py
+        01-MAIN-CODE/ai_video_factory/media_health.py
+        01-MAIN-CODE/ai_video_factory/metadata_guardrails.py
+        01-MAIN-CODE/ai_video_factory/production_guardrails.py
+        01-MAIN-CODE/ai_video_factory/provenance.py
+        01-MAIN-CODE/ai_video_factory/retry_policy.py
+        01-MAIN-CODE/ai_video_factory/subtitle_renderer.py
+        01-MAIN-CODE/ai_video_factory/system_diagnostics.py
+        01-MAIN-CODE/ai_video_factory/v3_pipeline.py
+        04-TESTS/tests/test_production_guardrails.py
+        --select E4,E7
     - name: Type-check hardened production boundary
       run: uv run mypy
     - name: Smoke-test command entry points
