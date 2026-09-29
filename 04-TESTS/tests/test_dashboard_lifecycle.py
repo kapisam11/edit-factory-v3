@@ -352,3 +352,43 @@ def test_v3_preview_endpoint_serves_canonical_final_video(monkeypatch, tmp_path)
     assert response.status_code == 200
     assert response.data == b"fake-mp4"
     assert response.mimetype == "video/mp4"
+
+
+def test_dashboard_job_visibility_is_scoped_to_principal(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
+
+    monkeypatch.setenv("AIVF_DASHBOARD_USERS", '{"alice":{"token":"alice-token","role":"editor"},"bob":{"token":"bob-token","role":"viewer"}}')
+    import importlib
+    import dashboard_auth
+    importlib.reload(dashboard_auth)
+    dashboard_auth.configure_dashboard_auth(appmod.app)
+
+    alice = appmod.app.test_client()
+    assert alice.post("/login", data={"token": "alice-token"}).status_code == 302
+    with alice.session_transaction() as state:
+        state["aivf_user_id"] = "alice"
+        state["aivf_role"] = "editor"
+        state["aivf_authenticated"] = True
+    with appmod.app.test_request_context("/"):
+        from flask import session
+        session["aivf_user_id"] = "alice"
+        session["aivf_role"] = "editor"
+        session["aivf_authenticated"] = True
+        appmod.db_insert_job("job-alice", "alice", {"topic": "alice"})
+
+    bob = appmod.app.test_client()
+    assert bob.post("/login", data={"token": "bob-token"}).status_code == 302
+    response = bob.get("/api/jobs")
+    assert response.status_code == 200
+    assert response.get_json() == []
+
+    admin = appmod.app.test_client()
+    with admin.session_transaction() as state:
+        state["aivf_user_id"] = "admin"
+        state["aivf_role"] = "admin"
+        state["aivf_authenticated"] = True
+    response = admin.get("/api/jobs")
+    assert response.status_code == 200
+    assert any(item["id"] == "job-alice" for item in response.get_json())
