@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -104,6 +105,26 @@ def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None =
     stderr = (completed.stderr or "").strip()
     return ToolResult(args, completed.returncode, completed.stdout or "", stderr[-limit:])
 
+def redact_log_message(message: object, *, max_length: int = 4000) -> str:
+    """Redact common credential-bearing values before they reach logs."""
+    value = str(message or "")
+    patterns = (
+        r"(?i)(authorization\\s*[:=]\\s*bearer\\s+)[^\\s,;]+",
+        r"(?i)(\\b(?:api[_ -]?key|token|secret|password)\\s*[:=]\\s*)[^\\s,;]+",
+    )
+    for pattern in patterns:
+        value = re.sub(pattern, r"\\1<REDACTED>", value)
+    return value[:max(256, int(max_length))]
+
+
+class SecretRedactionFilter(__import__("logging").Filter):
+    """Logging filter for accidental credential leakage."""
+    def filter(self, record: object) -> bool:
+        record.msg = redact_log_message(record.getMessage())
+        record.args = ()
+        return True
+
+
 @dataclass(frozen=True)
 class Diagnostic:
     key: str
@@ -146,5 +167,5 @@ def redact_mapping(payload: Mapping[str, Any], *, secret_names: Iterable[str] = 
     return dict(result)
 
 __all__ = ["Diagnostic","GuardrailError","ToolResult","atomic_write_bytes","atomic_write_json","diagnose_environment",
-           "executable_path","free_disk_bytes","redact_mapping","require_free_disk","run_tool","safe_filename",
+           "executable_path","free_disk_bytes","redact_log_message","SecretRedactionFilter","redact_mapping","require_free_disk","run_tool","safe_filename",
            "sha256_file","validate_path_inside"]
