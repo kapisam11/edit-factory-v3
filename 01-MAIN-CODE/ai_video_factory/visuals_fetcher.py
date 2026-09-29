@@ -499,11 +499,11 @@ def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = T
                         continue
                 if v.get("thumbnail") and _media_rights_cleared(v):
                     try:
-                        r = requests.get(v["thumbnail"], timeout=12, headers={"User-Agent": "ai-video-factory/1.0"})
-                        if r.ok:
-                            fn = os.path.join(out_dir, f"thumb_{i+1}.jpg")
-                            with open(fn, "wb") as wf:
-                                wf.write(r.content)
+                        fn = os.path.join(out_dir, f"thumb_{i+1}.jpg")
+                        if _download_http_bounded(
+                            v["thumbnail"], fn,
+                            max_bytes=_remote_image_limit_bytes(), require_image=True,
+                        ):
                             v["local_thumbnail"] = fn
                     except Exception:
                         pass
@@ -514,15 +514,13 @@ def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = T
             if not _media_rights_cleared(v):
                 continue
             try:
-                r = requests.get(url, timeout=12, headers={"User-Agent": "ai-video-factory/1.0"})
-                if r.ok and r.content:
-                    ext = os.path.splitext(url.split("?")[0])[1]
-                    if not ext:
-                        ext = ".jpg"
-                    fname = f"img_{i+1}{ext}"
-                    fn = os.path.join(out_dir, fname)
-                    with open(fn, "wb") as wf:
-                        wf.write(r.content)
+                suffix = os.path.splitext(urlparse(str(url)).path)[1].lower()
+                if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+                    suffix = ".jpg"
+                fn = os.path.join(out_dir, f"img_{i+1}{suffix}")
+                if _download_http_bounded(
+                    url, fn, max_bytes=_remote_image_limit_bytes(), require_image=True,
+                ):
                     v["local_path"] = fn
                     v["downloaded_at"] = datetime.utcnow().isoformat() + "Z"
                     if _is_meme(v):
