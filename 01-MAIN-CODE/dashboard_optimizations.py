@@ -88,8 +88,25 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         cache.delete("jobs:list")
         return result
 
+    def _job_access_allowed(job: dict | None) -> bool:
+        if not job or not has_request_context():
+            return job is not None
+        try:
+            from flask import session
+            role = str(session.get("aivf_role") or "viewer")
+        except Exception:
+            role = "viewer"
+        if role == "admin":
+            return True
+        try:
+            payload = json.loads(job.get("params") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        return str(payload.get("_principal") or "") == principal_for_request(request)
+
     def db_get_job(job_id: str) -> dict | None:
-        return store.get_job(job_id)
+        job = store.get_job(job_id)
+        return job if _job_access_allowed(job) else None
 
     def db_append_log(job_id: str, level: str, message: str) -> None:
         store.append_log(job_id, level, message)
@@ -99,11 +116,27 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     def db_list_jobs() -> list[dict]:
         cached = cache.get_json("jobs:list")
-        if cached is not None:
-            return cached
-        value = store.list_jobs(100)
-        cache.set_json("jobs:list", value, 1.0)
-        return value
+        value = cached if cached is not None else store.list_jobs(100)
+        if cached is None:
+            cache.set_json("jobs:list", value, 1.0)
+        if not has_request_context():
+            return value
+        try:
+            from flask import session
+            if str(session.get("aivf_role") or "viewer") == "admin":
+                return value
+        except Exception:
+            return []
+        principal = principal_for_request(request)
+        filtered = []
+        for job in value:
+            try:
+                payload = json.loads(job.get("params") or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if str(payload.get("_principal") or "") == principal:
+                filtered.append(job)
+        return filtered
 
     def get_settings() -> dict:
         cached = cache.get_json("settings")
