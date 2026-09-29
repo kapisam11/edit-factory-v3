@@ -378,6 +378,7 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             upload_package_required=True,
             publish_required=publish_youtube,
             publish_prerequisites_met=bool((youtube_options or {}).get("disclosure_reviewed", False)) if publish_youtube else False,
+            metadata_guardrails_ok=bool((upload_packages.get(platform, {}).get("metadata_quality") or {}).get("passed", False)),
         )
         artifact_readiness[platform] = readiness.to_dict()
     manifest["artifact_readiness"] = artifact_readiness

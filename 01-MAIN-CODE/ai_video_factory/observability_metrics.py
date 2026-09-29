@@ -15,7 +15,7 @@ class MetricSnapshot:
 
 class MetricsRegistry:
     def __init__(self)->None:
-        self._lock=threading.RLock(); self._counters={}; self._timings={}
+        self._lock=threading.RLock(); self._counters: dict[str, int] = {}; self._timings: dict[str, list[float]] = {}
 
     def increment(self,name:str,value:int=1)->None:
         with self._lock: self._counters[name]=self._counters.get(name,0)+int(value)

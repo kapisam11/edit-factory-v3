@@ -95,8 +95,8 @@ def normalize_loudness(
         normalized_info = validate_media_output(
             str(temp), require_video=True, require_audio=True
         )
-        source_duration = float(source_info.get("duration") or 0.0)
-        normalized_duration = float(normalized_info.get("duration") or 0.0)
+        source_duration = float((source_info.get("format") or {}).get("duration") or 0.0)
+        normalized_duration = float((normalized_info.get("format") or {}).get("duration") or 0.0)
         if source_duration <= 0 or normalized_duration <= 0:
             raise AudioNormalizationError("normalized output has invalid duration")
         if abs(normalized_duration - source_duration) > 0.5:

@@ -148,7 +148,7 @@ def media_fingerprint(path:str|Path)->dict[str,Any]:
 
 def analyze_media(path:str|Path,deep:bool=False,*,max_duration:float=1800.0)->dict[str,Any]:
     s=validate_media_contract(path,require_video=True,max_duration=float(max_duration))
-    report={"ok":True,"summary":s,"black_frames":[],"freeze_frames":[],"silence_segments":[],"audio":None,"blur_score":None,"defects":[]}
+    report: dict[str, Any] = {"ok":True,"summary":s,"black_frames":[],"freeze_frames":[],"silence_segments":[],"audio":None,"blur_score":None,"defects":[]}
     if deep:
         report["black_frames"]=detect_black_frames(path)
         report["freeze_frames"]=detect_freeze_frames(path)

@@ -39,15 +39,15 @@ class FeedbackStore:
         self.record(FeedbackRecord(video_id,platform,edit_type,observed_at,values,dict(metadata or {})))
 
     def aggregate(self,platform:str|None=None)->dict[str,Any]:
-        sql="SELECT platform,edit_type,metrics FROM feedback"; params=()
+        sql="SELECT platform,edit_type,metrics FROM feedback"; params: tuple[str, ...] = ()
         if platform: sql+=" WHERE platform=?"; params=(platform,)
         with self._connect() as conn: rows=conn.execute(sql,params).fetchall()
-        groups={}
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for plat,edit,raw in rows:
             metrics=json.loads(raw)
             key=(plat,edit); bucket=groups.setdefault(key,[])
             bucket.append(metrics)
-        result={}
+        result: dict[str, Any] = {}
         for (plat,edit),bucket in groups.items():
             keys=set().union(*(item.keys() for item in bucket))
             result[f"{plat}:{edit}"]={"samples":len(bucket),"means":{k:round(sum(float(item.get(k,0.0)) for item in bucket)/len(bucket),6) for k in keys}}

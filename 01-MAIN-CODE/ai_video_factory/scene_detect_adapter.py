@@ -5,7 +5,7 @@ import os
 
 def pyscenedetect_available() -> bool:
     try:
-        import scenedetect  # type: ignore
+        import scenedetect
     except ImportError:
         return False
     return True

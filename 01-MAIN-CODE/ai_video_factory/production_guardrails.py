@@ -139,8 +139,8 @@ def diagnose_environment(*, required_tools: Iterable[str] = ("ffmpeg", "ffprobe"
         except GuardrailError as exc: results.append(Diagnostic(f"tool:{tool}", False, str(exc)))
         else: results.append(Diagnostic(f"tool:{tool}", True, path))
     for raw_path in required_paths:
-        path = Path(raw_path)
-        results.append(Diagnostic(f"path:{path}", path.exists(), "exists" if path.exists() else "missing"))
+        required_path = Path(raw_path)
+        results.append(Diagnostic(f"path:{required_path}", required_path.exists(), "exists" if required_path.exists() else "missing"))
     return results
 
 def redact_mapping(payload: Mapping[str, Any], *, secret_names: Iterable[str] = ()) -> dict[str, Any]:
