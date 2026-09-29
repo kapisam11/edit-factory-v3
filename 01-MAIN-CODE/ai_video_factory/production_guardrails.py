@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -117,9 +118,9 @@ def redact_log_message(message: object, *, max_length: int = 4000) -> str:
     return value[:max(256, int(max_length))]
 
 
-class SecretRedactionFilter(__import__("logging").Filter):
+class SecretRedactionFilter(logging.Filter):
     """Logging filter for accidental credential leakage."""
-    def filter(self, record: object) -> bool:
+    def filter(self, record: logging.LogRecord) -> bool:
         record.msg = redact_log_message(record.getMessage())
         record.args = ()
         return True
