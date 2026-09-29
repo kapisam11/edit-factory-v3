@@ -30,6 +30,17 @@ def test_redaction_does_not_leak_secrets() -> None:
     assert result['authorization'] == '[REDACTED]'
     assert result['user'] == 'ok'
 
+def test_redaction_is_recursive() -> None:
+    result = redact_mapping({
+        "outer": {
+            "api_key": "hidden",
+            "items": [{"password": "hidden"}, {"safe": "ok"}],
+        }
+    })
+    assert result["outer"]["api_key"] == "[REDACTED]"
+    assert result["outer"]["items"][0]["password"] == "[REDACTED]"
+    assert result["outer"]["items"][1]["safe"] == "ok"
+
 def test_ai_output_guards() -> None:
     assert parse_json_object('{"lines":["first","second"]}')['lines'] == ['first','second']
     assert validate_confidence(0.7) == 0.7
