@@ -327,6 +327,69 @@ def _valid_youtube_url(value: str) -> bool:
     return parsed.scheme == "https" and host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 
 
+def _download_http_bounded(url: str, destination: str, *, max_bytes: int, require_image: bool = False) -> bool:
+    """Stream a remote asset to disk with explicit size/type bounds."""
+    try:
+        parsed = urlparse(str(url))
+    except ValueError:
+        return False
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    max_bytes = max(1, int(max_bytes))
+    try:
+        with requests.get(
+            str(url),
+            stream=True,
+            timeout=(5, 30),
+            headers={"User-Agent": "ai-video-factory/1.0"},
+        ) as response:
+            if not response.ok:
+                return False
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if require_image and content_type and not content_type.startswith("image/"):
+                return False
+            announced = response.headers.get("Content-Length")
+            if announced and announced.isdigit() and int(announced) > max_bytes:
+                return False
+            written = 0
+            with open(destination, "wb") as handle:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if written > max_bytes:
+                        handle.close()
+                        try:
+                            os.unlink(destination)
+                        except OSError:
+                            pass
+                        return False
+                    handle.write(chunk)
+            return written > 0
+    except (OSError, requests.RequestException):
+        try:
+            os.unlink(destination)
+        except OSError:
+            pass
+        return False
+
+
+def _remote_image_limit_bytes() -> int:
+    try:
+        mb = int(os.environ.get("AIVF_MAX_REMOTE_IMAGE_MB", "16"))
+    except ValueError:
+        mb = 16
+    return max(1, min(mb, 256)) * 1024 * 1024
+
+
+def _remote_video_limit_mb() -> int:
+    try:
+        mb = int(os.environ.get("AIVF_MAX_REMOTE_VIDEO_MB", "1024"))
+    except ValueError:
+        mb = 1024
+    return max(64, min(mb, 4096))
+
+
 def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20, *, rights_cleared: bool = False) -> Dict:
     """Download a rights-cleared YouTube clip through a temporary staging directory."""
     if not rights_cleared or not _valid_youtube_url(youtube_url):
@@ -349,7 +412,7 @@ def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20
         uploader = info.get("uploader")
         upload_date = info.get("upload_date")
         tmp_name = os.path.join(staging_dir, f"{video_id}.%(ext)s")
-        dl = subprocess.run(["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio/best", "-o", tmp_name, youtube_url], capture_output=True, text=True, timeout=300)
+        max_video_mb = _remote_video_limit_mb()\n        estimated_size = info.get("filesize") or info.get("filesize_approx") or 0\n        if estimated_size and int(estimated_size) > max_video_mb * 1024 * 1024:\n            return {}\n        dl = subprocess.run([\n            "yt-dlp", "--retries", "2", "--fragment-retries", "2", "--socket-timeout", "30",\n            "--max-filesize", f"{max_video_mb}M", "--download-sections", f"*0-{int(max_duration)}",\n            "-f", "bestvideo[ext=mp4]+bestaudio/best", "-o", tmp_name, youtube_url,\n        ], capture_output=True, text=True, timeout=300)
         if dl.returncode != 0:
             return {}
         downloaded = next((os.path.join(staging_dir, name) for name in os.listdir(staging_dir) if name.startswith(video_id + ".")), None)
