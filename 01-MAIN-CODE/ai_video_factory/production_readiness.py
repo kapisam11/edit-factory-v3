@@ -29,6 +29,9 @@ def _item(number:int,name:str,status:str,evidence:str,detail:str="")->ReadinessI
 def run_readiness(root:str|Path=".")->list[ReadinessItem]:
     base=Path(root).resolve()
     py=base/"01-MAIN-CODE"/"ai_video_factory"
+    if not py.is_dir():
+        # The CLI may run from an installed wheel rather than the repository root.
+        py=Path(__file__).resolve().parent
     items:list[ReadinessItem]=[]
 
     def exists(*relative:str)->bool:
