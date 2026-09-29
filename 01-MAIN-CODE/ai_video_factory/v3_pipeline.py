@@ -21,7 +21,7 @@ from .media_health import MediaHealthError, analyze_media
 from .metadata_guardrails import build_upload_metadata
 from .provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest, write_provenance
 from .system_diagnostics import diagnostics_report, write_diagnostics
-from .production_guardrails import atomic_write_json, require_free_disk
+from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
@@ -340,7 +340,13 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     if semantic_qc_disabled and (environment not in {"development", "test"} or not qc_override):
         raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
     try:
-        source_health = analyze_media(input_video, deep=False)
+        try:
+            source_max_seconds = float(os.environ.get("AIVF_MAX_SOURCE_DURATION_SECONDS", "86400"))
+        except ValueError as exc:
+            raise ValueError("AIVF_MAX_SOURCE_DURATION_SECONDS must be numeric") from exc
+        if not math.isfinite(source_max_seconds) or source_max_seconds < 1800:
+            raise ValueError("AIVF_MAX_SOURCE_DURATION_SECONDS must be finite and >= 1800")
+        source_health = analyze_media(input_video, deep=False, max_duration=source_max_seconds)
         _atomic_json_write(package / "source_media_health.json", source_health)
         footage_evidence = _build_footage_evidence(input_video, enable_ocr, min_scenes=len(blueprint.clip_plan))
     except Exception as exc:
@@ -362,16 +368,19 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             final_video, baseline_path, render_report = _finalize_v3_media(
                 result, package, payload, target_seconds
             )
-            final_health = analyze_media(
-                final_video,
-                deep=os.environ.get("AIVF_DEEP_FINAL_MEDIA_QC", "1").strip() != "0",
-            )
+            try:
+                final_health = analyze_media(
+                    final_video,
+                    deep=os.environ.get("AIVF_DEEP_FINAL_MEDIA_QC", "1").strip() != "0",
+                )
+            except (MediaHealthError, GuardrailError, OSError, ValueError) as exc:
+                final_health = {"ok": False, "errors": [str(exc)], "warnings": [], "defects": [str(exc)]}
             _atomic_json_write(package / "final_media_health.json", final_health)
             if not final_health.get("ok", False):
-                result.errors.extend(
-                    f"V3 final media health: {warning}"
-                    for warning in (final_health.get("warnings") or ["technical media defects detected"])
-                )
+                defects = list(final_health.get("defects") or final_health.get("errors") or [])
+                if not defects:
+                    defects = ["technical media health check failed"]
+                result.errors.extend(f"V3 final media health: {defect}" for defect in defects)
             semantic_report: Dict[str, Any] = {"ok": True, "mode": "disabled"}
             if not semantic_qc_disabled:
                 semantic_report = analyze_render_semantics(final_video)
@@ -379,10 +388,24 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     result.errors.extend("V3 semantic QC: " + e for e in semantic_report["errors"])
                 result.warnings.extend("V3 semantic QC: " + w for w in semantic_report["warnings"])
             _package_v3_assets(result=result, package=package, topic=topic, platform=platform, source_video=input_video, baseline_summary=baseline_summary)
+            metadata_report = build_upload_metadata(
+                topic,
+                summary=baseline_summary,
+                hook=str(baseline_summary.get("hook") or ""),
+            )
+            _atomic_json_write(package / "metadata_guardrails.json", metadata_report)
+            metadata_ok = bool(metadata_report["quality"]["ok"])
+            if not metadata_ok:
+                result.errors.extend(
+                    f"Metadata guardrail: {error}"
+                    for error in metadata_report["quality"]["errors"]
+                )
+
             readiness = evaluate_artifact(
                 final_video, target_seconds=target_seconds,
                 platform_profile=payload["platform_variants"][platform],
                 package_dir=package_dir, upload_package_required=True, publish_required=False,
+                metadata_guardrails_ok=metadata_ok,
             )
             if not render_report["ok"]:
                 result.errors.extend("V3 render QC: " + e for e in render_report["errors"])
@@ -411,18 +434,6 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             if manifest_needs_rights_review(provenance):
                 result.warnings.append("Media provenance contains assets requiring rights review")
 
-            metadata_report = build_upload_metadata(
-                topic,
-                summary=baseline_summary,
-                hook=str(baseline_summary.get("hook") or ""),
-            )
-            _atomic_json_write(package / "metadata_guardrails.json", metadata_report)
-            if not metadata_report["quality"]["ok"]:
-                result.warnings.extend(
-                    f"Metadata guardrail: {error}"
-                    for error in metadata_report["quality"]["errors"]
-                )
-
             diagnostics = diagnostics_report(directories=[package])
             write_diagnostics(package / "diagnostics.json", diagnostics)
             if not diagnostics["ok"]:
@@ -431,7 +442,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             if readiness.state == "UPLOAD_PACKAGE_VALID":
                 result.warnings.append("V3 artifact readiness: upload package validated; publish readiness is intentionally not claimed")
             _persist_v3_reports(package, result, render_report, semantic_report, readiness)
-        except RenderContractError as exc:
+        except (RenderContractError, MediaHealthError, GuardrailError, OSError, ValueError) as exc:
             result.errors.append(f"V3 render contract failed: {exc}")
     result.artifacts.update({
         "v3_blueprint": str(blueprint_path),
