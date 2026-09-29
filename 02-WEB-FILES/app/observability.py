@@ -34,6 +34,15 @@ def install_observability(app: Flask) -> None:
         response.headers[REQUEST_ID_HEADER] = getattr(g, "request_id", "")
         return response
 
+    @app.get("/api/metrics")
+    def metrics():
+        snapshot = GLOBAL_METRICS.snapshot()
+        return jsonify({
+            "counters": snapshot.counters,
+            "timings_ms_avg": snapshot.timings_ms,
+            "generated_at": snapshot.generated_at,
+        })
+
     @app.route("/healthz")
     def healthz():
         started = getattr(g, "request_started_at", time.perf_counter())
