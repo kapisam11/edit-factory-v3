@@ -52,7 +52,8 @@ def retry_after(attempt: int, *, base: float = 0.5, cap: float = 8.0, key: str =
 
 def idempotency_key(payload: Mapping[str, Any], *, namespace: str = "aivf") -> str:
     normalized = json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return f"{namespace}:{hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]}"
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+    return f"{namespace}:{digest}"
 
 def is_stale(updated_at_epoch: float, *, now: float | None = None, stale_after_seconds: float = 3600.0) -> bool:
     current = time.time() if now is None else float(now)
