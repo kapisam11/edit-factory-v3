@@ -206,6 +206,8 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     strict_rights = os.environ.get("AIVF_STRICT_RIGHTS", "1") == "1"
     evidence_records = []
     for item in records:
+        if not any(item.get(key) for key in ("declared_by", "declared_at", "evidence_url", "license_url")):
+            continue
         evidence_records.append({
             **item,
             "asset_id": item.get("title") or item.get("url") or "source",
