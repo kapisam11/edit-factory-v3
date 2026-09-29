@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from ai_video_factory.media_health import (
+    MediaHealthError,
     analyze_media,
     assert_render_quality,
     detect_black_frames,
@@ -61,5 +62,5 @@ def test_render_contract_rejects_wrong_duration(tmp_path: Path) -> None:
     video = tmp_path / "fixture.mp4"
     _make_fixture(video)
     assert_render_quality(video, target_seconds=2.0, require_audio=True)
-    with pytest.raises(Exception):
+    with pytest.raises(MediaHealthError):
         assert_render_quality(video, target_seconds=5.0, require_audio=True)
