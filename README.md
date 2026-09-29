@@ -67,6 +67,16 @@ aivf-content --help
 aivf-v3 --help
 ```
 
+Run the production preflight diagnostics CLI:
+
+```bash
+aivf-diagnose
+# inspect one media file more deeply
+aivf-diagnose --media input.mp4 --deep --directory output
+```
+
+V3 renders now emit technical media-health, provenance, metadata-guardrail, and environment-diagnostics artifacts alongside the existing render/QC reports. Rights metadata is treated as a review signal; the pipeline does not infer that online media is licensed for reuse.
+
 ## Windows one-click start
 
 On Windows, double-click **[START-ALL.bat](START-ALL.bat)** in the repository root. It is the main local launcher and stays next to this README.
