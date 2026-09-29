@@ -94,15 +94,13 @@ def build_upload_metadata(
         evidence=evidence if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)) else [],
         fact_reviewed=bool(data.get("facts_reviewed", False)),
     )
-    if factuality["publish_blocked"]:
-        quality["ok"] = False
-        quality["errors"].append("metadata contains numeric/date claims without verified evidence or explicit fact review")
     return {
         "title": title,
         "description": description,
         "hashtags": hashtags,
         "factuality": factuality,
         "quality": quality,
+        "publish_ready": bool(quality["ok"]) and not factuality["publish_blocked"],
     }
 
 def source_attribution_note(source: Mapping[str, Any]) -> str:
