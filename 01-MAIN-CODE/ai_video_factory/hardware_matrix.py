@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .hardware import choose_encoder
+from .render_engine import validate_media_output
 
 
 ENCODERS = ("libx264", "h264_nvenc", "h264_amf", "h264_qsv", "h264_vaapi")
@@ -53,7 +54,16 @@ def run_encoder_smoke(encoder: str) -> dict[str, Any]:
         cmd.append(str(output))
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
         ok = result.returncode == 0 and output.is_file() and output.stat().st_size > 0
-        return {"encoder": encoder, "available": encoder in ffmpeg_encoders(), "ok": ok, "error": (result.stderr or "")[-1000:] if not ok else ""}
+        error = ""
+        if ok:
+            try:
+                validate_media_output(str(output), require_video=True, require_audio=False)
+            except Exception as exc:
+                ok = False
+                error = f"output validation failed: {exc}"
+        if not ok and not error:
+            error = (result.stderr or "")[-1000:]
+        return {"encoder": encoder, "available": encoder in ffmpeg_encoders(), "ok": ok, "error": error}
 
 
 def run_matrix(encoders: Iterable[str] = ENCODERS) -> dict[str, Any]:
