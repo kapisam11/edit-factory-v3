@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .production_guardrails import safe_filename, validate_path_inside
+from .production_guardrails import GuardrailError, safe_filename, validate_path_inside
 
 
 class AssetManager:
