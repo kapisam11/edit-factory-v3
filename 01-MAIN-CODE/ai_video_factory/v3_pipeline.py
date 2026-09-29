@@ -21,6 +21,7 @@ from .media_health import MediaHealthError, analyze_media
 from .metadata_guardrails import build_upload_metadata
 from .provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest, write_provenance
 from .system_diagnostics import diagnostics_report, write_diagnostics
+from .production_guardrails import atomic_write_json, require_free_disk
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
@@ -112,17 +113,7 @@ def _validate_timeline_contract(package: Path, blueprint_payload: Dict[str, Any]
 
 
 def _atomic_json_write(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_path = tempfile.mkstemp(prefix=".aivf-", suffix=".partial", dir=str(path.parent), text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, indent=2, ensure_ascii=False)
-            handle.flush(); os.fsync(handle.fileno())
-        os.replace(temp_path, path)
-    except BaseException:
-        try: os.unlink(temp_path)
-        except OSError: pass
-        raise
+    atomic_write_json(path, payload)
 
 
 def _validate_v3_inputs(input_video: str, topic: str, target_seconds: float, platform: str, audience: str, bpm: int) -> None:
@@ -330,6 +321,13 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
     _validate_v3_inputs(input_video, topic, target_seconds, platform, audience, bpm)
     package = Path(package_dir)
     package.mkdir(parents=True, exist_ok=True)
+    try:
+        minimum_free_mb = int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "512"))
+    except ValueError as exc:
+        raise ValueError("AIVF_MIN_FREE_DISK_MB must be an integer") from exc
+    if minimum_free_mb < 0:
+        raise ValueError("AIVF_MIN_FREE_DISK_MB cannot be negative")
+    require_free_disk(package, minimum_free_mb * 1024 * 1024)
     _cleanup_v3_transients(package)
     blueprint, payload, blueprint_path = _prepare_blueprint(
         topic, context, target_seconds, platform, audience, bpm, package, edit_type, source_metadata
