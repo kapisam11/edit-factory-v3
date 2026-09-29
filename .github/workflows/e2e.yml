@@ -122,6 +122,12 @@ jobs:
           test -f "$PACKAGE_DIR/v3_readiness.json"
           test -f "$PACKAGE_DIR/v3_render_qc.json"
           test -f "$PACKAGE_DIR/scenes.json"
+          test -f "$PACKAGE_DIR/source_media_health.json"
+          test -f "$PACKAGE_DIR/final_media_health.json"
+          test -f "$PACKAGE_DIR/provenance.json"
+          test -f "$PACKAGE_DIR/metadata_guardrails.json"
+          test -f "$PACKAGE_DIR/diagnostics.json"
+          test -f "$PACKAGE_DIR/upload_package.json"
           uv run python - "$PACKAGE_DIR" <<'PY'
           from PIL import Image
           from pathlib import Path
@@ -170,6 +176,7 @@ jobs:
           if readiness["checks"].get("MEDIA_CONTRACT_VALID") is not True: raise SystemExit(32)
           if readiness["checks"].get("UPLOAD_PACKAGE_VALID") is not True: raise SystemExit(33)
           if readiness.get("state") != "UPLOAD_PACKAGE_VALID": raise SystemExit(34)
+          metadata = json.loads((Path(os.environ["RESULTS_DIR"]) / "../aivf-output" / readiness["artifacts"].get("package_name","") / "metadata_guardrails.json").read_text()) if readiness.get("artifacts",{}).get("package_name") else None
           if render_qc.get("ok") is not True: raise SystemExit(35)
           if (render_qc.get("retention_verification") or {}).get("ok") is not True: raise SystemExit(36)
           PY
