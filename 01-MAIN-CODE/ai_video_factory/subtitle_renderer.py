@@ -86,9 +86,16 @@ def burn_subtitles(input_video: str, output_video: str, script: str, style: str 
     word_timings = estimate_word_timing(script, total_duration)
     drawtext = build_drawtext_filter(word_timings, style)
     if not drawtext:
-        shutil.copy2(input_video, output_video)
-        validate_media_output(output_video, require_video=True, require_audio=False)
-        return output_video
+        try:
+            shutil.copy2(input_video, output_video)
+            validate_media_output(output_video, require_video=True, require_audio=False)
+            return output_video
+        except Exception:
+            try:
+                Path(output_video).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
     try:
         _run_ffmpeg(["ffmpeg", "-y", "-i", input_video, "-vf", drawtext, "-c:a", "copy", "-c:v", "libx264", "-preset", "fast", "-crf", "23", output_video])
         validate_media_output(output_video, require_video=True, require_audio=False)
