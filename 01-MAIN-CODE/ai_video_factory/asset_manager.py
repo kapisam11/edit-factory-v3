@@ -94,7 +94,7 @@ class AssetManager:
         shutil.copy2(src, dest)
         if metadata:
             dest.with_suffix(".json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        uri_parts = [category] + ([sub] if sub else []) + [filename]
+        uri_parts = [category] + ([sub] if sub else []) + [dest.name]
         return "assets://" + "/".join(uri_parts)
 
     def get_random_music(self, mood: str) -> Optional[str]:
