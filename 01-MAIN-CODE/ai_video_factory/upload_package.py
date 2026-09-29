@@ -244,9 +244,10 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     ) if verification_records else {
         "status": "not_applicable", "publish_blocked": False, "unresolved_assets": [], "provider_required": require_content_verification
     }
-        if evidence_gate["publish_blocked"]:
+
+    if evidence_gate["publish_blocked"]:
         unresolved.extend(evidence_gate["checked"])
-    
+
     return {
         "status": "cleared" if external and not unresolved else ("review_required" if unresolved else "not_declared"),
         "publish_blocked": bool(unresolved) or bool(copyright_verification["publish_blocked"]),
