@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from enum import Enum
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, Sequence
 
 
-class CopyrightStatus(StrEnum):
+class CopyrightStatus(str, Enum):
     NOT_CHECKED = "not_checked"
     VERIFIED = "verified"
     BLOCKED = "blocked"
