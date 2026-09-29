@@ -43,22 +43,32 @@ def normalize_loudness(input_path: str | Path, output_path: str | Path, *, targe
     source, target = Path(input_path), Path(output_path)
     if not source.is_file():
         raise FileNotFoundError(source)
-    measurement = measure_loudness(source)
-    measured = measurement["measured"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=".aivf-loudnorm-", suffix=".mp4", dir=target.parent)
+    os.close(fd)
+    temp = Path(temp_name)
+    try:
+        try:
+            measurement = measure_loudness(source)
+        except Exception as exc:
+            raise AudioNormalizationError(f"loudness measurement failed: {exc}") from exc
+        measured = measurement["measured"]
     parts = [f"loudnorm=I={float(target_i):.1f}", f"TP={float(target_tp):.1f}", f"LRA={float(target_lra):.1f}"]
     for key in ("measured_I","measured_TP","measured_LRA","measured_thresh","offset"):
         value = measured.get(key)
         if value not in (None,"","inf","-inf"):
             parts.append(f"{key}={value}")
     parts.append("linear=false:print_format=summary")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(prefix=".aivf-loudnorm-", suffix=".mp4", dir=target.parent)
-    os.close(fd)
-    temp = Path(temp_name)
     try:
+        source_info = validate_media_output(str(source), require_video=True, require_audio=True)
         run_ffmpeg(["ffmpeg","-hide_banner","-y","-i",str(source),"-c:v","copy","-af",":".join(parts),"-c:a","aac","-b:a","192k",str(temp)], timeout=1800, capture_output=True)
         if not temp.is_file() or temp.stat().st_size <= 0:
             raise AudioNormalizationError("normalized output is missing or empty")
+        normalized_info = validate_media_output(str(temp), require_video=True, require_audio=True)
+        source_duration = float(source_info.get("duration") or 0.0)
+        normalized_duration = float(normalized_info.get("duration") or 0.0)
+        if abs(normalized_duration - source_duration) > 0.5:
+            raise AudioNormalizationError("normalized output duration changed unexpectedly")
         os.replace(temp, target)
     except Exception as exc:
         temp.unlink(missing_ok=True)
