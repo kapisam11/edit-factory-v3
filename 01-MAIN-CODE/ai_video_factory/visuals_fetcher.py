@@ -412,7 +412,10 @@ def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20
         uploader = info.get("uploader")
         upload_date = info.get("upload_date")
         tmp_name = os.path.join(staging_dir, f"{video_id}.%(ext)s")
-        max_video_mb = _remote_video_limit_mb()\n        estimated_size = info.get("filesize") or info.get("filesize_approx") or 0\n        if estimated_size and int(estimated_size) > max_video_mb * 1024 * 1024:\n            return {}\n        dl = subprocess.run([\n            "yt-dlp", "--retries", "2", "--fragment-retries", "2", "--socket-timeout", "30",\n            "--max-filesize", f"{max_video_mb}M", "--download-sections", f"*0-{int(max_duration)}",\n            "-f", "bestvideo[ext=mp4]+bestaudio/best", "-o", tmp_name, youtube_url,\n        ], capture_output=True, text=True, timeout=300)
+        max_video_mb = _remote_video_limit_mb()
+        estimated_size = info.get("filesize") or info.get("filesize_approx") or 0
+        if estimated_size and int(estimated_size) > max_video_mb * 1024 * 1024:
+            return {}\n        dl = subprocess.run([\n            "yt-dlp", "--retries", "2", "--fragment-retries", "2", "--socket-timeout", "30",\n            "--max-filesize", f"{max_video_mb}M", "--download-sections", f"*0-{int(max_duration)}",\n            "-f", "bestvideo[ext=mp4]+bestaudio/best", "-o", tmp_name, youtube_url,\n        ], capture_output=True, text=True, timeout=300)
         if dl.returncode != 0:
             return {}
         downloaded = next((os.path.join(staging_dir, name) for name in os.listdir(staging_dir) if name.startswith(video_id + ".")), None)
