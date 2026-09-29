@@ -1,5 +1,7 @@
 """Hardware detection and encoder preset selection."""
 import shutil
+import subprocess
+from functools import lru_cache
 from typing import Any, Dict
 
 try:
