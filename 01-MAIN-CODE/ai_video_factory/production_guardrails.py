@@ -78,19 +78,31 @@ def executable_path(name: str) -> str:
         raise GuardrailError(f"required executable not found on PATH: {name}")
     return resolved
 
-def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None = None, env: Mapping[str, str] | None = None) -> ToolResult:
+def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None = None,
+             env: Mapping[str, str] | None = None, stderr_limit: int = 4000) -> ToolResult:
+    """Run an external tool without a shell and retain a bounded diagnostic tail."""
     args = tuple(str(item) for item in argv)
-    if not args or not args[0]: raise GuardrailError("tool command cannot be empty")
-    if int(timeout) <= 0: raise GuardrailError("tool timeout must be positive")
+    if not args or not args[0]:
+        raise GuardrailError("tool command cannot be empty")
+    if int(timeout) <= 0:
+        raise GuardrailError("tool timeout must be positive")
+    limit = max(256, int(stderr_limit))
     try:
-        completed = subprocess.run(list(args), cwd=str(cwd) if cwd else None, env=dict(env) if env is not None else None,
-                                  capture_output=True, text=True, timeout=int(timeout), check=False)
+        completed = subprocess.run(
+            list(args),
+            cwd=str(cwd) if cwd else None,
+            env=dict(env) if env is not None else None,
+            capture_output=True,
+            text=True,
+            timeout=int(timeout),
+            check=False,
+        )
     except subprocess.TimeoutExpired as exc:
         raise GuardrailError(f"tool timed out after {timeout}s: {args[0]}") from exc
     except OSError as exc:
         raise GuardrailError(f"could not start tool {args[0]}: {exc}") from exc
     stderr = (completed.stderr or "").strip()
-    return ToolResult(args, completed.returncode, completed.stdout or "", stderr[-4000:])
+    return ToolResult(args, completed.returncode, completed.stdout or "", stderr[-limit:])
 
 @dataclass(frozen=True)
 class Diagnostic:
