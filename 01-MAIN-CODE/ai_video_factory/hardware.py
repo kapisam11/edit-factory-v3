@@ -47,12 +47,12 @@ def choose_performance_profile() -> str:
 def choose_encoder() -> str:
     """Choose an ffmpeg encoder string based on detected hardware.
 
-    Returns one of: 'h264_nvenc', 'hevc_nvenc', 'libx264'.
+    Returns one of: 'h264_nvenc', 'h264_amf', 'libx264'.
     """
     if detect_nvidia():
         return "h264_nvenc"
     if detect_amd():
-        return "hevc_nvenc"
+        return "h264_amf"
     return "libx264"
 
 
@@ -62,4 +62,6 @@ def ffmpeg_preset_for(encoder: str) -> Dict[str, str]:
         return {"codec": "h264_nvenc", "preset": "p5", "rc": "vbr_hq", "bitrate": "8000k"}
     if encoder == "hevc_nvenc":
         return {"codec": "hevc_nvenc", "preset": "p5", "rc": "vbr_hq", "bitrate": "8000k"}
+    if encoder == "h264_amf":
+        return {"codec": "h264_amf", "quality": "quality", "bitrate": "8000k"}
     return {"codec": "libx264", "preset": "slow", "crf": "20"}
