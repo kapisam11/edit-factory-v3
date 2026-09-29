@@ -129,6 +129,59 @@ jobs:
         uv run coverage report --include='01-MAIN-CODE/dashboard_optimizations.py' --fail-under=40
         uv run coverage report --include='01-MAIN-CODE/resource_governor.py' --fail-under=80
 
+  media-and-platform-smoke:
+    name: Media/platform smoke
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+    - name: Install FFmpeg
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+    - name: Set up Python 3.12
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: '3.12'
+    - name: Set up uv
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+      with:
+        enable-cache: true
+    - name: Install locked environment
+      run: uv sync --frozen --python 3.12 --extra web --extra dev
+    - name: Generate compatibility fixtures
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p /tmp/aivf-media
+        ffmpeg -y -f lavfi -i 'testsrc2=size=640x360:rate=30000/1001:duration=3' -f lavfi -i 'anullsrc=r=48000:cl=stereo' -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/aivf-media/cfr.mp4
+        ffmpeg -y -f lavfi -i 'testsrc2=size=640x360:rate=25:duration=3' -vf 'setpts=N/(25*TB)' -f lavfi -i 'sine=frequency=1000:sample_rate=48000:duration=3' -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/aivf-media/vfr.mp4
+        ffmpeg -y -f lavfi -i 'testsrc2=size=640x360:rate=25:duration=2' -f lavfi -i 'sine=frequency=440:sample_rate=48000:duration=2' -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/aivf-media/h264.mp4
+    - name: Run compatibility matrix and benchmark
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: |
+        uv run aivf-compat /tmp/aivf-media/*.mp4
+        uv run python -c "from ai_video_factory.benchmark import benchmark_media; print(benchmark_media('/tmp/aivf-media/cfr.mp4'))"
+    - name: Exercise large-file filesystem smoke
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: uv run python -c "from ai_video_factory.large_media_smoke import create_sparse_file, smoke_large_file; p=create_sparse_file('/tmp/aivf-10gb-sparse.bin',10.0); print(smoke_large_file(p))"
+  macos-smoke:
+    name: macOS production smoke
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+    - name: Set up Python 3.12
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: '3.12'
+    - name: Set up uv
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239a1f3b78
+      with:
+        enable-cache: true
+    - name: Install locked environment
+      run: uv sync --frozen --python 3.12 --extra web --extra dev
+    - name: Compile production Python
+      run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
+
   windows-smoke:
     runs-on: windows-latest
     steps:
