@@ -1,6 +1,7 @@
 """Authentication and request-hardening for the single-user dashboard."""
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import threading
@@ -23,8 +24,8 @@ def _configured_users(default_role: Role) -> dict[str, dict[str, str]]:
     if not raw:
         return {}
     try:
-        payload = __import__("json").loads(raw)
-    except (TypeError, ValueError, __import__("json").JSONDecodeError):
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
         return {}
     if not isinstance(payload, dict):
         return {}
