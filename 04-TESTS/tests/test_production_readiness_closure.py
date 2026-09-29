@@ -49,15 +49,19 @@ def test_rbac():
     assert role_allows(Role.ADMIN, Role.EDITOR)
     assert not role_allows(Role.VIEWER, Role.EDITOR)
 
-def test_job_backend_reclaims_expired(tmp_path):
+def test_job_backend_reclaims_expired_and_rejects_stale_worker(tmp_path):
     backend=SQLiteJobBackend(tmp_path/"queue.db",visibility_timeout=0.01)
     backend.enqueue("j1",{"topic":"test"})
-    job=backend.claim()
-    assert job and job.job_id=="j1"
+    first=backend.claim()
+    assert first and first.job_id=="j1"
     import time
     time.sleep(0.02)
     assert backend.recover_expired()==1
-    assert backend.claim() is not None
+    second=backend.claim()
+    assert second and second.job_id=="j1"
+    assert first.worker_token != second.worker_token
+    assert backend.complete(first.job_id, first.worker_token) is False
+    assert backend.complete(second.job_id, second.worker_token) is True
 
 def test_feedback_store_aggregates(tmp_path):
     store=FeedbackStore(tmp_path/"feedback.db")
@@ -82,3 +86,36 @@ def test_readiness_reports_exactly_34_items():
     items=run_readiness(Path(__file__).resolve().parents[2])
     assert len(items)==34
     assert [item.number for item in items]==list(range(1,35))
+
+
+def test_log_redaction_patterns():
+    from ai_video_factory.production_guardrails import redact_log_message
+    value=redact_log_message("Authorization: Bearer abc123 token=xyz secret: nope password=bad")
+    assert "abc123" not in value
+    assert "xyz" not in value
+    assert "nope" not in value
+    assert "bad" not in value
+
+
+def test_asset_import_returns_renamed_uri(tmp_path):
+    from ai_video_factory.asset_manager import AssetManager
+    source=tmp_path/"clip.mp3"
+    source.write_bytes(b"fake")
+    manager=AssetManager(tmp_path/"assets")
+    first=manager.import_asset(str(source),"sfx")
+    second=manager.import_asset(str(source),"sfx")
+    assert first=="assets://sfx/clip.mp3"
+    assert second=="assets://sfx/clip-2.mp3"
+
+
+def test_upload_publish_review_gate():
+    from ai_video_factory.upload_package import finalize_upload_package
+    import os
+    old=os.environ.get("AIVF_REQUIRE_HUMAN_REVIEW")
+    os.environ["AIVF_REQUIRE_HUMAN_REVIEW"]="1"
+    try:
+        result=finalize_upload_package("/tmp/aivf-review-test",topic="test",summary={"human_review":None})
+        assert result["publish_ready"] is False
+    finally:
+        if old is None: os.environ.pop("AIVF_REQUIRE_HUMAN_REVIEW",None)
+        else: os.environ["AIVF_REQUIRE_HUMAN_REVIEW"]=old
