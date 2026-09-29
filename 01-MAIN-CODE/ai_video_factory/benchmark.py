@@ -33,9 +33,19 @@ def compare_benchmarks(before:dict[str,Any],after:dict[str,Any])->dict[str,Any]:
         return None if a<=0 else round((b-a)/a,4)
     return {"before":before,"after":after,"probe_time_delta":ratio("probe_seconds"),"hash_time_delta":ratio("sha256_seconds")}
 
+def benchmark_many(paths:list[str|Path], repeats:int=1)->dict[str,Any]:
+    results=[benchmark_media(path,repeats=repeats) for path in paths]
+    return {
+        "count": len(results),
+        "results": results,
+        "total_bytes": sum(int(item["size_bytes"]) for item in results),
+        "average_probe_seconds": round(sum(float(item["probe_seconds"]) for item in results)/max(1,len(results)),6),
+    }
+
+
 def write_benchmark(path:str|Path,data:dict[str,Any])->str:
     target=Path(path); target.parent.mkdir(parents=True,exist_ok=True)
     target.write_text(json.dumps(data,indent=2,sort_keys=True),encoding="utf-8")
     return str(target)
 
-__all__=["benchmark_media","compare_benchmarks","write_benchmark"]
+__all__=["benchmark_many","benchmark_media","compare_benchmarks","write_benchmark"]
