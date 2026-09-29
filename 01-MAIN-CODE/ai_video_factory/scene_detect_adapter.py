@@ -12,8 +12,7 @@ def pyscenedetect_available() -> bool:
 
 def _fallback_boundaries(video_path: str, threshold: float = 0.42) -> list[float]:
     try:
-        import cv2  # type: ignore
-        import numpy as np  # type: ignore
+        import cv2
     except ImportError:
         return []
     capture = cv2.VideoCapture(video_path)
@@ -51,7 +50,7 @@ def detect_shot_boundaries(video_path: str, *, threshold: float = 27.0, min_scen
         return []
     if pyscenedetect_available():
         try:
-            from scenedetect import ContentDetector, SceneManager, open_video  # type: ignore
+            from scenedetect import ContentDetector, SceneManager, open_video
             video = open_video(video_path)
             manager = SceneManager()
             manager.add_detector(ContentDetector(threshold=float(threshold), min_scene_len=int(min_scene_len)))
