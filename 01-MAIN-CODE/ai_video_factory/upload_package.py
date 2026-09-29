@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .render_engine import run_ffprobe
+from .rights_policy import rights_gate
+from .factuality_guard import metadata_fact_gate
 
 
 @dataclass(frozen=True)
@@ -195,13 +197,27 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
         if item.get("rights_status") != "cleared"
         and item.get("rights_basis") not in cleared_bases
     ]
-
+    strict_rights = str(__import__("os").environ.get("AIVF_STRICT_RIGHTS", "1")) == "1"
+    evidence_records = []
+    for item in records:
+        evidence_records.append({
+            **item,
+            "asset_id": item.get("title") or item.get("url") or "source",
+            "source": item.get("source") or "external",
+        })
+    evidence_gate = rights_gate(evidence_records, strict=strict_rights) if evidence_records else {
+        "status": "not_declared", "publish_blocked": False, "checked": [], "evidence_contract": "not applicable"
+    }
+    if evidence_gate["publish_blocked"]:
+        unresolved.extend(evidence_gate["checked"])
+    
     return {
         "status": "cleared" if external and not unresolved else ("review_required" if unresolved else "not_declared"),
         "publish_blocked": bool(unresolved),
         "requires_explicit_declaration": bool(summary.get("requires_rights_declaration")),
         "sources": records,
         "unverified_sources": unresolved,
+        "rights_evidence_gate": evidence_gate,
         "message": (
             "Publishing is blocked until every third-party or user-provided source has a declared, valid rights basis."
             if unresolved
@@ -500,8 +516,16 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         tags,
         title_limit=profile.title_limit,
     )
-
-    upload_dir = root / "upload" / profile.name
+    evidence = summary.get("factual_evidence") or summary.get("research_evidence") or []
+    factuality = metadata_fact_gate(
+        chosen_title,
+        description,
+        evidence=evidence if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)) else [],
+        fact_reviewed=bool(summary.get("facts_reviewed", False)),
+    )
+    if factuality["publish_blocked"]:
+        metadata_quality["passed"] = False
+        metadata_quality.setdefault("issues", []).append("numeric/date metadata claims require evidence or fact review")
     upload_dir.mkdir(parents=True, exist_ok=True)
     (upload_dir / "title.txt").write_text(chosen_title + "\n", encoding="utf-8")
     (upload_dir / "description.txt").write_text(description + "\n", encoding="utf-8")
@@ -548,7 +572,8 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "ai_disclosure": disclosure,
         "media_rights": rights,
         "metadata_quality": metadata_quality,
-        "publish_ready": bool(metadata_quality["passed"]) and not rights["publish_blocked"],
+        "factuality": factuality,
+        "publish_ready": bool(metadata_quality["passed"]) and not rights["publish_blocked"] and not factuality["publish_blocked"],
         "artifacts": _collect_artifacts(root),
     }
     (upload_dir / "metadata.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
