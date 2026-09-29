@@ -755,6 +755,9 @@ def settings():
 
 @app.route("/api/jobs", methods=["POST"])
 def create_job():
+    role_gate = app.extensions.get("aivf_require_role")
+    if callable(role_gate):
+        role_gate("editor")
     client_ip = request.remote_addr or "unknown"
     if not check_rate_limit(client_ip):
         return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
@@ -855,6 +858,9 @@ def get_job_status(job_id):
 
 @app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
 def cancel_job(job_id):
+    role_gate = app.extensions.get("aivf_require_role")
+    if callable(role_gate):
+        role_gate("editor")
     from dashboard_compat import cancel_process
     return cancel_process(job_id)
 
