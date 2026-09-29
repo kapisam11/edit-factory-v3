@@ -110,8 +110,8 @@ def redact_log_message(message: object, *, max_length: int = 4000) -> str:
     """Redact common credential-bearing values before they reach logs."""
     value = str(message or "")
     patterns = (
-        r"(?i)(authorization\\s*[:=]\\s*bearer\\s+)[^\\s,;]+",
-        r"(?i)(\\b(?:api[_ -]?key|token|secret|password)\\s*[:=]\\s*)[^\\s,;]+",
+        r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
+        r"(?i)(\b(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+",
     )
     for pattern in patterns:
         value = re.sub(pattern, r"\\1<REDACTED>", value)
