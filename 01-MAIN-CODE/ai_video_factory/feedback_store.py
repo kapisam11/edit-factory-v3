@@ -38,6 +38,19 @@ class FeedbackStore:
         values={str(k):float(v) for k,v in metrics.items()}
         self.record(FeedbackRecord(video_id,platform,edit_type,observed_at,values,dict(metadata or {})))
 
+    def records(self, limit:int=10000, platform:str|None=None)->list[FeedbackRecord]:
+        sql="SELECT video_id,platform,edit_type,observed_at,metrics,metadata FROM feedback"
+        params: tuple[str, ...] = ()
+        if platform:
+            sql+=" WHERE platform=?"; params=(platform,)
+        sql+=" ORDER BY observed_at DESC LIMIT ?"
+        with self._connect() as conn:
+            rows=conn.execute(sql,(*params,max(1,int(limit)))).fetchall()
+        return [
+            FeedbackRecord(str(video_id),str(plat),str(edit),str(observed),json.loads(metrics),json.loads(metadata))
+            for video_id,plat,edit,observed,metrics,metadata in rows
+        ]
+
     def aggregate(self,platform:str|None=None)->dict[str,Any]:
         sql="SELECT platform,edit_type,metrics FROM feedback"; params: tuple[str, ...] = ()
         if platform: sql+=" WHERE platform=?"; params=(platform,)
