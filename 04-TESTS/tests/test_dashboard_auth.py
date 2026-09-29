@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 
 def _load(monkeypatch):
@@ -8,7 +9,8 @@ def _load(monkeypatch):
     importlib.reload(dashboard_auth)
     dashboard_auth._login_attempts.clear()
     from flask import Flask
-    app = Flask(__name__)
+    template_dir = Path(__file__).resolve().parents[2] / "02-WEB-FILES" / "templates"
+    app = Flask(__name__, template_folder=str(template_dir))
     app.secret_key = "test-secret"
 
     @app.get("/")
