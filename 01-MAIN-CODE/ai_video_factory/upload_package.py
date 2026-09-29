@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 from .render_engine import run_ffprobe
 from .rights_policy import rights_gate
 from .factuality_guard import metadata_fact_gate
+from .human_review import review_gate
 
 
 @dataclass(frozen=True)
@@ -523,9 +524,12 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         evidence=evidence if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)) else [],
         fact_reviewed=bool(summary.get("facts_reviewed", False)),
     )
-    if factuality["publish_blocked"]:
-        metadata_quality["passed"] = False
-        metadata_quality.setdefault("issues", []).append("numeric/date metadata claims require evidence or fact review")
+    human_review = review_gate(summary.get("human_review"))
+    require_human_review = str(__import__("os").environ.get("AIVF_REQUIRE_HUMAN_REVIEW", "1")) == "1"
+    if not human_review["publish_blocked"] and human_review["status"] == "approved":
+        human_review["required"] = require_human_review
+    else:
+        human_review["required"] = require_human_review
     upload_dir.mkdir(parents=True, exist_ok=True)
     (upload_dir / "title.txt").write_text(chosen_title + "\n", encoding="utf-8")
     (upload_dir / "description.txt").write_text(description + "\n", encoding="utf-8")
@@ -573,7 +577,13 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "media_rights": rights,
         "metadata_quality": metadata_quality,
         "factuality": factuality,
-        "publish_ready": bool(metadata_quality["passed"]) and not rights["publish_blocked"] and not factuality["publish_blocked"],
+        "human_review": human_review,
+        "publish_ready": (
+            bool(metadata_quality["passed"])
+            and not rights["publish_blocked"]
+            and not factuality["publish_blocked"]
+            and (not require_human_review or human_review["status"] == "approved")
+        ),
         "artifacts": _collect_artifacts(root),
     }
     (upload_dir / "metadata.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
