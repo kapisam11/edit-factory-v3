@@ -5,6 +5,7 @@ from top-performing videos in the same niche.
 
 Requires: pillow
 """
+import json
 import logging
 import math
 import os
@@ -16,6 +17,7 @@ from typing import List, Optional
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 from .style_learner import learn_style
+from .thumbnail_quality import score_thumbnail, rank_variants
 from .render_engine import run_ffmpeg, run_ffprobe
 
 logger = logging.getLogger(__name__)
@@ -440,6 +442,7 @@ def make_thumbnail_variants(
             logger.warning("Style learning failed: %s", exc)
 
     variants = []
+    quality = []
     for i in range(max(1, int(count))):
         out = os.path.join(out_dir, f"variant_{i + 1}.png")
         mod_style = style.copy() if style else None
@@ -457,6 +460,18 @@ def make_thumbnail_variants(
             background_focus=focus,
         )
         variants.append(out)
+        try:
+            quality.append({"path": out, "quality": score_thumbnail(out)})
+        except Exception as exc:
+            logger.warning("Thumbnail quality scoring failed for %s: %s", out, exc)
+            quality.append({"path": out, "quality": {"ok": False, "score": 0.0, "error": str(exc)}})
+    try:
+        Path(out_dir, "thumbnail_quality.json").write_text(
+            json.dumps({"variants": quality, "ranked": [path for path, _ in rank_variants(variants)]}, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("Could not write thumbnail quality report: %s", exc)
     return variants
 
 def make_thumbnail_vertical(
