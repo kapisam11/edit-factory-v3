@@ -52,7 +52,12 @@ class SQLiteJobBackend:
 
     def fail(self,job_id:str,error:str)->bool:
         with self._connect() as conn:
-            return conn.execute("UPDATE queue SET status='failed',claimed=NULL,payload=json_set(payload,'$.error',?) WHERE job_id=? AND status='running'",(str(error)[:4000],job_id)).rowcount==1
+            row=conn.execute("SELECT payload FROM queue WHERE job_id=? AND status='running'",(job_id,)).fetchone()
+            if not row:
+                return False
+            payload=json.loads(row[0])
+            payload["error"]=str(error)[:4000]
+            return conn.execute("UPDATE queue SET status='failed',claimed=NULL,payload=? WHERE job_id=? AND status='running'",(json.dumps(payload),job_id)).rowcount==1
 
     def recover_expired(self)->int:
         with self._connect() as conn:
