@@ -18,6 +18,7 @@ from .v3_engine import V3Blueprint, V3Config, create_v3_blueprint, validate_blue
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
 from .v3_semantic_qc import analyze_render_semantics
 from .media_health import MediaHealthError, analyze_media
+from .audio_normalization import AudioNormalizationError, normalize_loudness
 from .metadata_guardrails import build_upload_metadata
 from .provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest, write_provenance
 from .system_diagnostics import diagnostics_report, write_diagnostics
@@ -155,9 +156,29 @@ def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
             "required upload-package validation did not pass"
         )
 
+def _normalize_final_audio(package: Path, final_video: str) -> str:
+    """Normalize final-program audio while preserving the video stream."""
+    if os.environ.get("AIVF_EBU_R128", "1").strip() == "0":
+        return final_video
+    source = Path(final_video)
+    normalized = package / ".final.v3.audio-normalized.mp4"
+    try:
+        media = analyze_media(source, deep=False, max_duration=3600.0)
+        if not media["summary"].get("has_audio"):
+            return final_video
+        normalize_loudness(source, normalized)
+        if not normalized.is_file() or normalized.stat().st_size <= 0:
+            raise AudioNormalizationError("normalized final audio artifact is missing")
+        os.replace(normalized, source)
+        return str(source)
+    except (AudioNormalizationError, MediaHealthError, OSError, ValueError) as exc:
+        normalized.unlink(missing_ok=True)
+        raise RenderContractError(f"EBU R128 final audio normalization failed: {exc}") from exc
+
+
 def _cleanup_v3_transients(package: Path) -> None:
     """Remove only known V3 temporary artifacts; preserve canonical outputs for inspection."""
-    for name in ("final.v3.retention.mp4", ".final.v3.normalized.mp4"):
+    for name in ("final.v3.retention.mp4", ".final.v3.normalized.mp4", ".final.v3.audio-normalized.mp4"):
         (package / name).unlink(missing_ok=True)
     for child in package.glob(".aivf-*.partial"):
         child.unlink(missing_ok=True)
@@ -368,6 +389,8 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             final_video, baseline_path, render_report = _finalize_v3_media(
                 result, package, payload, target_seconds
             )
+            final_video = _normalize_final_audio(package, final_video)
+            result.final_video = final_video
             try:
                 final_health = analyze_media(
                     final_video,
