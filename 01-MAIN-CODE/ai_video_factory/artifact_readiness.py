@@ -74,6 +74,7 @@ def evaluate_artifact(
     upload_package_required: bool = False,
     publish_required: bool = False,
     publish_prerequisites_met: bool = False,
+    metadata_guardrails_ok: bool | None = None,
 ) -> ReadinessReport:
     errors: list[str] = []
     warnings: list[str] = []
@@ -131,6 +132,12 @@ def evaluate_artifact(
             errors.append(f"UPLOAD_PACKAGE_VALID: invalid upload package manifest: {exc}")
     elif package and package.exists() and not upload_package_required:
         warnings.append("No upload manifest is present; upload-package readiness is not claimed")
+    if metadata_guardrails_ok is False:
+        upload_ok = False
+        errors.append("UPLOAD_PACKAGE_VALID: metadata guardrails rejected the packaged metadata")
+    elif metadata_guardrails_ok is None and upload_package_required:
+        warnings.append("Metadata guardrails were not evaluated; upload-package readiness is not claimed")
+        upload_ok = False
     checks["UPLOAD_PACKAGE_VALID"] = upload_ok
     if upload_package_required and not upload_ok:
         errors.append("UPLOAD_PACKAGE_VALID: required upload package is incomplete")

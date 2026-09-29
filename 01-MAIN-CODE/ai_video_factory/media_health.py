@@ -77,19 +77,19 @@ def _events(text:str,start_key:str,end_key:str)->list[dict[str,float]]:
     return [{"start":a,"end":b,"duration":max(0.0,b-a)} for a,b in zip(starts,ends)]
 
 def detect_black_frames(path:str|Path,min_duration:float=0.5)->list[dict[str,float]]:
-    r=run_tool(["ffmpeg","-hide_banner","-i",str(path),"-vf",f"blackdetect=d={float(min_duration):.3f}:pic_th=0.98","-an","-f","null","-"],timeout=600)
+    r=run_tool(["ffmpeg","-hide_banner","-i",str(path),"-vf",f"blackdetect=d={float(min_duration):.3f}:pic_th=0.98","-an","-f","null","-"],timeout=600,stderr_limit=1024*1024)
     if r.returncode!=0:
         raise MediaHealthError(f"black-frame analysis failed: {r.stderr_tail}")
     return _events(r.stderr_tail,"black_start","black_end")
 
 def detect_freeze_frames(path:str|Path,min_duration:float=1.0)->list[dict[str,float]]:
-    r=run_tool(["ffmpeg","-hide_banner","-i",str(path),"-vf",f"freezedetect=n=-60dB:d={float(min_duration):.3f}","-an","-f","null","-"],timeout=600)
+    r=run_tool(["ffmpeg","-hide_banner","-i",str(path),"-vf",f"freezedetect=n=-60dB:d={float(min_duration):.3f}","-an","-f","null","-"],timeout=600,stderr_limit=1024*1024)
     if r.returncode!=0:
         raise MediaHealthError(f"freeze-frame analysis failed: {r.stderr_tail}")
     return _events(r.stderr_tail,"freeze_start","freeze_end")
 
 def detect_silence(path:str|Path,threshold_db:float=-50.0,min_duration:float=0.5)->list[dict[str,float]]:
-    r=run_tool(["ffmpeg","-hide_banner","-i",str(path),"-af",f"silencedetect=noise={float(threshold_db):.1f}dB:d={float(min_duration):.3f}","-f","null","-"],timeout=600)
+    r=run_tool(["ffmpeg","-hide_banner","-i",str(path),"-af",f"silencedetect=noise={float(threshold_db):.1f}dB:d={float(min_duration):.3f}","-f","null","-"],timeout=600,stderr_limit=1024*1024)
     if r.returncode!=0:
         raise MediaHealthError(f"silence analysis failed: {r.stderr_tail}")
     pending=None
@@ -107,7 +107,7 @@ def detect_silence(path:str|Path,threshold_db:float=-50.0,min_duration:float=0.5
     return out
 
 def audio_loudness(path:str|Path)->dict[str,Any]:
-    r=run_tool(["ffmpeg","-hide_banner","-i",str(path),"-af","loudnorm=print_format=json","-f","null","-"],timeout=600)
+    r=run_tool(["ffmpeg","-hide_banner","-i",str(path),"-af","loudnorm=print_format=json","-f","null","-"],timeout=600,stderr_limit=1024*1024)
     if r.returncode!=0:
         raise MediaHealthError(f"audio loudness analysis failed: {r.stderr_tail}")
     raw=r.stderr_tail
@@ -146,9 +146,9 @@ def media_fingerprint(path:str|Path)->dict[str,Any]:
     s=stream_summary(probe_media(path))
     return {"sha256":sha256_file(path),"size":s["size"],"duration":round(s["duration"],3),"width":s["width"],"height":s["height"],"video_codec":s["video_codec"],"audio_codec":s["audio_codec"]}
 
-def analyze_media(path:str|Path,deep:bool=False)->dict[str,Any]:
-    s=validate_media_contract(path,require_video=True)
-    report={"ok":True,"summary":s,"black_frames":[],"freeze_frames":[],"silence_segments":[],"audio":None,"blur_score":None}
+def analyze_media(path:str|Path,deep:bool=False,*,max_duration:float=1800.0)->dict[str,Any]:
+    s=validate_media_contract(path,require_video=True,max_duration=float(max_duration))
+    report: dict[str, Any] = {"ok":True,"summary":s,"black_frames":[],"freeze_frames":[],"silence_segments":[],"audio":None,"blur_score":None,"defects":[]}
     if deep:
         report["black_frames"]=detect_black_frames(path)
         report["freeze_frames"]=detect_freeze_frames(path)
@@ -159,8 +159,18 @@ def analyze_media(path:str|Path,deep:bool=False)->dict[str,Any]:
     report["quality_score"]=media_quality_score(s,len(report["black_frames"]),len(report["freeze_frames"]))
     report["fingerprint"]=media_fingerprint(path)
     report["warnings"]=[] if report["quality_score"]>=0.8 else ["technical media quality is below the preferred threshold"]
-    if report["black_frames"] or report["freeze_frames"]: report["ok"]=False
+    if report["black_frames"]:
+        report["defects"].append(f"detected {len(report['black_frames'])} black-frame event(s)")
+    if report["freeze_frames"]:
+        report["defects"].append(f"detected {len(report['freeze_frames'])} freeze-frame event(s)")
+    if report["defects"]:
+        report["ok"]=False
+        report["warnings"].extend(report["defects"])
     return report
+
+def analyze_source_media(path:str|Path, *, max_duration:float=86400.0, deep:bool=False)->dict[str,Any]:
+    """Validate source footage with a separate long-duration contract."""
+    return analyze_media(path, deep=deep, max_duration=max_duration)
 
 def assert_render_quality(path:str|Path,target_seconds:float,require_audio:bool=False)->dict[str,Any]:
     s=validate_media_contract(path,require_video=True,require_audio=require_audio,min_duration=max(.25,float(target_seconds)-.5),max_duration=float(target_seconds)+.5)

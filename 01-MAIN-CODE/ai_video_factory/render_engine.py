@@ -200,7 +200,7 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
         raise ValueError("render duration must be positive")
     src_clip = _validate_media_input(src_clip, "source clip")
     encoder = choose_encoder()
-    candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc") else ["libx264"]
+    candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc", "h264_amf") else ["libx264"]
     last_error = None
     seek_start = 0.0 if Path(src_clip).parent.name == "_clips" else max(0.0, ss)
     for selected in candidates:

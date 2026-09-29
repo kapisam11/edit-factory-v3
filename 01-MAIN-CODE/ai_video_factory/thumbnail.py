@@ -134,21 +134,41 @@ def thumbnail_quality_report(path: str, expected_size: Optional[tuple] = None) -
         mean = sum(sum(p) / 3.0 for p in pixels) / len(pixels)
         variance = sum(((sum(p) / 3.0) - mean) ** 2 for p in pixels) / len(pixels)
         contrast = min(1.0, math.sqrt(variance) / 72.0)
+        edges = img.resize((256, 256)).filter(ImageFilter.FIND_EDGES)
+        edge_pixels = list(edges.getdata())
+        edge_mean = sum(sum(p) / 3.0 for p in edge_pixels) / max(1, len(edge_pixels))
+        sharpness = min(1.0, edge_mean / 32.0)
         size_ok = expected_size is None or tuple(img.size) == tuple(expected_size)
+        face_count = 0
+        try:
+            import cv2
+            gray = cv2.cvtColor(__import__("numpy").array(img.resize((512, 512))), cv2.COLOR_RGB2GRAY)
+            detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+            face_count = int(len(detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)))
+        except Exception:
+            face_count = 0
         checks = {
             "nonempty": True,
             "size": size_ok,
             "contrast": contrast >= 0.18,
             "brightness": 0.18 <= brightness <= 0.88,
+            "sharpness": sharpness >= 0.08,
         }
         score = round(
-            25.0 * float(checks["nonempty"])
-            + 25.0 * float(checks["size"])
-            + 30.0 * contrast
-            + 20.0 * (1.0 - min(1.0, abs(brightness - 0.52) / 0.52)),
+            20.0 * float(checks["nonempty"])
+            + 20.0 * float(checks["size"])
+            + 24.0 * contrast
+            + 16.0 * (1.0 - min(1.0, abs(brightness - 0.52) / 0.52))
+            + 20.0 * sharpness,
             1,
         )
-        return {"passed": all(checks.values()), "score": score, "checks": checks}
+        return {
+            "passed": all(checks.values()),
+            "score": score,
+            "checks": checks,
+            "sharpness": round(sharpness, 4),
+            "face_count": face_count,
+        }
     except Exception as exc:
         return {"passed": False, "score": 0.0, "checks": {"readable": False}, "error": str(exc)}
 

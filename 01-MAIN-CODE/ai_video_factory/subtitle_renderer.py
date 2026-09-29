@@ -86,6 +86,11 @@ def burn_subtitles(input_video: str, output_video: str, script: str, style: str 
     word_timings = estimate_word_timing(script, total_duration)
     drawtext = build_drawtext_filter(word_timings, style)
     if not drawtext:
+        input_path = Path(input_video).resolve()
+        output_path = Path(output_video).resolve()
+        if input_path == output_path:
+            validate_media_output(str(input_path), require_video=True, require_audio=False)
+            return str(input_path)
         try:
             shutil.copy2(input_video, output_video)
             validate_media_output(output_video, require_video=True, require_audio=False)

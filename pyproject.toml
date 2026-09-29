@@ -14,6 +14,9 @@ dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "edge-tts>=6.1.0", "numpy>=
 [project.scripts]
 aivf = "app.cli:main"
 aivf-diagnose = "ai_video_factory.diagnostics_cli:main"
+aivf-ready = "ai_video_factory.production_readiness:main"
+aivf-hardware-smoke = "ai_video_factory.hardware_smoke:main"
+aivf-compat = "ai_video_factory.compatibility_cli:main"
 aivf-content = "app.content_factory_cli:main"
 aivf-v3 = "ai_video_factory.v3_cli:main"
 
@@ -45,7 +48,8 @@ py-modules = ["cli", "dashboard_auth", "dashboard_cache", "dashboard_compat", "d
 markers = ["integration: tests that execute external media/runtime components such as FFmpeg"]
 
 [tool.mypy]
-python_version = "3.10"
+# Keep runtime support at Python 3.10 while allowing current dependency stubs to parse.
+python_version = "3.12"
 ignore_missing_imports = true
 follow_imports = "skip"
 check_untyped_defs = true
@@ -66,6 +70,24 @@ files = [
   "01-MAIN-CODE/job_state.py",
   "01-MAIN-CODE/dashboard_store.py",
   "02-WEB-FILES/app/job_service.py",
+  "01-MAIN-CODE/ai_video_factory/production_guardrails.py",
+  "01-MAIN-CODE/ai_video_factory/media_health.py",
+  "01-MAIN-CODE/ai_video_factory/metadata_guardrails.py",
+  "01-MAIN-CODE/ai_video_factory/factuality_guard.py",
+  "01-MAIN-CODE/ai_video_factory/scene_detect_adapter.py",
+  "01-MAIN-CODE/ai_video_factory/audio_normalization.py",
+  "01-MAIN-CODE/ai_video_factory/rights_policy.py",
+  "01-MAIN-CODE/ai_video_factory/human_review.py",
+  "01-MAIN-CODE/ai_video_factory/authorization.py",
+  "01-MAIN-CODE/ai_video_factory/feedback_store.py",
+  "01-MAIN-CODE/ai_video_factory/job_backend.py",
+  "01-MAIN-CODE/ai_video_factory/job_recovery.py",
+  "01-MAIN-CODE/ai_video_factory/cache_lifecycle.py",
+  "01-MAIN-CODE/ai_video_factory/benchmark.py",
+  "01-MAIN-CODE/ai_video_factory/compatibility_matrix.py",
+  "01-MAIN-CODE/ai_video_factory/reproducible_build.py",
+  "01-MAIN-CODE/ai_video_factory/production_readiness.py",
+  "01-MAIN-CODE/ai_video_factory/observability_metrics.py",
 ]
 
 [tool.ruff]

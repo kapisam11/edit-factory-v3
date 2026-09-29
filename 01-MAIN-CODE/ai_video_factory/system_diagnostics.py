@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -17,8 +18,11 @@ def diagnostics_report(*, required_tools: Iterable[str] = ('ffmpeg','ffprobe'), 
         writable = False
         try:
             path.mkdir(parents=True, exist_ok=True)
-            probe = path / '.aivf-write-test'
-            probe.write_text('ok', encoding='utf-8')
+            with tempfile.NamedTemporaryFile(prefix='.aivf-write-test-', dir=path, delete=False) as handle:
+                probe = Path(handle.name)
+                handle.write(b'ok')
+                handle.flush()
+                os.fsync(handle.fileno())
             probe.unlink(missing_ok=True)
             writable = True
         except OSError:

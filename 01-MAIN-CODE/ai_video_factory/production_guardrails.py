@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -78,19 +80,51 @@ def executable_path(name: str) -> str:
         raise GuardrailError(f"required executable not found on PATH: {name}")
     return resolved
 
-def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None = None, env: Mapping[str, str] | None = None) -> ToolResult:
+def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None = None,
+             env: Mapping[str, str] | None = None, stderr_limit: int = 4000) -> ToolResult:
+    """Run an external tool without a shell and retain a bounded diagnostic tail."""
     args = tuple(str(item) for item in argv)
-    if not args or not args[0]: raise GuardrailError("tool command cannot be empty")
-    if int(timeout) <= 0: raise GuardrailError("tool timeout must be positive")
+    if not args or not args[0]:
+        raise GuardrailError("tool command cannot be empty")
+    if int(timeout) <= 0:
+        raise GuardrailError("tool timeout must be positive")
+    limit = max(256, int(stderr_limit))
     try:
-        completed = subprocess.run(list(args), cwd=str(cwd) if cwd else None, env=dict(env) if env is not None else None,
-                                  capture_output=True, text=True, timeout=int(timeout), check=False)
+        completed = subprocess.run(
+            list(args),
+            cwd=str(cwd) if cwd else None,
+            env=dict(env) if env is not None else None,
+            capture_output=True,
+            text=True,
+            timeout=int(timeout),
+            check=False,
+        )
     except subprocess.TimeoutExpired as exc:
         raise GuardrailError(f"tool timed out after {timeout}s: {args[0]}") from exc
     except OSError as exc:
         raise GuardrailError(f"could not start tool {args[0]}: {exc}") from exc
     stderr = (completed.stderr or "").strip()
-    return ToolResult(args, completed.returncode, completed.stdout or "", stderr[-4000:])
+    return ToolResult(args, completed.returncode, completed.stdout or "", stderr[-limit:])
+
+def redact_log_message(message: object, *, max_length: int = 4000) -> str:
+    """Redact common credential-bearing values before they reach logs."""
+    value = str(message or "")
+    patterns = (
+        r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
+        r"(?i)(\b(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+",
+    )
+    for pattern in patterns:
+        value = re.sub(pattern, r"\1<REDACTED>", value)
+    return value[:max(256, int(max_length))]
+
+
+class SecretRedactionFilter(logging.Filter):
+    """Logging filter for accidental credential leakage."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact_log_message(record.getMessage())
+        record.args = ()
+        return True
+
 
 @dataclass(frozen=True)
 class Diagnostic:
@@ -105,8 +139,8 @@ def diagnose_environment(*, required_tools: Iterable[str] = ("ffmpeg", "ffprobe"
         except GuardrailError as exc: results.append(Diagnostic(f"tool:{tool}", False, str(exc)))
         else: results.append(Diagnostic(f"tool:{tool}", True, path))
     for raw_path in required_paths:
-        path = Path(raw_path)
-        results.append(Diagnostic(f"path:{path}", path.exists(), "exists" if path.exists() else "missing"))
+        required_path = Path(raw_path)
+        results.append(Diagnostic(f"path:{required_path}", required_path.exists(), "exists" if required_path.exists() else "missing"))
     return results
 
 def redact_mapping(payload: Mapping[str, Any], *, secret_names: Iterable[str] = ()) -> dict[str, Any]:
@@ -134,5 +168,5 @@ def redact_mapping(payload: Mapping[str, Any], *, secret_names: Iterable[str] = 
     return dict(result)
 
 __all__ = ["Diagnostic","GuardrailError","ToolResult","atomic_write_bytes","atomic_write_json","diagnose_environment",
-           "executable_path","free_disk_bytes","redact_mapping","require_free_disk","run_tool","safe_filename",
+           "executable_path","free_disk_bytes","redact_log_message","SecretRedactionFilter","redact_mapping","require_free_disk","run_tool","safe_filename",
            "sha256_file","validate_path_inside"]

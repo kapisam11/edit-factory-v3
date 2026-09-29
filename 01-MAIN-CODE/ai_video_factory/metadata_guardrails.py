@@ -5,6 +5,8 @@ import re
 from collections import Counter
 from typing import Any, Mapping, Sequence
 
+from .factuality_guard import metadata_fact_gate
+
 def _clean(text: str, max_length: int) -> str:
     value = re.sub(r"[\x00-\x1f\x7f]", " ", str(text or ""))
     value = re.sub(r"\s+", " ", value).strip()
@@ -33,15 +35,17 @@ def build_description(topic: str, summary: Mapping[str, Any] | None = None, attr
     return _clean("\n\n".join(parts), 5000)
 
 def duplicate_phrase_score(values: Sequence[str], phrase_words: int = 3) -> float:
-    grams = []
+    """Measure repetition inside individual fields, not intentional title/topic overlap."""
     n = max(2, int(phrase_words))
+    all_grams: list[tuple[str, ...]] = []
     for value in values:
         words = re.findall(r"[a-z0-9]+", str(value).lower())
-        grams.extend(tuple(words[i:i+n]) for i in range(max(0, len(words) - n + 1)))
-    if not grams:
+        all_grams.extend(tuple(words[i:i+n]) for i in range(max(0, len(words) - n + 1)))
+    if not all_grams:
         return 0.0
-    repeated = sum(count - 1 for count in Counter(grams).values() if count > 1)
-    return round(min(1.0, repeated / max(1, len(grams))), 4)
+    counts = Counter(all_grams)
+    repeated = sum(count - 1 for count in counts.values() if count > 1)
+    return round(min(1.0, repeated / max(1, len(all_grams))), 4)
 
 def metadata_quality_score(title: str, description: str, hashtags: Sequence[str]) -> float:
     score = 0.35 * (12 <= len(title.strip()) <= 100)
@@ -79,11 +83,27 @@ def build_upload_metadata(
     hook: str = "",
     attribution: str = "",
 ) -> dict[str, Any]:
+    data = summary or {}
     title = normalize_title(topic, hook)
-    description = build_description(topic, summary, attribution)
-    text = " ".join([topic, hook, str((summary or {}).get("strongest_angle", ""))])
+    description = build_description(topic, data, attribution)
+    text = " ".join([topic, hook, str(data.get("strongest_angle", ""))])
     hashtags = hashtags_from_text(text)
-    return {"title": title, "description": description, "hashtags": hashtags, "quality": validate_metadata(title, description, hashtags)}
+    quality = validate_metadata(title, description, hashtags)
+    evidence = data.get("factual_evidence") or data.get("research_evidence") or []
+    factuality = metadata_fact_gate(
+        title,
+        description,
+        evidence=evidence if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)) else [],
+        fact_reviewed=bool(data.get("facts_reviewed", False)),
+    )
+    return {
+        "title": title,
+        "description": description,
+        "hashtags": hashtags,
+        "factuality": factuality,
+        "quality": quality,
+        "publish_ready": bool(quality["ok"]) and not factuality["publish_blocked"],
+    }
 
 def source_attribution_note(source: Mapping[str, Any]) -> str:
     status = str(source.get("rights_status") or "review_required")

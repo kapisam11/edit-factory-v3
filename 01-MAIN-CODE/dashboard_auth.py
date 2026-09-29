@@ -8,6 +8,7 @@ import time
 from urllib.parse import urlparse
 
 from flask import abort, g, redirect, render_template, request, session, url_for
+from ai_video_factory.authorization import Role, normalize_role, role_allows
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 PUBLIC_PATHS = {"/login", "/logout", "/api/health"}
@@ -78,6 +79,7 @@ def configure_dashboard_auth(app):
     app.config["_AIVF_AUTH_CONFIGURED"] = True
     token = os.environ.get("AIVF_DASHBOARD_TOKEN", "").strip()
     allow_insecure_local = os.environ.get("AIVF_ALLOW_INSECURE_LOCAL", "0") == "1"
+    configured_role = normalize_role(os.environ.get("AIVF_DASHBOARD_ROLE", "admin"))
     if not token and not allow_insecure_local:
         app.logger.warning("AIVF_DASHBOARD_TOKEN is unset; dashboard access will fail closed")
 
@@ -134,8 +136,25 @@ def configure_dashboard_auth(app):
         if valid or local_dev_valid:
             session.clear()
             session["aivf_authenticated"] = True
+            session["aivf_role"] = configured_role.value
             return redirect("/")
         return "Invalid dashboard token", 401
+
+    @app.context_processor
+    def dashboard_auth_context() -> dict:
+        raw_role = session.get("aivf_role") or configured_role.value
+        try:
+            role = normalize_role(raw_role)
+        except ValueError:
+            role = Role.VIEWER
+        return {"aivf_role": role.value}
+
+    def require_dashboard_role(required: str | Role) -> None:
+        raw_role = session.get("aivf_role") or configured_role.value
+        if not role_allows(normalize_role(raw_role), required):
+            abort(403)
+
+    app.extensions["aivf_require_role"] = require_dashboard_role
 
     @app.post("/logout")
     def dashboard_logout():

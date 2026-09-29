@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .production_guardrails import safe_filename, validate_path_inside
+from .production_guardrails import GuardrailError, safe_filename, validate_path_inside
 
 
 class AssetManager:
@@ -45,7 +45,7 @@ class AssetManager:
             return None
         try:
             path = self._safe_asset_path(*parts)
-        except ValueError:
+        except (ValueError, GuardrailError):
             return None
         return path if path.exists() else None
 
@@ -82,10 +82,19 @@ class AssetManager:
         dest_dir.mkdir(parents=True, exist_ok=True)
         filename = safe_filename(src.name, fallback="asset")
         dest = validate_path_inside(self.root, dest_dir / filename)
+        if dest.exists():
+            stem, suffix = dest.stem, dest.suffix
+            for index in range(2, 10000):
+                candidate = dest.with_name(f"{stem}-{index}{suffix}")
+                if not candidate.exists():
+                    dest = candidate
+                    break
+            else:
+                raise RuntimeError("unable to allocate a collision-free asset filename")
         shutil.copy2(src, dest)
         if metadata:
             dest.with_suffix(".json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        uri_parts = [category] + ([sub] if sub else []) + [filename]
+        uri_parts = [category] + ([sub] if sub else []) + [dest.name]
         return "assets://" + "/".join(uri_parts)
 
     def get_random_music(self, mood: str) -> Optional[str]:

@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .render_engine import run_ffprobe
+from .rights_policy import rights_gate
+from .factuality_guard import metadata_fact_gate
+from .human_review import review_gate
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,10 @@ def _source_records(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "rights_basis": _normalize_phrase(str(raw.get("rights_basis") or "")),
             "rights_status": _normalize_phrase(str(raw.get("rights_status") or "review_required")).lower(),
             "source": _normalize_phrase(str(raw.get("source") or default_source)).lower(),
+            "evidence_url": str(raw.get("evidence_url") or raw.get("permission_url") or "").strip(),
+            "declared_by": _normalize_phrase(str(raw.get("declared_by") or "")),
+            "declared_at": str(raw.get("declared_at") or "").strip(),
+            "attribution": _normalize_phrase(str(raw.get("attribution") or "")),
         }
         key = record["url"] or (record["creator"], record["title"], record["source"])
         if key and key not in seen and (record["title"] or record["creator"] or record["url"]):
@@ -195,13 +203,29 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
         if item.get("rights_status") != "cleared"
         and item.get("rights_basis") not in cleared_bases
     ]
-
+    strict_rights = os.environ.get("AIVF_STRICT_RIGHTS", "1") == "1"
+    evidence_records = []
+    for item in records:
+        if not any(item.get(key) for key in ("declared_by", "declared_at", "evidence_url", "license_url")):
+            continue
+        evidence_records.append({
+            **item,
+            "asset_id": item.get("title") or item.get("url") or "source",
+            "source": item.get("source") or "external",
+        })
+    evidence_gate = rights_gate(evidence_records, strict=strict_rights) if evidence_records else {
+        "status": "not_declared", "publish_blocked": False, "checked": [], "evidence_contract": "not applicable"
+    }
+    if evidence_gate["publish_blocked"]:
+        unresolved.extend(evidence_gate["checked"])
+    
     return {
         "status": "cleared" if external and not unresolved else ("review_required" if unresolved else "not_declared"),
         "publish_blocked": bool(unresolved),
         "requires_explicit_declaration": bool(summary.get("requires_rights_declaration")),
         "sources": records,
         "unverified_sources": unresolved,
+        "rights_evidence_gate": evidence_gate,
         "message": (
             "Publishing is blocked until every third-party or user-provided source has a declared, valid rights basis."
             if unresolved
@@ -500,7 +524,16 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         tags,
         title_limit=profile.title_limit,
     )
-
+    evidence = summary.get("factual_evidence") or summary.get("research_evidence") or []
+    factuality = metadata_fact_gate(
+        chosen_title,
+        description,
+        evidence=evidence if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)) else [],
+        fact_reviewed=bool(summary.get("facts_reviewed", False)),
+    )
+    human_review = review_gate(summary.get("human_review"))
+    require_human_review = os.environ.get("AIVF_REQUIRE_HUMAN_REVIEW", "1") == "1"
+    human_review["required"] = require_human_review
     upload_dir = root / "upload" / profile.name
     upload_dir.mkdir(parents=True, exist_ok=True)
     (upload_dir / "title.txt").write_text(chosen_title + "\n", encoding="utf-8")
@@ -548,7 +581,14 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "ai_disclosure": disclosure,
         "media_rights": rights,
         "metadata_quality": metadata_quality,
-        "publish_ready": bool(metadata_quality["passed"]) and not rights["publish_blocked"],
+        "factuality": factuality,
+        "human_review": human_review,
+        "publish_ready": (
+            bool(metadata_quality["passed"])
+            and not rights["publish_blocked"]
+            and not factuality["publish_blocked"]
+            and (not require_human_review or human_review["status"] == "approved")
+        ),
         "artifacts": _collect_artifacts(root),
     }
     (upload_dir / "metadata.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

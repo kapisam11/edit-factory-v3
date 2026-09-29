@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 
 def _load(monkeypatch):
@@ -8,7 +9,8 @@ def _load(monkeypatch):
     importlib.reload(dashboard_auth)
     dashboard_auth._login_attempts.clear()
     from flask import Flask
-    app = Flask(__name__)
+    template_dir = Path(__file__).resolve().parents[2] / "02-WEB-FILES" / "templates"
+    app = Flask(__name__, template_folder=str(template_dir))
     app.secret_key = "test-secret"
 
     @app.get("/")
@@ -21,6 +23,8 @@ def _load(monkeypatch):
 
     dashboard_auth.configure_dashboard_auth(app)
     return app
+
+
 def _login(client):
     response = client.post("/login", data={"token": "test-token"})
     assert response.status_code == 302
@@ -32,6 +36,21 @@ def test_dashboard_requires_authentication(monkeypatch):
     response = client.get("/")
     assert response.status_code == 302
     assert "/login" in response.headers["Location"]
+
+
+def test_dashboard_requires_authentication_for_non_root(monkeypatch):
+    app = _load(monkeypatch)
+    @app.get("/private")
+    def private():
+        return "private"
+    response = app.test_client().get("/private")
+    assert response.status_code == 401
+
+
+def test_login_page_renders(monkeypatch):
+    app = _load(monkeypatch)
+    response = app.test_client().get("/login")
+    assert response.status_code == 200
 
 
 def test_dashboard_token_logs_user_in(monkeypatch):
@@ -72,6 +91,18 @@ def test_authenticated_state_change_accepts_same_origin(monkeypatch):
     _login(client)
 
     response = client.post("/state-change", headers={"Origin": "http://localhost"})
+    assert response.status_code == 200
+
+
+def test_authenticated_state_change_accepts_same_origin_referer(monkeypatch):
+    app = _load(monkeypatch)
+    client = app.test_client()
+    _login(client)
+
+    response = client.post(
+        "/state-change",
+        headers={"Referer": "http://localhost/private?page=1"},
+    )
     assert response.status_code == 200
 
 
@@ -120,6 +151,24 @@ def test_session_cookie_is_secure(monkeypatch):
     response = client.post("/login", data={"token": "test-token"})
     assert response.status_code == 302
     assert "Secure" in response.headers.get("Set-Cookie", "")
+
+
+def test_logout_clears_session(monkeypatch):
+    app = _load(monkeypatch)
+    client = app.test_client()
+    _login(client)
+    assert client.get("/").status_code == 200
+    response = client.post("/logout")
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+    assert client.get("/").status_code == 302
+
+
+def test_configure_is_idempotent(monkeypatch):
+    app = _load(monkeypatch)
+    import dashboard_auth
+    dashboard_auth.configure_dashboard_auth(app)
+    assert app.config["_AIVF_AUTH_CONFIGURED"] is True
 
 
 def test_dashboard_emits_nonce_based_csp(monkeypatch):

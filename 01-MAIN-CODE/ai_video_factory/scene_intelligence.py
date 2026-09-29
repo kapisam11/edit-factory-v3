@@ -14,6 +14,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .production_models import Scene
 from .render_engine import run_ffprobe
+from .scene_detect_adapter import scene_windows
 
 
 class SceneAnalysisError(RuntimeError):
@@ -144,17 +145,22 @@ def analyze_video(
 
     step = max(0.5, float(sample_seconds))
     requested_min_scenes = max(1, int(min_scenes or 0))
-    count = min(
+    fallback_count = min(
         max_scenes,
         max(requested_min_scenes, max(1, int(math.ceil(duration / step)))),
     )
-    edges = [min(duration, i * duration / count) for i in range(count + 1)]
+    shot_windows = scene_windows(video_path, duration, max_scenes=max_scenes)
+    if shot_windows and len(shot_windows) >= requested_min_scenes:
+        windows = shot_windows
+    else:
+        edges = [min(duration, i * duration / fallback_count) for i in range(fallback_count + 1)]
+        windows = [(edges[i], edges[i + 1]) for i in range(fallback_count)]
 
     scenes: List[Scene] = []
     global_prev_gray = None
-    for index in range(count):
-        start = float(edges[index])
-        end = float(edges[index + 1])
+    for index, (start_raw, end_raw) in enumerate(windows):
+        start = float(start_raw)
+        end = float(end_raw)
         frames = list(_sample_frames(video_path, start, end, 2))
         motions: List[float] = []
         brightness_values: List[float] = []
