@@ -14,6 +14,7 @@ dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "edge-tts>=6.1.0", "numpy>=
 [project.scripts]
 aivf = "app.cli:main"
 aivf-diagnose = "ai_video_factory.diagnostics_cli:main"
+aivf-ready = "ai_video_factory.production_readiness:main"
 aivf-content = "app.content_factory_cli:main"
 aivf-v3 = "ai_video_factory.v3_cli:main"
 
@@ -23,6 +24,7 @@ dev = ["pytest>=7.0", "pytest-cov>=5.0", "mypy>=1.0", "ruff>=0.6.0", "build>=1.2
 audit = ["pip-audit>=2.9.0"]
 beats = ["librosa>=0.10.0"]
 vision = ["opencv-python-headless>=4.8.0"]
+scenes = ["scenedetect>=0.6.6"]
 ocr = ["pytesseract>=0.3.10", "opencv-python-headless>=4.8.0"]
 diarization = ["pyannote.audio>=3.1.0"]
 intelligence = ["sentence-transformers>=3.0.0"]
@@ -66,6 +68,24 @@ files = [
   "01-MAIN-CODE/job_state.py",
   "01-MAIN-CODE/dashboard_store.py",
   "02-WEB-FILES/app/job_service.py",
+  "01-MAIN-CODE/ai_video_factory/production_guardrails.py",
+  "01-MAIN-CODE/ai_video_factory/media_health.py",
+  "01-MAIN-CODE/ai_video_factory/metadata_guardrails.py",
+  "01-MAIN-CODE/ai_video_factory/factuality_guard.py",
+  "01-MAIN-CODE/ai_video_factory/scene_detect_adapter.py",
+  "01-MAIN-CODE/ai_video_factory/audio_normalization.py",
+  "01-MAIN-CODE/ai_video_factory/rights_policy.py",
+  "01-MAIN-CODE/ai_video_factory/human_review.py",
+  "01-MAIN-CODE/ai_video_factory/authorization.py",
+  "01-MAIN-CODE/ai_video_factory/feedback_store.py",
+  "01-MAIN-CODE/ai_video_factory/job_backend.py",
+  "01-MAIN-CODE/ai_video_factory/job_recovery.py",
+  "01-MAIN-CODE/ai_video_factory/cache_lifecycle.py",
+  "01-MAIN-CODE/ai_video_factory/benchmark.py",
+  "01-MAIN-CODE/ai_video_factory/compatibility_matrix.py",
+  "01-MAIN-CODE/ai_video_factory/reproducible_build.py",
+  "01-MAIN-CODE/ai_video_factory/production_readiness.py",
+  "01-MAIN-CODE/ai_video_factory/observability_metrics.py",
 ]
 
 [tool.ruff]
