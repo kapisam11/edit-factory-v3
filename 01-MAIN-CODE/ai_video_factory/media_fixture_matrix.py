@@ -25,7 +25,7 @@ def generate_fixtures(root: str | Path) -> list[Path]:
 
     specs = [
         ("cfr.mp4", ["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "2"]),
-        ("vfr.mp4", ["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "2", "-vf", "select='if(lt(n,20),1,not(mod(n,3)))',setpts=N/30/TB", "-fps_mode", "vfr"]),
+        ("vfr.mp4", ["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "2", "-vf", "select='if(lt(n,20),1,not(mod(n,3)))',setpts='if(lt(N,20),N/(30*TB),(20+(N-20)*1.5)/(30*TB))'", "-fps_mode", "vfr"]),
         ("ten_bit.mkv", ["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24", "-t", "2", "-vf", "format=yuv420p10le", "-c:v", "libx264"]),
         ("interlaced.mp4", ["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=25", "-t", "2", "-vf", "tinterlace=mode=interleave_top"]),
     ]
