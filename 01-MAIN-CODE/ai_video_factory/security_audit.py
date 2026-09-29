@@ -38,7 +38,7 @@ def _keyword_bool(node: ast.Call, name: str) -> bool:
 def audit_source(path: str | Path) -> list[SecurityFinding]:
     source_path = Path(path)
     try:
-        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        tree = ast.parse(source_path.read_text(encoding="utf-8-sig"), filename=str(source_path))
     except (OSError, UnicodeDecodeError, SyntaxError) as exc:
         return [SecurityFinding(str(source_path), 0, "HIGH", "parse-error", str(exc))]
     findings = []
