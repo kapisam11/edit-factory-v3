@@ -183,9 +183,12 @@ def select_best_thumbnail_variant(paths: List[str]) -> int:
         visual_score = max(0.0, _score_image(path))
         face_bonus = 5.0 if 1 <= int(report.get("face_count", 0)) <= 3 else 0.0
         final_score = float(report["score"]) + (10.0 * visual_score) + face_bonus
-        scored.append((final_score, -index, index))
-    scored.sort(reverse=True)
-    return scored[0][2]
+        # Passing the deterministic quality gate always outranks a failed variant.
+        scored.append((bool(report.get("passed", False)), final_score, -index, index))
+    passing = [item for item in scored if item[0]]
+    pool = passing or scored
+    pool.sort(reverse=True)
+    return pool[0][3]
 
 
 def _score_image(path: str) -> float:
