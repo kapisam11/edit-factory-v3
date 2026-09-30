@@ -327,6 +327,43 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
         validate_media_output(output_path)
 
 
+def stamp_media_metadata(path: str, *, version: str = "3.0.0") -> str:
+    """Embed a traceability tag without re-encoding the media streams."""
+    target = Path(path)
+    if not target.is_file():
+        raise FileNotFoundError(target)
+    version = str(version).strip()[:64]
+    if not version:
+        raise ValueError("version must not be empty")
+    temp = target.with_name(f".{target.stem}.metadata{target.suffix}")
+    try:
+        run_ffmpeg(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-y",
+                "-i",
+                str(target),
+                "-map",
+                "0",
+                "-c",
+                "copy",
+                "-metadata",
+                f"comment=Edit Factory {version}",
+                "-movflags",
+                "+faststart",
+                str(temp),
+            ],
+            timeout=300,
+        )
+        validate_media_output(str(temp), require_video=True, require_audio=False)
+        os.replace(temp, target)
+        return str(target)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
+
+
 def _escape_filter_path(path: str) -> str:
     return _validate_media_path(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
