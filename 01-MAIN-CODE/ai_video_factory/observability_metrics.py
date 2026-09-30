@@ -30,20 +30,20 @@ class MetricsRegistry:
         """Export low-cardinality counters/timings in Prometheus text format."""
         snapshot = self.snapshot()
         lines: list[str] = []
-        for raw_name, value in snapshot.counters.items():
+        for raw_name, count in snapshot.counters.items():
             if raw_name.startswith("http_requests_total:"):
                 _, method, endpoint = raw_name.split(":", 2)
                 method = re.sub(r"[^A-Za-z0-9_]", "_", method)
                 endpoint = endpoint.replace("\\", "\\\\").replace('"', '\\"')
                 lines.append(
-                    f'aivf_http_requests_total{{method="{method}",endpoint="{endpoint}"}} {int(value)}'
+                    f'aivf_http_requests_total{{method="{method}",endpoint="{endpoint}"}} {int(count)}'
                 )
             else:
                 metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
-                lines.append(f"aivf_{metric} {int(value)}")
-        for raw_name, value in snapshot.timings_ms.items():
+                lines.append(f"aivf_{metric} {int(count)}")
+        for raw_name, timing_ms in snapshot.timings_ms.items():
             metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
-            lines.append(f"aivf_{metric}_milliseconds_avg {value}")
+            lines.append(f"aivf_{metric}_milliseconds_avg {timing_ms}")
         return "\n".join(lines) + ("\n" if lines else "")
 
     def snapshot(self)->MetricSnapshot:
