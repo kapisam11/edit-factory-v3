@@ -397,10 +397,13 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 result, package, payload, target_seconds
             )
             final_video = _normalize_final_audio(package, final_video)
-            final_video = stamp_media_metadata(
-                final_video,
-                version=os.environ.get("AIVF_VERSION", "3.0.0"),
-            )
+            try:
+                final_video = stamp_media_metadata(
+                    final_video,
+                    version=os.environ.get("AIVF_VERSION", "3.0.0"),
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                result.warnings.append(f"Final metadata stamping skipped: {exc}")
             result.final_video = final_video
             try:
                 final_health = analyze_media(
