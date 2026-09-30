@@ -59,3 +59,15 @@ def test_readyz_reports_tool_and_directory_readiness(monkeypatch, tmp_path):
     payload = response.get_json()
     assert payload["status"] == "ready"
     assert payload["diagnostics"]["ok"] is True
+
+
+def test_readyz_fails_when_disk_below_configured_threshold(monkeypatch, tmp_path):
+    app = _load_app(monkeypatch, tmp_path)
+    from app.observability import install_observability
+    install_observability(app)
+
+    monkeypatch.setenv("AIVF_MIN_FREE_DISK_MB", "999999999")
+    response = app.test_client().get("/readyz")
+    assert response.status_code == 503
+    assert response.get_json()["status"] == "not_ready"
+    assert any(item["key"] == "minimum_free_disk" for item in response.get_json()["diagnostics"]["checks"])
