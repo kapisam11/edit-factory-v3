@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from flask import jsonify, request, send_file, send_from_directory
+from werkzeug.utils import secure_filename
 
 SECRET_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
 _DASHBOARD_SECRETS = {key: "" for key in SECRET_KEYS}
@@ -312,11 +313,16 @@ def register_dashboard_compat(app):
             return jsonify({"error": "Package not found"}), 404
         if package is None:
             return jsonify({"error": "Package not found"}), 404
-        try:
-            relative = Path(str(filename))
-            if relative.is_absolute():
+        raw_parts = str(filename).replace("\\", "/").split("/")
+        safe_parts = []
+        for part in raw_parts:
+            safe_part = secure_filename(part)
+            if not part or safe_part != part or part in {".", ".."}:
                 return jsonify({"error": "Package not found"}), 404
-            resolved = (package / relative).resolve()
+            safe_parts.append(safe_part)
+        safe_relative = Path(*safe_parts)
+        try:
+            resolved = (package / safe_relative).resolve()
             resolved.relative_to(package.resolve())
         except (OSError, TypeError, ValueError):
             return jsonify({"error": "Package not found"}), 404
