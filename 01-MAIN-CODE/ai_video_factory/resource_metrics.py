@@ -123,3 +123,94 @@ def resource_json(start: dict[str, Any], end: dict[str, Any]) -> str:
 
 
 __all__ = ["snapshot_resources", "summarize_resources", "resource_json"]
+
+
+class ResourceMonitor:
+    """Sample the worker process tree so short-lived FFmpeg children are included."""
+
+    def __init__(self, interval_seconds: float = 1.0) -> None:
+        import threading
+
+        if interval_seconds <= 0:
+            raise ValueError("interval_seconds must be positive")
+        self.interval_seconds = float(interval_seconds)
+        self._stop = threading.Event()
+        self._thread = None
+        self.start = snapshot_resources()
+        self.peak_rss_bytes = self.start.get("rss_bytes")
+        self.peak_cpu_percent = self.start.get("cpu_percent")
+        self.sample_count = 1
+        self.child_processes_seen = 0
+
+    def _tree_snapshot(self) -> dict[str, Any]:
+        base = snapshot_resources()
+        if psutil is None:
+            return base
+        try:
+            root = psutil.Process(os.getpid())
+            processes = [root, *root.children(recursive=True)]
+        except (OSError, ValueError):
+            return base
+        total_rss = 0
+        total_cpu = 0.0
+        count = 0
+        for process in processes:
+            try:
+                if process.is_running():
+                    total_rss += int(process.memory_info().rss)
+                    total_cpu += float(process.cpu_percent(interval=None))
+                    count += 1
+            except (OSError, ValueError):
+                continue
+        if count:
+            base["rss_bytes"] = total_rss
+            base["cpu_percent"] = total_cpu
+            base["process_tree_count"] = count
+            self.child_processes_seen = max(self.child_processes_seen, count - 1)
+        return base
+
+    def _run(self) -> None:
+        # Prime cpu counters before sampling.
+        self._tree_snapshot()
+        while not self._stop.wait(self.interval_seconds):
+            sample = self._tree_snapshot()
+            self.sample_count += 1
+            rss = sample.get("rss_bytes")
+            cpu = sample.get("cpu_percent")
+            if rss is not None:
+                self.peak_rss_bytes = max(
+                    int(self.peak_rss_bytes or 0), int(rss)
+                )
+            if cpu is not None:
+                self.peak_cpu_percent = max(
+                    float(self.peak_cpu_percent or 0.0), float(cpu)
+                )
+
+    def start_monitoring(self) -> None:
+        import threading
+
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._run,
+            name="aivf-resource-monitor",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop_monitoring(self) -> dict[str, Any]:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(2.0, self.interval_seconds + 1.0))
+        end = self._tree_snapshot()
+        return {
+            **summarize_resources(self.start, end),
+            "peak_rss_bytes": self.peak_rss_bytes,
+            "peak_cpu_percent": self.peak_cpu_percent,
+            "sample_count": self.sample_count,
+            "child_processes_seen": self.child_processes_seen,
+            "gpu_end": end.get("gpu"),
+        }
+
+
+__all__ = ["snapshot_resources", "summarize_resources", "resource_json", "ResourceMonitor"]
