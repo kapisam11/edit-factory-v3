@@ -310,7 +310,19 @@ def register_dashboard_compat(app):
         package = web_app_v3._resolve_package(name)
         if not _package_access_allowed(web_app_v3, package):
             return jsonify({"error": "Package not found"}), 404
-        return send_from_directory(package, filename)
+        if package is None:
+            return jsonify({"error": "Package not found"}), 404
+        try:
+            relative = Path(str(filename))
+            if relative.is_absolute():
+                return jsonify({"error": "Package not found"}), 404
+            resolved = (package / relative).resolve()
+            resolved.relative_to(package.resolve())
+        except (OSError, TypeError, ValueError):
+            return jsonify({"error": "Package not found"}), 404
+        if not resolved.is_file():
+            return jsonify({"error": "Package not found"}), 404
+        return send_file(resolved)
 
     @app.route("/api/admin/cleanup", methods=["POST"])
     def cleanup_packages_admin():
