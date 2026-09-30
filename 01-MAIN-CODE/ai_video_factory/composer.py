@@ -235,9 +235,11 @@ def compose_short_from_video(
         return index, dst
 
     try:
-        configured_workers = int(os.environ.get("AIVF_MAX_PARALLEL_SEGMENTS", "2"))
+        configured_workers = int(os.environ.get("AIVF_MAX_PARALLEL_SEGMENTS", "1"))
     except ValueError as exc:
         raise ValueError("AIVF_MAX_PARALLEL_SEGMENTS must be an integer") from exc
+    # One segment at a time is the safe default because the global FFmpeg budget is shared across jobs.
+    # Operators can opt into bounded parallelism explicitly.
     max_workers = min(4, max(1, configured_workers), max(1, len(edit_plan)))
 
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aivf-segment") as executor:
