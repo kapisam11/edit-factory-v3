@@ -111,6 +111,11 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         return str(payload.get("_principal") or "") == principal_for_request(request)
 
     def db_get_job(job_id: str) -> dict | None:
+        """Raw internal job lookup used by workers and lifecycle code."""
+        return store.get_job(job_id)
+
+    def authorized_db_get_job(job_id: str) -> dict | None:
+        """Request-scoped job lookup that enforces dashboard ownership/RBAC."""
         job = store.get_job(job_id)
         return job if _job_access_allowed(job) else None
 
@@ -167,6 +172,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     app_module.db_update_job = db_update_job
     app_module.db_claim_job = db_claim_job
     app_module.db_get_job = db_get_job
+    app_module.authorized_db_get_job = authorized_db_get_job
     app_module.db_append_log = db_append_log
     app_module.db_logs_since = db_logs_since
     app_module.db_list_jobs = db_list_jobs
