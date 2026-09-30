@@ -45,9 +45,19 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
     )
 
     def heartbeat() -> None:
+        failures = 0
         while not heartbeat_stop.wait(interval):
-            if not heartbeat_store.heartbeat_job(job_id):
-                return
+            try:
+                alive = heartbeat_store.heartbeat_job(job_id)
+            except Exception:
+                alive = False
+            if alive:
+                failures = 0
+            else:
+                failures += 1
+                # A transient SQLite lock must not terminate the lease-refresh thread.
+                if failures >= 5:
+                    failures = 0
 
     heartbeat_thread = threading.Thread(
         target=heartbeat,
