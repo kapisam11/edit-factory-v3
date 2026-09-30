@@ -63,6 +63,19 @@ def install_observability(app: Flask) -> None:
             required_tools=("ffmpeg", "ffprobe"),
             directories=[state_dir],
         )
+        try:
+            minimum_free = max(0, int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "512"))) * 1024 * 1024
+        except ValueError:
+            minimum_free = 512 * 1024 * 1024
+        directory = (report.get("directories") or [{}])[0]
+        free_bytes = int(directory.get("free_bytes") or 0)
+        if free_bytes < minimum_free:
+            report["ok"] = False
+            report.setdefault("checks", []).append({
+                "key": "minimum_free_disk",
+                "ok": False,
+                "detail": f"free disk {free_bytes} bytes is below required {minimum_free} bytes",
+            })
         status = 200 if report["ok"] else 503
         return jsonify({
             "status": "ready" if status == 200 else "not_ready",
