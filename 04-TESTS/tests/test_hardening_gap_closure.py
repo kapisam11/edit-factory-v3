@@ -110,7 +110,10 @@ def test_resource_snapshot_is_json_serializable(monkeypatch):
         summarize_resources,
     )
 
-    monkeypatch.setattr("ai_video_factory.resource_metrics.shutil.which", lambda name: None)
+    monkeypatch.setattr(
+        "ai_video_factory.resource_metrics.shutil.which",
+        lambda name: None,
+    )
     start = snapshot_resources()
     end = snapshot_resources()
     report = summarize_resources(start, end)
@@ -130,7 +133,11 @@ def test_media_version_stamp_uses_copy_mode(monkeypatch, tmp_path):
         Path(command[-1]).write_bytes(b"stamped")
 
     monkeypatch.setattr(render_engine, "run_ffmpeg", fake_run)
-    monkeypatch.setattr(render_engine, "validate_media_output", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        render_engine,
+        "validate_media_output",
+        lambda *args, **kwargs: {},
+    )
     result = render_engine.stamp_media_metadata(str(source), version="3.0.0-test")
 
     assert result == str(source)
