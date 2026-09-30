@@ -24,3 +24,38 @@ def test_production_observability_adds_request_id_and_health(monkeypatch, tmp_pa
     payload = response.get_json()
     assert payload["status"] == "ok"
     assert payload["request_id"] == response.headers["X-Request-ID"]
+
+
+def test_observability_preserves_valid_request_id_and_rejects_malformed_id(monkeypatch, tmp_path):
+    app = _load_app(monkeypatch, tmp_path)
+    from app.observability import install_observability
+
+    install_observability(app)
+
+    @app.get("/ok-request-id")
+    def ok_request_id():
+        return {"status": "ok"}
+
+    client = app.test_client()
+    valid = "req-test-2026"
+    response = client.get("/ok-request-id", headers={"X-Request-ID": valid})
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == valid
+
+    malformed = "bad id with spaces"
+    response = client.get("/ok-request-id", headers={"X-Request-ID": malformed})
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] != malformed
+
+
+def test_readyz_reports_tool_and_directory_readiness(monkeypatch, tmp_path):
+    app = _load_app(monkeypatch, tmp_path)
+    from app.observability import install_observability
+
+    install_observability(app)
+    monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
+    response = app.test_client().get("/readyz")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ready"
+    assert payload["diagnostics"]["ok"] is True
