@@ -715,9 +715,17 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
 
 
 def _resolve_package(name: str) -> Optional[Path]:
+    raw_name = str(name)
+    safe_name = secure_filename(raw_name)
+    if not safe_name or safe_name != raw_name or safe_name in {".", ".."}:
+        return None
     root = OUTPUT_FOLDER.resolve()
-    candidate = (OUTPUT_FOLDER / name).resolve()
-    if root not in candidate.parents or not candidate.is_dir():
+    candidate = (root / safe_name).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if not candidate.is_dir():
         return None
     return candidate
 
@@ -1005,11 +1013,16 @@ def package_file(name, filename):
         abort(404)
     if pkg_dir is None:
         abort(404)
-    try:
-        relative = Path(str(filename))
-        if relative.is_absolute():
+    raw_parts = str(filename).replace("\\", "/").split("/")
+    safe_parts = []
+    for part in raw_parts:
+        safe_part = secure_filename(part)
+        if not part or safe_part != part or part in {".", ".."}:
             abort(404)
-        resolved = (pkg_dir / relative).resolve()
+        safe_parts.append(safe_part)
+    safe_relative = Path(*safe_parts)
+    try:
+        resolved = (pkg_dir / safe_relative).resolve()
         resolved.relative_to(pkg_dir.resolve())
     except (OSError, TypeError, ValueError):
         abort(404)
