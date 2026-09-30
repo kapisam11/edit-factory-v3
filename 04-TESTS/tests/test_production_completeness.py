@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from PIL import Image
+import pytest
 
 from ai_video_factory.copyright_policy import (
     CopyrightEvidence,
@@ -9,6 +10,8 @@ from ai_video_factory.copyright_policy import (
     copyright_gate,
     fingerprint_file,
 )
+from ai_video_factory.factuality_guard import metadata_fact_gate
+from ai_video_factory.security_audit import audit_source, high_severity
 from ai_video_factory.filesystem_guard import safe_delete, safe_join, safe_rmtree
 from ai_video_factory.human_review import composite_review_score
 from ai_video_factory.learning_loop import LearningPolicy, train_policy
@@ -97,3 +100,59 @@ def test_unverified_copyright_is_blocked():
         provider_status=CopyrightStatus.MANUAL_REVIEW,
     )
     assert copyright_gate([evidence], require_provider=True)["publish_blocked"] is True
+
+
+def test_filesystem_guard_rejects_traversal(tmp_path: Path):
+    root = tmp_path / "root"
+    root.mkdir()
+    with pytest.raises(Exception):
+        safe_join(root, "../escape")
+    with pytest.raises(Exception):
+        safe_join(root, "/absolute/path")
+
+
+def test_factuality_numeric_claim_requires_human_review():
+    report = metadata_fact_gate(
+        "Minecraft hit 100 million views",
+        "The clip reached 100 million views.",
+        evidence=[{"text": "100 million views"}],
+        fact_reviewed=False,
+    )
+    assert report["publish_blocked"] is True
+    assert report["fact_review_required"] is True
+    reviewed = metadata_fact_gate(
+        "Minecraft hit 100 million views",
+        "The clip reached 100 million views.",
+        evidence=[{"text": "100 million views"}],
+        fact_reviewed=True,
+    )
+    assert reviewed["publish_blocked"] is False
+
+
+def test_security_audit_blocks_shell_apis(tmp_path: Path):
+    source = tmp_path / "unsafe.py"
+    source.write_text(
+        "import os\nos.system('echo unsafe')\n",
+        encoding="utf-8",
+    )
+    findings = audit_source(source)
+    assert any(item.rule == "shell-execution" for item in findings)
+    assert high_severity(findings)
+
+
+def test_security_audit_blocks_dynamic_subprocess_shell(tmp_path: Path):
+    source = tmp_path / "dynamic.py"
+    source.write_text(
+        "import subprocess\nflag = True\nsubprocess.run(['echo', 'x'], shell=flag)\n",
+        encoding="utf-8",
+    )
+    findings = audit_source(source)
+    assert any(item.rule == "dynamic-subprocess-shell" for item in findings)
+
+
+def test_audio_measurement_contract_rejects_missing_or_nonfinite_values():
+    from ai_video_factory.audio_normalization import AudioNormalizationError, _numeric_measurement
+    with pytest.raises(AudioNormalizationError):
+        _numeric_measurement({}, "input_i")
+    with pytest.raises(AudioNormalizationError):
+        _numeric_measurement({"input_i": "nan"}, "input_i")
