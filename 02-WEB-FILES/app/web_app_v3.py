@@ -1007,26 +1007,41 @@ def list_packages():
 
 
 @app.route("/api/packages/<name>/file/<path:filename>")
+def _resolve_package_file(package: Optional[Path], filename: str) -> Optional[Path]:
+    """Resolve an existing regular file discovered beneath a package root."""
+    if package is None or not isinstance(filename, str):
+        return None
+    requested = filename.replace("\\", "/")
+    if not requested or requested.startswith("/") or requested.startswith("../") or "/../" in requested:
+        return None
+    root = package.resolve()
+    try:
+        candidates = package.rglob("*")
+    except OSError:
+        return None
+    for candidate in candidates:
+        try:
+            if not candidate.is_file() or candidate.is_symlink():
+                continue
+            relative = candidate.relative_to(package).as_posix()
+            if relative != requested:
+                continue
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+            return resolved
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def package_file(name, filename):
     pkg_dir = _resolve_package(name)
     if not _package_access_allowed(pkg_dir):
         abort(404)
     if pkg_dir is None:
         abort(404)
-    raw_parts = str(filename).replace("\\", "/").split("/")
-    safe_parts = []
-    for part in raw_parts:
-        safe_part = secure_filename(part)
-        if not part or safe_part != part or part in {".", ".."}:
-            abort(404)
-        safe_parts.append(safe_part)
-    safe_relative = Path(*safe_parts)
-    try:
-        resolved = (pkg_dir / safe_relative).resolve()
-        resolved.relative_to(pkg_dir.resolve())
-    except (OSError, TypeError, ValueError):
-        abort(404)
-    if not resolved.is_file():
+    resolved = _resolve_package_file(pkg_dir, filename)
+    if resolved is None:
         abort(404)
     return send_file(resolved)
 
