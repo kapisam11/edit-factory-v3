@@ -69,6 +69,33 @@ def _package_access_allowed(web_app_v3, package) -> bool:
     return False
 
 
+def _resolve_package_file(package, filename):
+    """Resolve an existing regular file discovered beneath the package root."""
+    if package is None or not isinstance(filename, str):
+        return None
+    requested = filename.replace("\\", "/")
+    if not requested or requested.startswith("/") or requested.startswith("../") or "/../" in requested:
+        return None
+    root = package.resolve()
+    try:
+        candidates = package.rglob("*")
+    except OSError:
+        return None
+    for candidate in candidates:
+        try:
+            if not candidate.is_file() or candidate.is_symlink():
+                continue
+            relative = candidate.relative_to(package).as_posix()
+            if relative != requested:
+                continue
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+            return resolved
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def cancel_process(job_id):
     import web_app_v3
     if _request_role() not in {"admin", "editor"}:
@@ -313,20 +340,8 @@ def register_dashboard_compat(app):
             return jsonify({"error": "Package not found"}), 404
         if package is None:
             return jsonify({"error": "Package not found"}), 404
-        raw_parts = str(filename).replace("\\", "/").split("/")
-        safe_parts = []
-        for part in raw_parts:
-            safe_part = secure_filename(part)
-            if not part or safe_part != part or part in {".", ".."}:
-                return jsonify({"error": "Package not found"}), 404
-            safe_parts.append(safe_part)
-        safe_relative = Path(*safe_parts)
-        try:
-            resolved = (package / safe_relative).resolve()
-            resolved.relative_to(package.resolve())
-        except (OSError, TypeError, ValueError):
-            return jsonify({"error": "Package not found"}), 404
-        if not resolved.is_file():
+        resolved = _resolve_package_file(package, filename)
+        if resolved is None:
             return jsonify({"error": "Package not found"}), 404
         return send_file(resolved)
 
