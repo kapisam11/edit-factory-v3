@@ -9,6 +9,11 @@ import time
 from typing import Any
 
 try:
+    import resource
+except ImportError:  # pragma: no cover
+    resource = None
+
+try:
     import psutil  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
     psutil = None
@@ -19,6 +24,7 @@ def snapshot_resources() -> dict[str, Any]:
         "timestamp": time.time(),
         "pid": os.getpid(),
         "cpu_percent": None,
+        "cpu_time_seconds": None,
         "rss_bytes": None,
         "vms_bytes": None,
         "gpu": None,
@@ -30,6 +36,18 @@ def snapshot_resources() -> dict[str, Any]:
             memory = process.memory_info()
             result["rss_bytes"] = int(memory.rss)
             result["vms_bytes"] = int(memory.vms)
+        except (OSError, ValueError):
+            pass
+
+    try:
+        cpu = os.times()
+        result["cpu_time_seconds"] = round(float(cpu.user + cpu.system), 6)
+    except (OSError, ValueError):
+        pass
+    if result["rss_bytes"] is None and resource is not None:
+        try:
+            raw_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            result["rss_bytes"] = raw_rss if os.name == "nt" else raw_rss * 1024
         except (OSError, ValueError):
             pass
 
@@ -72,6 +90,8 @@ def snapshot_resources() -> dict[str, Any]:
 def summarize_resources(start: dict[str, Any], end: dict[str, Any]) -> dict[str, Any]:
     start_cpu = start.get("cpu_percent")
     end_cpu = end.get("cpu_percent")
+    start_cpu_time = start.get("cpu_time_seconds")
+    end_cpu_time = end.get("cpu_time_seconds")
     start_rss = start.get("rss_bytes")
     end_rss = end.get("rss_bytes")
     summary: dict[str, Any] = {
@@ -81,6 +101,11 @@ def summarize_resources(start: dict[str, Any], end: dict[str, Any]) -> dict[str,
         "rss_end_bytes": end_rss,
         "cpu_percent_start": start_cpu,
         "cpu_percent_end": end_cpu,
+        "cpu_time_seconds_delta": (
+            round(float(end_cpu_time) - float(start_cpu_time), 6)
+            if start_cpu_time is not None and end_cpu_time is not None
+            else None
+        ),
         "elapsed_seconds": round(
             max(0.0, float(end.get("timestamp", 0.0)) - float(start.get("timestamp", 0.0))),
             3,
