@@ -35,9 +35,9 @@ def install_observability(app: Flask) -> None:
         return response
 
     @app.get("/metrics")
-    def metrics_prometheus():
+    def prometheus_metrics():
         return Response(
-            GLOBAL_METRICS.to_prometheus(),
+            GLOBAL_METRICS.prometheus(),
             mimetype="text/plain; version=0.0.4",
         )
 
