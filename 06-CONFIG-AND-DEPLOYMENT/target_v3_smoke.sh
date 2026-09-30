@@ -112,6 +112,18 @@ for required in (
     if not required.is_file():
         raise SystemExit(f"target smoke required artifact is missing: {required}")
 
+for metadata_file in (
+    package / "source_media_metadata.json",
+    package / "final_media_metadata.json",
+):
+    payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("error") or not payload.get("streams"):
+        raise SystemExit(f"target smoke metadata validation failed: {metadata_file}")
+
+resource_usage = json.loads((package / "resource_usage.json").read_text(encoding="utf-8"))
+if not isinstance(resource_usage, dict) or "elapsed_seconds" not in resource_usage:
+    raise SystemExit("target smoke resource telemetry is malformed")
+
 subprocess.run([
     "ffprobe", "-v", "error", "-show_entries", "format=duration",
     "-of", "default=noprint_wrappers=1:nokey=1", str(final_video),
