@@ -189,7 +189,19 @@ def init_db() -> None:
                 created_at REAL NOT NULL DEFAULT (unixepoch()),
                 PRIMARY KEY (principal, idem_key)
             )
+        """)\n        conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                from_status TEXT,
+                to_status TEXT,
+                event TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
         """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_job_events_job_id_id ON job_events(job_id, id)")
+
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at)
         """)
