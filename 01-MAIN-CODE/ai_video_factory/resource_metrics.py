@@ -7,16 +7,19 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
+resource_module: Any
 try:
-    import resource
+    import resource as resource_module
 except ImportError:  # pragma: no cover
-    resource = None
+    resource_module = None
 
+psutil: Any
 try:
-    import psutil  # type: ignore[import-untyped]
+    import psutil
 except ImportError:  # pragma: no cover
     psutil = None
 
@@ -46,9 +49,9 @@ def snapshot_resources() -> dict[str, Any]:
         result["cpu_time_seconds"] = round(float(cpu.user + cpu.system), 6)
     except (OSError, ValueError):
         pass
-    if result["rss_bytes"] is None and resource is not None:
+    if result["rss_bytes"] is None and resource_module is not None:
         try:
-            raw_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            raw_rss = int(resource_module.getrusage(resource_module.RUSAGE_SELF).ru_maxrss)
             result["rss_bytes"] = raw_rss if sys.platform == "darwin" else raw_rss * 1024
         except (OSError, ValueError):
             pass
@@ -132,13 +135,11 @@ class ResourceMonitor:
     """Sample the worker process tree so short-lived FFmpeg children are included."""
 
     def __init__(self, interval_seconds: float = 1.0) -> None:
-        import threading
-
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
         self.interval_seconds = float(interval_seconds)
         self._stop = threading.Event()
-        self._thread = None
+        self._thread: threading.Thread | None = None
         self.start = snapshot_resources()
         self.peak_rss_bytes = self.start.get("rss_bytes")
         self.peak_cpu_percent = self.start.get("cpu_percent")
@@ -187,8 +188,6 @@ class ResourceMonitor:
                 self.peak_cpu_percent = max(float(self.peak_cpu_percent or 0.0), float(cpu))
 
     def start_monitoring(self) -> None:
-        import threading
-
         if self._thread is not None:
             return
         self._thread = threading.Thread(
