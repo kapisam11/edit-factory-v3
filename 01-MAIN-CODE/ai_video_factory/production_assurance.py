@@ -22,6 +22,7 @@ _DEFAULT_EXCLUDES = {
     ".ruff_cache",
     "artifact_manifest.json",
     "release_evidence.json",
+    "resource_usage.json",
 }
 
 
