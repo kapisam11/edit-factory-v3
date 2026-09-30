@@ -17,11 +17,11 @@ try:
 except ImportError:  # pragma: no cover
     resource_module = None
 
-psutil: Any
 try:
-    import psutil
+    import psutil as _psutil
 except ImportError:  # pragma: no cover
-    psutil = None
+    _psutil = None
+psutil: Any = _psutil
 
 
 def snapshot_resources() -> dict[str, Any]:
