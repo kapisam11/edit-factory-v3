@@ -352,3 +352,57 @@ def test_v3_preview_endpoint_serves_canonical_final_video(monkeypatch, tmp_path)
     assert response.status_code == 200
     assert response.data == b"fake-mp4"
     assert response.mimetype == "video/mp4"
+
+
+
+def test_dashboard_job_access_and_owner_filtering(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+
+    install_dashboard_optimizations(appmod)
+    appmod.db_insert_job("job-owned", "topic", {"topic": "topic"})
+    client = appmod.app.test_client()
+
+    with client.session_transaction() as session:
+        session["aivf_authenticated"] = True
+        session["aivf_role"] = "viewer"
+        session["aivf_principal"] = "owner-a"
+
+    with appmod.app.test_request_context("/api/jobs/job-owned"):
+        with appmod.app.test_request_context("/api/jobs/job-owned"):
+            import resource_governor
+            monkeypatch.setattr(resource_governor, "principal_for_request", lambda _request: "owner-a")
+            assert appmod.authorized_db_get_job("job-owned")["id"] == "job-owned"
+
+    monkeypatch.setattr(resource_governor, "principal_for_request", lambda _request: "owner-b")
+    with appmod.app.test_request_context("/api/jobs/job-owned"):
+        assert appmod.authorized_db_get_job("job-owned") is None
+
+
+def test_retry_requires_editor_role(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+
+    install_dashboard_optimizations(appmod)
+    appmod.db_insert_job("job-retry-role", "topic", {"topic": "topic"})
+    appmod.db_update_job("job-retry-role", status="error", error="provider returned 429")
+    client = appmod.app.test_client()
+    with client.session_transaction() as session:
+        session["aivf_authenticated"] = True
+        session["aivf_role"] = "viewer"
+        session["aivf_principal"] = "viewer-a"
+    response = client.post("/api/jobs/job-retry-role/retry", headers={"Origin": "http://localhost"})
+    assert response.status_code == 403
+
+
+def test_stale_reconciliation_keeps_fresh_heartbeat(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
+    appmod.db_insert_job("job-fresh", "topic", {"topic": "topic"})
+    appmod.db_update_job("job-fresh", status="running")
+    with appmod.get_db() as conn:
+        conn.execute("UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP WHERE id=?", ("job-fresh",))
+    monkeypatch.setenv("AIVF_STALE_JOB_TIMEOUT_SECONDS", "60")
+    appmod.app.preprocess_request()
+    assert appmod.db_get_job("job-fresh")["status"] == "running"
