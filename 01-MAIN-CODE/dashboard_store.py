@@ -135,6 +135,20 @@ class DashboardStore:
                 "CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id "
                 "ON job_logs(job_id, id)"
             )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    from_status TEXT,
+                    to_status TEXT,
+                    event TEXT NOT NULL,
+                    details TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_events_job_id_id ON job_events(job_id, id)"
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_rate_limits_client_ip_ts "
                 "ON rate_limits(client_ip, ts)"
@@ -153,6 +167,21 @@ class DashboardStore:
                 "CREATE INDEX IF NOT EXISTS idx_idempotency_created "
                 "ON idempotency_keys(created_at)"
             )
+
+    @staticmethod
+    def _record_event(
+        conn: sqlite3.Connection,
+        job_id: str,
+        event: str,
+        *,
+        from_status: str | None = None,
+        to_status: str | None = None,
+        details: str = "",
+    ) -> None:
+        conn.execute(
+            "INSERT INTO job_events(job_id, from_status, to_status, event, details) VALUES (?,?,?,?,?)",
+            (job_id, from_status, to_status, str(event)[:120], str(details)[:4000]),
+        )
 
     def insert_job(
         self,
@@ -198,6 +227,7 @@ class DashboardStore:
                 "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 (job_id, topic, encoded),
             )
+            self._record_event(conn, job_id, "created", to_status="queued", details=f"topic={topic[:200]}")
 
         self.write(write)
 
@@ -263,6 +293,7 @@ class DashboardStore:
                 "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 (job_id, topic, encoded),
             )
+            self._record_event(conn, job_id, "created", to_status="queued", details="idempotent request")
             return job_id, True
 
         return self.write(write)
@@ -283,16 +314,28 @@ class DashboardStore:
             return 0
 
         def write(conn: sqlite3.Connection) -> int:
+            row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                return 0
+            previous_status = str(row["status"])
+            target_status = str(kwargs.get("status", previous_status))
             if "status" in kwargs:
-                row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
-                if row is None:
-                    return 0
-                validate_transition(str(row["status"]), str(kwargs["status"]))
+                validate_transition(previous_status, target_status)
             fields = ", ".join(f"{key}=?" for key in kwargs)
-            return int(conn.execute(
+            changed = int(conn.execute(
                 f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 list(kwargs.values()) + [job_id],
             ).rowcount)
+            if changed and target_status != previous_status:
+                self._record_event(
+                    conn,
+                    job_id,
+                    "status_change",
+                    from_status=previous_status,
+                    to_status=target_status,
+                    details=str(kwargs.get("error") or kwargs.get("step") or ""),
+                )
+            return changed
 
         return int(self.write(write))
 
@@ -452,6 +495,21 @@ class DashboardStore:
                 (job_id, bounded_last_id),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def events_since(self, job_id: str, last_id: int = 0) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, created_at, from_status, to_status, event, details "
+                "FROM job_events WHERE job_id=? AND id>? ORDER BY id ASC",
+                (job_id, max(0, int(last_id))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def prune_events(self, *, max_age_seconds: int = 30 * 86400, now: float | None = None) -> int:
+        cutoff = (time.time() if now is None else float(now)) - max(300, int(max_age_seconds))
+        return int(self.write(lambda conn: conn.execute(
+            "DELETE FROM job_events WHERE strftime('%s', created_at)<?", (str(int(cutoff)),)
+        ).rowcount))
 
     def check_rate_limit(self, client_ip: str, max_requests: int = 10, window_seconds: int = 60) -> bool:
         if max_requests < 1 or window_seconds < 1:
