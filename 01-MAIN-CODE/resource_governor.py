@@ -65,18 +65,30 @@ def principal_for_request(request: Any) -> str:
 
 
 def directory_size(path: str | Path, *, limit: int | None = None) -> int:
+    """Count only regular files beneath a root; never follow symlinked files/directories."""
     root = Path(path)
     total = 0
-    try:
-        iterator = root.rglob("*")
-    except OSError:
+    if not root.exists() or root.is_symlink():
         return 0
-    for item in iterator:
+    stack = [root]
+    while stack:
+        current = stack.pop()
         try:
-            if item.is_file():
-                total += item.stat().st_size
-                if limit is not None and total > limit:
-                    return total
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        total += int(entry.stat(follow_symlinks=False).st_size)
+                        if limit is not None and total > limit:
+                            return total
+                    except OSError:
+                        continue
         except OSError:
             continue
     return total
