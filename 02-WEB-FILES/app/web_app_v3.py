@@ -842,7 +842,8 @@ def list_jobs():
 
 @app.route("/api/jobs/<job_id>", methods=["GET"])
 def get_job(job_id):
-    job = db_get_job(job_id)
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+    job = lookup(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(_redact_job(job, include_logs=True))
@@ -850,7 +851,8 @@ def get_job(job_id):
 
 @app.route("/api/jobs/<job_id>/status")
 def get_job_status(job_id):
-    job = db_get_job(job_id)
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+    job = lookup(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify({"id": job_id, "status": job["status"], "step": job["step"], "error": job["error"]})
@@ -868,10 +870,12 @@ def cancel_job(job_id):
 @app.route("/api/jobs/<job_id>/logs")
 @app.route("/api/jobs/<job_id>/logs/stream")
 def job_logs_stream(job_id):
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+
     def stream():
         last_id = 0
         while True:
-            job = db_get_job(job_id)
+            job = lookup(job_id)
             if not job:
                 yield "data: " + json.dumps({"level": "ERROR", "msg": "Job not found"}) + "\n\n"
                 return
