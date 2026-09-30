@@ -23,7 +23,12 @@ def _last_json(text: str) -> dict[str, Any]:
         raise AudioNormalizationError("FFmpeg loudnorm JSON was not an object")
     return payload
 
-def _numeric_measurement(payload: dict[str, Any], key: str, *, allow_negative_infinity: bool = False) -> float:
+def _numeric_measurement(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    allow_negative_infinity: bool = False,
+) -> float:
     value = payload.get(key)
     if value is None:
         raise AudioNormalizationError(f"FFmpeg loudnorm measurement {key} is missing")
@@ -32,7 +37,8 @@ def _numeric_measurement(payload: dict[str, Any], key: str, *, allow_negative_in
     except (TypeError, ValueError) as exc:
         raise AudioNormalizationError(f"FFmpeg loudnorm measurement {key} is not numeric") from exc
     if math.isnan(result) or (
-        math.isinf(result) and not (allow_negative_infinity and result < 0)
+        math.isinf(result)
+        and not (allow_negative_infinity and result < 0)
     ):
         raise AudioNormalizationError(f"FFmpeg loudnorm measurement {key} is not finite")
     return result
@@ -40,8 +46,7 @@ def _numeric_measurement(payload: dict[str, Any], key: str, *, allow_negative_in
 
 def measure_loudness(path: str | Path) -> dict[str, Any]:
     result = run_ffmpeg(
-        ["ffmpeg", "-hide_banner", "-i", str(path),
-         "-af", "loudnorm=I=-14:TP=-1.0:LRA=11:print_format=json", "-f", "null", "-"],
+        ["ffmpeg","-hide_banner","-i",str(path),"-af","loudnorm=I=-14:TP=-1.0:LRA=11:print_format=json","-f","null","-"],
         timeout=900, capture_output=True,
     )
     payload = _last_json(result.stderr or "")
