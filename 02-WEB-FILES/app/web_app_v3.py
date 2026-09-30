@@ -905,7 +905,7 @@ def create_job():
 
     job_id = f"job_{uuid.uuid4().hex[:12]}"
     try:
-        from dashboard_store import DashboardStore, JobAdmissionError
+        from dashboard_store import DashboardStore, IdempotencyConflict, JobAdmissionError
         store = globals().get("dashboard_store") or DashboardStore(DB_PATH)
         store.ensure_indexes()
         if idem_key:
@@ -933,6 +933,10 @@ def create_job():
                 principal=principal,
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
             )
+    except IdempotencyConflict as exc:
+        if upload_path is not None:
+            upload_path.unlink(missing_ok=True)
+        return jsonify({"error": str(exc)}), 409
     except JobAdmissionError as exc:
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
