@@ -184,14 +184,14 @@ def media_quality_score(summary:Mapping[str,Any],black_count:int=0,freeze_count:
     score-=min(0.35,0.10*int(freeze_count))
     return round(max(0.0,min(1.0,score)),4)
 
-def media_fingerprint(path:str|Path)->dict[str,Any]:
+def media_fingerprint(path:str|Path, summary:Mapping[str,Any]|None=None)->dict[str,Any]:
     from .production_guardrails import sha256_file
-    s=stream_summary(probe_media(path))
+    s=dict(summary) if summary is not None else stream_summary(probe_media(path))
     return {"sha256":sha256_file(path),"size":s["size"],"duration":round(s["duration"],3),"width":s["width"],"height":s["height"],"video_codec":s["video_codec"],"audio_codec":s["audio_codec"]}
 
 def analyze_media(path:str|Path,deep:bool=False,*,max_duration:float=1800.0)->dict[str,Any]:
     s=validate_media_contract(path,require_video=True,max_duration=float(max_duration))
-    report: dict[str, Any] = {"ok":True,"summary":s,"black_frames":[],"freeze_frames":[],"silence_segments":[],"audio":None,"blur_score":None,"defects":[],
+    report: dict[str, Any] = {"ok":True,"summary":s,"black_frames":[],"freeze_frames":[],"silence_segments":[],"audio":None,"blur_score":None,"defects":[],"warnings":[],
         "timing":{"av_sync_delta_seconds":av_sync_delta(s),"vfr":detect_vfr(s)}}
     if deep:
         report["black_frames"]=detect_black_frames(path)
@@ -207,8 +207,13 @@ def analyze_media(path:str|Path,deep:bool=False,*,max_duration:float=1800.0)->di
     if sync_delta is not None and abs(float(sync_delta)) > 0.5:
         report["defects"].append(f"audio/video duration delta exceeds tolerance: {sync_delta:.3f}s")
     report["silence_ratio"] = silence_ratio(report["silence_segments"], s["duration"]) if report["silence_segments"] else 0.0
-    report["fingerprint"]=media_fingerprint(path)
-    report["warnings"]=[] if report["quality_score"]>=0.8 else ["technical media quality is below the preferred threshold"]
+    report["fingerprint"]=media_fingerprint(path, s)
+    if report["quality_score"] < 0.8:
+        report["warnings"].append("technical media quality is below the preferred threshold")
+    if report["silence_ratio"] > 0.35:
+        report["warnings"].append("audio contains an unusually high silence ratio")
+    if report["blur_score"] is not None and report["blur_score"] < 0.25:
+        report["warnings"].append("sampled frames have low sharpness; visual review is recommended")
     if report["black_frames"]:
         report["defects"].append(f"detected {len(report['black_frames'])} black-frame event(s)")
     if report["freeze_frames"]:
