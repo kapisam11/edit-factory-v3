@@ -542,10 +542,15 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         nonlocal resource_written
         if resource_written:
             return
-        resource_report = summarize_resources(resource_start, snapshot_resources())
-        with (package / "resource_usage.json").open("w", encoding="utf-8") as handle:
-            json.dump(resource_report, handle, indent=2, ensure_ascii=False)
-        resource_written = True
+        try:
+            resource_report = summarize_resources(resource_start, snapshot_resources())
+            with (package / "resource_usage.json").open("w", encoding="utf-8") as handle:
+                json.dump(resource_report, handle, indent=2, ensure_ascii=False)
+            resource_written = True
+        except (OSError, TypeError, ValueError) as exc:
+            # Resource telemetry is best-effort diagnostics; never turn a valid render into a failed job.
+            logger.warning("Could not write resource usage for %s: %s", job_id, exc)
+            resource_written = True
 
     try:
         if not update(status="running", step="Initializing"):
