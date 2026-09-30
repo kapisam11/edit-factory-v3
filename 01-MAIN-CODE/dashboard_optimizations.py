@@ -281,6 +281,11 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         def bounded_log_stream(job_id: str):
             if not acquire_sse():
                 return jsonify({"error": "SSE connection capacity reached"}), 429
+            authorized_lookup = getattr(app_module, "authorized_db_get_job", app_module.db_get_job)
+            authorized_job = authorized_lookup(job_id)
+            if not authorized_job:
+                release_sse()
+                return jsonify({"error": "Job not found"}), 404
             try:
                 response = original_log_stream(job_id)
             except Exception:
@@ -321,16 +326,17 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         try:
             with store.connect() as conn:
                 rows = conn.execute(
-                    "SELECT id, status, updated_at FROM jobs WHERE status IN ('running','cancelling')"
+                    "SELECT id, status, updated_at, worker_heartbeat_at "
+                    "FROM jobs WHERE status IN ('running','cancelling')"
                 ).fetchall()
                 for row in rows:
                     job_id = str(row["id"])
                     process = app_module._active_processes.get(job_id)
                     if process is not None and process.is_alive():
                         continue
-                    updated = str(row["updated_at"] or "").strip()
+                    heartbeat = str(row["worker_heartbeat_at"] or row["updated_at"] or "").strip()
                     try:
-                        seen = __import__("datetime").datetime.fromisoformat(updated).replace(
+                        seen = __import__("datetime").datetime.fromisoformat(heartbeat).replace(
                             tzinfo=__import__("datetime").timezone.utc
                         ).timestamp()
                     except (TypeError, ValueError, OverflowError):
