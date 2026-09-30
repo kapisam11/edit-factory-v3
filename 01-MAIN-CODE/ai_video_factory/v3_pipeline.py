@@ -20,6 +20,7 @@ from .v3_semantic_qc import analyze_render_semantics
 from .media_health import MediaHealthError, analyze_media
 from .media_metadata import extract_media_metadata
 from .audio_normalization import AudioNormalizationError, normalize_loudness
+from .render_engine import stamp_media_metadata
 from .metadata_guardrails import build_upload_metadata
 from .provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest, write_provenance
 from .system_diagnostics import diagnostics_report, write_diagnostics
@@ -396,6 +397,10 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 result, package, payload, target_seconds
             )
             final_video = _normalize_final_audio(package, final_video)
+            final_video = stamp_media_metadata(
+                final_video,
+                version=os.environ.get("AIVF_VERSION", "3.0.0"),
+            )
             result.final_video = final_video
             try:
                 final_health = analyze_media(
