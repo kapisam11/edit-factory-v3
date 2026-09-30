@@ -20,6 +20,8 @@ _DEFAULT_EXCLUDES = {
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    "artifact_manifest.json",
+    "release_evidence.json",
 }
 
 
@@ -51,6 +53,8 @@ def _relative_files(
     for current, dirs, names in os.walk(root, followlinks=False):
         dirs[:] = [name for name in dirs if name not in excluded and not (Path(current) / name).is_symlink()]
         for name in names:
+            if name in excluded:
+                continue
             candidate = Path(current) / name
             if candidate.is_symlink() or not candidate.is_file():
                 continue
