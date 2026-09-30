@@ -197,6 +197,7 @@ try:
     deleted = store.write(
         lambda conn: (
             conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,)),
+            conn.execute("DELETE FROM job_events WHERE job_id=?", (job_id,)),
             conn.execute("DELETE FROM jobs WHERE id=? AND status='done'", (job_id,)),
         )
     )
