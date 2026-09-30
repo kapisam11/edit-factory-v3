@@ -72,7 +72,8 @@ def cancel_process(job_id):
     import web_app_v3
     if _request_role() not in {"admin", "editor"}:
         return jsonify({"error": "Editor role required"}), 403
-    job = web_app_v3.db_get_job(job_id)
+    lookup = getattr(web_app_v3, "authorized_db_get_job", web_app_v3.db_get_job)
+    job = lookup(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     with web_app_v3._active_processes_lock:
