@@ -22,13 +22,14 @@ async def main(base_url: str, token: str) -> None:
         page.on("pageerror", lambda exc: page_errors.append(str(exc)))
         page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
 
-        await page.goto(base_url.rstrip("/") + "/", wait_until="networkidle")
+        await page.goto(base_url.rstrip("/") + "/", wait_until="domcontentloaded")
         if "/login" not in page.url:
             failures.append(f"unauthenticated root did not redirect to login: {page.url}")
 
         await page.locator('input[name="token"]').fill(token)
         await page.get_by_role("button", name="Sign in").click()
-        await page.wait_for_load_state("networkidle")
+        await page.wait_for_load_state("domcontentloaded")
+        await page.wait_for_timeout(500)
 
         if "/login" in page.url:
             failures.append("login did not reach dashboard")
