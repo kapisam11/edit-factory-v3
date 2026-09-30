@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import jsonify, request, send_from_directory
+from flask import jsonify, request, send_file, send_from_directory
 
 SECRET_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
 _DASHBOARD_SECRETS = {key: "" for key in SECRET_KEYS}
