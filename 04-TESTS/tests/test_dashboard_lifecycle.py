@@ -368,14 +368,19 @@ def test_dashboard_job_access_and_owner_filtering(monkeypatch, tmp_path):
         session["aivf_role"] = "viewer"
         session["aivf_principal"] = "owner-a"
 
+    import resource_governor
+    from flask import session
+
     with appmod.app.test_request_context("/api/jobs/job-owned"):
-        with appmod.app.test_request_context("/api/jobs/job-owned"):
-            import resource_governor
-            monkeypatch.setattr(resource_governor, "principal_for_request", lambda _request: "owner-a")
-            assert appmod.authorized_db_get_job("job-owned")["id"] == "job-owned"
+        session["aivf_authenticated"] = True
+        session["aivf_role"] = "viewer"
+        monkeypatch.setattr(resource_governor, "principal_for_request", lambda _request: "owner-a")
+        assert appmod.authorized_db_get_job("job-owned")["id"] == "job-owned"
 
     monkeypatch.setattr(resource_governor, "principal_for_request", lambda _request: "owner-b")
     with appmod.app.test_request_context("/api/jobs/job-owned"):
+        session["aivf_authenticated"] = True
+        session["aivf_role"] = "viewer"
         assert appmod.authorized_db_get_job("job-owned") is None
 
 
