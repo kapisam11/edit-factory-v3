@@ -1047,7 +1047,6 @@ def list_packages():
     return jsonify(packages)
 
 
-@app.route("/api/packages/<name>/file/<path:filename>")
 def _resolve_package_file(package: Optional[Path], filename: str) -> Optional[Path]:
     """Resolve an existing regular file discovered beneath a package root."""
     if package is None or not isinstance(filename, str):
@@ -1075,6 +1074,7 @@ def _resolve_package_file(package: Optional[Path], filename: str) -> Optional[Pa
     return None
 
 
+@app.route("/api/packages/<name>/file/<path:filename>")
 def package_file(name, filename):
     pkg_dir = _resolve_package(name)
     if not _package_access_allowed(pkg_dir):
