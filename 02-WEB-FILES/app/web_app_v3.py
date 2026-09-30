@@ -536,6 +536,16 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
 
     from ai_video_factory.resource_metrics import snapshot_resources, summarize_resources
     resource_start = snapshot_resources()
+    resource_written = False
+
+    def write_resource_report(package: Path) -> None:
+        nonlocal resource_written
+        if resource_written:
+            return
+        resource_report = summarize_resources(resource_start, snapshot_resources())
+        with (package / "resource_usage.json").open("w", encoding="utf-8") as handle:
+            json.dump(resource_report, handle, indent=2, ensure_ascii=False)
+        resource_written = True
 
     try:
         if not update(status="running", step="Initializing"):
@@ -577,6 +587,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             }
             with open(pkg_dir / "v3_job_result.json", "w", encoding="utf-8") as handle:
                 json.dump(result_payload, handle, indent=2, ensure_ascii=False)
+            write_resource_report(pkg_dir)
             if result_payload["errors"] or not _artifact_is_valid(result_payload.get("final_video")):
                 if not result_payload["errors"]:
                     result_payload["errors"].append("V3 final artifact failed media validation")
@@ -605,6 +616,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             return
         log("INFO", "→ Running Pipeline")
         ctx = build_director_pipeline(skip_stages=skip_stages).run(ctx)
+        write_resource_report(pkg_dir)
         if ctx.errors or not _artifact_is_valid(ctx.final_video):
             if not ctx.errors:
                 ctx.errors.append("Final artifact failed media validation")
@@ -616,19 +628,16 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 log("INFO", "Job complete!")
     except Exception as exc:
         try:
+            package = Path(locals().get("pkg_dir", "")) if locals().get("pkg_dir") else None
+            if package is not None and package.is_dir():
+                write_resource_report(package)
+        except Exception:
+            logger.exception("Could not record resource usage for %s", job_id)
+        try:
             if update(status="error", step="failed", error=str(exc)):
                 log("ERROR", f"Job failed: {exc}")
         except Exception:
             logger.exception("Could not record worker failure for %s", job_id)
-    finally:
-        try:
-            resource_report = summarize_resources(resource_start, snapshot_resources())
-            package = Path(locals().get("pkg_dir", "")) if locals().get("pkg_dir") else None
-            if package is not None and package.is_dir():
-                with (package / "resource_usage.json").open("w", encoding="utf-8") as handle:
-                    json.dump(resource_report, handle, indent=2, ensure_ascii=False)
-        except Exception:
-            logger.exception("Could not record resource usage for %s", job_id)
 
 
 def _artifact_is_valid(final_video: Any) -> bool:
