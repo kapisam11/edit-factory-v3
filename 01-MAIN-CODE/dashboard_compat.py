@@ -8,7 +8,8 @@ import threading
 import time
 from pathlib import Path
 
-from flask import jsonify, request, send_from_directory
+from flask import jsonify, request, send_file, send_from_directory
+from werkzeug.utils import secure_filename
 
 SECRET_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
 _DASHBOARD_SECRETS = {key: "" for key in SECRET_KEYS}
@@ -307,7 +308,24 @@ def register_dashboard_compat(app):
         package = web_app_v3._resolve_package(name)
         if not _package_access_allowed(web_app_v3, package):
             return jsonify({"error": "Package not found"}), 404
-        return send_from_directory(package, filename)
+        if package is None:
+            return jsonify({"error": "Package not found"}), 404
+        raw_parts = str(filename).replace("\\", "/").split("/")
+        safe_parts = []
+        for part in raw_parts:
+            safe_part = secure_filename(part)
+            if not part or safe_part != part or part in {".", ".."}:
+                return jsonify({"error": "Package not found"}), 404
+            safe_parts.append(safe_part)
+        safe_relative = Path(*safe_parts)
+        try:
+            resolved = (package / safe_relative).resolve()
+            resolved.relative_to(package.resolve())
+        except (OSError, TypeError, ValueError):
+            return jsonify({"error": "Package not found"}), 404
+        if not resolved.is_file():
+            return jsonify({"error": "Package not found"}), 404
+        return send_file(resolved)
 
     @app.route("/api/admin/cleanup", methods=["POST"])
     def cleanup_packages_admin():
