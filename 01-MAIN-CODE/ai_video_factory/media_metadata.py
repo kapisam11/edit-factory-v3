@@ -4,6 +4,7 @@ The extractor returns normalized codec/container/timing/dimension/audio/color me
 without copying arbitrary tags into the production artifact. Potentially sensitive
 location/comment/author tags are excluded unless explicitly requested.
 """
+
 from __future__ import annotations
 
 import json
