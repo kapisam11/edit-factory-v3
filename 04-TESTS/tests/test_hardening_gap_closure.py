@@ -100,3 +100,14 @@ def test_cache_lifecycle_still_enforces_size(tmp_path):
     cache = CacheLifecycle(tmp_path / "cache", max_bytes=10, ttl_seconds=60)
     (cache.root / "a.tmp").write_bytes(b"12345678901")
     assert cache.enforce_size() == 1
+
+
+def test_resource_snapshot_is_json_serializable(monkeypatch):
+    from ai_video_factory.resource_metrics import resource_json, snapshot_resources, summarize_resources
+
+    monkeypatch.setattr("ai_video_factory.resource_metrics.shutil.which", lambda name: None)
+    start = snapshot_resources()
+    end = snapshot_resources()
+    report = summarize_resources(start, end)
+    assert report["elapsed_seconds"] >= 0
+    assert resource_json(start, end).startswith("{")
