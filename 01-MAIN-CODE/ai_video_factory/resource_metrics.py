@@ -50,7 +50,9 @@ def snapshot_resources() -> dict[str, Any]:
         try:
             raw_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
             result["rss_bytes"] = (
-                raw_rss if sys.platform == "darwin" else raw_rss * 1024
+                raw_rss
+                if sys.platform == "darwin"
+                else raw_rss * 1024
             )
         except (OSError, ValueError):
             pass
