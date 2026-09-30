@@ -334,7 +334,11 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                     process = app_module._active_processes.get(job_id)
                     if process is not None and process.is_alive():
                         continue
-                    heartbeat = str(row["worker_heartbeat_at"] or row["updated_at"] or "").strip()
+                    heartbeat = str(row["worker_heartbeat_at"] or "").strip()
+                    # Legacy rows without a heartbeat lease are left alone rather than
+                    # being guessed stale from an unrelated metadata timestamp.
+                    if not heartbeat:
+                        continue
                     try:
                         seen = __import__("datetime").datetime.fromisoformat(heartbeat).replace(
                             tzinfo=__import__("datetime").timezone.utc
