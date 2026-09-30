@@ -141,6 +141,7 @@ class ResourceMonitor:
         self.peak_cpu_percent = self.start.get("cpu_percent")
         self.sample_count = 1
         self.child_processes_seen = 0
+        self._final_report: dict[str, Any] | None = None
 
     def _tree_snapshot(self) -> dict[str, Any]:
         base = snapshot_resources()
@@ -199,11 +200,13 @@ class ResourceMonitor:
         self._thread.start()
 
     def stop_monitoring(self) -> dict[str, Any]:
+        if self._final_report is not None:
+            return dict(self._final_report)
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=max(2.0, self.interval_seconds + 1.0))
         end = self._tree_snapshot()
-        return {
+        self._final_report = {
             **summarize_resources(self.start, end),
             "peak_rss_bytes": self.peak_rss_bytes,
             "peak_cpu_percent": self.peak_cpu_percent,
@@ -211,6 +214,7 @@ class ResourceMonitor:
             "child_processes_seen": self.child_processes_seen,
             "gpu_end": end.get("gpu"),
         }
+        return dict(self._final_report)
 
 
 __all__ = ["snapshot_resources", "summarize_resources", "resource_json", "ResourceMonitor"]
