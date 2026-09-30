@@ -996,7 +996,19 @@ def package_file(name, filename):
     pkg_dir = _resolve_package(name)
     if not _package_access_allowed(pkg_dir):
         abort(404)
-    return send_from_directory(pkg_dir, filename)
+    if pkg_dir is None:
+        abort(404)
+    try:
+        relative = Path(str(filename))
+        if relative.is_absolute():
+            abort(404)
+        resolved = (pkg_dir / relative).resolve()
+        resolved.relative_to(pkg_dir.resolve())
+    except (OSError, TypeError, ValueError):
+        abort(404)
+    if not resolved.is_file():
+        abort(404)
+    return send_file(resolved)
 
 
 @app.route("/api/health")
