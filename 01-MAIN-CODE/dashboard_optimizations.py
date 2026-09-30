@@ -364,6 +364,17 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                             "INSERT INTO job_logs (job_id, level, message) VALUES (?, ?, ?)",
                             (job_id, "ERROR", "Recovered stale worker job after heartbeat timeout"),
                         )
+                        conn.execute(
+                            "INSERT INTO job_events (job_id, from_status, to_status, event, details) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (
+                                job_id,
+                                str(row["status"]),
+                                "interrupted",
+                                "recovery",
+                                "Worker heartbeat expired and worker process was not running",
+                            ),
+                        )
         except Exception:
             app_module.logger.exception("Stale job reconciliation failed")
         return recovered
@@ -399,6 +410,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
             if stale_ids:
                 placeholders = ",".join("?" for _ in stale_ids)
                 conn.execute(f"DELETE FROM job_logs WHERE job_id IN ({placeholders})", stale_ids)
+                conn.execute(f"DELETE FROM job_events WHERE job_id IN ({placeholders})", stale_ids)
                 conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", stale_ids)
             conn.execute("DELETE FROM rate_limits WHERE ts < ?", (cutoff,))
         # Keep idempotency keys and lifecycle audit history bounded independently
