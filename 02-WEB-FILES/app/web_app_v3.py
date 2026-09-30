@@ -30,6 +30,7 @@ from ai_video_factory.validation import normalize_workflow, validate_target_seco
 from ai_video_factory.render_engine import run_ffprobe
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
+from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
 from app.job_service import build_job_params
 
 APP_DIR = Path(__file__).resolve().parent
@@ -178,6 +179,19 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS idempotency_keys (
+                principal TEXT NOT NULL,
+                idem_key TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                created_at REAL NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY (principal, idem_key)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at)
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rate_limits (
@@ -827,19 +841,29 @@ def create_job():
         )
     except (TypeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
+
     topic = params["topic"]
     workflow = params["workflow"]
+    idem_key = request.headers.get("Idempotency-Key", "").strip()
+    if len(idem_key) > 200:
+        return jsonify({"error": "Idempotency-Key must be at most 200 characters"}), 400
+    from resource_governor import principal_for_request, MAX_QUEUED_PER_PRINCIPAL
+    principal = principal_for_request(request)
+    params["_principal"] = principal
+
+    # Hash only user-visible request intent; runtime paths and credentials are excluded.
+    request_fingerprint_payload = {
+        key: value
+        for key, value in params.items()
+        if key not in {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
+    }
+    request_hash = request_idempotency_hash(request_fingerprint_payload, namespace="dashboard-request")
+
     target_seconds = params["target_seconds"]
-    try:
-        with get_db() as conn:
-            queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
-        if queued >= _MAX_QUEUED_JOBS:
-            return jsonify({"error": "Queue capacity reached. Retry later."}), 429
-    except sqlite3.Error:
-        return jsonify({"error": "Job queue is temporarily unavailable"}), 503
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
     params["_retry_secret_keys"] = [key for key in SECRET_PARAM_KEYS if data.get(key)]
+
     if workflow == "v3":
         capabilities = _runtime_capabilities()
         requested = (
@@ -881,15 +905,46 @@ def create_job():
 
     job_id = f"job_{uuid.uuid4().hex[:12]}"
     try:
-        db_insert_job(job_id, topic, params)
+        from dashboard_store import DashboardStore, JobAdmissionError
+        store = globals().get("dashboard_store") or DashboardStore(DB_PATH)
+        store.ensure_indexes()
+        if idem_key:
+            actual_job_id, created = store.insert_job_idempotent(
+                job_id,
+                topic,
+                params,
+                principal=principal,
+                idempotency_key=idem_key,
+                request_hash=request_hash,
+                max_queued_jobs=_MAX_QUEUED_JOBS,
+                principal_limit=MAX_QUEUED_PER_PRINCIPAL,
+            )
+            if not created:
+                if upload_path is not None:
+                    upload_path.unlink(missing_ok=True)
+                existing = store.get_job(actual_job_id) or {}
+                return jsonify({"job_id": actual_job_id, "status": existing.get("status", "queued"), "idempotent_replay": True}), 200
+        else:
+            store.insert_job(
+                job_id,
+                topic,
+                params,
+                max_queued_jobs=_MAX_QUEUED_JOBS,
+                principal=principal,
+                principal_limit=MAX_QUEUED_PER_PRINCIPAL,
+            )
+    except JobAdmissionError as exc:
+        if upload_path is not None:
+            upload_path.unlink(missing_ok=True)
+        return jsonify({"error": str(exc)}), 429
     except Exception:
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
         raise
+
     _runtime_secrets[job_id] = secrets
     _start_job(job_id, params, secrets)
     return jsonify({"job_id": job_id, "status": "queued"}), 202
-
 
 @app.route("/api/jobs", methods=["GET"])
 def list_jobs():
