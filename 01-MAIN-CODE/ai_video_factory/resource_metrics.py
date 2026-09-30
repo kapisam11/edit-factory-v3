@@ -1,11 +1,12 @@
 """Per-job CPU, memory and optional NVIDIA GPU resource measurements."""
+
 from __future__ import annotations
 
 import json
 import os
 import shutil
-import sys
 import subprocess
+import sys
 import time
 from typing import Any
 
