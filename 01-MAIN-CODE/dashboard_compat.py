@@ -103,7 +103,6 @@ def cancel_process(job_id):
     lookup = getattr(web_app_v3, "authorized_db_get_job", web_app_v3.db_get_job)
     job = lookup(job_id)
     if not job and _request_role() == "admin":
-        # Admins may inspect terminal legacy jobs that predate principal ownership.
         job = web_app_v3.db_get_job(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
