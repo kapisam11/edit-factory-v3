@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 from PIL import Image
 import pytest
@@ -84,6 +85,8 @@ def test_metrics_registry_exposes_percentiles_and_prometheus():
 
 
 def test_completeness_report_is_not_blocked(tmp_path: Path):
+    (tmp_path / "01-MAIN-CODE").mkdir()
+    (tmp_path / "01-MAIN-CODE" / "safe.py").write_text("VALUE = 1\n", encoding="utf-8")
     report = run_completeness(tmp_path)
     names = {item.name for item in report}
     assert "command-execution-security" in names
@@ -156,3 +159,39 @@ def test_audio_measurement_contract_rejects_missing_or_nonfinite_values():
         _numeric_measurement({}, "input_i")
     with pytest.raises(AudioNormalizationError):
         _numeric_measurement({"input_i": "nan"}, "input_i")
+
+
+def test_completeness_main_uses_cli_root(tmp_path: Path, monkeypatch, capsys):
+    (tmp_path / "01-MAIN-CODE").mkdir()
+    (tmp_path / "01-MAIN-CODE" / "safe.py").write_text("VALUE = 1\n", encoding="utf-8")
+    from ai_video_factory import production_completeness
+    monkeypatch.setattr(sys, "argv", ["aivf-completeness", str(tmp_path)])
+    assert production_completeness.main() == 0
+    output = capsys.readouterr().out
+    assert '"status": "ready"' in output
+
+
+def test_media_fixture_generation_is_strict():
+    from ai_video_factory.media_fixture_matrix import MediaFixtureError, generate_fixtures
+    # The production CI has FFmpeg; skip rather than pretending this local test
+    # can generate media when the dependency is absent.
+    import shutil
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("FFmpeg is required for fixture generation")
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="aivf-fixture-test-") as tmp:
+        paths = generate_fixtures(tmp)
+        assert len(paths) == 4
+
+
+def test_blocked_provider_decision_is_never_ignored():
+    evidence = CopyrightEvidence(
+        asset_id="blocked",
+        sha256="abc",
+        rights_status="owned",
+        provider="exact-local",
+        provider_status=CopyrightStatus.BLOCKED,
+    )
+    result = copyright_gate([evidence], require_provider=False)
+    assert result["publish_blocked"] is True
+    assert result["blocked_provider_decision"] is True
