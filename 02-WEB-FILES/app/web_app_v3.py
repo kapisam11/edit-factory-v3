@@ -893,13 +893,54 @@ def job_logs_stream(job_id):
     )
 
 
+def _package_access_allowed(pkg_dir: Optional[Path]) -> bool:
+    """Allow package access only to admins or the principal that owns the job."""
+    if pkg_dir is None or not pkg_dir.is_dir():
+        return False
+    from flask import session
+    if not app.config.get("_AIVF_AUTH_CONFIGURED"):
+        return True
+    if not session.get("aivf_authenticated"):
+        return False
+    if str(session.get("aivf_role") or "viewer").strip().lower() == "admin":
+        return True
+    try:
+        from resource_governor import principal_for_request
+        principal = principal_for_request(request)
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT params, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL"
+            ).fetchall()
+        for row in rows:
+            if str(Path(str(row["pkg_dir"])).resolve()) != str(pkg_dir.resolve()):
+                continue
+            payload = json.loads(row["params"] or "{}")
+            return str(payload.get("_principal") or "") == principal
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return False
+
+
+def _request_is_admin() -> bool:
+    from flask import session
+    return (
+        not app.config.get("_AIVF_AUTH_CONFIGURED")
+        or (
+            bool(session.get("aivf_authenticated"))
+            and str(session.get("aivf_role") or "viewer").strip().lower() == "admin"
+        )
+    )
+
+
 @app.route("/api/packages")
 def list_packages():
     global _package_cache
     now = time.monotonic()
-    with _package_cache_lock:
-        if _package_cache and now - _package_cache[0] < _PACKAGE_CACHE_TTL:
-            return jsonify(_package_cache[1])
+    use_cache = _request_is_admin()
+    if use_cache:
+        with _package_cache_lock:
+            if _package_cache and now - _package_cache[0] < _PACKAGE_CACHE_TTL:
+                return jsonify(_package_cache[1])
 
     packages = []
     try:
@@ -909,6 +950,8 @@ def list_packages():
     package_paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     for pkg_path in package_paths:
         try:
+            if not _package_access_allowed(pkg_path):
+                continue
             thumbnail_name = next(
                 (name for name in ("thumbnail.png", "thumbnail_vertical.png") if (pkg_path / name).exists()),
                 None,
@@ -937,15 +980,16 @@ def list_packages():
         except OSError:
             continue
 
-    with _package_cache_lock:
-        _package_cache = (time.monotonic(), packages)
+    if use_cache:
+        with _package_cache_lock:
+            _package_cache = (time.monotonic(), packages)
     return jsonify(packages)
 
 
 @app.route("/api/packages/<name>/file/<path:filename>")
 def package_file(name, filename):
     pkg_dir = _resolve_package(name)
-    if not pkg_dir:
+    if not _package_access_allowed(pkg_dir):
         abort(404)
     return send_from_directory(pkg_dir, filename)
 
