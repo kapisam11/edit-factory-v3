@@ -2,7 +2,7 @@ name: Python package
 
 on:
   push:
-    branches: [ main, production-hardening-10-of-10 ]
+    branches: [ main, production-hardening-10-of-10, hardening-complete-2026-09-30 ]
   pull_request:
     branches: [ main ]
 
@@ -35,7 +35,7 @@ jobs:
     - name: Verify lockfile is complete
       run: test -s uv.lock && grep -q '^version = ' uv.lock && grep -q '^requires-python' uv.lock
     - name: Check Ruff formatting on hardening modules
-      run: uv run ruff format --check 01-MAIN-CODE/ai_video_factory/media_metadata.py 04-TESTS/tests/test_hardening_gap_closure.py
+      run: uv run ruff format --check 01-MAIN-CODE/ai_video_factory/media_metadata.py 01-MAIN-CODE/ai_video_factory/resource_metrics.py 04-TESTS/tests/test_hardening_gap_closure.py
     - name: Compile Python sources
       run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
     - name: Lint production Python for correctness
