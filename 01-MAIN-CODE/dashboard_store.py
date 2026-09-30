@@ -21,6 +21,10 @@ class JobAdmissionError(RuntimeError):
     """Raised when an atomic dashboard admission limit rejects a new job."""
 
 
+class IdempotencyConflict(JobAdmissionError):
+    """Raised when a request key is reused for a different request payload."""
+
+
 class JobRetryNotAllowed(RuntimeError):
     """Raised when a retry is exhausted or the recorded failure is deterministic."""
 
@@ -232,7 +236,7 @@ class DashboardStore:
             ).fetchone()
             if existing is not None:
                 if str(existing["request_hash"]) != fingerprint:
-                    raise JobAdmissionError("idempotency key was already used for a different request")
+                    raise IdempotencyConflict("idempotency key was already used for a different request")
                 return str(existing["job_id"]), False
             if max_queued_jobs is not None:
                 queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
