@@ -24,7 +24,7 @@ from .render_engine import stamp_media_metadata
 from .metadata_guardrails import build_upload_metadata
 from .provenance import build_asset_record, load_provenance, manifest_needs_rights_review, provenance_manifest, write_provenance
 from .system_diagnostics import diagnostics_report, write_diagnostics
-from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk
+from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk, sha256_file
 from .production_assurance import (
     build_artifact_manifest,
     build_environment_fingerprint,
@@ -484,6 +484,12 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 final_video=final_video,
                 assets=[source_record],
                 pipeline_version="3.0.0",
+                run_context={
+                    "blueprint_sha256": sha256_file(blueprint_path),
+                    "platform": platform,
+                    "target_seconds": round(float(target_seconds), 6),
+                    "edit_type": payload.get("edit_type"),
+                },
             )
             write_provenance(package / "provenance.json", provenance)
             if manifest_needs_rights_review(provenance):
