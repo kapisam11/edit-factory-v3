@@ -2,7 +2,7 @@ name: Security scanning
 
 on:
   push:
-    branches: [main]
+    branches: [main, hardening-complete-2026-09-30]
   pull_request:
     branches: [main]
   schedule:
