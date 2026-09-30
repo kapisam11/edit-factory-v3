@@ -170,3 +170,18 @@ def test_dashboard_store_idempotency_is_atomic_and_bounded(tmp_path):
         )
 
     assert len(store.list_jobs()) == 1
+
+
+def test_dashboard_job_event_history_tracks_lifecycle(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store = DashboardStore(db)
+    store.ensure_indexes()
+    store.insert_job("job-events", "topic", {"topic": "topic"})
+    assert store.claim_job("job-events") is True
+    assert store.update_job("job-events", status="done", step="Complete") == 1
+
+    events = store.events_since("job-events")
+    assert [event["event"] for event in events][:1] == ["created"]
+    assert ("queued", "running") in {(event["from_status"], event["to_status"]) for event in events}
+    assert ("running", "done") in {(event["from_status"], event["to_status"]) for event in events}
