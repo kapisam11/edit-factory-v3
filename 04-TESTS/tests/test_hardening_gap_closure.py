@@ -104,7 +104,11 @@ def test_cache_lifecycle_still_enforces_size(tmp_path):
 
 
 def test_resource_snapshot_is_json_serializable(monkeypatch):
-    from ai_video_factory.resource_metrics import resource_json, snapshot_resources, summarize_resources
+    from ai_video_factory.resource_metrics import (
+        resource_json,
+        snapshot_resources,
+        summarize_resources,
+    )
 
     monkeypatch.setattr("ai_video_factory.resource_metrics.shutil.which", lambda name: None)
     start = snapshot_resources()
