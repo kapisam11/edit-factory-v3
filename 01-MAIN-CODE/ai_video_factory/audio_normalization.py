@@ -29,10 +29,16 @@ def measure_loudness(path: str | Path) -> dict[str, Any]:
         timeout=900, capture_output=True,
     )
     payload = _last_json(result.stderr or "")
+    try:
+        integrated_lufs = float(payload.get("input_i"))
+        true_peak = float(payload.get("input_tp"))
+        loudness_range = float(payload.get("input_lra"))
+    except (TypeError, ValueError) as exc:
+        raise AudioNormalizationError("FFmpeg loudnorm returned non-numeric measurement values") from exc
     return {
-        "integrated_lufs": payload.get("input_i"),
-        "true_peak": payload.get("input_tp"),
-        "loudness_range": payload.get("input_lra"),
+        "integrated_lufs": integrated_lufs,
+        "true_peak": true_peak,
+        "loudness_range": loudness_range,
         "measured": payload,
     }
 
@@ -101,6 +107,23 @@ def normalize_loudness(
             raise AudioNormalizationError("normalized output has invalid duration")
         if abs(normalized_duration - source_duration) > 0.5:
             raise AudioNormalizationError("normalized output duration changed unexpectedly")
+
+        final_loudness = measure_loudness(temp)
+        integrated = float(final_loudness["integrated_lufs"])
+        true_peak = float(final_loudness["true_peak"])
+        lra = float(final_loudness["loudness_range"])
+        if abs(integrated - float(target_i)) > 0.75:
+            raise AudioNormalizationError(
+                f"normalized integrated loudness {integrated:.2f} LUFS is outside target {float(target_i):.2f} ±0.75 LU"
+            )
+        if true_peak > float(target_tp) + 0.2:
+            raise AudioNormalizationError(
+                f"normalized true peak {true_peak:.2f} dBTP exceeds target {float(target_tp):.2f} dBTP +0.2"
+            )
+        if lra > float(target_lra) + 3.0:
+            raise AudioNormalizationError(
+                f"normalized loudness range {lra:.2f} LU exceeds target {float(target_lra):.2f} LU +3"
+            )
 
         os.replace(temp, target)
     except Exception as exc:
