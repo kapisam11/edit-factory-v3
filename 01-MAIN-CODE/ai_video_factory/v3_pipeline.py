@@ -18,6 +18,7 @@ from .v3_engine import V3Blueprint, V3Config, create_v3_blueprint, validate_blue
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
 from .v3_semantic_qc import analyze_render_semantics
 from .media_health import MediaHealthError, analyze_media
+from .media_metadata import extract_media_metadata
 from .audio_normalization import AudioNormalizationError, normalize_loudness
 from .metadata_guardrails import build_upload_metadata
 from .provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest, write_provenance
@@ -369,6 +370,11 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             raise ValueError("AIVF_MAX_SOURCE_DURATION_SECONDS must be finite and >= 1800")
         source_health = analyze_media(input_video, deep=False, max_duration=source_max_seconds)
         _atomic_json_write(package / "source_media_health.json", source_health)
+        try:
+            source_media_metadata = extract_media_metadata(input_video)
+        except (OSError, RuntimeError, ValueError) as exc:
+            source_media_metadata = {"ok": False, "error": str(exc)}
+        _atomic_json_write(package / "source_media_metadata.json", source_media_metadata)
         footage_evidence = _build_footage_evidence(input_video, enable_ocr, min_scenes=len(blueprint.clip_plan))
     except Exception as exc:
         raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
@@ -399,6 +405,11 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             except (MediaHealthError, GuardrailError, OSError, ValueError) as exc:
                 final_health = {"ok": False, "errors": [str(exc)], "warnings": [], "defects": [str(exc)]}
             _atomic_json_write(package / "final_media_health.json", final_health)
+            try:
+                final_media_metadata = extract_media_metadata(final_video)
+            except (OSError, RuntimeError, ValueError) as exc:
+                final_media_metadata = {"ok": False, "error": str(exc)}
+            _atomic_json_write(package / "final_media_metadata.json", final_media_metadata)
             if not final_health.get("ok", False):
                 defects = list(final_health.get("defects") or final_health.get("errors") or [])
                 if not defects:
@@ -476,7 +487,9 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
         "v3_readiness": str(package / "v3_readiness.json"),
         "v3_baseline": str(package / "v3_baseline.mp4"),
         "source_media_health": str(package / "source_media_health.json"),
+        "source_media_metadata": str(package / "source_media_metadata.json"),
         "final_media_health": str(package / "final_media_health.json"),
+        "final_media_metadata": str(package / "final_media_metadata.json"),
         "provenance": str(package / "provenance.json"),
         "metadata_guardrails": str(package / "metadata_guardrails.json"),
         "diagnostics": str(package / "diagnostics.json"),
