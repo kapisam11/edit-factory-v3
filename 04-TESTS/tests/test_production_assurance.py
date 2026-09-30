@@ -60,3 +60,26 @@ def test_environment_and_release_evidence_are_explicit_about_human_review():
     )
     assert evidence["release_candidate"] is True
     assert evidence["human_review_required"] is True
+
+
+def test_manifest_self_hash_and_rights_gate_prevent_false_green(tmp_path):
+    from ai_video_factory.production_assurance import build_release_evidence
+
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4",))
+
+    tampered = dict(manifest)
+    tampered["manifest_sha256"] = "0" * 64
+    assert verify_artifact_manifest(package, tampered)["ok"] is False
+
+    blocked = build_release_evidence(
+        package_dir=package,
+        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        media_health={"ok": True},
+        provenance={"assets": [{"rights_status": "review_required"}]},
+        environment={"ok": True},
+    )
+    assert blocked["release_candidate"] is False
+    assert blocked["checks"]["rights_clear"] is False
