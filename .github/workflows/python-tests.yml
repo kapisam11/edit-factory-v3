@@ -168,7 +168,7 @@ jobs:
         uv run aivf-compat /tmp/aivf-media/*.mp4
         uv run python -c "from ai_video_factory.benchmark import benchmark_media, benchmark_many; print(benchmark_media('/tmp/aivf-media/cfr.mp4')); print(benchmark_many(['/tmp/aivf-media/cfr.mp4','/tmp/aivf-media/vfr.mp4']))"
         uv run python -c "from ai_video_factory.hardware_matrix import run_matrix; print(run_matrix())"
-        uv run python -c "from ai_video_factory.media_fixture_matrix import generate_fixtures, validate_fixture_matrix; paths=generate_fixtures('/tmp/aivf-exotic'); result=validate_fixture_matrix(paths); print(result); assert result['count'] >= 2 and result['failed'] == 0"
+        uv run python -c "from ai_video_factory.media_fixture_matrix import generate_fixtures, validate_fixture_matrix; paths=generate_fixtures('/tmp/aivf-exotic'); result=validate_fixture_matrix(paths); print(result); assert result['count'] == 4 and result['passed'] == 4 and result['failed'] == 0"
     - name: Exercise large-file filesystem smoke
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
