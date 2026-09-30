@@ -6,6 +6,7 @@ from ai_video_factory.cache_lifecycle import CacheLifecycle, content_hash
 from ai_video_factory.hardware import ffmpeg_preset_for
 from ai_video_factory.media_metadata import extract_media_metadata
 from ai_video_factory.observability_metrics import MetricsRegistry
+from ai_video_factory import render_engine
 
 
 def test_media_metadata_normalizes_ffprobe_output(monkeypatch, tmp_path):
@@ -113,3 +114,22 @@ def test_resource_snapshot_is_json_serializable(monkeypatch):
     assert "rss_start_bytes" in report
     assert "cpu_time_seconds_delta" in report
     assert resource_json(start, end).startswith("{")
+
+
+def test_media_version_stamp_uses_copy_mode(monkeypatch, tmp_path):
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"source")
+    calls = []
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"stamped")
+
+    monkeypatch.setattr(render_engine, "run_ffmpeg", fake_run)
+    monkeypatch.setattr(render_engine, "validate_media_output", lambda *args, **kwargs: {})
+    result = render_engine.stamp_media_metadata(str(source), version="3.0.0-test")
+
+    assert result == str(source)
+    assert source.read_bytes() == b"stamped"
+    assert "-c" in calls[0] and "copy" in calls[0]
+    assert "comment=Edit Factory 3.0.0-test" in calls[0]
