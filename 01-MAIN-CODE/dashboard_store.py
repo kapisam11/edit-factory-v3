@@ -62,12 +62,43 @@ class DashboardStore:
                 time.sleep(backoff_seconds(attempt + 1, base=self.RETRY_DELAY_SECONDS, cap=1.0))
         raise AssertionError("unreachable")
 
+    @staticmethod
+    def _ensure_job_columns(conn: sqlite3.Connection) -> None:
+        """Apply lightweight job-table migrations required by lifecycle features."""
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if not columns:
+            return
+        if "retry_count" not in columns:
+            try:
+                conn.execute(
+                    "ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        if "worker_heartbeat_at" not in columns:
+            try:
+                conn.execute(
+                    "ALTER TABLE jobs ADD COLUMN worker_heartbeat_at TEXT"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+            try:
+                conn.execute(
+                    "UPDATE jobs SET worker_heartbeat_at=updated_at "
+                    "WHERE worker_heartbeat_at IS NULL"
+                )
+            except sqlite3.OperationalError as exc:
+                if "no such column" not in str(exc).lower():
+                    raise
+
     def ensure_indexes(self) -> None:
         """Add indexes, retry state migration, and lifecycle guards."""
         with self.connect() as conn:
-            columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
-            if "retry_count" not in columns:
-                conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+            self._ensure_job_columns(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
                 BEFORE UPDATE OF status ON jobs
@@ -90,6 +121,10 @@ class DashboardStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_updated "
                 "ON jobs(status, updated_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_worker_heartbeat "
+                "ON jobs(status, worker_heartbeat_at)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id "
@@ -197,15 +232,40 @@ class DashboardStore:
 
         return int(self.write(write))
     def claim_job(self, job_id: str) -> bool:
-        """Atomically claim one queued job before starting a worker process."""
-        changed = self.update_job_if_status(
-            job_id,
-            ("queued",),
-            status="running",
-            step="starting",
-            error=None,
-        )
-        return changed == 1
+        """Atomically claim a queued job and establish its heartbeat lease."""
+        def write(conn: sqlite3.Connection) -> int:
+            self._ensure_job_columns(conn)
+            row = conn.execute(
+                "SELECT status FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None or str(row["status"]) != "queued":
+                return 0
+            validate_transition("queued", "running")
+            return int(
+                conn.execute(
+                    "UPDATE jobs SET status='running', step='starting', "
+                    "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, "
+                    "updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='queued'",
+                    (job_id,),
+                ).rowcount
+            )
+        return int(self.write(write)) == 1
+
+    def heartbeat_job(self, job_id: str) -> bool:
+        """Refresh the durable worker lease for a non-terminal job."""
+        def write(conn: sqlite3.Connection) -> int:
+            self._ensure_job_columns(conn)
+            return int(
+                conn.execute(
+                    "UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP, "
+                    "updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status IN ('running','cancelling')",
+                    (job_id,),
+                ).rowcount
+            )
+        return bool(self.write(write))
 
     def update_job_if_status(
         self,
