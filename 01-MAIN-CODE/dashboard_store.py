@@ -71,17 +71,29 @@ class DashboardStore:
         if not columns:
             return
         if "retry_count" not in columns:
-            conn.execute(
-                "ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
-            )
+            try:
+                conn.execute(
+                    "ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
         if "worker_heartbeat_at" not in columns:
-            conn.execute(
-                "ALTER TABLE jobs ADD COLUMN worker_heartbeat_at TEXT"
-            )
-            conn.execute(
-                "UPDATE jobs SET worker_heartbeat_at=updated_at "
-                "WHERE worker_heartbeat_at IS NULL"
-            )
+            try:
+                conn.execute(
+                    "ALTER TABLE jobs ADD COLUMN worker_heartbeat_at TEXT"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+            try:
+                conn.execute(
+                    "UPDATE jobs SET worker_heartbeat_at=updated_at "
+                    "WHERE worker_heartbeat_at IS NULL"
+                )
+            except sqlite3.OperationalError as exc:
+                if "no such column" not in str(exc).lower():
+                    raise
 
     def ensure_indexes(self) -> None:
         """Add indexes, retry state migration, and lifecycle guards."""
