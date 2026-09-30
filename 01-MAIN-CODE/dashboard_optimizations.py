@@ -90,17 +90,20 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         return result
 
     def _job_access_allowed(job: dict | None) -> bool:
-        if not job or not has_request_context():
-            return job is not None
+        if not job:
+            return False
+        if not has_request_context():
+            return True
         try:
-            from flask import current_app, session
-            if not current_app.config.get("_AIVF_AUTH_CONFIGURED") or not session.get("aivf_authenticated"):
-                return True
-            role = str(session.get("aivf_role") or "viewer")
+            from flask import session
+            authenticated = bool(session.get("aivf_authenticated"))
+            role = str(session.get("aivf_role") or "viewer").strip().lower()
         except Exception:
+            return False
+        if role == "admin" and authenticated:
             return True
-        if role == "admin":
-            return True
+        if not authenticated or role not in {"viewer", "editor"}:
+            return False
         try:
             payload = json.loads(job.get("params") or "{}")
         except (TypeError, ValueError, json.JSONDecodeError):
@@ -125,13 +128,13 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         if not has_request_context():
             return value
         try:
-            from flask import current_app, session
-            if not current_app.config.get("_AIVF_AUTH_CONFIGURED") or not session.get("aivf_authenticated"):
-                return value
-            if str(session.get("aivf_role") or "viewer") == "admin":
+            from flask import session
+            if not session.get("aivf_authenticated"):
+                return []
+            if str(session.get("aivf_role") or "viewer").strip().lower() == "admin":
                 return value
         except Exception:
-            return value
+            return []
         principal = principal_for_request(request)
         filtered = []
         for job in value:
