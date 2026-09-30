@@ -53,7 +53,7 @@ def test_media_metadata_normalizes_ffprobe_output(monkeypatch, tmp_path):
     assert result["format"]["duration"] == "12.5"
     assert result["streams"][0]["fps"] == 29.97003
     assert result["streams"][1]["sample_rate"] == "48000"
-    assert "location" not in result["format"]["tags"]
+    assert "location" not in result["tags"]
 
 
 def test_media_metadata_can_include_explicit_sensitive_tags(monkeypatch, tmp_path):
