@@ -416,7 +416,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     @app_module.app.get("/api/jobs/<job_id>/preview")
     def job_preview(job_id: str):
-        job = app_module.db_get_job(job_id)
+        lookup = getattr(app_module, "authorized_db_get_job", app_module.db_get_job)
+        job = lookup(job_id)
         if not job:
             return jsonify({"error": "Job not found"}), 404
         if job.get("status") != "done":
@@ -445,7 +446,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     @app_module.app.post("/api/jobs/<job_id>/retry")
     def retry_job(job_id: str):
-        job = app_module.db_get_job(job_id)
+        lookup = getattr(app_module, "authorized_db_get_job", app_module.db_get_job)
+        job = lookup(job_id)
         if not job:
             return jsonify({"error": "Job not found"}), 404
         if job.get("status") not in {"error", "interrupted"}:
