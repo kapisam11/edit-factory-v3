@@ -401,6 +401,13 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 conn.execute(f"DELETE FROM job_logs WHERE job_id IN ({placeholders})", stale_ids)
                 conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", stale_ids)
             conn.execute("DELETE FROM rate_limits WHERE ts < ?", (cutoff,))
+        # Keep idempotency keys and lifecycle audit history bounded independently
+        # from completed-job retention, so state growth cannot become unbounded.
+        try:
+            store.prune_idempotency(max_age_seconds=max(86400, int(days * 86400)))
+            store.prune_events(max_age_seconds=max(7 * 86400, int(days * 86400)))
+        except Exception as exc:
+            logger.warning("Dashboard metadata retention cleanup failed: %s", exc)
         upload_cutoff = cutoff
         try:
             for child in app_module.UPLOAD_FOLDER.iterdir():
