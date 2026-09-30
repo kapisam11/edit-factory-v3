@@ -32,6 +32,10 @@ jobs:
       run: uv sync --frozen --python "${{ matrix.python-version }}" --extra web --extra dev
     - name: Verify locked environment
       run: uv pip check
+    - name: Verify lockfile is complete
+      run: test -s uv.lock && grep -q '^version = ' uv.lock && grep -q '^requires-python' uv.lock
+    - name: Check Ruff formatting on hardening modules
+      run: uv run ruff format --check 01-MAIN-CODE/ai_video_factory/media_metadata.py 04-TESTS/tests/test_hardening_gap_closure.py
     - name: Compile Python sources
       run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
     - name: Lint production Python for correctness
