@@ -114,6 +114,19 @@ def verify_artifact_manifest(
     """Verify an existing artifact manifest against the current package contents."""
     root = Path(package_dir).resolve()
     errors: list[str] = []
+    supplied_manifest_hash = str(manifest.get("manifest_sha256") or "")
+    if supplied_manifest_hash:
+        canonical = {
+            key: value for key, value in manifest.items()
+            if key != "manifest_sha256"
+        }
+        expected_manifest_hash = hashlib.sha256(
+            canonical_json(canonical).encode("utf-8")
+        ).hexdigest()
+        if supplied_manifest_hash != expected_manifest_hash:
+            errors.append("manifest hash mismatch")
+    else:
+        errors.append("manifest_sha256 is missing")
     files = manifest.get("files") or []
     if not isinstance(files, list):
         return {"ok": False, "errors": ["manifest.files must be a list"]}
@@ -181,6 +194,12 @@ def build_release_evidence(
         "readiness_valid": readiness.get("state") == "UPLOAD_PACKAGE_VALID",
         "media_valid": bool(media_health.get("ok")),
         "provenance_present": isinstance(provenance.get("assets"), list),
+        "rights_clear": not any(
+            str(item.get("rights_status") or "").lower() in {"review_required", "unverified"}
+            for item in (provenance.get("assets") or [])
+            if isinstance(item, Mapping)
+        ) and str((provenance.get("final_video") or {}).get("rights_status") or "").lower()
+        not in {"review_required", "unverified"},
         "environment_valid": bool(environment.get("ok")),
     }
     return {
