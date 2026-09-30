@@ -200,19 +200,25 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
         raise ValueError("render duration must be positive")
     src_clip = _validate_media_input(src_clip, "source clip")
     encoder = choose_encoder()
-    candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc", "h264_amf") else ["libx264"]
+    candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc", "h264_amf", "h264_vaapi") else ["libx264"]
     last_error = None
     seek_start = 0.0 if Path(src_clip).parent.name == "_clips" else max(0.0, ss)
     for selected in candidates:
-        extra = (
-            ["-preset", "p5", "-rc", "vbr_hq", "-b:v", "6000k"]
-            if selected in ("h264_nvenc", "hevc_nvenc")
-            else ["-preset", "fast", "-crf", "23"]
-        )
+        if selected in ("h264_nvenc", "hevc_nvenc"):
+            extra = ["-preset", "p5", "-rc", "vbr_hq", "-b:v", "6000k"]
+        elif selected == "h264_amf":
+            extra = ["-quality", "quality", "-b:v", "6000k"]
+        elif selected == "h264_vaapi":
+            extra = ["-qp", "23"]
+        else:
+            extra = ["-preset", "fast", "-crf", "23"]
         vf_full = f"{vf},tpad=stop_mode=clone:stop_duration={float(duration):.3f}"
-        cmd = [
-            "ffmpeg",
-            "-y",
+        if selected == "h264_vaapi":
+            vf_full = f"{vf_full},format=nv12,hwupload"
+        cmd = ["ffmpeg", "-y"]
+        if selected == "h264_vaapi":
+            cmd.extend(["-vaapi_device", "/dev/dri/renderD128"])
+        cmd.extend([
             "-ss",
             str(seek_start),
             "-i",
@@ -232,7 +238,7 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
             "128k",
             "-shortest",
             _validate_media_path(dst),
-        ]
+        ])
         try:
             run_ffmpeg(cmd)
             validate_media_output(dst)
@@ -268,15 +274,18 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
         opts += ["-rc", preset.get("rc", "vbr_hq"), "-b:v", preset.get("bitrate", "6000k")]
     else:
         opts += ["-crf", preset.get("crf", "20")]
-    cmd = [
-        "ffmpeg",
-        "-y",
+    cmd = ["ffmpeg", "-y"]
+    if codec == "h264_vaapi":
+        cmd += ["-vaapi_device", preset.get("device", "/dev/dri/renderD128")]
+    cmd += [
         "-f",
         "concat",
         "-safe",
         "0",
         "-i",
         concat_list_path,
+        "-vf",
+        "format=nv12,hwupload" if codec == "h264_vaapi" else "null",
         "-c:v",
         codec,
         *opts,
@@ -290,7 +299,7 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
         run_ffmpeg(cmd)
         validate_media_output(output_path)
     except Exception:
-        if "nvenc" not in codec:
+        if codec not in {"h264_nvenc", "hevc_nvenc", "h264_vaapi", "h264_amf"}:
             raise
         Path(output_path).unlink(missing_ok=True)
         fallback = [
