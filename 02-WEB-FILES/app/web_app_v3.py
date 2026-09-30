@@ -534,30 +534,6 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
 
         _run_db_write(write, db_path)
 
-    from ai_video_factory.resource_metrics import ResourceMonitor
-    resource_monitor = ResourceMonitor(
-        interval_seconds=max(
-            0.25,
-            float(os.environ.get("AIVF_RESOURCE_SAMPLE_SECONDS", "1.0")),
-        )
-    )
-    resource_monitor.start_monitoring()
-    resource_written = False
-
-    def write_resource_report(package: Path) -> None:
-        nonlocal resource_written
-        if resource_written:
-            return
-        try:
-            resource_report = resource_monitor.stop_monitoring()
-            with (package / "resource_usage.json").open("w", encoding="utf-8") as handle:
-                json.dump(resource_report, handle, indent=2, ensure_ascii=False)
-            resource_written = True
-        except (OSError, TypeError, ValueError) as exc:
-            # Resource telemetry is best-effort diagnostics; never turn a valid render into a failed job.
-            logger.warning("Could not write resource usage for %s: %s", job_id, exc)
-            resource_written = True
-
     try:
         if not update(status="running", step="Initializing"):
             return
@@ -598,7 +574,6 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             }
             with open(pkg_dir / "v3_job_result.json", "w", encoding="utf-8") as handle:
                 json.dump(result_payload, handle, indent=2, ensure_ascii=False)
-            write_resource_report(pkg_dir)
             if result_payload["errors"] or not _artifact_is_valid(result_payload.get("final_video")):
                 if not result_payload["errors"]:
                     result_payload["errors"].append("V3 final artifact failed media validation")
@@ -627,7 +602,6 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             return
         log("INFO", "→ Running Pipeline")
         ctx = build_director_pipeline(skip_stages=skip_stages).run(ctx)
-        write_resource_report(pkg_dir)
         if ctx.errors or not _artifact_is_valid(ctx.final_video):
             if not ctx.errors:
                 ctx.errors.append("Final artifact failed media validation")
@@ -638,14 +612,6 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             if update(status="done", step="Complete", pkg_dir=str(pkg_dir)):
                 log("INFO", "Job complete!")
     except Exception as exc:
-        try:
-            if "resource_monitor" in locals():
-                resource_report = resource_monitor.stop_monitoring()
-                package = Path(locals().get("pkg_dir", "")) if locals().get("pkg_dir") else None
-            if package is not None and package.is_dir():
-                write_resource_report(package)
-        except Exception:
-            logger.exception("Could not record resource usage for %s", job_id)
         try:
             if update(status="error", step="failed", error=str(exc)):
                 log("ERROR", f"Job failed: {exc}")
@@ -876,7 +842,8 @@ def list_jobs():
 
 @app.route("/api/jobs/<job_id>", methods=["GET"])
 def get_job(job_id):
-    job = db_get_job(job_id)
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+    job = lookup(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(_redact_job(job, include_logs=True))
@@ -884,7 +851,8 @@ def get_job(job_id):
 
 @app.route("/api/jobs/<job_id>/status")
 def get_job_status(job_id):
-    job = db_get_job(job_id)
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+    job = lookup(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify({"id": job_id, "status": job["status"], "step": job["step"], "error": job["error"]})
@@ -902,13 +870,20 @@ def cancel_job(job_id):
 @app.route("/api/jobs/<job_id>/logs")
 @app.route("/api/jobs/<job_id>/logs/stream")
 def job_logs_stream(job_id):
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+    authorized_job = lookup(job_id)
+    if not authorized_job:
+        return jsonify({"error": "Job not found"}), 404
+
     def stream():
         last_id = 0
+        job = dict(authorized_job)
         while True:
-            job = db_get_job(job_id)
-            if not job:
+            current = db_get_job(job_id)
+            if not current:
                 yield "data: " + json.dumps({"level": "ERROR", "msg": "Job not found"}) + "\n\n"
                 return
+            job["status"] = current.get("status")
             for row in db_logs_since(job_id, last_id):
                 last_id = row["id"]
                 yield "data: " + json.dumps({"time": row["created_at"], "level": row["level"], "msg": row["message"]}) + "\n\n"
@@ -923,13 +898,54 @@ def job_logs_stream(job_id):
     )
 
 
+def _package_access_allowed(pkg_dir: Optional[Path]) -> bool:
+    """Allow package access only to admins or the principal that owns the job."""
+    if pkg_dir is None or not pkg_dir.is_dir():
+        return False
+    from flask import session
+    if not app.config.get("_AIVF_AUTH_CONFIGURED"):
+        return True
+    if not session.get("aivf_authenticated"):
+        return False
+    if str(session.get("aivf_role") or "viewer").strip().lower() == "admin":
+        return True
+    try:
+        from resource_governor import principal_for_request
+        principal = principal_for_request(request)
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT params, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL"
+            ).fetchall()
+        for row in rows:
+            if str(Path(str(row["pkg_dir"])).resolve()) != str(pkg_dir.resolve()):
+                continue
+            payload = json.loads(row["params"] or "{}")
+            return str(payload.get("_principal") or "") == principal
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return False
+
+
+def _request_is_admin() -> bool:
+    from flask import session
+    return (
+        not app.config.get("_AIVF_AUTH_CONFIGURED")
+        or (
+            bool(session.get("aivf_authenticated"))
+            and str(session.get("aivf_role") or "viewer").strip().lower() == "admin"
+        )
+    )
+
+
 @app.route("/api/packages")
 def list_packages():
     global _package_cache
     now = time.monotonic()
-    with _package_cache_lock:
-        if _package_cache and now - _package_cache[0] < _PACKAGE_CACHE_TTL:
-            return jsonify(_package_cache[1])
+    use_cache = _request_is_admin()
+    if use_cache:
+        with _package_cache_lock:
+            if _package_cache and now - _package_cache[0] < _PACKAGE_CACHE_TTL:
+                return jsonify(_package_cache[1])
 
     packages = []
     try:
@@ -939,6 +955,8 @@ def list_packages():
     package_paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     for pkg_path in package_paths:
         try:
+            if not _package_access_allowed(pkg_path):
+                continue
             thumbnail_name = next(
                 (name for name in ("thumbnail.png", "thumbnail_vertical.png") if (pkg_path / name).exists()),
                 None,
@@ -967,15 +985,16 @@ def list_packages():
         except OSError:
             continue
 
-    with _package_cache_lock:
-        _package_cache = (time.monotonic(), packages)
+    if use_cache:
+        with _package_cache_lock:
+            _package_cache = (time.monotonic(), packages)
     return jsonify(packages)
 
 
 @app.route("/api/packages/<name>/file/<path:filename>")
 def package_file(name, filename):
     pkg_dir = _resolve_package(name)
-    if not pkg_dir:
+    if not _package_access_allowed(pkg_dir):
         abort(404)
     return send_from_directory(pkg_dir, filename)
 
