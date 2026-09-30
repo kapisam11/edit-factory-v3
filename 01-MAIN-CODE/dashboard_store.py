@@ -62,18 +62,31 @@ class DashboardStore:
                 time.sleep(backoff_seconds(attempt + 1, base=self.RETRY_DELAY_SECONDS, cap=1.0))
         raise AssertionError("unreachable")
 
+    @staticmethod
+    def _ensure_job_columns(conn: sqlite3.Connection) -> None:
+        """Apply lightweight job-table migrations required by lifecycle features."""
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if not columns:
+            return
+        if "retry_count" not in columns:
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "worker_heartbeat_at" not in columns:
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN worker_heartbeat_at TEXT"
+            )
+            conn.execute(
+                "UPDATE jobs SET worker_heartbeat_at=updated_at "
+                "WHERE worker_heartbeat_at IS NULL"
+            )
+
     def ensure_indexes(self) -> None:
         """Add indexes, retry state migration, and lifecycle guards."""
         with self.connect() as conn:
-            columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
-            if "retry_count" not in columns:
-                conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
-            if "worker_heartbeat_at" not in columns:
-                conn.execute("ALTER TABLE jobs ADD COLUMN worker_heartbeat_at TEXT")
-                conn.execute(
-                    "UPDATE jobs SET worker_heartbeat_at=updated_at "
-                    "WHERE worker_heartbeat_at IS NULL"
-                )
+            self._ensure_job_columns(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
                 BEFORE UPDATE OF status ON jobs
@@ -209,6 +222,7 @@ class DashboardStore:
     def claim_job(self, job_id: str) -> bool:
         """Atomically claim a queued job and establish its heartbeat lease."""
         def write(conn: sqlite3.Connection) -> int:
+            self._ensure_job_columns(conn)
             row = conn.execute(
                 "SELECT status FROM jobs WHERE id=?",
                 (job_id,),
@@ -230,6 +244,7 @@ class DashboardStore:
     def heartbeat_job(self, job_id: str) -> bool:
         """Refresh the durable worker lease for a non-terminal job."""
         def write(conn: sqlite3.Connection) -> int:
+            self._ensure_job_columns(conn)
             return int(
                 conn.execute(
                     "UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP, "
