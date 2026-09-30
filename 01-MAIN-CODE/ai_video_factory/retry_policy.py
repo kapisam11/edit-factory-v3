@@ -23,6 +23,8 @@ def is_retryable_error(error: Exception) -> bool:
         return True
     if isinstance(error, sqlite3.OperationalError):
         return any(marker in str(error).lower() for marker in ("locked", "busy"))
+    if isinstance(error, PermissionError):
+        return False
     if isinstance(error, OSError) and not isinstance(error, FileNotFoundError):
         return True
     text = str(error).lower()
@@ -30,7 +32,9 @@ def is_retryable_error(error: Exception) -> bool:
         return False
     if any(marker in text for marker in ("429", "temporarily unavailable", "timeout", "timed out", "rate limit", "connection reset", "502", "503", "504")):
         return True
-    return isinstance(error, RuntimeError)
+    # Unknown RuntimeError instances are not safe to retry. The caller may
+    # explicitly classify known transient runtime failures using the markers above.
+    return False
 
 def classify_failure(error: Exception) -> str:
     text = str(error).lower()
@@ -55,8 +59,13 @@ def idempotency_key(payload: Mapping[str, Any], *, namespace: str = "aivf") -> s
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
     return f"{namespace}:{digest}"
 
+def retry_deadline_exceeded(started_at_epoch: float, *, now: float | None = None, max_seconds: float = 3600.0) -> bool:
+    current = time.time() if now is None else float(now)
+    return current - float(started_at_epoch) >= float(max_seconds)
+
+
 def is_stale(updated_at_epoch: float, *, now: float | None = None, stale_after_seconds: float = 3600.0) -> bool:
     current = time.time() if now is None else float(now)
     return current - float(updated_at_epoch) >= float(stale_after_seconds)
 
-__all__ = ["is_retryable_error","classify_failure","backoff_seconds","retry_after","idempotency_key","is_stale"]
+__all__ = ["is_retryable_error","classify_failure","backoff_seconds","retry_after","idempotency_key","retry_deadline_exceeded","is_stale"]
