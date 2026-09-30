@@ -68,6 +68,12 @@ class DashboardStore:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
             if "retry_count" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+            if "worker_heartbeat_at" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN worker_heartbeat_at TEXT")
+                conn.execute(
+                    "UPDATE jobs SET worker_heartbeat_at=updated_at "
+                    "WHERE worker_heartbeat_at IS NULL"
+                )
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
                 BEFORE UPDATE OF status ON jobs
@@ -90,6 +96,10 @@ class DashboardStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_updated "
                 "ON jobs(status, updated_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_worker_heartbeat "
+                "ON jobs(status, worker_heartbeat_at)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id "
@@ -205,7 +215,22 @@ class DashboardStore:
             step="starting",
             error=None,
         )
+        if changed == 1:
+            self.heartbeat_job(job_id)
         return changed == 1
+
+    def heartbeat_job(self, job_id: str) -> bool:
+        """Refresh the durable worker lease for a non-terminal job."""
+        def write(conn: sqlite3.Connection) -> int:
+            return int(
+                conn.execute(
+                    "UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP, "
+                    "updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status IN ('running','cancelling')",
+                    (job_id,),
+                ).rowcount
+            )
+        return bool(self.write(write))
 
     def update_job_if_status(
         self,
