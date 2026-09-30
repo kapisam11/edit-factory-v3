@@ -906,8 +906,19 @@ def create_job():
     job_id = f"job_{uuid.uuid4().hex[:12]}"
     try:
         from dashboard_store import DashboardStore, IdempotencyConflict, JobAdmissionError
+        from resource_governor import ResourceLimitExceeded, check_job_creation_limits
         store = globals().get("dashboard_store") or DashboardStore(DB_PATH)
         store.ensure_indexes()
+        try:
+            check_job_creation_limits(
+                store.connect,
+                principal,
+                (UPLOAD_FOLDER, OUTPUT_FOLDER),
+            )
+        except ResourceLimitExceeded as exc:
+            if upload_path is not None:
+                upload_path.unlink(missing_ok=True)
+            return jsonify({"error": str(exc)}), 429
         if idem_key:
             actual_job_id, created = store.insert_job_idempotent(
                 job_id,
@@ -947,7 +958,15 @@ def create_job():
         raise
 
     _runtime_secrets[job_id] = secrets
-    _start_job(job_id, params, secrets)
+    cache = globals().get("dashboard_cache")
+    if cache is not None:
+        try:
+            cache.delete("jobs:list")
+        except Exception:
+            logger.debug("Unable to invalidate dashboard job-list cache", exc_info=True)
+    if not _start_job(job_id, params, secrets):
+        _runtime_secrets.pop(job_id, None)
+        return jsonify({"error": "Worker capacity is temporarily unavailable"}), 503
     return jsonify({"job_id": job_id, "status": "queued"}), 202
 
 @app.route("/api/jobs", methods=["GET"])
