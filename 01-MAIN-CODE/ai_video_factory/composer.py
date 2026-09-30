@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, Any, List
 
 from .segment_engine import get_segments, detect_beats, snap_to_beat, generate_clip_paths, _get_duration_safe
@@ -14,6 +15,7 @@ from .render_engine import (
     burn_subtitles,
     mix_voiceover,
 )
+from .hardware import choose_encoder
 from .subtitle_tools import script_to_srt
 from .tts import generate_voiceover
 
@@ -207,29 +209,52 @@ def compose_short_from_video(
 
     filter_effectiveness = _load_filter_effectiveness(package_dir)
     target_size = _target_size_from_plan(plan)
-    seq_files = []
-    durations = []
-    for i, seg in enumerate(edit_plan):
-        duration = float(seg[0]) if isinstance(seg, (list, tuple)) else float(seg)
+    durations = [
+        float(seg[0]) if isinstance(seg, (list, tuple)) else float(seg)
+        for seg in edit_plan
+    ]
+    seq_files: list[str] = []
+    render_failures: list[tuple[int, Exception]] = []
+
+    def render_one(index: int) -> tuple[int, str]:
+        seg = edit_plan[index]
+        duration = durations[index]
         label = seg[1] if isinstance(seg, (list, tuple)) and len(seg) > 1 else "segment"
-        durations.append(duration)
-        src_index = i if is_v3 else i % len(clip_paths)
-        segment_index = i if is_v3 else i % len(segments)
+        src_index = index if is_v3 else index % len(clip_paths)
+        segment_index = index if is_v3 else index % len(segments)
         src_clip = clip_paths[src_index]
-        dst = os.path.join(temp_dir, f"segment_{i:02d}.mp4")
-        vf = build_cinematic_filter(i, label, duration, filter_effectiveness or None, target_size=target_size)
+        dst = os.path.join(temp_dir, f"segment_{index:02d}.mp4")
+        vf = build_cinematic_filter(index, label, duration, filter_effectiveness or None, target_size=target_size)
         seg_start, seg_end = segments[segment_index]
         to = snap_to_beat(seg_start, seg_end, duration, beats)
         clip_dur = _get_duration_safe(src_clip)
         if clip_dur > 0:
             to = min(max(to, seg_start + min(duration, clip_dur)), seg_start + clip_dur)
         actual_dur = max(0.01, duration if is_v3 else (to - seg_start))
-        try:
-            render_segment(src_clip, seg_start, actual_dur, vf, dst)
-            seq_files.append(dst)
-        except Exception as exc:
-            logger.error("Segment render %d failed: %s", i, exc)
+        render_segment(src_clip, seg_start, actual_dur, vf, dst)
+        return index, dst
 
+    try:
+        configured_workers = int(os.environ.get("AIVF_MAX_PARALLEL_SEGMENTS", "2"))
+    except ValueError as exc:
+        raise ValueError("AIVF_MAX_PARALLEL_SEGMENTS must be an integer") from exc
+    max_workers = min(4, max(1, configured_workers), max(1, len(edit_plan)))
+
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aivf-segment") as executor:
+        futures = {executor.submit(render_one, index): index for index in range(len(edit_plan))}
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                _, destination = future.result()
+                seq_files.append(destination)
+            except Exception as exc:
+                render_failures.append((index, exc))
+                logger.error("Segment render %d failed: %s", index, exc)
+
+    if render_failures and is_v3:
+        details = "; ".join(f"segment {index}: {error}" for index, error in render_failures)
+        raise RuntimeError(f"V3 segment rendering failed: {details}")
+    seq_files.sort(key=lambda path: int(os.path.splitext(os.path.basename(path))[0].split("_")[-1]))
     if not seq_files:
         raise RuntimeError("No segments could be rendered.")
     if is_v3 and len(seq_files) != len(edit_plan):
@@ -262,7 +287,11 @@ def compose_short_from_video(
 
     concat_out = os.path.join(temp_dir, "concatenated.mp4")
     write_concat_list(seq_files, os.path.join(temp_dir, "concat.txt"))
-    concat_segments(os.path.join(temp_dir, "concat.txt"), concat_out)
+    concat_segments(
+        os.path.join(temp_dir, "concat.txt"),
+        concat_out,
+        encoder=choose_encoder(),
+    )
     burn_subtitles(concat_out, subtitle_path, out_file)
 
     if has_vo:
