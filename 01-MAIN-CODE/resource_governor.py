@@ -41,12 +41,14 @@ RESOURCE_RECONCILE_INTERVAL_SECONDS = max(
 
 
 def principal_for_request(request: Any) -> str:
-    """Return a per-authenticated-session principal, with a safe legacy fallback."""
+    """Return a stable authenticated-session principal, with a safe network fallback."""
     try:
         from flask import has_request_context, session
 
         if has_request_context() and session.get("aivf_authenticated"):
             principal = str(session.get("aivf_principal") or "").strip()
+            if not principal:
+                principal = str(session.get("aivf_user_id") or "").strip()
             if not principal:
                 principal = "session:" + secrets.token_urlsafe(24)
                 session["aivf_principal"] = principal
