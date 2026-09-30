@@ -413,8 +413,10 @@ def test_editor_cannot_cancel_another_principals_job(monkeypatch, tmp_path):
         from dashboard_compat import cancel_process
         response = cancel_process("job-owner")
 
-    assert response[1] == 404
-    assert appmod.db_get_job("job-owner") is None
+    assert response.status_code == 404
+    with appmod.get_db() as conn:
+        row = conn.execute("SELECT status FROM jobs WHERE id=?", ("job-owner",)).fetchone()
+    assert row["status"] == "running"
 
 
 def test_viewer_cannot_edit_package_or_cancel(monkeypatch, tmp_path):
