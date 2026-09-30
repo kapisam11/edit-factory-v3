@@ -398,6 +398,7 @@ def test_dashboard_job_visibility_is_scoped_to_principal(monkeypatch, tmp_path):
 
 def test_editor_cannot_cancel_another_principals_job(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
+    appmod.app.config["_AIVF_AUTH_CONFIGURED"] = True
     from dashboard_optimizations import install_dashboard_optimizations
     install_dashboard_optimizations(appmod)
     appmod.db_insert_job("job-owner", "owner", {"topic": "owner", "_principal": "owner"})
@@ -421,6 +422,7 @@ def test_editor_cannot_cancel_another_principals_job(monkeypatch, tmp_path):
 
 def test_viewer_cannot_edit_package_or_cancel(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
+    appmod.app.config["_AIVF_AUTH_CONFIGURED"] = True
     from dashboard_optimizations import install_dashboard_optimizations
     install_dashboard_optimizations(appmod)
     package = Path(appmod.OUTPUT_FOLDER) / "job-owner"
@@ -450,6 +452,7 @@ def test_viewer_cannot_edit_package_or_cancel(monkeypatch, tmp_path):
 
 def test_admin_cleanup_requires_admin_role(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
+    appmod.app.config["_AIVF_AUTH_CONFIGURED"] = True
     from dashboard_optimizations import install_dashboard_optimizations
     install_dashboard_optimizations(appmod)
     import dashboard_compat
