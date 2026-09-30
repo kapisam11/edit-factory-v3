@@ -110,4 +110,5 @@ def test_resource_snapshot_is_json_serializable(monkeypatch):
     end = snapshot_resources()
     report = summarize_resources(start, end)
     assert report["elapsed_seconds"] >= 0
+    assert "rss_start_bytes" in report
     assert resource_json(start, end).startswith("{")
