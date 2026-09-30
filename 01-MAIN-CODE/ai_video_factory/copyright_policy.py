@@ -99,14 +99,20 @@ def copyright_gate(
             "public_domain",
             "cc_license",
         }
-        provider_ok = item.provider_status is CopyrightStatus.VERIFIED
-        if not rights_ok or (require_provider and not provider_ok):
+        provider_configured = bool(item.provider or item.provider_reference)
+        provider_blocked = item.provider_status is CopyrightStatus.BLOCKED
+        provider_required_block = require_provider and item.provider_status is not CopyrightStatus.VERIFIED
+        provider_unverified = provider_configured and item.provider_status is not CopyrightStatus.VERIFIED
+        if not rights_ok or provider_blocked or provider_required_block or provider_unverified:
             unresolved.append(item.asset_id)
     return {
         "status": "cleared" if not unresolved else "review_required",
         "publish_blocked": bool(unresolved),
         "unresolved_assets": unresolved,
         "provider_required": require_provider,
+        "blocked_provider_decision": any(
+            item.provider_status is CopyrightStatus.BLOCKED for item in records
+        ),
     }
 
 
