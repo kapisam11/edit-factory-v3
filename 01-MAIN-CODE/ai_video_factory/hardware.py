@@ -1,6 +1,7 @@
 """Hardware detection and encoder preset selection."""
 import shutil
 import subprocess
+from pathlib import Path
 from functools import lru_cache
 from typing import Any, Dict
 
@@ -23,6 +24,11 @@ def detect_amd() -> bool:
 def detect_intel_gpu() -> bool:
     """Return True if Intel GPU tools are available."""
     return shutil.which("vainfo") is not None or shutil.which("intel_gpu_top") is not None
+
+
+def detect_vaapi() -> bool:
+    """Return True when a Linux VAAPI device and the probing utility are available."""
+    return Path("/dev/dri/renderD128").exists() and shutil.which("vainfo") is not None
 
 
 def get_memory_gb() -> float:
@@ -53,6 +59,8 @@ def choose_encoder() -> str:
         return "h264_nvenc"
     if detect_amd():
         return "h264_amf"
+    if detect_vaapi():
+        return "h264_vaapi"
     return "libx264"
 
 
@@ -64,4 +72,6 @@ def ffmpeg_preset_for(encoder: str) -> Dict[str, str]:
         return {"codec": "hevc_nvenc", "preset": "p5", "rc": "vbr_hq", "bitrate": "8000k"}
     if encoder == "h264_amf":
         return {"codec": "h264_amf", "quality": "quality", "bitrate": "8000k"}
+    if encoder == "h264_vaapi":
+        return {"codec": "h264_vaapi", "device": "/dev/dri/renderD128", "qp": "23"}
     return {"codec": "libx264", "preset": "slow", "crf": "20"}
