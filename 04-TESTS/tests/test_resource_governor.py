@@ -55,3 +55,84 @@ def test_sse_counter_is_bounded():
         release_sse()
         release_sse()
         governor.MAX_SSE_CONNECTIONS = original
+
+
+
+def test_resource_governor_validation_and_request_principals(monkeypatch):
+    import flask
+    from types import SimpleNamespace
+    import resource_governor as governor
+
+    monkeypatch.setenv("AIVF_TRUST_PROXY_HEADERS", "1")
+    with pytest.raises(ValueError, match="must be an integer"):
+        governor._int_env("TEST_INTEGER", 2)
+    monkeypatch.setenv("TEST_INTEGER", "0")
+    with pytest.raises(ValueError, match="must be >= 1"):
+        governor._int_env("TEST_INTEGER", 2)
+
+    app = flask.Flask(__name__)
+    app.secret_key = "test-secret"
+    with app.test_request_context(
+        "/",
+        environ_overrides={
+            "REMOTE_ADDR": "127.0.0.1",
+            "HTTP_X_FORWARDED_FOR": "203.0.113.10, 10.0.0.1",
+        },
+    ):
+        flask.session["aivf_authenticated"] = True
+        first = governor.principal_for_request(flask.request)
+        second = governor.principal_for_request(flask.request)
+        assert first.startswith("session:")
+        assert first == second
+
+    fallback_request = SimpleNamespace(
+        remote_addr="127.0.0.1",
+        headers={"X-Forwarded-For": "203.0.113.10, 10.0.0.1"},
+    )
+    assert governor.principal_for_request(fallback_request) == "203.0.113.10"
+
+    def explode():
+        raise RuntimeError("no request context")
+
+    monkeypatch.setattr(flask, "has_request_context", explode)
+    assert governor.principal_for_request(SimpleNamespace(remote_addr="198.51.100.7", headers={})) == "198.51.100.7"
+
+
+def test_resource_governor_directory_and_storage_error_paths(monkeypatch, tmp_path):
+    import resource_governor as governor
+    from resource_governor import job_storage_ok
+
+    def broken_rglob(_self, _pattern):
+        raise OSError("simulated rglob failure")
+
+    monkeypatch.setattr(type(tmp_path), "rglob", broken_rglob)
+    assert governor.directory_size(tmp_path) == 0
+
+    class BrokenEntry:
+        def is_file(self):
+            raise OSError("simulated stat failure")
+
+    monkeypatch.setattr(type(tmp_path), "rglob", lambda _self, _pattern: [BrokenEntry()])
+    assert governor.directory_size(tmp_path) == 0
+    assert job_storage_ok(tmp_path) is True
+
+
+def test_principal_queued_jobs_ignores_malformed_params(tmp_path):
+    import resource_governor as governor
+
+    db_path = tmp_path / "jobs.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE jobs(params TEXT, status TEXT)")
+        conn.execute(
+            "INSERT INTO jobs(params,status) VALUES(?, 'queued')",
+            ("not-json",),
+        )
+        conn.execute(
+            "INSERT INTO jobs(params,status) VALUES(?, 'queued')",
+            (json.dumps({"_principal": "valid"}),),
+        )
+
+    assert governor.principal_queued_jobs(
+        lambda: sqlite3.connect(db_path),
+        "valid",
+    ) == 1
