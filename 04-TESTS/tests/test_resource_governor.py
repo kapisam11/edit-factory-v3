@@ -64,6 +64,7 @@ def test_resource_governor_validation_and_request_principals(monkeypatch):
     import resource_governor as governor
 
     monkeypatch.setenv("AIVF_TRUST_PROXY_HEADERS", "1")
+    monkeypatch.setenv("TEST_INTEGER", "not-an-integer")
     with pytest.raises(ValueError, match="must be an integer"):
         governor._int_env("TEST_INTEGER", 2)
     monkeypatch.setenv("TEST_INTEGER", "0")
