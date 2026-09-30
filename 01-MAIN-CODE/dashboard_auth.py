@@ -81,22 +81,28 @@ def configure_dashboard_auth(app):
     allow_insecure_local = os.environ.get("AIVF_ALLOW_INSECURE_LOCAL", "0") == "1"
     configured_role = normalize_role(os.environ.get("AIVF_DASHBOARD_ROLE", "admin"))
 
-    # Flask sessions need a stable signing key. Prefer an explicit deployment secret;
-    # derive a deterministic fallback from the dashboard token so multiple workers
-    # share the same session key without duplicating the credential in configuration.
+    # Flask sessions need a stable secret shared by all workers.
+    # Never derive a key from the public local-development login string.
     session_key = os.environ.get("AIVF_DASHBOARD_SECRET_KEY", "").strip()
     if not session_key:
-        if token:
+        session_key = os.environ.get("FLASK_SECRET_KEY", "").strip()
+    if not session_key and token:
+        session_key = hashlib.sha256(
+            ("AIVF-DASHBOARD-SESSION:" + token).encode("utf-8")
+        ).hexdigest()
+    if not session_key:
+        raw_users = os.environ.get("AIVF_DASHBOARD_USERS", "").strip()
+        if raw_users:
             session_key = hashlib.sha256(
-                ("AIVF-DASHBOARD-SESSION:" + token).encode("utf-8")
+                ("AIVF-DASHBOARD-USERS-SESSION:" + raw_users).encode("utf-8")
             ).hexdigest()
-        elif allow_insecure_local:
-            session_key = hashlib.sha256(
-                b"AIVF-DASHBOARD-SESSION:local-development"
-            ).hexdigest()
-        else:
-            session_key = secrets.token_hex(32)
+    local_only = False
+    if not session_key:
+        session_key = secrets.token_hex(32)
+        local_only = bool(allow_insecure_local)
+    default_user = os.environ.get("AIVF_DASHBOARD_USER", "local-user").strip() or "local-user"
     app.secret_key = session_key
+    app.config["_AIVF_LOCAL_ONLY"] = local_only
 
     if not token and not allow_insecure_local:
         app.logger.warning("AIVF_DASHBOARD_TOKEN is unset; dashboard access will fail closed")
@@ -131,6 +137,8 @@ def configure_dashboard_auth(app):
         path = request.path
         if path.startswith("/static/") or path in PUBLIC_PATHS:
             return None
+        if app.config.get("_AIVF_LOCAL_ONLY") and not _loopback_request():
+            abort(403)
         if session.get("aivf_authenticated"):
             if request.method not in SAFE_METHODS and not _same_origin_request():
                 abort(403)
@@ -155,6 +163,7 @@ def configure_dashboard_auth(app):
             session.clear()
             session["aivf_authenticated"] = True
             session["aivf_role"] = configured_role.value
+            session["aivf_principal"] = "user:" + str(default_user)
             return redirect("/")
         return "Invalid dashboard token", 401
 
