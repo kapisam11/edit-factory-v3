@@ -80,6 +80,24 @@ def configure_dashboard_auth(app):
     token = os.environ.get("AIVF_DASHBOARD_TOKEN", "").strip()
     allow_insecure_local = os.environ.get("AIVF_ALLOW_INSECURE_LOCAL", "0") == "1"
     configured_role = normalize_role(os.environ.get("AIVF_DASHBOARD_ROLE", "admin"))
+
+    # Flask sessions need a stable signing key. Prefer an explicit deployment secret;
+    # derive a deterministic fallback from the dashboard token so multiple workers
+    # share the same session key without duplicating the credential in configuration.
+    session_key = os.environ.get("AIVF_DASHBOARD_SECRET_KEY", "").strip()
+    if not session_key:
+        if token:
+            session_key = hashlib.sha256(
+                ("AIVF-DASHBOARD-SESSION:" + token).encode("utf-8")
+            ).hexdigest()
+        elif allow_insecure_local:
+            session_key = hashlib.sha256(
+                b"AIVF-DASHBOARD-SESSION:local-development"
+            ).hexdigest()
+        else:
+            session_key = secrets.token_hex(32)
+    app.secret_key = session_key
+
     if not token and not allow_insecure_local:
         app.logger.warning("AIVF_DASHBOARD_TOKEN is unset; dashboard access will fail closed")
 
