@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -36,13 +37,32 @@ def run_completeness(root: str | Path = ".") -> list[CompletenessCheck]:
     checks: list[CompletenessCheck] = []
     manual: list[str] = []
 
-    findings = scan_repository(base)
-    severe = high_severity(findings)
-    checks.append(CompletenessCheck(
-        "command-execution-security",
-        "PASS" if not severe else "BLOCKED",
-        f"{len(findings)} findings; {len(severe)} high severity",
-    ))
+    code_roots = (
+        base / "01-MAIN-CODE",
+        base / "02-WEB-FILES",
+        base / "03-SIDE-CODE",
+    )
+    code_files = [
+        path
+        for root in code_roots
+        if root.is_dir()
+        for path in root.rglob("*.py")
+        if path.is_file()
+    ]
+    if not code_files:
+        checks.append(CompletenessCheck(
+            "command-execution-security",
+            "BLOCKED",
+            "repository code directories/files were not found; refusing to treat an empty scan as clean",
+        ))
+    else:
+        findings = scan_repository(base)
+        severe = high_severity(findings)
+        checks.append(CompletenessCheck(
+            "command-execution-security",
+            "PASS" if not severe else "BLOCKED",
+            f"{len(findings)} findings; {len(severe)} high severity",
+        ))
 
     try:
         safe_join(base / "output", "package", "asset.mp4")
@@ -155,7 +175,7 @@ def report(root: str | Path = ".") -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = list(argv or [])
+    args = list(argv) if argv is not None else list(sys.argv[1:])
     root = args[0] if args and not args[0].startswith("-") else "."
     payload = report(root)
     print(json.dumps(payload, indent=2, sort_keys=True))
