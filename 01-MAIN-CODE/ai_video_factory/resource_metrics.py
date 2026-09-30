@@ -77,9 +77,8 @@ def summarize_resources(start: dict[str, Any], end: dict[str, Any]) -> dict[str,
     summary: dict[str, Any] = {
         "started_at": start.get("timestamp"),
         "finished_at": end.get("timestamp"),
-        "peak_rss_bytes": max(
-            int(value) for value in (start_rss, end_rss) if value is not None
-        ) if any(value is not None for value in (start_rss, end_rss)) else None,
+        "rss_start_bytes": start_rss,
+        "rss_end_bytes": end_rss,
         "cpu_percent_start": start_cpu,
         "cpu_percent_end": end_cpu,
         "elapsed_seconds": round(
