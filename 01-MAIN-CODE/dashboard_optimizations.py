@@ -452,6 +452,12 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     @app_module.app.post("/api/jobs/<job_id>/retry")
     def retry_job(job_id: str):
+        role_gate = app_module.app.extensions.get("aivf_require_role")
+        if callable(role_gate):
+            try:
+                role_gate("editor")
+            except Exception:
+                return jsonify({"error": "Editor role required"}), 403
         lookup = getattr(app_module, "authorized_db_get_job", app_module.db_get_job)
         job = lookup(job_id)
         if not job:
