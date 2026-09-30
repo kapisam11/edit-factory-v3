@@ -391,13 +391,19 @@ def test_retry_requires_editor_role(monkeypatch, tmp_path):
     install_dashboard_optimizations(appmod)
     appmod.db_insert_job("job-retry-role", "topic", {"topic": "topic"})
     appmod.db_update_job("job-retry-role", status="error", error="provider returned 429")
-    client = appmod.app.test_client()
-    with client.session_transaction() as session:
+
+    from flask import session
+    with appmod.app.test_request_context(
+        "/api/jobs/job-retry-role/retry",
+        method="POST",
+        headers={"Origin": "http://localhost"},
+    ):
         session["aivf_authenticated"] = True
         session["aivf_role"] = "viewer"
         session["aivf_principal"] = "viewer-a"
-    response = client.post("/api/jobs/job-retry-role/retry", headers={"Origin": "http://localhost"})
-    assert response.status_code == 403
+        response, status = appmod.app.view_functions["retry_job"]("job-retry-role")
+
+    assert status == 403
 
 
 def test_stale_reconciliation_keeps_fresh_heartbeat(monkeypatch, tmp_path):
@@ -409,5 +415,10 @@ def test_stale_reconciliation_keeps_fresh_heartbeat(monkeypatch, tmp_path):
     with appmod.get_db() as conn:
         conn.execute("UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP WHERE id=?", ("job-fresh",))
     monkeypatch.setenv("AIVF_STALE_JOB_TIMEOUT_SECONDS", "60")
-    appmod.app.preprocess_request()
+    from flask import session
+    with appmod.app.test_request_context("/api/jobs/job-fresh"):
+        session["aivf_authenticated"] = True
+        session["aivf_role"] = "admin"
+        result = appmod.app.preprocess_request()
+        assert result is None
     assert appmod.db_get_job("job-fresh")["status"] == "running"
