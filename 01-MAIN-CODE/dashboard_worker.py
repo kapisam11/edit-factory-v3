@@ -39,10 +39,24 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
 
     heartbeat_stop = threading.Event()
     heartbeat_store = DashboardStore(db_path)
-    interval = max(
-        5.0,
-        float(os.environ.get("AIVF_WORKER_HEARTBEAT_SECONDS", "15")),
-    )
+    try:
+        raw_interval = os.environ.get("AIVF_WORKER_HEARTBEAT_SECONDS", "15")
+        parsed_interval = float(raw_interval)
+        if parsed_interval != parsed_interval or parsed_interval <= 0:
+            raise ValueError
+        interval = max(5.0, parsed_interval)
+    except (TypeError, ValueError):
+        try:
+            heartbeat_store.update_job_if_status(
+                job_id,
+                ("queued", "running"),
+                status="error",
+                step="failed",
+                error="AIVF_WORKER_HEARTBEAT_SECONDS must be numeric and greater than 0",
+            )
+        except Exception:
+            pass
+        return
 
     def heartbeat() -> None:
         failures = 0
