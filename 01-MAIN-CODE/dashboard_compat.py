@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 from flask import jsonify, request, send_from_directory
 
@@ -35,8 +36,46 @@ def _terminate_process_tree(process):
         process.join(timeout=5)
 
 
+def _request_role() -> str:
+    from flask import current_app, has_request_context, session
+    if not has_request_context():
+        return "admin"
+    try:
+        if not current_app.config.get("_AIVF_AUTH_CONFIGURED") or not session.get("aivf_authenticated"):
+            return "admin"
+        return str(session.get("aivf_role") or "viewer").strip().lower()
+    except RuntimeError:
+        return "admin"
+
+
+def _package_access_allowed(web_app_v3, package) -> bool:
+    if not package:
+        return False
+    if _request_role() == "admin":
+        return True
+    try:
+        with web_app_v3.get_db() as conn:
+            rows = conn.execute("SELECT params, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL").fetchall()
+        from resource_governor import principal_for_request
+        principal = principal_for_request(request)
+        for row in rows:
+            if str(Path(str(row["pkg_dir"])).resolve()) != str(package.resolve()):
+                continue
+            payload = json.loads(row["params"] or "{}")
+            return str(payload.get("_principal") or "") == principal
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return False
+
+
 def cancel_process(job_id):
     import web_app_v3
+    if _request_role() not in {"admin", "editor"}:
+        return jsonify({"error": "Editor role required"}), 403
+    lookup = getattr(web_app_v3, "authorized_db_get_job", web_app_v3.db_get_job)
+    job = lookup(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
     with web_app_v3._active_processes_lock:
         with web_app_v3.get_db() as conn:
             cursor = conn.execute(
@@ -224,6 +263,8 @@ def register_dashboard_compat(app):
 
     @app.route("/api/presets", methods=["GET", "POST", "DELETE"])
     def compat_presets():
+        if request.method in {"POST", "DELETE"} and _request_role() != "admin":
+            return jsonify({"error": "Admin role required"}), 403
         if request.method == "POST":
             data = request.get_json(silent=True) or {}
             name = str(data.get("name", "")).strip()
@@ -240,8 +281,10 @@ def register_dashboard_compat(app):
     @app.route("/api/package/<name>/script", methods=["GET", "POST"])
     def compat_script(name):
         package = web_app_v3._resolve_package(name)
-        if not package:
+        if not _package_access_allowed(web_app_v3, package):
             return jsonify({"error": "Package not found"}), 404
+        if request.method == "POST" and _request_role() not in {"admin", "editor"}:
+            return jsonify({"error": "Editor role required"}), 403
         path = package / "script.txt"
         if request.method == "GET":
             return jsonify({"script": path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""})
@@ -255,19 +298,21 @@ def register_dashboard_compat(app):
     @app.route("/api/package/<name>/files")
     def compat_files(name):
         package = web_app_v3._resolve_package(name)
-        if not package:
+        if not _package_access_allowed(web_app_v3, package):
             return jsonify({"error": "Package not found"}), 404
         return jsonify([{"path": path.relative_to(package).as_posix(), "size": path.stat().st_size} for path in package.rglob("*") if path.is_file()])
 
     @app.route("/api/package/<name>/file/<path:filename>")
     def compat_file(name, filename):
         package = web_app_v3._resolve_package(name)
-        if not package:
+        if not _package_access_allowed(web_app_v3, package):
             return jsonify({"error": "Package not found"}), 404
         return send_from_directory(package, filename)
 
     @app.route("/api/admin/cleanup", methods=["POST"])
     def cleanup_packages_admin():
+        if _request_role() != "admin":
+            return jsonify({"error": "Admin role required"}), 403
         days = request.args.get("max_age_days", os.environ.get("AIVF_RETENTION_DAYS", "7"))
         removed = _cleanup_old_packages(web_app_v3, days)
         return jsonify({"removed": removed, "count": len(removed)})
