@@ -68,6 +68,7 @@ def provenance_manifest(
     final_video: str | Path | None = None,
     assets: list[Mapping[str, Any]] | None = None,
     pipeline_version: str = "3.0.0",
+    run_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     package = Path(package_dir)
     manifest: dict[str, Any] = {
@@ -77,6 +78,7 @@ def provenance_manifest(
         "package": package.name,
         "assets": [dict(item) for item in (assets or [])],
         "final_video": None,
+        "run_context": dict(run_context or {}),
     }
     if final_video and Path(final_video).is_file():
         manifest["final_video"] = build_asset_record(
