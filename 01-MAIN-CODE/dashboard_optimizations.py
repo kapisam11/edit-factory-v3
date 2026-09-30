@@ -335,8 +335,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                     if process is not None and process.is_alive():
                         continue
                     heartbeat = str(row["worker_heartbeat_at"] or "").strip()
-                    # Legacy rows without a heartbeat lease are left alone rather than
-                    # being guessed stale from an unrelated metadata timestamp.
+                    # Legacy rows without a heartbeat lease are not guessed stale from
+                    # an unrelated metadata timestamp.
                     if not heartbeat:
                         continue
                     try:
