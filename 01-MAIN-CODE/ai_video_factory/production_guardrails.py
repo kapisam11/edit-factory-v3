@@ -7,9 +7,11 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -80,6 +82,40 @@ def executable_path(name: str) -> str:
         raise GuardrailError(f"required executable not found on PATH: {name}")
     return resolved
 
+def _process_group_kwargs() -> dict[str, Any]:
+    """Create an isolated process group/session for external tools."""
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}
+
+
+def terminate_process_tree(process: subprocess.Popen[Any], *, grace_seconds: float = 2.0) -> None:
+    """Terminate an external process and its children without leaking work past cancellation."""
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=max(1.0, float(grace_seconds) + 1.0),
+            )
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+            deadline = time.monotonic() + max(0.1, float(grace_seconds))
+            while process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
 def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None = None,
              env: Mapping[str, str] | None = None, stderr_limit: int = 4000) -> ToolResult:
     """Run an external tool without a shell and retain a bounded diagnostic tail."""
@@ -90,15 +126,25 @@ def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None =
         raise GuardrailError("tool timeout must be positive")
     limit = max(256, int(stderr_limit))
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             list(args),
             cwd=str(cwd) if cwd else None,
             env=dict(env) if env is not None else None,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=int(timeout),
-            check=False,
+            **_process_group_kwargs(),
         )
+        try:
+            stdout, stderr = process.communicate(timeout=int(timeout))
+        except subprocess.TimeoutExpired as exc:
+            terminate_process_tree(process)
+            try:
+                process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            raise GuardrailError(f"tool timed out after {timeout}s: {args[0]}") from exc
+        completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
     except subprocess.TimeoutExpired as exc:
         raise GuardrailError(f"tool timed out after {timeout}s: {args[0]}") from exc
     except OSError as exc:
@@ -169,4 +215,4 @@ def redact_mapping(payload: Mapping[str, Any], *, secret_names: Iterable[str] = 
 
 __all__ = ["Diagnostic","GuardrailError","ToolResult","atomic_write_bytes","atomic_write_json","diagnose_environment",
            "executable_path","free_disk_bytes","redact_log_message","SecretRedactionFilter","redact_mapping","require_free_disk","run_tool","safe_filename",
-           "sha256_file","validate_path_inside"]
+           "sha256_file","terminate_process_tree","validate_path_inside"]
