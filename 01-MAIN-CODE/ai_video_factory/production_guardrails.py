@@ -126,16 +126,6 @@ class SecretRedactionFilter(logging.Filter):
         return True
 
 
-def install_global_log_redaction() -> SecretRedactionFilter:
-    """Install one idempotent redaction filter on every existing root handler."""
-    redactor = SecretRedactionFilter()
-    root = logging.getLogger()
-    for handler in root.handlers:
-        if not any(isinstance(existing, SecretRedactionFilter) for existing in handler.filters):
-            handler.addFilter(redactor)
-    return redactor
-
-
 @dataclass(frozen=True)
 class Diagnostic:
     key: str
@@ -179,4 +169,4 @@ def redact_mapping(payload: Mapping[str, Any], *, secret_names: Iterable[str] = 
 
 __all__ = ["Diagnostic","GuardrailError","ToolResult","atomic_write_bytes","atomic_write_json","diagnose_environment",
            "executable_path","free_disk_bytes","redact_log_message","SecretRedactionFilter","redact_mapping","require_free_disk","run_tool","safe_filename",
-           "sha256_file","validate_path_inside","install_global_log_redaction"]
+           "sha256_file","validate_path_inside"]

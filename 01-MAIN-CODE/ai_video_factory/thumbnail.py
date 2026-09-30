@@ -177,7 +177,7 @@ def thumbnail_quality_report(path: str, expected_size: Optional[tuple] = None) -
 
 
 def select_best_thumbnail_variant(paths: List[str]) -> int:
-    """Return the best 1-based variant index using legacy and visual quality scores."""
+    """Return the best 1-based variant, preferring variants that pass the quality gate."""
     if not paths:
         raise ValueError("No thumbnail variants were supplied")
     scored = []
@@ -187,9 +187,12 @@ def select_best_thumbnail_variant(paths: List[str]) -> int:
         legacy_score = float(legacy.get("score") or 0.0) / 100.0
         modern_score = float(modern.get("score") or 0.0)
         combined = 0.60 * legacy_score + 0.40 * modern_score
-        scored.append((combined, legacy_score, modern_score, -index, index))
-    scored.sort(reverse=True)
-    return scored[0][4]
+        passed = bool(legacy.get("passed", False)) and bool(modern.get("ok", False))
+        scored.append((passed, combined, legacy_score, modern_score, -index, index))
+    passing = [item for item in scored if item[0]]
+    pool = passing or scored
+    pool.sort(reverse=True)
+    return pool[0][5]
 
 def _score_image(path: str) -> float:
     """Prefer sharp, moderately bright, colorful frames over flat/dark frames."""

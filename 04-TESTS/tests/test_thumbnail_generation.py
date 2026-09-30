@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from ai_video_factory.thumbnail import make_thumbnail, make_thumbnail_variants
+from ai_video_factory.thumbnail import make_thumbnail, make_thumbnail_variants, select_best_thumbnail_variant
 
 
 def test_thumbnail_uses_real_background_and_readable_composition(tmp_path: Path):
@@ -38,3 +38,26 @@ def test_thumbnail_fallback_is_still_valid(tmp_path: Path):
     with Image.open(output) as result:
         assert result.size == (1280, 720)
         assert result.getbbox() is not None
+
+
+def test_thumbnail_selector_honors_modern_quality_gate(monkeypatch):
+    paths = ["first.png", "second.png"]
+    legacy = {
+        path: {"passed": True, "score": 80.0, "checks": {"nonempty": True}}
+        for path in paths
+    }
+    modern = {
+        "first.png": {"ok": False, "score": 0.99},
+        "second.png": {"ok": True, "score": 0.55},
+    }
+
+    monkeypatch.setattr(
+        "ai_video_factory.thumbnail.thumbnail_quality_report",
+        lambda path: legacy[path],
+    )
+    monkeypatch.setattr(
+        "ai_video_factory.thumbnail.score_thumbnail",
+        lambda path: modern[path],
+    )
+
+    assert select_best_thumbnail_variant(paths) == 2

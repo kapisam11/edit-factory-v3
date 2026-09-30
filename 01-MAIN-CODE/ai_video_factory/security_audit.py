@@ -29,12 +29,10 @@ def _call_name(node: ast.Call) -> str:
         return ".".join(reversed(parts))
     return ""
 
-def _keyword_bool(node: ast.Call, name: str) -> bool | None:
+def _keyword_bool(node: ast.Call, name: str) -> bool:
     for kw in node.keywords:
-        if kw.arg == name:
-            if isinstance(kw.value, ast.Constant):
-                return bool(kw.value.value)
-            return None
+        if kw.arg == name and isinstance(kw.value, ast.Constant):
+            return bool(kw.value.value)
     return False
 
 def audit_source(path: str | Path) -> list[SecurityFinding]:
@@ -52,11 +50,8 @@ def audit_source(path: str | Path) -> list[SecurityFinding]:
             findings.append(SecurityFinding(str(source_path), node.lineno, "HIGH", "shell-execution", f"{name} must not be used"))
             continue
         if name.startswith("subprocess."):
-            shell = _keyword_bool(node, "shell")
-            if shell is True:
+            if _keyword_bool(node, "shell"):
                 findings.append(SecurityFinding(str(source_path), node.lineno, "HIGH", "subprocess-shell", "subprocess call enables a shell"))
-            elif shell is None:
-                findings.append(SecurityFinding(str(source_path), node.lineno, "HIGH", "dynamic-subprocess-shell", "subprocess shell mode is not statically known; fail closed"))
             if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                 findings.append(SecurityFinding(
                     str(source_path), node.lineno, "MEDIUM", "string-command",

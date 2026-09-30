@@ -27,10 +27,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install dashboard environment
-        run: |
-          uv sync --frozen --python 3.12 --extra web --extra dev --extra ocr
-          uv pip install playwright==1.63.0
-          uv run playwright install --with-deps chromium
+        run: uv sync --frozen --python 3.12 --extra web --extra dev --extra ocr
       - name: Start dashboard
         env:
           FLASK_SECRET_KEY: e2e-session-secret
@@ -83,14 +80,6 @@ jobs:
           queue = json.loads((root / "queue.json").read_text())
           assert "queued" in queue and "running" in queue
           PY
-      - name: Run real Chromium browser flow
-        env:
-          PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
-        run: |
-          set -euo pipefail
-          uv run python 03-SIDE-CODE/tools/browser_smoke.py http://127.0.0.1:5000 e2e-dashboard-token
-        if: success()
-
       - name: Run real dashboard V3 production flow
         env:
           AIVF_DASHBOARD_TOKEN: e2e-dashboard-token

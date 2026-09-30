@@ -9,7 +9,7 @@ description = "Emotion-first AI short-form video planning, production, retention
 requires-python = ">=3.10"
 license = "LicenseRef-Edit-Factory-Source-Available"
 license-files = ["LICENSE"]
-dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "edge-tts>=6.1.0", "numpy>=1.23.0"]
+dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "urllib3>=2.8.0", "edge-tts>=6.1.0", "numpy>=1.23.0"]
 
 [project.scripts]
 aivf = "app.cli:main"
@@ -17,7 +17,6 @@ aivf-diagnose = "ai_video_factory.diagnostics_cli:main"
 aivf-ready = "ai_video_factory.production_readiness:main"
 aivf-hardware-smoke = "ai_video_factory.hardware_smoke:main"
 aivf-compat = "ai_video_factory.compatibility_cli:main"
-aivf-completeness = "ai_video_factory.production_completeness:main"
 aivf-content = "app.content_factory_cli:main"
 aivf-v3 = "ai_video_factory.v3_cli:main"
 
@@ -89,6 +88,7 @@ files = [
   "01-MAIN-CODE/ai_video_factory/reproducible_build.py",
   "01-MAIN-CODE/ai_video_factory/production_readiness.py",
   "01-MAIN-CODE/ai_video_factory/observability_metrics.py",
+  "01-MAIN-CODE/ai_video_factory/resource_metrics.py",
 ]
 
 [tool.ruff]

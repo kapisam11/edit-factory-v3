@@ -471,3 +471,54 @@ def test_admin_cleanup_requires_admin_role(monkeypatch, tmp_path):
         session["aivf_role"] = "viewer"
         response, status = appmod.app.view_functions["cleanup_packages_admin"]()
         assert status == 403
+
+
+def test_retry_requires_editor_role(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+
+    install_dashboard_optimizations(appmod)
+    monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "test-token")
+    from dashboard_auth import configure_dashboard_auth
+    configure_dashboard_auth(appmod.app)
+    appmod.db_insert_job("job-retry-role", "topic", {"topic": "topic"})
+    appmod.db_update_job("job-retry-role", status="error", error="provider returned 429")
+
+    from flask import session
+    with appmod.app.test_request_context(
+        "/api/jobs/job-retry-role/retry",
+        method="POST",
+        headers={"Origin": "http://localhost"},
+    ):
+        session["aivf_authenticated"] = True
+        session["aivf_role"] = "viewer"
+        session["aivf_principal"] = "viewer-a"
+        response, status = appmod.app.view_functions["retry_job"]("job-retry-role")
+
+    assert status == 403
+
+
+def test_stale_reconciliation_keeps_fresh_heartbeat(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+
+    install_dashboard_optimizations(appmod)
+    monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "test-token")
+    from dashboard_auth import configure_dashboard_auth
+    configure_dashboard_auth(appmod.app)
+    appmod.db_insert_job("job-fresh", "topic", {"topic": "topic"})
+    appmod.db_update_job("job-fresh", status="running")
+    with appmod.get_db() as conn:
+        conn.execute(
+            "UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP WHERE id=?",
+            ("job-fresh",),
+        )
+    monkeypatch.setenv("AIVF_STALE_JOB_TIMEOUT_SECONDS", "60")
+
+    from flask import session
+    with appmod.app.test_request_context("/api/jobs/job-fresh"):
+        session["aivf_authenticated"] = True
+        session["aivf_role"] = "admin"
+        result = appmod.app.preprocess_request()
+        assert result is None
+    assert appmod.db_get_job("job-fresh")["status"] == "running"

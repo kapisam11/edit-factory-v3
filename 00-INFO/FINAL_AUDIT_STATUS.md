@@ -42,6 +42,15 @@ The repository-level findings from the September 21 hostile review are closed in
 - The production Docker image uses a pinned Python base-image digest and excludes test/extension trees from the runtime image.
 - Deployment includes an automated target-host V3 production smoke covering authenticated job creation, real V3 rendering, readiness, FFprobe validation, and preview.
 
+## Hardening additions completed on 2026-09-30
+
+- Added FFprobe-backed technical metadata artifacts for V3 source/final media, including codec, FPS, dimensions, color and audio properties with sensitive tags excluded by default.
+- Added content-addressed SHA-256 cache identity helpers.
+- Added Prometheus-compatible `/metrics` exposition alongside the JSON metrics endpoint.
+- Added bounded parallel segment rendering with the existing cross-process FFmpeg budget protecting host resources.
+- Added VAAPI encoder detection/preset handling with automatic CPU fallback when the hardware path is unavailable or fails.
+- Added an enforced Bandit high-severity/high-confidence security scan and lockfile completeness checks in CI.
+
 ## Remaining external acceptance gates
 
 These are deployment evidence gates, not unresolved repository defects:

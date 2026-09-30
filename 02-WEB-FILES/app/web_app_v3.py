@@ -516,6 +516,26 @@ def _redact_job(job: dict, include_logs: bool = False) -> dict:
 
 
 def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str, skip_stages: Optional[list[str]] = None) -> None:
+    resource_monitor = None
+    resource_report_written = False
+
+    def _write_resource_report(package_dir: Optional[Path]) -> None:
+        nonlocal resource_report_written
+        if resource_report_written or resource_monitor is None or package_dir is None:
+            return
+        try:
+            report = resource_monitor.stop_monitoring()
+            target = package_dir / "resource_usage.json"
+            temporary = package_dir / ".resource_usage.json.partial"
+            with temporary.open("w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=2, sort_keys=True, ensure_ascii=False)
+                handle.write("\n")
+            os.replace(temporary, target)
+        except Exception as exc:
+            logger.warning("Resource telemetry write skipped for %s: %s", job_id, exc)
+        finally:
+            resource_report_written = True
+
     def update(**kwargs: Any) -> bool:
         allowed = {"status", "step", "params", "pkg_dir", "error"}
         if set(kwargs) - allowed:
@@ -542,6 +562,18 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         _run_db_write(write, db_path)
 
     try:
+        from ai_video_factory.resource_metrics import ResourceMonitor
+
+        raw_interval = os.environ.get("AIVF_RESOURCE_SAMPLE_SECONDS", "1.0")
+        try:
+            interval_seconds = float(raw_interval)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AIVF_RESOURCE_SAMPLE_SECONDS must be numeric") from exc
+        if interval_seconds != interval_seconds or interval_seconds <= 0:
+            raise ValueError("AIVF_RESOURCE_SAMPLE_SECONDS must be finite and > 0")
+        resource_monitor = ResourceMonitor(interval_seconds=max(0.25, interval_seconds))
+        resource_monitor.start_monitoring()
+
         if not update(status="running", step="Initializing"):
             return
         log("INFO", "→ Initializing")
@@ -588,6 +620,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
                     log("ERROR", message)
             else:
+                _write_resource_report(pkg_dir)
                 if update(status="done", step="Complete (V3)", pkg_dir=str(pkg_dir)):
                     log("INFO", "V3 job complete!")
                     for warning in result_payload["warnings"]:
@@ -616,6 +649,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
                 log("ERROR", message)
         else:
+            _write_resource_report(pkg_dir)
             if update(status="done", step="Complete", pkg_dir=str(pkg_dir)):
                 log("INFO", "Job complete!")
     except Exception as exc:
@@ -624,6 +658,13 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 log("ERROR", f"Job failed: {exc}")
         except Exception:
             logger.exception("Could not record worker failure for %s", job_id)
+    finally:
+        if resource_monitor is not None and not resource_report_written:
+            try:
+                package_dir = locals().get("pkg_dir")
+                _write_resource_report(package_dir if isinstance(package_dir, Path) else None)
+            except Exception:
+                logger.exception("Could not finalize resource telemetry for %s", job_id)
 
 
 def _artifact_is_valid(final_video: Any) -> bool:
@@ -1006,7 +1047,6 @@ def list_packages():
     return jsonify(packages)
 
 
-@app.route("/api/packages/<name>/file/<path:filename>")
 def _resolve_package_file(package: Optional[Path], filename: str) -> Optional[Path]:
     """Resolve an existing regular file discovered beneath a package root."""
     if package is None or not isinstance(filename, str):
@@ -1034,6 +1074,7 @@ def _resolve_package_file(package: Optional[Path], filename: str) -> Optional[Pa
     return None
 
 
+@app.route("/api/packages/<name>/file/<path:filename>")
 def package_file(name, filename):
     pkg_dir = _resolve_package(name)
     if not _package_access_allowed(pkg_dir):

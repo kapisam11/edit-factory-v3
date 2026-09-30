@@ -1,6 +1,7 @@
 """Dependency-free counters and timing metrics."""
 from __future__ import annotations
 import json
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -25,31 +26,30 @@ class MetricsRegistry:
             self._timings.setdefault(name,[]).append(float(value_ms))
             if len(self._timings[name])>5000: self._timings[name]=self._timings[name][-5000:]
 
+    def to_prometheus(self) -> str:
+        """Export low-cardinality counters/timings in Prometheus text format."""
+        snapshot = self.snapshot()
+        lines: list[str] = []
+        for raw_name, count in snapshot.counters.items():
+            if raw_name.startswith("http_requests_total:"):
+                _, method, endpoint = raw_name.split(":", 2)
+                method = re.sub(r"[^A-Za-z0-9_]", "_", method)
+                endpoint = endpoint.replace("\\", "\\\\").replace('"', '\\"')
+                lines.append(
+                    f'aivf_http_requests_total{{method="{method}",endpoint="{endpoint}"}} {int(count)}'
+                )
+            else:
+                metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
+                lines.append(f"aivf_{metric} {int(count)}")
+        for raw_name, timing_ms in snapshot.timings_ms.items():
+            metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
+            lines.append(f"aivf_{metric}_milliseconds_avg {timing_ms}")
+        return "\n".join(lines) + ("\n" if lines else "")
+
     def snapshot(self)->MetricSnapshot:
         with self._lock:
             averages={name:round(sum(vals)/len(vals),3) for name,vals in self._timings.items() if vals}
             return MetricSnapshot(dict(self._counters),averages,time.time())
-
-    def percentile_ms(self, name:str, percentile:float=0.95)->float:
-        target=max(0.0,min(1.0,float(percentile)))
-        with self._lock:
-            values=sorted(self._timings.get(name, []))
-        if not values:
-            return 0.0
-        index=min(len(values)-1,max(0,int(round(target*(len(values)-1)))))
-        return round(values[index],3)
-
-    def prometheus(self)->str:
-        snapshot=self.snapshot()
-        lines=[]
-        for counter_name,counter_value in snapshot.counters.items():
-            metric=counter_name.replace(":","_").replace("-","_")
-            lines.append(f'aivf_{metric} {int(counter_value)}')
-        for timing_name,timing_value in snapshot.timings_ms.items():
-            metric=timing_name.replace(":","_").replace("-","_")
-            lines.append(f'aivf_{metric}_avg_ms {float(timing_value)}')
-            lines.append(f'aivf_{metric}_p95_ms {self.percentile_ms(timing_name,0.95)}')
-        return "\n".join(lines)+"\n"
 
     def to_json(self)->str:
         s=self.snapshot()

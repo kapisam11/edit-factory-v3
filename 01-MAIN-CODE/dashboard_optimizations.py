@@ -334,7 +334,11 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                     process = app_module._active_processes.get(job_id)
                     if process is not None and process.is_alive():
                         continue
-                    heartbeat = str(row["worker_heartbeat_at"] or row["updated_at"] or "").strip()
+                    heartbeat = str(row["worker_heartbeat_at"] or "").strip()
+                    # Legacy rows without a heartbeat lease are not guessed stale from
+                    # an unrelated metadata timestamp.
+                    if not heartbeat:
+                        continue
                     try:
                         seen = __import__("datetime").datetime.fromisoformat(heartbeat).replace(
                             tzinfo=__import__("datetime").timezone.utc
@@ -452,6 +456,22 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     @app_module.app.post("/api/jobs/<job_id>/retry")
     def retry_job(job_id: str):
+        role_gate = app_module.app.extensions.get("aivf_require_role")
+        if callable(role_gate):
+            try:
+                role_gate("editor")
+            except Exception:
+                return jsonify({"error": "Editor role required"}), 403
+        else:
+            try:
+                from flask import current_app, session
+                if current_app.config.get("_AIVF_AUTH_CONFIGURED"):
+                    authenticated = bool(session.get("aivf_authenticated"))
+                    role = str(session.get("aivf_role") or "viewer").strip().lower()
+                    if not authenticated or role not in {"admin", "editor"}:
+                        return jsonify({"error": "Editor role required"}), 403
+            except (RuntimeError, TypeError, AttributeError):
+                return jsonify({"error": "Editor role required"}), 403
         lookup = getattr(app_module, "authorized_db_get_job", app_module.db_get_job)
         job = lookup(job_id)
         if not job:

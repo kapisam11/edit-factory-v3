@@ -166,8 +166,13 @@ def report(root: str | Path = ".") -> dict[str, Any]:
     checks = run_completeness(root)
     blocked = [item for item in checks if item.status == "BLOCKED"]
     manual = [item for item in checks if item.status in {"MANUAL", "ENVIRONMENT"}]
+    status = "ready"
+    if blocked:
+        status = "blocked"
+    elif manual:
+        status = "pending"
     return {
-        "status": "ready" if not blocked else "blocked",
+        "status": status,
         "checks": [asdict(item) for item in checks],
         "blocked": len(blocked),
         "manual_gates": len(manual),

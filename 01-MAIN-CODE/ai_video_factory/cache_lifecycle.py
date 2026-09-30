@@ -1,9 +1,24 @@
 """Bounded filesystem cache lifecycle: TTL, LRU and orphan cleanup."""
 from __future__ import annotations
+import hashlib
 import os
 import time
 from pathlib import Path
 from typing import Iterable
+
+def content_hash(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Return a SHA-256 content hash suitable for cache identity."""
+    target = Path(path)
+    if not target.is_file():
+        raise FileNotFoundError(target)
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    digest = hashlib.sha256()
+    with target.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 
 class CacheLifecycle:
     def __init__(self,root:str|Path,max_bytes:int=5*1024**3,ttl_seconds:float=86400.0)->None:
@@ -63,4 +78,4 @@ class CacheLifecycle:
         sized=self.enforce_size()
         return {"expired":expired,"orphans":orphans,"size_evictions":sized}
 
-__all__=["CacheLifecycle"]
+__all__=["CacheLifecycle","content_hash"]

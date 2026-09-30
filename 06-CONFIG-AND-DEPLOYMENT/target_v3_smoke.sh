@@ -99,9 +99,30 @@ readiness_path = package / "v3_readiness.json"
 metadata_path = package / "upload" / "youtube_shorts" / "metadata.json"
 thumbnail_path = package / "thumbnail.png"
 thumbnail_vertical_path = package / "thumbnail_vertical.png"
-for required in (final_video, readiness_path, metadata_path, thumbnail_path, thumbnail_vertical_path):
+for required in (
+    final_video,
+    readiness_path,
+    metadata_path,
+    thumbnail_path,
+    thumbnail_vertical_path,
+    package / "source_media_metadata.json",
+    package / "final_media_metadata.json",
+    package / "resource_usage.json",
+):
     if not required.is_file():
         raise SystemExit(f"target smoke required artifact is missing: {required}")
+
+for metadata_file in (
+    package / "source_media_metadata.json",
+    package / "final_media_metadata.json",
+):
+    payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("error") or not payload.get("streams"):
+        raise SystemExit(f"target smoke metadata validation failed: {metadata_file}")
+
+resource_usage = json.loads((package / "resource_usage.json").read_text(encoding="utf-8"))
+if not isinstance(resource_usage, dict) or "elapsed_seconds" not in resource_usage:
+    raise SystemExit("target smoke resource telemetry is malformed")
 
 subprocess.run([
     "ffprobe", "-v", "error", "-show_entries", "format=duration",

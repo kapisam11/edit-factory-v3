@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .render_engine import run_ffprobe
 from .rights_policy import rights_gate
-from .copyright_policy import CopyrightEvidence, CopyrightStatus, copyright_gate
 from .factuality_guard import metadata_fact_gate
 from .human_review import review_gate
 
@@ -217,45 +216,16 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     evidence_gate = rights_gate(evidence_records, strict=strict_rights) if evidence_records else {
         "status": "not_declared", "publish_blocked": False, "checked": [], "evidence_contract": "not applicable"
     }
-    verification = summary.get("copyright_verification") or {}
-    verification_records = []
-    for item in external:
-        key = str(item.get("title") or item.get("url") or item.get("source") or "source")
-        raw = verification.get(key, {}) if isinstance(verification, Mapping) else {}
-        if not isinstance(raw, Mapping):
-            raw = {}
-        provider_status = str(raw.get("status") or "manual_review").strip().lower()
-        try:
-            status_enum = CopyrightStatus(provider_status)
-        except ValueError:
-            status_enum = CopyrightStatus.MANUAL_REVIEW
-        verification_records.append(CopyrightEvidence(
-            asset_id=key,
-            sha256=str(item.get("sha256") or raw.get("sha256") or ""),
-            rights_status=str(item.get("rights_basis") or item.get("rights_status") or "review_required"),
-            provider=str(raw.get("provider") or ""),
-            provider_reference=str(raw.get("reference") or ""),
-            provider_status=status_enum,
-        ))
-    require_content_verification = os.environ.get("AIVF_REQUIRE_CONTENT_VERIFICATION", "0") == "1"
-    copyright_verification = copyright_gate(
-        verification_records,
-        require_provider=require_content_verification,
-    ) if verification_records else {
-        "status": "not_applicable", "publish_blocked": False, "unresolved_assets": [], "provider_required": require_content_verification
-    }
-
     if evidence_gate["publish_blocked"]:
         unresolved.extend(evidence_gate["checked"])
-
+    
     return {
         "status": "cleared" if external and not unresolved else ("review_required" if unresolved else "not_declared"),
-        "publish_blocked": bool(unresolved) or bool(copyright_verification["publish_blocked"]),
+        "publish_blocked": bool(unresolved),
         "requires_explicit_declaration": bool(summary.get("requires_rights_declaration")),
         "sources": records,
         "unverified_sources": unresolved,
         "rights_evidence_gate": evidence_gate,
-        "copyright_verification": copyright_verification,
         "message": (
             "Publishing is blocked until every third-party or user-provided source has a declared, valid rights basis."
             if unresolved

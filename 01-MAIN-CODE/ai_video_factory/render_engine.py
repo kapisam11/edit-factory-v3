@@ -200,19 +200,25 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
         raise ValueError("render duration must be positive")
     src_clip = _validate_media_input(src_clip, "source clip")
     encoder = choose_encoder()
-    candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc", "h264_amf") else ["libx264"]
+    candidates = [encoder, "libx264"] if encoder in ("h264_nvenc", "hevc_nvenc", "h264_amf", "h264_vaapi") else ["libx264"]
     last_error = None
     seek_start = 0.0 if Path(src_clip).parent.name == "_clips" else max(0.0, ss)
     for selected in candidates:
-        extra = (
-            ["-preset", "p5", "-rc", "vbr_hq", "-b:v", "6000k"]
-            if selected in ("h264_nvenc", "hevc_nvenc")
-            else ["-preset", "fast", "-crf", "23"]
-        )
+        if selected in ("h264_nvenc", "hevc_nvenc"):
+            extra = ["-preset", "p5", "-rc", "vbr_hq", "-b:v", "6000k"]
+        elif selected == "h264_amf":
+            extra = ["-quality", "quality", "-b:v", "6000k"]
+        elif selected == "h264_vaapi":
+            extra = ["-qp", "23"]
+        else:
+            extra = ["-preset", "fast", "-crf", "23"]
         vf_full = f"{vf},tpad=stop_mode=clone:stop_duration={float(duration):.3f}"
-        cmd = [
-            "ffmpeg",
-            "-y",
+        if selected == "h264_vaapi":
+            vf_full = f"{vf_full},format=nv12,hwupload"
+        cmd = ["ffmpeg", "-y"]
+        if selected == "h264_vaapi":
+            cmd.extend(["-vaapi_device", "/dev/dri/renderD128"])
+        cmd.extend([
             "-ss",
             str(seek_start),
             "-i",
@@ -232,7 +238,7 @@ def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str)
             "128k",
             "-shortest",
             _validate_media_path(dst),
-        ]
+        ])
         try:
             run_ffmpeg(cmd)
             validate_media_output(dst)
@@ -263,20 +269,26 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
         raise FileNotFoundError(concat_list_path)
     preset = ffmpeg_preset_for(encoder)
     codec = preset.get("codec", "libx264")
-    opts = ["-preset", preset.get("preset", "slow")]
     if "nvenc" in codec:
-        opts += ["-rc", preset.get("rc", "vbr_hq"), "-b:v", preset.get("bitrate", "6000k")]
+        opts = ["-preset", preset.get("preset", "p5"), "-rc", preset.get("rc", "vbr_hq"), "-b:v", preset.get("bitrate", "6000k")]
+    elif codec == "h264_amf":
+        opts = ["-quality", preset.get("quality", "quality"), "-b:v", preset.get("bitrate", "6000k")]
+    elif codec == "h264_vaapi":
+        opts = ["-qp", preset.get("qp", "23")]
     else:
-        opts += ["-crf", preset.get("crf", "20")]
-    cmd = [
-        "ffmpeg",
-        "-y",
+        opts = ["-preset", preset.get("preset", "slow"), "-crf", preset.get("crf", "20")]
+    cmd = ["ffmpeg", "-y"]
+    if codec == "h264_vaapi":
+        cmd += ["-vaapi_device", preset.get("device", "/dev/dri/renderD128")]
+    cmd += [
         "-f",
         "concat",
         "-safe",
         "0",
         "-i",
         concat_list_path,
+        "-vf",
+        "format=nv12,hwupload" if codec == "h264_vaapi" else "null",
         "-c:v",
         codec,
         *opts,
@@ -290,7 +302,7 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
         run_ffmpeg(cmd)
         validate_media_output(output_path)
     except Exception:
-        if "nvenc" not in codec:
+        if codec not in {"h264_nvenc", "hevc_nvenc", "h264_vaapi", "h264_amf"}:
             raise
         Path(output_path).unlink(missing_ok=True)
         fallback = [
@@ -316,6 +328,43 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
         ]
         run_ffmpeg(fallback)
         validate_media_output(output_path)
+
+
+def stamp_media_metadata(path: str, *, version: str = "3.0.0") -> str:
+    """Embed a traceability tag without re-encoding the media streams."""
+    target = Path(path)
+    if not target.is_file():
+        raise FileNotFoundError(target)
+    version = str(version).strip()[:64]
+    if not version:
+        raise ValueError("version must not be empty")
+    temp = target.with_name(f".{target.stem}.metadata{target.suffix}")
+    try:
+        run_ffmpeg(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-y",
+                "-i",
+                str(target),
+                "-map",
+                "0",
+                "-c",
+                "copy",
+                "-metadata",
+                f"comment=Edit Factory {version}",
+                "-movflags",
+                "+faststart",
+                str(temp),
+            ],
+            timeout=300,
+        )
+        validate_media_output(str(temp), require_video=True, require_audio=False)
+        os.replace(temp, target)
+        return str(target)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
 
 
 def _escape_filter_path(path: str) -> str:
