@@ -207,17 +207,25 @@ class DashboardStore:
 
         return int(self.write(write))
     def claim_job(self, job_id: str) -> bool:
-        """Atomically claim one queued job before starting a worker process."""
-        changed = self.update_job_if_status(
-            job_id,
-            ("queued",),
-            status="running",
-            step="starting",
-            error=None,
-        )
-        if changed == 1:
-            self.heartbeat_job(job_id)
-        return changed == 1
+        """Atomically claim a queued job and establish its heartbeat lease."""
+        def write(conn: sqlite3.Connection) -> int:
+            row = conn.execute(
+                "SELECT status FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None or str(row["status"]) != "queued":
+                return 0
+            validate_transition("queued", "running")
+            return int(
+                conn.execute(
+                    "UPDATE jobs SET status='running', step='starting', "
+                    "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, "
+                    "updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='queued'",
+                    (job_id,),
+                ).rowcount
+            )
+        return int(self.write(write)) == 1
 
     def heartbeat_job(self, job_id: str) -> bool:
         """Refresh the durable worker lease for a non-terminal job."""
