@@ -6,6 +6,7 @@ timeouts, bounded write retries, and performance indexes.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -134,6 +135,20 @@ class DashboardStore:
                 "CREATE INDEX IF NOT EXISTS idx_rate_limits_client_ip_ts "
                 "ON rate_limits(client_ip, ts)"
             )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS idempotency_keys (
+                    principal TEXT NOT NULL,
+                    idem_key TEXT NOT NULL,
+                    request_hash TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    created_at REAL NOT NULL DEFAULT (unixepoch()),
+                    PRIMARY KEY (principal, idem_key)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_idempotency_created "
+                "ON idempotency_keys(created_at)"
+            )
 
     def insert_job(
         self,
@@ -181,6 +196,79 @@ class DashboardStore:
             )
 
         self.write(write)
+
+    def insert_job_idempotent(
+        self,
+        job_id: str,
+        topic: str,
+        params: dict,
+        *,
+        principal: str,
+        idempotency_key: str,
+        request_hash: str,
+        max_queued_jobs: int | None = None,
+        principal_limit: int | None = None,
+    ) -> tuple[str, bool]:
+        """Atomically reserve an idempotency key and insert the job.
+
+        Returns (job_id, created). A repeated identical request returns the
+        original job without creating a second worker. Reusing a key for a
+        different request is rejected as a conflict.
+        """
+        key = str(idempotency_key).strip()
+        if not 1 <= len(key) <= 200:
+            raise ValueError("idempotency key must be 1..200 characters")
+        principal_value = str(principal).strip() or "unknown"
+        fingerprint = str(request_hash).strip()
+        if not fingerprint:
+            raise ValueError("request hash is required")
+        encoded = json.dumps(params)
+
+        def write(conn: sqlite3.Connection) -> tuple[str, bool]:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT job_id, request_hash FROM idempotency_keys WHERE principal=? AND idem_key=?",
+                (principal_value, key),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["request_hash"]) != fingerprint:
+                    raise JobAdmissionError("idempotency key was already used for a different request")
+                return str(existing["job_id"]), False
+            if max_queued_jobs is not None:
+                queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
+                if queued >= int(max_queued_jobs):
+                    raise JobAdmissionError("queue capacity reached")
+            if principal_limit is not None:
+                rows = conn.execute("SELECT params FROM jobs WHERE status IN ('queued','running')").fetchall()
+                count = 0
+                for row in rows:
+                    try:
+                        payload = json.loads(row["params"] or "{}")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if str(payload.get("_principal", "")) == principal_value:
+                        count += 1
+                if count >= int(principal_limit):
+                    raise JobAdmissionError("principal queue capacity reached")
+            conn.execute(
+                "INSERT INTO idempotency_keys(principal, idem_key, request_hash, job_id) VALUES (?,?,?,?)",
+                (principal_value, key, fingerprint, job_id),
+            )
+            conn.execute(
+                "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (job_id, topic, encoded),
+            )
+            return job_id, True
+
+        return self.write(write)
+
+    def prune_idempotency(self, *, max_age_seconds: int = 86400, now: float | None = None) -> int:
+        """Bound idempotency storage so request keys cannot become unbounded state."""
+        cutoff = (time.time() if now is None else float(now)) - max(60, int(max_age_seconds))
+        return int(self.write(lambda conn: conn.execute(
+            "DELETE FROM idempotency_keys WHERE created_at<?", (cutoff,)
+        ).rowcount))
 
     def update_job(self, job_id: str, **kwargs: Any) -> int:
         allowed = {"status", "step", "params", "pkg_dir", "error"}
