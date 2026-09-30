@@ -95,7 +95,9 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         if not has_request_context():
             return True
         try:
-            from flask import session
+            from flask import current_app, session
+            if not current_app.config.get("_AIVF_AUTH_CONFIGURED"):
+                return True
             authenticated = bool(session.get("aivf_authenticated"))
             role = str(session.get("aivf_role") or "viewer").strip().lower()
         except Exception:
@@ -133,7 +135,9 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         if not has_request_context():
             return value
         try:
-            from flask import session
+            from flask import current_app, session
+            if not current_app.config.get("_AIVF_AUTH_CONFIGURED"):
+                return value
             if not session.get("aivf_authenticated"):
                 return []
             if str(session.get("aivf_role") or "viewer").strip().lower() == "admin":
