@@ -269,11 +269,14 @@ def concat_segments(concat_list_path: str, output_path: str, encoder: str = "lib
         raise FileNotFoundError(concat_list_path)
     preset = ffmpeg_preset_for(encoder)
     codec = preset.get("codec", "libx264")
-    opts = ["-preset", preset.get("preset", "slow")]
     if "nvenc" in codec:
-        opts += ["-rc", preset.get("rc", "vbr_hq"), "-b:v", preset.get("bitrate", "6000k")]
+        opts = ["-preset", preset.get("preset", "p5"), "-rc", preset.get("rc", "vbr_hq"), "-b:v", preset.get("bitrate", "6000k")]
+    elif codec == "h264_amf":
+        opts = ["-quality", preset.get("quality", "quality"), "-b:v", preset.get("bitrate", "6000k")]
+    elif codec == "h264_vaapi":
+        opts = ["-qp", preset.get("qp", "23")]
     else:
-        opts += ["-crf", preset.get("crf", "20")]
+        opts = ["-preset", preset.get("preset", "slow"), "-crf", preset.get("crf", "20")]
     cmd = ["ffmpeg", "-y"]
     if codec == "h264_vaapi":
         cmd += ["-vaapi_device", preset.get("device", "/dev/dri/renderD128")]
