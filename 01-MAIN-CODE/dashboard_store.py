@@ -377,7 +377,7 @@ class DashboardStore:
             if row is None or str(row["status"]) != "queued":
                 return 0
             validate_transition("queued", "running")
-            return int(
+            changed = int(
                 conn.execute(
                     "UPDATE jobs SET status='running', step='starting', "
                     "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, "
@@ -386,6 +386,16 @@ class DashboardStore:
                     (job_id,),
                 ).rowcount
             )
+            if changed:
+                self._record_event(
+                    conn,
+                    job_id,
+                    "status_change",
+                    from_status="queued",
+                    to_status="running",
+                    details="worker lease claimed",
+                )
+            return changed
         return int(self.write(write)) == 1
 
     def heartbeat_job(self, job_id: str) -> bool:
@@ -450,12 +460,22 @@ class DashboardStore:
             if status == "error" and row["error"]:
                 if not is_retryable_error(RuntimeError(str(row["error"]))):
                     raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
-            return int(conn.execute(
+            changed = int(conn.execute(
                 "UPDATE jobs SET status='queued', step='waiting', error=NULL, pkg_dir=NULL, "
                 "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
                 "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
                 (job_id, max_attempts),
             ).rowcount)
+            if changed:
+                self._record_event(
+                    conn,
+                    job_id,
+                    "retry",
+                    from_status=status,
+                    to_status="queued",
+                    details=f"attempt={attempts + 1}",
+                )
+            return changed
 
         return int(self.write(write))
 
