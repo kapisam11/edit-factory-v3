@@ -9,6 +9,7 @@ import logging
 import multiprocessing
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import subprocess
@@ -52,9 +53,15 @@ app = Flask(
     static_folder=str(BASE_DIR / "static"),
 )
 configured_secret = os.environ.get("FLASK_SECRET_KEY", "").strip()
+if not configured_secret:
+    configured_secret = os.environ.get("AIVF_DASHBOARD_SECRET_KEY", "").strip()
+if not configured_secret:
+    # The WSGI/auth bootstrap replaces this with a stable deployment key.
+    # A process-local fallback keeps direct imports and test clients session-capable.
+    configured_secret = secrets.token_hex(32)
 app.config.update(
     MAX_CONTENT_LENGTH=RUNTIME_CONFIG.max_upload_mb * 1024 * 1024,
-    SECRET_KEY=configured_secret or None,
+    SECRET_KEY=configured_secret,
 )
 
 logger = logging.getLogger("web_app_v3")
