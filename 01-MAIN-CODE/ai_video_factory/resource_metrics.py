@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import subprocess
 import time
 from typing import Any
@@ -47,7 +48,7 @@ def snapshot_resources() -> dict[str, Any]:
     if result["rss_bytes"] is None and resource is not None:
         try:
             raw_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-            result["rss_bytes"] = raw_rss if os.name == "nt" else raw_rss * 1024
+            result["rss_bytes"] = raw_rss if sys.platform == "darwin" else raw_rss * 1024
         except (OSError, ValueError):
             pass
 
