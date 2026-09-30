@@ -42,13 +42,13 @@ class MetricsRegistry:
     def prometheus(self)->str:
         snapshot=self.snapshot()
         lines=[]
-        for name,value in snapshot.counters.items():
-            metric=name.replace(":","_").replace("-","_")
-            lines.append(f'aivf_{metric} {int(value)}')
-        for name,value in snapshot.timings_ms.items():
-            metric=name.replace(":","_").replace("-","_")
-            lines.append(f'aivf_{metric}_avg_ms {float(value)}')
-            lines.append(f'aivf_{metric}_p95_ms {self.percentile_ms(name,0.95)}')
+        for counter_name,counter_value in snapshot.counters.items():
+            metric=counter_name.replace(":","_").replace("-","_")
+            lines.append(f'aivf_{metric} {int(counter_value)}')
+        for timing_name,timing_value in snapshot.timings_ms.items():
+            metric=timing_name.replace(":","_").replace("-","_")
+            lines.append(f'aivf_{metric}_avg_ms {float(timing_value)}')
+            lines.append(f'aivf_{metric}_p95_ms {self.percentile_ms(timing_name,0.95)}')
         return "\n".join(lines)+"\n"
 
     def to_json(self)->str:
