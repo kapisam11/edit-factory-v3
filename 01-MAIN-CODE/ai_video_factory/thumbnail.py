@@ -187,7 +187,7 @@ def select_best_thumbnail_variant(paths: List[str]) -> int:
         legacy_score = float(legacy.get("score") or 0.0) / 100.0
         modern_score = float(modern.get("score") or 0.0)
         combined = 0.60 * legacy_score + 0.40 * modern_score
-        passed = bool(legacy.get("passed", False)) and bool(modern.get("passed", True))
+        passed = bool(legacy.get("passed", False)) and bool(modern.get("ok", False))
         scored.append((passed, combined, legacy_score, modern_score, -index, index))
     passing = [item for item in scored if item[0]]
     pool = passing or scored
