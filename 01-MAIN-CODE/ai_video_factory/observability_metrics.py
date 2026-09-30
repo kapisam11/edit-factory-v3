@@ -1,6 +1,7 @@
 """Dependency-free counters and timing metrics."""
 from __future__ import annotations
 import json
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -24,6 +25,26 @@ class MetricsRegistry:
         with self._lock:
             self._timings.setdefault(name,[]).append(float(value_ms))
             if len(self._timings[name])>5000: self._timings[name]=self._timings[name][-5000:]
+
+    def to_prometheus(self) -> str:
+        """Export low-cardinality counters/timings in Prometheus text format."""
+        snapshot = self.snapshot()
+        lines: list[str] = []
+        for raw_name, value in snapshot.counters.items():
+            if raw_name.startswith("http_requests_total:"):
+                _, method, endpoint = raw_name.split(":", 2)
+                method = re.sub(r"[^A-Za-z0-9_]", "_", method)
+                endpoint = endpoint.replace("\\", "\\\\").replace('"', '\\"')
+                lines.append(
+                    f'aivf_http_requests_total{{method="{method}",endpoint="{endpoint}"}} {int(value)}'
+                )
+            else:
+                metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
+                lines.append(f"aivf_{metric} {int(value)}")
+        for raw_name, value in snapshot.timings_ms.items():
+            metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
+            lines.append(f"aivf_{metric}_milliseconds_avg {value}")
+        return "\n".join(lines) + ("\n" if lines else "")
 
     def snapshot(self)->MetricSnapshot:
         with self._lock:
