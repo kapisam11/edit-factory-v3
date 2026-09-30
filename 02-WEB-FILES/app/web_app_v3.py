@@ -534,6 +534,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
 
         _run_db_write(write, db_path)
 
+    from ai_video_factory.resource_metrics import snapshot_resources, summarize_resources
+    resource_start = snapshot_resources()
+
     try:
         if not update(status="running", step="Initializing"):
             return
@@ -617,6 +620,15 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 log("ERROR", f"Job failed: {exc}")
         except Exception:
             logger.exception("Could not record worker failure for %s", job_id)
+    finally:
+        try:
+            resource_report = summarize_resources(resource_start, snapshot_resources())
+            package = Path(locals().get("pkg_dir", "")) if locals().get("pkg_dir") else None
+            if package is not None and package.is_dir():
+                with (package / "resource_usage.json").open("w", encoding="utf-8") as handle:
+                    json.dump(resource_report, handle, indent=2, ensure_ascii=False)
+        except Exception:
+            logger.exception("Could not record resource usage for %s", job_id)
 
 
 def _artifact_is_valid(final_video: Any) -> bool:
