@@ -49,7 +49,9 @@ def snapshot_resources() -> dict[str, Any]:
     if result["rss_bytes"] is None and resource is not None:
         try:
             raw_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-            result["rss_bytes"] = raw_rss if sys.platform == "darwin" else raw_rss * 1024
+            result["rss_bytes"] = (
+                raw_rss if sys.platform == "darwin" else raw_rss * 1024
+            )
         except (OSError, ValueError):
             pass
 
@@ -109,7 +111,10 @@ def summarize_resources(start: dict[str, Any], end: dict[str, Any]) -> dict[str,
             else None
         ),
         "elapsed_seconds": round(
-            max(0.0, float(end.get("timestamp", 0.0)) - float(start.get("timestamp", 0.0))),
+            max(
+                0.0,
+                float(end.get("timestamp", 0.0)) - float(start.get("timestamp", 0.0)),
+            ),
             3,
         ),
         "gpu_start": start.get("gpu"),
@@ -217,4 +222,9 @@ class ResourceMonitor:
         return dict(self._final_report)
 
 
-__all__ = ["snapshot_resources", "summarize_resources", "resource_json", "ResourceMonitor"]
+__all__ = [
+    "snapshot_resources",
+    "summarize_resources",
+    "resource_json",
+    "ResourceMonitor",
+]
