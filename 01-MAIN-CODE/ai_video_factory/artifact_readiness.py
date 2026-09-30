@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Optional
 from .v3_quality import probe_media
+from .production_assurance import verify_artifact_manifest
 
 
 FINAL_VIDEO_CANDIDATES = ("final.v3.mp4", "final_with_music.mp4", "final_short.mp4", "final_short_vo.mp4", "final.mp4")
@@ -95,7 +96,7 @@ def evaluate_artifact(
         if platform_profile:
             width_ok = not platform_profile.get("width") or info["width"] == int(platform_profile["width"])
             height_ok = not platform_profile.get("height") or info["height"] == int(platform_profile["height"])
-        checks["MEDIA_CONTRACT_VALID"] = duration_ok and width_ok and height_ok
+        checks["MEDIA_CONTRACT_VALID"] = duration_ok and width_ok and height_ok and bool(info.get("has_video", True))
         if not duration_ok:
             errors.append("MEDIA_CONTRACT_VALID: duration is outside the allowed tolerance")
         if not width_ok or not height_ok:
@@ -132,6 +133,41 @@ def evaluate_artifact(
             errors.append(f"UPLOAD_PACKAGE_VALID: invalid upload package manifest: {exc}")
     elif package and package.exists() and not upload_package_required:
         warnings.append("No upload manifest is present; upload-package readiness is not claimed")
+    integrity_manifest = package / "artifact_manifest.json" if package else None
+    if upload_ok and integrity_manifest is not None and integrity_manifest.is_file():
+        try:
+            integrity = verify_artifact_manifest(
+                package,
+                json.loads(integrity_manifest.read_text(encoding="utf-8")),
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            upload_ok = False
+            errors.append(f"UPLOAD_PACKAGE_VALID: artifact integrity manifest is malformed: {exc}")
+        else:
+            if not integrity.get("ok"):
+                upload_ok = False
+                errors.extend(
+                    f"UPLOAD_PACKAGE_VALID: artifact integrity: {error}"
+                    for error in list(integrity.get("errors") or [])[:10]
+                )
+
+    if package and upload_ok:
+        # Thumbnail checks are intentionally deterministic and dependency-light.
+        for name, expected in (("thumbnail.png", (1280, 720)), ("thumbnail_vertical.png", (1080, 1920))):
+            path = package / name
+            if path.exists():
+                try:
+                    from PIL import Image
+                    with Image.open(path) as image:
+                        if tuple(image.size) != expected:
+                            upload_ok = False
+                            errors.append(
+                                f"UPLOAD_PACKAGE_VALID: {name} dimensions {tuple(image.size)} != {expected}"
+                            )
+                except Exception as exc:
+                    upload_ok = False
+                    errors.append(f"UPLOAD_PACKAGE_VALID: {name} could not be validated: {exc}")
+
     if metadata_guardrails_ok is False:
         upload_ok = False
         errors.append("UPLOAD_PACKAGE_VALID: metadata guardrails rejected the packaged metadata")
