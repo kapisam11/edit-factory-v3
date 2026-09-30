@@ -180,7 +180,10 @@ def select_best_thumbnail_variant(paths: List[str]) -> int:
     scored = []
     for index, path in enumerate(paths, start=1):
         report = thumbnail_quality_report(path)
-        scored.append((float(report["score"]), -index, index))
+        visual_score = max(0.0, _score_image(path))
+        face_bonus = 5.0 if 1 <= int(report.get("face_count", 0)) <= 3 else 0.0
+        final_score = float(report["score"]) + (10.0 * visual_score) + face_bonus
+        scored.append((final_score, -index, index))
     scored.sort(reverse=True)
     return scored[0][2]
 
