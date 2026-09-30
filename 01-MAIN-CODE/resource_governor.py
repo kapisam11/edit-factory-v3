@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import threading
 from pathlib import Path
 from typing import Any, Iterable
@@ -40,7 +41,19 @@ RESOURCE_RECONCILE_INTERVAL_SECONDS = max(
 
 
 def principal_for_request(request: Any) -> str:
-    """Return a stable principal without trusting spoofable proxy headers by default."""
+    """Return a per-authenticated-session principal, with a safe legacy fallback."""
+    try:
+        from flask import has_request_context, session
+
+        if has_request_context() and session.get("aivf_authenticated"):
+            principal = str(session.get("aivf_principal") or "").strip()
+            if not principal:
+                principal = "session:" + secrets.token_urlsafe(24)
+                session["aivf_principal"] = principal
+            return principal
+    except (ImportError, RuntimeError, TypeError):
+        pass
+
     remote = str(getattr(request, "remote_addr", None) or "unknown")
     if os.environ.get("AIVF_TRUST_PROXY_HEADERS", "0") == "1":
         forwarded = getattr(getattr(request, "headers", None), "get", lambda *_: None)("X-Forwarded-For")
