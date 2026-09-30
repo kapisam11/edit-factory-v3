@@ -182,13 +182,9 @@ class ResourceMonitor:
             rss = sample.get("rss_bytes")
             cpu = sample.get("cpu_percent")
             if rss is not None:
-                self.peak_rss_bytes = max(
-                    int(self.peak_rss_bytes or 0), int(rss)
-                )
+                self.peak_rss_bytes = max(int(self.peak_rss_bytes or 0), int(rss))
             if cpu is not None:
-                self.peak_cpu_percent = max(
-                    float(self.peak_cpu_percent or 0.0), float(cpu)
-                )
+                self.peak_cpu_percent = max(float(self.peak_cpu_percent or 0.0), float(cpu))
 
     def start_monitoring(self) -> None:
         import threading
