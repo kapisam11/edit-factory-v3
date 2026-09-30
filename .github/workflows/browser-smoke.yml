@@ -1,0 +1,57 @@
+name: Browser UI smoke (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    name: Chromium dashboard smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+      - name: Install dashboard and browser test dependencies
+        run: |
+          uv sync --frozen --python 3.12 --extra web --extra dev
+          uv pip install playwright==1.63.0
+          uv run playwright install --with-deps chromium
+      - name: Start dashboard
+        env:
+          FLASK_SECRET_KEY: browser-smoke-session-secret
+          AIVF_DASHBOARD_TOKEN: browser-smoke-token
+          AIVF_COOKIE_SECURE: "0"
+          AIVF_STATE_DIR: ${{ runner.temp }}/aivf-state
+          AIVF_UPLOAD_DIR: ${{ runner.temp }}/aivf-uploads
+          AIVF_OUTPUT_DIR: ${{ runner.temp }}/aivf-output
+          PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+        run: |
+          nohup uv run gunicorn --bind 127.0.0.1:5000 --workers 1 --access-logfile - --error-logfile - app.wsgi:app > /tmp/aivf-browser.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5000/api/health && exit 0
+            sleep 1
+          done
+          cat /tmp/aivf-browser.log
+          exit 1
+      - name: Run Chromium browser smoke
+        env:
+          PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+        run: uv run python 03-SIDE-CODE/tools/browser_smoke.py http://127.0.0.1:5000 browser-smoke-token
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke-evidence
+          path: |
+            browser-smoke.png
+            /tmp/aivf-browser.log
+          if-no-files-found: warn

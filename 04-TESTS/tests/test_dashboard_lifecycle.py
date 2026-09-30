@@ -11,8 +11,10 @@ def _load_dashboard(monkeypatch, tmp_path):
     monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("AIVF_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("AIVF_OUTPUT_DIR", str(tmp_path / "output"))
+    monkeypatch.setenv("FLASK_SECRET_KEY", "test-dashboard-secret")
     import web_app_v3
     importlib.reload(web_app_v3)
+    web_app_v3.app.secret_key = "test-secret"
     return web_app_v3
 
 
@@ -261,12 +263,19 @@ def test_real_worker_process_can_be_terminated(tmp_path):
 
 def test_cancellation_does_not_overwrite_terminal_job(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
+    appmod.app.config["_AIVF_AUTH_CONFIGURED"] = True
     appmod.db_insert_job("job-done", "topic", {"topic": "topic"})
     appmod.db_update_job("job-done", status="done", step="Complete")
 
     from dashboard_compat import cancel_process
 
     with appmod.app.test_request_context("/api/jobs/job-done/cancel", method="POST"):
+        from flask import session
+        session["aivf_authenticated"] = True
+        session["aivf_user_id"] = "internal"
+        session["aivf_role"] = "editor"
         response, status = cancel_process("job-done")
 
     assert status == 409
@@ -352,3 +361,113 @@ def test_v3_preview_endpoint_serves_canonical_final_video(monkeypatch, tmp_path)
     assert response.status_code == 200
     assert response.data == b"fake-mp4"
     assert response.mimetype == "video/mp4"
+
+
+def test_dashboard_job_visibility_is_scoped_to_principal(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
+
+    monkeypatch.setenv("AIVF_DASHBOARD_USERS", '{"alice":{"token":"alice-token","role":"editor"},"bob":{"token":"bob-token","role":"viewer"}}')
+    import importlib
+    import dashboard_auth
+    importlib.reload(dashboard_auth)
+    dashboard_auth.configure_dashboard_auth(appmod.app)
+
+    alice = appmod.app.test_client()
+    assert alice.post("/login", data={"token": "alice-token"}).status_code == 302
+    with alice.session_transaction() as state:
+        state["aivf_user_id"] = "alice"
+        state["aivf_role"] = "editor"
+        state["aivf_authenticated"] = True
+    with appmod.app.test_request_context("/"):
+        from flask import session
+        session["aivf_user_id"] = "alice"
+        session["aivf_role"] = "editor"
+        session["aivf_authenticated"] = True
+        appmod.db_insert_job("job-alice", "alice", {"topic": "alice"})
+
+    bob = appmod.app.test_client()
+    assert bob.post("/login", data={"token": "bob-token"}).status_code == 302
+    response = bob.get("/api/jobs")
+    assert response.status_code == 200
+    assert response.get_json() == []
+
+    admin = appmod.app.test_client()
+    with admin.session_transaction() as state:
+        state["aivf_user_id"] = "admin"
+        state["aivf_role"] = "admin"
+        state["aivf_authenticated"] = True
+    response = admin.get("/api/jobs")
+    assert response.status_code == 200
+    assert any(item["id"] == "job-alice" for item in response.get_json())
+
+
+def test_editor_cannot_cancel_another_principals_job(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    appmod.app.config["_AIVF_AUTH_CONFIGURED"] = True
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
+    appmod.db_insert_job("job-owner", "owner", {"topic": "owner", "_principal": "owner"})
+    appmod.db_update_job("job-owner", status="running", step="Rendering")
+
+    import dashboard_compat
+    from flask import session
+    dashboard_compat.register_dashboard_compat(appmod.app)
+    with appmod.app.test_request_context("/api/jobs/job-owner/cancel", method="POST"):
+        session["aivf_authenticated"] = True
+        session["aivf_user_id"] = "editor-user"
+        session["aivf_role"] = "editor"
+        from dashboard_compat import cancel_process
+        response, status = cancel_process("job-owner")
+
+    assert status == 404
+    with appmod.get_db() as conn:
+        row = conn.execute("SELECT status FROM jobs WHERE id=?", ("job-owner",)).fetchone()
+    assert row["status"] == "running"
+
+
+def test_viewer_cannot_edit_package_or_cancel(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    appmod.app.config["_AIVF_AUTH_CONFIGURED"] = True
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
+    package = Path(appmod.OUTPUT_FOLDER) / "job-owner"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "script.txt").write_text("test", encoding="utf-8")
+    appmod.db_insert_job("job-owner", "owner", {"topic": "owner", "_principal": "viewer-user"})
+    appmod.db_update_job("job-owner", status="done", step="Complete", pkg_dir=str(package))
+
+    import dashboard_compat
+    from flask import session
+    dashboard_compat.register_dashboard_compat(appmod.app)
+    with appmod.app.test_request_context(f"/api/package/{package.name}/script", method="POST", json={"script":"changed"}):
+        session["aivf_authenticated"] = True
+        session["aivf_user_id"] = "viewer-user"
+        session["aivf_role"] = "viewer"
+        response, status = appmod.app.view_functions["compat_script"](package.name)
+        assert status == 403
+
+    with appmod.app.test_request_context(f"/api/jobs/{package.name}/cancel", method="POST"):
+        session["aivf_authenticated"] = True
+        session["aivf_user_id"] = "viewer-user"
+        session["aivf_role"] = "viewer"
+        from dashboard_compat import cancel_process
+        response, status = cancel_process("job-owner")
+        assert status == 403
+
+
+def test_admin_cleanup_requires_admin_role(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    appmod.app.config["_AIVF_AUTH_CONFIGURED"] = True
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
+    import dashboard_compat
+    from flask import session
+    dashboard_compat.register_dashboard_compat(appmod.app)
+    with appmod.app.test_request_context("/api/admin/cleanup", method="POST"):
+        session["aivf_authenticated"] = True
+        session["aivf_user_id"] = "viewer-user"
+        session["aivf_role"] = "viewer"
+        response, status = appmod.app.view_functions["cleanup_packages_admin"]()
+        assert status == 403

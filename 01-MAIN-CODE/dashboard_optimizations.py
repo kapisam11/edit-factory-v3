@@ -12,6 +12,7 @@ from flask import Response, abort, has_request_context, jsonify, request, send_f
 from dashboard_cache import HybridCache
 from dashboard_store import DashboardStore, JobAdmissionError, JobRetryNotAllowed
 from ai_video_factory.runtime_config import runtime_config
+from ai_video_factory.job_recovery import should_recover
 from resource_governor import (
     MAX_JOB_STORAGE_BYTES,
     MAX_RENDER_WALLCLOCK_SECONDS,
@@ -88,8 +89,37 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         cache.delete("jobs:list")
         return result
 
+    def _job_access_allowed(job: dict | None) -> bool:
+        if not job:
+            return False
+        if not has_request_context():
+            return True
+        try:
+            from flask import current_app, session
+            if not current_app.config.get("_AIVF_AUTH_CONFIGURED"):
+                return True
+            authenticated = bool(session.get("aivf_authenticated"))
+            role = str(session.get("aivf_role") or "viewer").strip().lower()
+        except Exception:
+            return False
+        if role == "admin" and authenticated:
+            return True
+        if not authenticated or role not in {"viewer", "editor"}:
+            return False
+        try:
+            payload = json.loads(job.get("params") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        return str(payload.get("_principal") or "") == principal_for_request(request)
+
     def db_get_job(job_id: str) -> dict | None:
+        """Raw internal job lookup used by workers and lifecycle code."""
         return store.get_job(job_id)
+
+    def authorized_db_get_job(job_id: str) -> dict | None:
+        """Request-scoped job lookup that enforces dashboard ownership/RBAC."""
+        job = store.get_job(job_id)
+        return job if _job_access_allowed(job) else None
 
     def db_append_log(job_id: str, level: str, message: str) -> None:
         store.append_log(job_id, level, message)
@@ -99,11 +129,31 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     def db_list_jobs() -> list[dict]:
         cached = cache.get_json("jobs:list")
-        if cached is not None:
-            return cached
-        value = store.list_jobs(100)
-        cache.set_json("jobs:list", value, 1.0)
-        return value
+        value = cached if cached is not None else store.list_jobs(100)
+        if cached is None:
+            cache.set_json("jobs:list", value, 1.0)
+        if not has_request_context():
+            return value
+        try:
+            from flask import current_app, session
+            if not current_app.config.get("_AIVF_AUTH_CONFIGURED"):
+                return value
+            if not session.get("aivf_authenticated"):
+                return []
+            if str(session.get("aivf_role") or "viewer").strip().lower() == "admin":
+                return value
+        except Exception:
+            return []
+        principal = principal_for_request(request)
+        filtered = []
+        for job in value:
+            try:
+                payload = json.loads(job.get("params") or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if str(payload.get("_principal") or "") == principal:
+                filtered.append(job)
+        return filtered
 
     def get_settings() -> dict:
         cached = cache.get_json("settings")
@@ -126,6 +176,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     app_module.db_update_job = db_update_job
     app_module.db_claim_job = db_claim_job
     app_module.db_get_job = db_get_job
+    app_module.authorized_db_get_job = authorized_db_get_job
     app_module.db_append_log = db_append_log
     app_module.db_logs_since = db_logs_since
     app_module.db_list_jobs = db_list_jobs
@@ -230,6 +281,11 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         def bounded_log_stream(job_id: str):
             if not acquire_sse():
                 return jsonify({"error": "SSE connection capacity reached"}), 429
+            authorized_lookup = getattr(app_module, "authorized_db_get_job", app_module.db_get_job)
+            authorized_job = authorized_lookup(job_id)
+            if not authorized_job:
+                release_sse()
+                return jsonify({"error": "Job not found"}), 404
             try:
                 response = original_log_stream(job_id)
             except Exception:
@@ -258,6 +314,55 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         app_module.app.view_functions["job_logs_stream"] = bounded_log_stream
 
     cleanup_state = {"last": 0.0}
+
+    def _reconcile_stale_jobs() -> int:
+        """Mark orphaned running jobs interrupted after a bounded stale timeout."""
+        try:
+            timeout_seconds = max(60.0, float(os.environ.get("AIVF_STALE_JOB_TIMEOUT_SECONDS", "3600")))
+        except (TypeError, ValueError):
+            timeout_seconds = 3600.0
+        now = __import__("time").time()
+        recovered = 0
+        try:
+            with store.connect() as conn:
+                rows = conn.execute(
+                    "SELECT id, status, updated_at, worker_heartbeat_at "
+                    "FROM jobs WHERE status IN ('running','cancelling')"
+                ).fetchall()
+                for row in rows:
+                    job_id = str(row["id"])
+                    process = app_module._active_processes.get(job_id)
+                    if process is not None and process.is_alive():
+                        continue
+                    heartbeat = str(row["worker_heartbeat_at"] or row["updated_at"] or "").strip()
+                    try:
+                        seen = __import__("datetime").datetime.fromisoformat(heartbeat).replace(
+                            tzinfo=__import__("datetime").timezone.utc
+                        ).timestamp()
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if not should_recover(
+                        heartbeat_epoch=None,
+                        last_seen_epoch=seen,
+                        now=now,
+                        timeout_seconds=timeout_seconds,
+                    ):
+                        continue
+                    cursor = conn.execute(
+                        "UPDATE jobs SET status='interrupted', step='interrupted', "
+                        "error=?, updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=? AND status IN ('running','cancelling')",
+                        ("Worker heartbeat expired and worker process is not running", job_id),
+                    )
+                    if cursor.rowcount:
+                        recovered += 1
+                        conn.execute(
+                            "INSERT INTO job_logs (job_id, level, message) VALUES (?, ?, ?)",
+                            (job_id, "ERROR", "Recovered stale worker job after heartbeat timeout"),
+                        )
+        except Exception:
+            app_module.logger.exception("Stale job reconciliation failed")
+        return recovered
 
     def _database_cleanup() -> None:
         import time
@@ -312,11 +417,13 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         app_module._cleanup_runtime_secrets()
         if _is_media_request():
             return
+        _reconcile_stale_jobs()
         _database_cleanup()
 
     @app_module.app.get("/api/jobs/<job_id>/preview")
     def job_preview(job_id: str):
-        job = app_module.db_get_job(job_id)
+        lookup = getattr(app_module, "authorized_db_get_job", app_module.db_get_job)
+        job = lookup(job_id)
         if not job:
             return jsonify({"error": "Job not found"}), 404
         if job.get("status") != "done":
@@ -345,7 +452,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
     @app_module.app.post("/api/jobs/<job_id>/retry")
     def retry_job(job_id: str):
-        job = app_module.db_get_job(job_id)
+        lookup = getattr(app_module, "authorized_db_get_job", app_module.db_get_job)
+        job = lookup(job_id)
         if not job:
             return jsonify({"error": "Job not found"}), 404
         if job.get("status") not in {"error", "interrupted"}:

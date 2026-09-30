@@ -1,0 +1,29 @@
+name: Provenance verification (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "GHCR image reference, for example ghcr.io/owner/repo:latest"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: read
+  packages: read
+
+jobs:
+  verify:
+    name: Verify container provenance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify image provenance attestation
+        env:
+          IMAGE: ${{ inputs.image }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          command -v gh
+          gh attestation verify "oci://${IMAGE}" --owner "${GITHUB_REPOSITORY_OWNER}"

@@ -10,6 +10,8 @@ def configure_logging(level=logging.INFO):
 
 
 configure_logging()
+from .production_guardrails import install_global_log_redaction
+install_global_log_redaction()
 builtins.tempfile = tempfile
 
 from .factory import create_package

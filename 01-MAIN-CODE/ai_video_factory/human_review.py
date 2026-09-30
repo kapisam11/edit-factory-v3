@@ -31,6 +31,16 @@ def validate_review(review: HumanReview)->list[str]:
     if review.approved and errors: errors.append("review cannot be approved while invalid")
     return errors
 
+def composite_review_score(scores: Mapping[str,int]) -> float:
+    values=[]
+    for key in REQUIRED_KEYS:
+        if key in scores:
+            values.append(max(1,min(5,int(scores[key]))))
+    if not values:
+        return 0.0
+    return round((sum(values) - len(values)) / (4 * len(values)), 4)
+
+
 def review_gate(review: HumanReview|Mapping[str,Any]|None)->dict[str,Any]:
     if review is None: return {"status":"review_required","publish_blocked":True,"errors":["human review has not been completed"]}
     item=review if isinstance(review,HumanReview) else HumanReview(
@@ -41,6 +51,14 @@ def review_gate(review: HumanReview|Mapping[str,Any]|None)->dict[str,Any]:
         reviewed_at=str(review.get("reviewed_at") or ""),
     )
     errors=validate_review(item)
-    return {"status":"approved" if item.approved and not errors else "review_required","publish_blocked":not item.approved or bool(errors),"errors":errors}
+    score=composite_review_score(item.scores)
+    status="approved" if item.approved and not errors else "review_required"
+    return {
+        "status":status,
+        "publish_blocked":not item.approved or bool(errors),
+        "errors":errors,
+        "composite_score":score,
+        "dimensions":dict(item.scores),
+    }
 
-__all__=["HumanReview","REQUIRED_KEYS","create_review","review_gate","validate_review"]
+__all__=["HumanReview","REQUIRED_KEYS","composite_review_score","create_review","review_gate","validate_review"]

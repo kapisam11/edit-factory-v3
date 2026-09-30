@@ -9,6 +9,7 @@ import logging
 import multiprocessing
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import subprocess
@@ -21,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
@@ -52,9 +53,15 @@ app = Flask(
     static_folder=str(BASE_DIR / "static"),
 )
 configured_secret = os.environ.get("FLASK_SECRET_KEY", "").strip()
+if not configured_secret:
+    configured_secret = os.environ.get("AIVF_DASHBOARD_SECRET_KEY", "").strip()
+if not configured_secret:
+    # The WSGI/auth bootstrap replaces this with a stable deployment key.
+    # A process-local fallback keeps direct imports and test clients session-capable.
+    configured_secret = secrets.token_hex(32)
 app.config.update(
     MAX_CONTENT_LENGTH=RUNTIME_CONFIG.max_upload_mb * 1024 * 1024,
-    SECRET_KEY=configured_secret or None,
+    SECRET_KEY=configured_secret,
 )
 
 logger = logging.getLogger("web_app_v3")
@@ -708,9 +715,17 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
 
 
 def _resolve_package(name: str) -> Optional[Path]:
+    raw_name = str(name)
+    safe_name = secure_filename(raw_name)
+    if not safe_name or safe_name != raw_name or safe_name in {".", ".."}:
+        return None
     root = OUTPUT_FOLDER.resolve()
-    candidate = (OUTPUT_FOLDER / name).resolve()
-    if root not in candidate.parents or not candidate.is_dir():
+    candidate = (root / safe_name).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if not candidate.is_dir():
         return None
     return candidate
 
@@ -842,7 +857,8 @@ def list_jobs():
 
 @app.route("/api/jobs/<job_id>", methods=["GET"])
 def get_job(job_id):
-    job = db_get_job(job_id)
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+    job = lookup(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(_redact_job(job, include_logs=True))
@@ -850,7 +866,8 @@ def get_job(job_id):
 
 @app.route("/api/jobs/<job_id>/status")
 def get_job_status(job_id):
-    job = db_get_job(job_id)
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+    job = lookup(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify({"id": job_id, "status": job["status"], "step": job["step"], "error": job["error"]})
@@ -868,13 +885,20 @@ def cancel_job(job_id):
 @app.route("/api/jobs/<job_id>/logs")
 @app.route("/api/jobs/<job_id>/logs/stream")
 def job_logs_stream(job_id):
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+    authorized_job = lookup(job_id)
+    if not authorized_job:
+        return jsonify({"error": "Job not found"}), 404
+
     def stream():
         last_id = 0
+        job = dict(authorized_job)
         while True:
-            job = db_get_job(job_id)
-            if not job:
+            current = db_get_job(job_id)
+            if not current:
                 yield "data: " + json.dumps({"level": "ERROR", "msg": "Job not found"}) + "\n\n"
                 return
+            job["status"] = current.get("status")
             for row in db_logs_since(job_id, last_id):
                 last_id = row["id"]
                 yield "data: " + json.dumps({"time": row["created_at"], "level": row["level"], "msg": row["message"]}) + "\n\n"
@@ -889,13 +913,54 @@ def job_logs_stream(job_id):
     )
 
 
+def _package_access_allowed(pkg_dir: Optional[Path]) -> bool:
+    """Allow package access only to admins or the principal that owns the job."""
+    if pkg_dir is None or not pkg_dir.is_dir():
+        return False
+    from flask import session
+    if not app.config.get("_AIVF_AUTH_CONFIGURED"):
+        return True
+    if not session.get("aivf_authenticated"):
+        return False
+    if str(session.get("aivf_role") or "viewer").strip().lower() == "admin":
+        return True
+    try:
+        from resource_governor import principal_for_request
+        principal = principal_for_request(request)
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT params, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL"
+            ).fetchall()
+        for row in rows:
+            if str(Path(str(row["pkg_dir"])).resolve()) != str(pkg_dir.resolve()):
+                continue
+            payload = json.loads(row["params"] or "{}")
+            return str(payload.get("_principal") or "") == principal
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return False
+
+
+def _request_is_admin() -> bool:
+    from flask import session
+    return (
+        not app.config.get("_AIVF_AUTH_CONFIGURED")
+        or (
+            bool(session.get("aivf_authenticated"))
+            and str(session.get("aivf_role") or "viewer").strip().lower() == "admin"
+        )
+    )
+
+
 @app.route("/api/packages")
 def list_packages():
     global _package_cache
     now = time.monotonic()
-    with _package_cache_lock:
-        if _package_cache and now - _package_cache[0] < _PACKAGE_CACHE_TTL:
-            return jsonify(_package_cache[1])
+    use_cache = _request_is_admin()
+    if use_cache:
+        with _package_cache_lock:
+            if _package_cache and now - _package_cache[0] < _PACKAGE_CACHE_TTL:
+                return jsonify(_package_cache[1])
 
     packages = []
     try:
@@ -905,6 +970,8 @@ def list_packages():
     package_paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     for pkg_path in package_paths:
         try:
+            if not _package_access_allowed(pkg_path):
+                continue
             thumbnail_name = next(
                 (name for name in ("thumbnail.png", "thumbnail_vertical.png") if (pkg_path / name).exists()),
                 None,
@@ -933,17 +1000,50 @@ def list_packages():
         except OSError:
             continue
 
-    with _package_cache_lock:
-        _package_cache = (time.monotonic(), packages)
+    if use_cache:
+        with _package_cache_lock:
+            _package_cache = (time.monotonic(), packages)
     return jsonify(packages)
 
 
 @app.route("/api/packages/<name>/file/<path:filename>")
+def _resolve_package_file(package: Optional[Path], filename: str) -> Optional[Path]:
+    """Resolve an existing regular file discovered beneath a package root."""
+    if package is None or not isinstance(filename, str):
+        return None
+    requested = filename.replace("\\", "/")
+    if not requested or requested.startswith("/") or requested.startswith("../") or "/../" in requested:
+        return None
+    root = package.resolve()
+    try:
+        candidates = package.rglob("*")
+    except OSError:
+        return None
+    for candidate in candidates:
+        try:
+            if not candidate.is_file() or candidate.is_symlink():
+                continue
+            relative = candidate.relative_to(package).as_posix()
+            if relative != requested:
+                continue
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+            return resolved
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def package_file(name, filename):
     pkg_dir = _resolve_package(name)
-    if not pkg_dir:
+    if not _package_access_allowed(pkg_dir):
         abort(404)
-    return send_from_directory(pkg_dir, filename)
+    if pkg_dir is None:
+        abort(404)
+    resolved = _resolve_package_file(pkg_dir, filename)
+    if resolved is None:
+        abort(404)
+    return send_file(resolved)
 
 
 @app.route("/api/health")

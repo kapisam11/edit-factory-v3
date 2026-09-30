@@ -28,7 +28,7 @@ def review_claims(text: str, evidence: Sequence[Mapping[str,Any]]|None=None, *, 
     evidence_text=" ".join(str(item.get("text") or "") for item in (evidence or []))
     unsupported=[claim.text for claim in claims if claim.text not in evidence_text]
     reviewed=bool(fact_reviewed)
-    status="verified" if reviewed or not unsupported else "manual_review"
+    status="verified" if not claims or reviewed else "manual_review"
     return {"status":status,"claims":[{"text":c.text,"kind":c.kind} for c in claims],"unsupported_claims":unsupported,"fact_review_required":bool(unsupported) or (bool(claims) and not reviewed),"evidence_count":len(evidence or [])}
 
 def metadata_fact_gate(title: str, description: str, *, evidence: Sequence[Mapping[str,Any]]|None=None, fact_reviewed: bool=False) -> dict[str,Any]:

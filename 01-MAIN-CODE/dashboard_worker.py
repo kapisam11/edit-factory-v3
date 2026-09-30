@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import sys
+import threading
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WEB_DIR = _REPO_ROOT / "02-WEB-FILES"
@@ -34,6 +35,36 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
             pass
     from app import web_app_v3
     from ai_video_factory.validation import validate_target_seconds, validate_v3_target_seconds
+    from dashboard_store import DashboardStore
+
+    heartbeat_stop = threading.Event()
+    heartbeat_store = DashboardStore(db_path)
+    interval = max(
+        5.0,
+        float(os.environ.get("AIVF_WORKER_HEARTBEAT_SECONDS", "15")),
+    )
+
+    def heartbeat() -> None:
+        failures = 0
+        while not heartbeat_stop.wait(interval):
+            try:
+                alive = heartbeat_store.heartbeat_job(job_id)
+            except Exception:
+                alive = False
+            if alive:
+                failures = 0
+            else:
+                failures += 1
+                # A transient SQLite lock must not terminate the lease-refresh thread.
+                if failures >= 5:
+                    failures = 0
+
+    heartbeat_thread = threading.Thread(
+        target=heartbeat,
+        name=f"aivf-worker-heartbeat-{job_id}",
+        daemon=True,
+    )
+    heartbeat_thread.start()
     params = dict(params)
     workflow = str(params.get("workflow", "default")).strip().lower()
     if workflow == "v3":
@@ -42,6 +73,10 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
         params["target_seconds"] = validate_target_seconds(params.get("target_seconds", 45.0))
     params["workflow"] = workflow
     skip_stages = _skip_stages_for_workflow(workflow)
-    web_app_v3._run_job_worker_impl(
-        job_id, params, secrets, output_root, db_path, skip_stages=skip_stages
-    )
+    try:
+        web_app_v3._run_job_worker_impl(
+            job_id, params, secrets, output_root, db_path, skip_stages=skip_stages
+        )
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=min(interval, 5.0))

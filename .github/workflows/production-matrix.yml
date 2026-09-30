@@ -1,0 +1,59 @@
+name: Production matrix (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-production-matrix:
+    name: Linux production matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+      - name: Install locked environment
+        run: uv sync --frozen --python 3.12 --extra web --extra dev
+      - name: Run completeness audit
+        env:
+          PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+        run: uv run aivf-completeness .
+      - name: Run encoder matrix
+        env:
+          PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+        run: uv run python -c "from ai_video_factory.hardware_matrix import run_matrix; r=run_matrix(); print(r); assert r['available'] >= 1 and r['passed'] >= 1"
+      - name: Generate exotic-media fixtures
+        env:
+          PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+        run: |
+          uv run python - <<'PY'
+          from ai_video_factory.media_fixture_matrix import generate_fixtures, validate_fixture_matrix
+          paths = generate_fixtures("/tmp/aivf-production-matrix")
+          result = validate_fixture_matrix(paths)
+          print(result)
+          assert result["count"] >= 2
+          assert result["failed"] == 0
+          PY
+      - name: Run benchmark suite
+        env:
+          PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+        run: |
+          uv run python - <<'PY'
+          from ai_video_factory.benchmark import benchmark_many
+          from pathlib import Path
+          root = Path("/tmp/aivf-production-matrix")
+          media = [str(path) for path in root.glob("*") if path.is_file()]
+          result = benchmark_many(media)
+          print(result)
+          assert result["count"] >= 1
+          PY

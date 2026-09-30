@@ -8,7 +8,21 @@ def classify_media(path:str|Path)->dict[str,Any]:
     try:
         report=analyze_media(path,deep=False,max_duration=86400.0)
         summary=report["summary"]
-        return {"path":str(path),"ok":bool(report["ok"]),"duration":summary.get("duration"),"width":summary.get("width"),"height":summary.get("height"),"codec":summary.get("video_codec"),"audio_codec":summary.get("audio_codec"),"fps":summary.get("fps"),"pixel_format":summary.get("pixel_format"),"error":None}
+        width=int(summary.get("width") or 0)
+        height=int(summary.get("height") or 0)
+        duration=float(summary.get("duration") or 0.0)
+        pixel_format=str(summary.get("pixel_format") or "")
+        codec=str(summary.get("video_codec") or "")
+        flags={
+            "positive_duration": duration > 0,
+            "nonzero_dimensions": width > 0 and height > 0,
+            "dimensions_not_oversized": width <= 7680 and height <= 7680,
+            "pixel_format_known": bool(pixel_format),
+            "codec_known": bool(codec),
+            "duration_not_extreme": duration <= 86400.0,
+        }
+        ok=bool(report["ok"]) and all(flags.values())
+        return {"path":str(path),"ok":ok,"duration":duration,"width":width,"height":height,"codec":codec,"audio_codec":summary.get("audio_codec"),"fps":summary.get("fps"),"pixel_format":pixel_format,"compatibility_flags":flags,"error":None if ok else "media compatibility contract failed"}
     except Exception as exc:
         return {"path":str(path),"ok":False,"error":str(exc)}
 

@@ -34,6 +34,13 @@ def install_observability(app: Flask) -> None:
         response.headers[REQUEST_ID_HEADER] = getattr(g, "request_id", "")
         return response
 
+    @app.get("/metrics")
+    def prometheus_metrics():
+        return Response(
+            GLOBAL_METRICS.prometheus(),
+            mimetype="text/plain; version=0.0.4",
+        )
+
     @app.get("/api/metrics")
     def metrics():
         snapshot = GLOBAL_METRICS.snapshot()

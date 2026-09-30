@@ -1,5 +1,6 @@
 """Small role-based authorization contract shared by dashboard and workers."""
 from __future__ import annotations
+from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
@@ -9,6 +10,22 @@ class Role(str, Enum):
     ADMIN="admin"
 
 _RANK={Role.VIEWER:10,Role.EDITOR:20,Role.ADMIN:30}
+
+
+@dataclass(frozen=True)
+class Principal:
+    user_id: str
+    role: Role
+
+    def can(self, required: str | Role) -> bool:
+        return role_allows(self.role, required)
+
+
+def principal(user_id: str, role: str | Role) -> Principal:
+    value=str(user_id).strip()
+    if not value:
+        raise ValueError("user_id is required")
+    return Principal(value, normalize_role(role))
 
 def normalize_role(value:str|Role|None)->Role:
     if isinstance(value, Role):
@@ -29,4 +46,4 @@ def allowed_roles(required:str|Role)->Iterable[str]:
     minimum=_RANK[normalize_role(required)]
     return [r.value for r,rank in _RANK.items() if rank>=minimum]
 
-__all__=["Role","allowed_roles","normalize_role","require_role","role_allows"]
+__all__=["Principal","Role","allowed_roles","normalize_role","principal","require_role","role_allows"]

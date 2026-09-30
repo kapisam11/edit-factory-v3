@@ -5,17 +5,20 @@ from top-performing videos in the same niche.
 
 Requires: pillow
 """
+import json
 import logging
 import math
 import os
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import List, Optional
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 from .style_learner import learn_style
+from .thumbnail_quality import score_thumbnail, rank_variants
 from .render_engine import run_ffmpeg, run_ffprobe
 
 logger = logging.getLogger(__name__)
@@ -174,16 +177,19 @@ def thumbnail_quality_report(path: str, expected_size: Optional[tuple] = None) -
 
 
 def select_best_thumbnail_variant(paths: List[str]) -> int:
-    """Return a 1-based variant index using the finished image, not just the background."""
+    """Return the best 1-based variant index using legacy and visual quality scores."""
     if not paths:
         raise ValueError("No thumbnail variants were supplied")
     scored = []
     for index, path in enumerate(paths, start=1):
-        report = thumbnail_quality_report(path)
-        scored.append((float(report["score"]), -index, index))
+        legacy = thumbnail_quality_report(path)
+        modern = score_thumbnail(path)
+        legacy_score = float(legacy.get("score") or 0.0) / 100.0
+        modern_score = float(modern.get("score") or 0.0)
+        combined = 0.60 * legacy_score + 0.40 * modern_score
+        scored.append((combined, legacy_score, modern_score, -index, index))
     scored.sort(reverse=True)
-    return scored[0][2]
-
+    return scored[0][4]
 
 def _score_image(path: str) -> float:
     """Prefer sharp, moderately bright, colorful frames over flat/dark frames."""
@@ -440,6 +446,7 @@ def make_thumbnail_variants(
             logger.warning("Style learning failed: %s", exc)
 
     variants = []
+    quality = []
     for i in range(max(1, int(count))):
         out = os.path.join(out_dir, f"variant_{i + 1}.png")
         mod_style = style.copy() if style else None
@@ -457,6 +464,18 @@ def make_thumbnail_variants(
             background_focus=focus,
         )
         variants.append(out)
+        try:
+            quality.append({"path": out, "quality": score_thumbnail(out)})
+        except Exception as exc:
+            logger.warning("Thumbnail quality scoring failed for %s: %s", out, exc)
+            quality.append({"path": out, "quality": {"ok": False, "score": 0.0, "error": str(exc)}})
+    try:
+        Path(out_dir, "thumbnail_quality.json").write_text(
+            json.dumps({"variants": quality, "ranked": [path for path, _ in rank_variants(variants)]}, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("Could not write thumbnail quality report: %s", exc)
     return variants
 
 def make_thumbnail_vertical(

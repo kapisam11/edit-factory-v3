@@ -17,6 +17,7 @@ aivf-diagnose = "ai_video_factory.diagnostics_cli:main"
 aivf-ready = "ai_video_factory.production_readiness:main"
 aivf-hardware-smoke = "ai_video_factory.hardware_smoke:main"
 aivf-compat = "ai_video_factory.compatibility_cli:main"
+aivf-completeness = "ai_video_factory.production_completeness:main"
 aivf-content = "app.content_factory_cli:main"
 aivf-v3 = "ai_video_factory.v3_cli:main"
 
