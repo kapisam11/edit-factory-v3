@@ -871,14 +871,19 @@ def cancel_job(job_id):
 @app.route("/api/jobs/<job_id>/logs/stream")
 def job_logs_stream(job_id):
     lookup = globals().get("authorized_db_get_job", db_get_job)
+    authorized_job = lookup(job_id)
+    if not authorized_job:
+        return jsonify({"error": "Job not found"}), 404
 
     def stream():
         last_id = 0
+        job = dict(authorized_job)
         while True:
-            job = lookup(job_id)
-            if not job:
+            current = db_get_job(job_id)
+            if not current:
                 yield "data: " + json.dumps({"level": "ERROR", "msg": "Job not found"}) + "\n\n"
                 return
+            job["status"] = current.get("status")
             for row in db_logs_since(job_id, last_id):
                 last_id = row["id"]
                 yield "data: " + json.dumps({"time": row["created_at"], "level": row["level"], "msg": row["message"]}) + "\n\n"
