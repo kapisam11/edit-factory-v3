@@ -845,8 +845,8 @@ def create_job():
     topic = params["topic"]
     workflow = params["workflow"]
     idem_key = request.headers.get("Idempotency-Key", "").strip()
-    if len(idem_key) > 200:
-        return jsonify({"error": "Idempotency-Key must be at most 200 characters"}), 400
+    if idem_key and not re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", idem_key):
+        return jsonify({"error": "Idempotency-Key contains unsupported characters"}), 400
     from resource_governor import principal_for_request, MAX_QUEUED_PER_PRINCIPAL
     principal = principal_for_request(request)
     params["_principal"] = principal
