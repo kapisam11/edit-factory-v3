@@ -504,7 +504,11 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
 
             if readiness.state == "UPLOAD_PACKAGE_VALID":
                 result.warnings.append("V3 artifact readiness: upload package validated; publish readiness is intentionally not claimed")
-            # Integrity is evaluated only after all canonical artifacts have been written.
+
+            _persist_v3_reports(package, result, render_report, semantic_report, readiness)
+
+            # Integrity is evaluated after report persistence so recorded hashes cover
+            # the final metadata/report content, not a pre-finalization snapshot.
             provenance = load_provenance(package / "provenance.json") if (package / "provenance.json").is_file() else provenance
             artifact_manifest = build_artifact_manifest(
                 package,
@@ -518,6 +522,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     "provenance.json",
                     "metadata_guardrails.json",
                     "diagnostics.json",
+                    "environment_fingerprint.json",
                 ),
             )
             _atomic_json_write(package / "artifact_manifest.json", artifact_manifest)
@@ -531,8 +536,6 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             _atomic_json_write(package / "release_evidence.json", release_evidence)
             if not release_evidence["release_candidate"]:
                 result.warnings.append("Automated release evidence is incomplete; human review remains required")
-
-            _persist_v3_reports(package, result, render_report, semantic_report, readiness)
         except (RenderContractError, MediaHealthError, GuardrailError, OSError, ValueError) as exc:
             result.errors.append(f"V3 render contract failed: {exc}")
     result.artifacts.update({
