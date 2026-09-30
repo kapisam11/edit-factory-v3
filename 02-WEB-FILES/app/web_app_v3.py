@@ -534,8 +534,14 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
 
         _run_db_write(write, db_path)
 
-    from ai_video_factory.resource_metrics import snapshot_resources, summarize_resources
-    resource_start = snapshot_resources()
+    from ai_video_factory.resource_metrics import ResourceMonitor
+    resource_monitor = ResourceMonitor(
+        interval_seconds=max(
+            0.25,
+            float(os.environ.get("AIVF_RESOURCE_SAMPLE_SECONDS", "1.0")),
+        )
+    )
+    resource_monitor.start_monitoring()
     resource_written = False
 
     def write_resource_report(package: Path) -> None:
@@ -543,7 +549,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         if resource_written:
             return
         try:
-            resource_report = summarize_resources(resource_start, snapshot_resources())
+            resource_report = resource_monitor.stop_monitoring()
             with (package / "resource_usage.json").open("w", encoding="utf-8") as handle:
                 json.dump(resource_report, handle, indent=2, ensure_ascii=False)
             resource_written = True
@@ -633,7 +639,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 log("INFO", "Job complete!")
     except Exception as exc:
         try:
-            package = Path(locals().get("pkg_dir", "")) if locals().get("pkg_dir") else None
+            if "resource_monitor" in locals():
+                resource_report = resource_monitor.stop_monitoring()
+                package = Path(locals().get("pkg_dir", "")) if locals().get("pkg_dir") else None
             if package is not None and package.is_dir():
                 write_resource_report(package)
         except Exception:
