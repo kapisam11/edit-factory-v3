@@ -132,3 +132,41 @@ def test_dashboard_store_retry_policy_is_bounded_and_rejects_deterministic_failu
     store.update_job("job-1", status="error", error="invalid configuration")
     with pytest.raises(JobRetryNotAllowed, match="deterministic|maximum"):
         store.retry_job("job-1", max_attempts=1)
+
+
+def test_dashboard_store_idempotency_is_atomic_and_bounded(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store = DashboardStore(db)
+    store.ensure_indexes()
+
+    assert store.insert_job_idempotent(
+        "job-idem-1",
+        "topic",
+        {"topic": "topic", "_principal": "alice"},
+        principal="alice",
+        idempotency_key="request-1",
+        request_hash="hash-1",
+    ) == ("job-idem-1", True)
+
+    assert store.insert_job_idempotent(
+        "job-idem-2",
+        "topic",
+        {"topic": "topic", "_principal": "alice"},
+        principal="alice",
+        idempotency_key="request-1",
+        request_hash="hash-1",
+    ) == ("job-idem-1", False)
+
+    from dashboard_store import IdempotencyConflict
+    with pytest.raises(IdempotencyConflict):
+        store.insert_job_idempotent(
+            "job-idem-3",
+            "different topic",
+            {"topic": "different", "_principal": "alice"},
+            principal="alice",
+            idempotency_key="request-1",
+            request_hash="different-hash",
+        )
+
+    assert len(store.list_jobs()) == 1
