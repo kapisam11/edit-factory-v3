@@ -26,7 +26,7 @@ async def main(base_url: str, token: str) -> None:
         if "/login" not in page.url:
             failures.append(f"unauthenticated root did not redirect to login: {page.url}")
 
-        await page.get_by_label("Dashboard token").fill(token)
+        await page.locator('input[name="token"]').fill(token)
         await page.get_by_role("button", name="Sign in").click()
         await page.wait_for_load_state("networkidle")
 
