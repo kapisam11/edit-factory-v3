@@ -87,7 +87,7 @@ def test_retry_rejects_corrupted_persisted_parameters_without_queueing(monkeypat
         "job-bad-params",
         status="error",
         step="failed",
-        error="previous failure",
+        error="provider temporarily unavailable",
         params="{broken-json",
     )
 
@@ -110,7 +110,7 @@ def test_retry_reports_worker_start_failure(monkeypatch, tmp_path):
     install_dashboard_optimizations(appmod)
     assert "retry_job" in appmod.app.view_functions
     appmod.db_insert_job("job-start-failure", "topic", {"topic": "topic"})
-    appmod.db_update_job("job-start-failure", status="error", step="failed", error="previous failure")
+    appmod.db_update_job("job-start-failure", status="error", step="failed", error="provider temporarily unavailable")
 
     def failing_start(job_id, params, secrets):
         appmod.db_update_job(
@@ -183,7 +183,7 @@ def test_retry_preserves_retained_one_off_secret(monkeypatch, tmp_path):
         "topic",
         {"topic": "topic", "workflow": "default", "_retry_secret_keys": ["model_key"]},
     )
-    appmod.db_update_job("job-secret-retry", status="error", step="failed", error="previous failure")
+    appmod.db_update_job("job-secret-retry", status="error", step="failed", error="provider temporarily unavailable")
 
     captured = {}
     appmod._runtime_secrets["job-secret-retry"] = {"model_key": "one-off-secret"}
@@ -211,7 +211,7 @@ def test_retry_accepts_missing_one_off_secret_without_persisting_it(monkeypatch,
         "topic",
         {"topic": "topic", "workflow": "default", "_retry_secret_keys": ["model_key"]},
     )
-    appmod.db_update_job("job-restart-safe-retry", status="error", step="failed", error="previous failure")
+    appmod.db_update_job("job-restart-safe-retry", status="error", step="failed", error="provider temporarily unavailable")
     appmod._runtime_secrets.pop("job-restart-safe-retry", None)
     appmod._runtime_secret_expiry.pop("job-restart-safe-retry", None)
 
