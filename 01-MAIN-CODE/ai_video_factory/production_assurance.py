@@ -342,7 +342,8 @@ def build_release_evidence(
         and str(final_video_record.get("rights_status") or "").strip().lower() in cleared_rights
         and all(str(item.get("rights_status") or "").strip().lower() in cleared_rights for item in rights_records)
     )
-    readiness_checks = readiness.get("checks") if isinstance(readiness.get("checks"), Mapping) else {}
+    raw_readiness_checks = readiness.get("checks")
+    readiness_checks = raw_readiness_checks if isinstance(raw_readiness_checks, Mapping) else {}
     readiness_valid = (
         readiness.get("state") == "UPLOAD_PACKAGE_VALID"
         and all(
