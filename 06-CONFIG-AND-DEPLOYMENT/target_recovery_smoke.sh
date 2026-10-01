@@ -183,7 +183,7 @@ from pathlib import Path
 orphans = []
 for proc in Path("/proc").glob("[0-9]*"):
     try:
-        command = (proc / "cmdline").read_bytes().replace(b"\\x00", b" ").decode("utf-8", "replace")
+        command = (proc / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
     except (OSError, UnicodeDecodeError):
         continue
     if "ffmpeg" in command.lower():
