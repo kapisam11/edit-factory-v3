@@ -43,7 +43,11 @@ def validate_rights_evidence(evidence: RightsEvidence) -> list[str]:
         errors.append("rights declaration has no declared_at timestamp")
     if evidence.declared_at:
         try:
-            datetime.fromisoformat(evidence.declared_at.replace("Z","+00:00"))
+            declared_at = datetime.fromisoformat(evidence.declared_at.replace("Z", "+00:00"))
+            if declared_at.tzinfo is None:
+                errors.append("declared_at must include a timezone")
+            elif declared_at > datetime.now(timezone.utc):
+                errors.append("declared_at cannot be in the future")
         except ValueError:
             errors.append("declared_at is not an ISO-8601 timestamp")
     return errors
