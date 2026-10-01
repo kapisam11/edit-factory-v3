@@ -200,6 +200,7 @@ def test_build_job_params_carries_license_url():
             "platform": "youtube_shorts",
             "audience": "short-form viewers",
             "rights_basis": "cc_license",
+            "rights_evidence_url": "https://example.com/rights",
             "license_url": "https://example.com/license",
         },
         {
