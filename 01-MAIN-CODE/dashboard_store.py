@@ -260,8 +260,18 @@ class DashboardStore:
                 "SELECT job_id, request_hash FROM idempotency_keys WHERE principal=? AND idem_key=?",
                 (principal_value, key),
             ).fetchone()
-        if row is None:
-            return None
+            if row is None:
+                return None
+            job_exists = conn.execute(
+                "SELECT 1 FROM jobs WHERE id=?",
+                (str(row["job_id"]),),
+            ).fetchone()
+            if job_exists is None:
+                conn.execute(
+                    "DELETE FROM idempotency_keys WHERE principal=? AND idem_key=?",
+                    (principal_value, key),
+                )
+                return None
         return str(row["job_id"]), str(row["request_hash"])
 
 
