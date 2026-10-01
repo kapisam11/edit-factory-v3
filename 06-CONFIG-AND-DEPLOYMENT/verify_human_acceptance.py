@@ -8,6 +8,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Make the verifier runnable directly from a source checkout as well as an
+# installed environment; do not require callers to set PYTHONPATH manually.
+_MAIN_CODE = Path(__file__).resolve().parents[1] / "01-MAIN-CODE"
+if _MAIN_CODE.is_dir() and str(_MAIN_CODE) not in sys.path:
+    sys.path.insert(0, str(_MAIN_CODE))
+
 from ai_video_factory.production_assurance import verify_artifact_manifest
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$", re.I)
