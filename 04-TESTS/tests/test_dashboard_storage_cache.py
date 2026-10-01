@@ -186,3 +186,22 @@ def test_dashboard_job_event_history_tracks_lifecycle(tmp_path):
     assert [event["event"] for event in events][:1] == ["created"]
     assert ("queued", "running") in {(event["from_status"], event["to_status"]) for event in events}
     assert ("running", "done") in {(event["from_status"], event["to_status"]) for event in events}
+
+
+def test_stale_idempotency_key_is_self_healed(tmp_path):
+    store = DashboardStore(tmp_path / "jobs.db")
+    store.ensure_indexes()
+
+    def seed(conn):
+        conn.execute(
+            "INSERT INTO idempotency_keys(principal, idem_key, request_hash, job_id) VALUES (?,?,?,?)",
+            ("alice", "stale-key", "hash-stale", "missing-job"),
+        )
+    store.write(seed)
+
+    assert store.lookup_idempotency(principal="alice", idempotency_key="stale-key") is None
+    with store.connect() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM idempotency_keys WHERE principal=? AND idem_key=?",
+            ("alice", "stale-key"),
+        ).fetchone() is None
