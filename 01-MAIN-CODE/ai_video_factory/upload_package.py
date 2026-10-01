@@ -168,61 +168,51 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
         or item.get("url")
     ]
 
-    rights_declaration = summary.get("source_metadata")
-    declared_basis = ""
-    if isinstance(rights_declaration, Mapping):
-        declared_basis = _normalize_phrase(str(rights_declaration.get("rights_basis") or "")).lower()
+    if summary.get("requires_rights_declaration"):
+        supplied = summary.get("source_metadata")
+        if not isinstance(supplied, Mapping):
+            external.append({
+                "title": "Input media",
+                "creator": "",
+                "url": "",
+                "license": "",
+                "license_url": "",
+                "rights_basis": "",
+                "rights_status": "review_required",
+                "source": "user_provided",
+                "evidence_url": "",
+                "declared_by": "",
+                "declared_at": "",
+                "attribution": "",
+            })
 
-    if summary.get("requires_rights_declaration") and declared_basis not in {
-        "owned",
-        "explicit_permission",
-        "commercial_license",
-        "public_domain",
-        "cc_license",
-    }:
-        external.append({
-            "title": "Input media",
-            "creator": "",
-            "url": "",
-            "license": "",
-            "license_url": "",
-            "rights_basis": "",
-            "rights_status": "review_required",
-            "source": "user_provided",
-        })
-
-    cleared_bases = {
-        "owned",
-        "explicit_permission",
-        "commercial_license",
-        "public_domain",
-        "cc_license",
-    }
-    unresolved = [
-        item for item in external
-        if item.get("rights_status") != "cleared"
-        and item.get("rights_basis") not in cleared_bases
-    ]
     strict_rights = os.environ.get("AIVF_STRICT_RIGHTS", "1") == "1"
     evidence_records = []
-    for item in records:
-        if not any(item.get(key) for key in ("declared_by", "declared_at", "evidence_url", "license_url")):
-            continue
+    for item in external:
+        # Rights status is the only field allowed to declare the intended basis
+        # at this boundary. A free-form rights_basis must never grant approval.
         evidence_records.append({
             **item,
-            "asset_id": item.get("title") or item.get("url") or "source",
+            "asset_id": item.get("asset_id") or item.get("title") or item.get("url") or "source",
             "source": item.get("source") or "external",
+            "rights_basis": item.get("rights_status") or "review_required",
         })
+
     evidence_gate = rights_gate(evidence_records, strict=strict_rights) if evidence_records else {
-        "status": "not_declared", "publish_blocked": False, "checked": [], "evidence_contract": "not applicable"
+        "status": "not_declared",
+        "publish_blocked": False,
+        "checked": [],
+        "evidence_contract": "not applicable",
     }
-    if evidence_gate["publish_blocked"]:
-        unresolved.extend(evidence_gate["checked"])
-    
+    unresolved = [
+        item for item in evidence_gate.get("checked") or []
+        if isinstance(item, Mapping) and item.get("errors")
+    ]
+
     return {
         "status": "cleared" if external and not unresolved else ("review_required" if unresolved else "not_declared"),
-        "publish_blocked": bool(unresolved),
-        "requires_explicit_declaration": bool(summary.get("requires_rights_declaration")),
+        "publish_blocked": bool(unresolved) and strict_rights,
+        "requires_explicit_declaration": bool(external),
         "sources": records,
         "unverified_sources": unresolved,
         "rights_evidence_gate": evidence_gate,
