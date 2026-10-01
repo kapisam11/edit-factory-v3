@@ -942,6 +942,25 @@ def create_job():
             # deployment/test database.
             store = DashboardStore(DB_PATH)
         store.ensure_indexes()
+        if idem_key:
+            existing_idempotency = store.lookup_idempotency(
+                principal=principal,
+                idempotency_key=idem_key,
+            )
+            if existing_idempotency is not None:
+                existing_job_id, existing_request_hash = existing_idempotency
+                if existing_request_hash != request_hash:
+                    if upload_path is not None:
+                        upload_path.unlink(missing_ok=True)
+                    return jsonify({"error": "Idempotency key was already used for a different request"}), 409
+                if upload_path is not None:
+                    upload_path.unlink(missing_ok=True)
+                existing = store.get_job(existing_job_id) or {}
+                return jsonify({
+                    "job_id": existing_job_id,
+                    "status": existing.get("status", "queued"),
+                    "idempotent_replay": True,
+                }), 200
         try:
             check_job_creation_limits(
                 store.connect,
