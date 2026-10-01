@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ai_video_factory.production_assurance import verify_artifact_manifest
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$", re.I)
 
@@ -59,6 +60,12 @@ def main(argv: list[str]) -> int:
     supplied = str(acceptance.get("artifact_manifest_sha256") or "").lower()
     if not SHA256.fullmatch(manifest_hash) or manifest_hash != supplied:
         die("acceptance artifact hash does not match artifact_manifest.json")
+
+    # The stored manifest hash alone is insufficient: it can still describe
+    # files that were modified after the human review. Re-hash the package now.
+    integrity = verify_artifact_manifest(package, manifest)
+    if not integrity.get("ok"):
+        die("accepted package no longer matches its artifact manifest: " + "; ".join(list(integrity.get("errors") or [])[:10]))
 
     result = {
         "ok": True,
