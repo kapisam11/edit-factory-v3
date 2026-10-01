@@ -28,6 +28,7 @@ from werkzeug.utils import secure_filename
 
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 from ai_video_factory.render_engine import run_ffprobe
+from ai_video_factory.production_guardrails import sha256_file
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
@@ -837,6 +838,18 @@ def settings():
 
 
 @app.route("/api/jobs", methods=["POST"])
+def _request_fingerprint(params: dict, upload_path: Optional[Path] = None) -> str:
+    """Fingerprint request intent and, when present, the uploaded media bytes."""
+    payload = {
+        key: value
+        for key, value in params.items()
+        if key not in {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
+    }
+    if upload_path is not None:
+        payload["_input_media_sha256"] = sha256_file(upload_path)
+    return request_idempotency_hash(payload, namespace="dashboard-request")
+
+
 def create_job():
     role_gate = app.extensions.get("aivf_require_role")
     if callable(role_gate):
@@ -915,6 +928,14 @@ def create_job():
         except (OSError, ValueError):
             return jsonify({"error": "Upload is too large or is not a valid supported video stream"}), 400
         params["raw_video"] = str(upload_path)
+
+    request_hash = ""
+    if idem_key:
+        try:
+            request_hash = _request_fingerprint(params, upload_path)
+        except OSError:
+            upload_path.unlink(missing_ok=True)
+            return jsonify({"error": "Uploaded video could not be fingerprinted safely"}), 400
 
     job_id = f"job_{uuid.uuid4().hex[:12]}"
     try:
