@@ -216,6 +216,8 @@ def verify_release_evidence(package_dir: str | Path, evidence: Mapping[str, Any]
         environment=environment,
         artifact_integrity=integrity,
     )
+    if evidence.get("schema_version") != expected.get("schema_version"):
+        errors.append("release-evidence schema version mismatch")
     if evidence.get("checks") != expected.get("checks"):
         errors.append("stored release-evidence checks do not match recomputed checks")
     if bool(evidence.get("release_candidate")) != bool(expected.get("release_candidate")):
@@ -259,13 +261,28 @@ def build_release_evidence(
     final_video = provenance.get("final_video")
     final_video_record = final_video if isinstance(final_video, Mapping) else {}
     rights_gate = provenance.get("rights_gate")
+    asset_ids = {
+        str(item.get("asset_id") or "")
+        for item in (assets or [])
+        if isinstance(item, Mapping)
+    }
+    checked_rights = rights_gate.get("checked") if isinstance(rights_gate, Mapping) else None
+    checked_asset_ids = {
+        str(item.get("asset_id") or "")
+        for item in (checked_rights or [])
+        if isinstance(item, Mapping)
+    } if isinstance(checked_rights, list) else set()
     rights_gate_ok = (
         isinstance(rights_gate, Mapping)
         and str(rights_gate.get("status") or "").strip().lower() == "cleared"
         and not bool(rights_gate.get("publish_blocked"))
+        and isinstance(checked_rights, list)
+        and bool(checked_rights)
+        and checked_asset_ids == asset_ids
+        and len(checked_asset_ids) == len(asset_ids)
         and not any(
             isinstance(item, Mapping) and bool(item.get("errors"))
-            for item in (rights_gate.get("checked") or [])
+            for item in checked_rights
         )
     )
     cleared_rights = {"owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"}
@@ -284,8 +301,17 @@ def build_release_evidence(
         and str(final_video_record.get("rights_status") or "").strip().lower() in cleared_rights
         and all(str(item.get("rights_status") or "").strip().lower() in cleared_rights for item in rights_records)
     )
+    readiness_checks = readiness.get("checks") if isinstance(readiness.get("checks"), Mapping) else {}
+    readiness_valid = (
+        readiness.get("state") == "UPLOAD_PACKAGE_VALID"
+        and all(
+            readiness_checks.get(key) is True
+            for key in ("MEDIA_VALID", "MEDIA_CONTRACT_VALID", "UPLOAD_PACKAGE_VALID")
+        )
+        and not bool(readiness.get("errors"))
+    )
     checks = {
-        "readiness_valid": readiness.get("state") == "UPLOAD_PACKAGE_VALID",
+        "readiness_valid": readiness_valid,
         "media_valid": bool(media_health.get("ok")),
         "provenance_present": provenance_present,
         "rights_clear": rights_clear,
