@@ -79,7 +79,7 @@ def test_explicit_permission_clears_publish_gate():
             "rights_status": "explicit_permission",
             "declared_by": "tester",
             "declared_at": "2026-10-01T15:00:00Z",
-            "evidence_url": "https://www.youtube.com/watch?v=example",
+            "evidence_url": "https://example.com/permission",
             "source": "user_provided",
         }
     }
