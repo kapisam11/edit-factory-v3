@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "package_name": "REPLACE_WITH_PACKAGE",
+  "artifact_manifest_sha256": "64-HEX-SHA256",
+  "video_reviewed": false,
+  "video_acceptance": "REQUIRED: confirm no visible rendering defects",
+  "audio_reviewed": false,
+  "audio_acceptance": "REQUIRED: confirm no audible defects / sync problems",
+  "rights_reviewed": false,
+  "rights_acceptance": "REQUIRED: confirm rights/provenance evidence is acceptable",
+  "reviewer": "REQUIRED",
+  "reviewed_at": "2026-01-01T00:00:00Z",
+  "notes": ""
+}
