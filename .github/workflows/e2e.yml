@@ -129,6 +129,9 @@ jobs:
           test -f "$PACKAGE_DIR/metadata_guardrails.json"
           test -f "$PACKAGE_DIR/diagnostics.json"
           test -f "$PACKAGE_DIR/upload_package.json"
+          test -f "$PACKAGE_DIR/artifact_manifest.json"
+          test -f "$PACKAGE_DIR/release_evidence.json"
+          test -f "$PACKAGE_DIR/environment_fingerprint.json"
           uv run python - "$PACKAGE_DIR" <<'PY'
           from PIL import Image
           from pathlib import Path
@@ -138,6 +141,18 @@ jobs:
               assert thumbnail.size == (1280, 720)
           with Image.open(package / 'thumbnail_vertical.png') as thumbnail:
               assert thumbnail.size == (1080, 1920)
+          PY
+          uv run python - "$PACKAGE_DIR" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from ai_video_factory.production_assurance import verify_artifact_manifest
+          package = Path(sys.argv[1])
+          manifest = json.loads((package / "artifact_manifest.json").read_text(encoding="utf-8"))
+          result = verify_artifact_manifest(package, manifest)
+          assert result["ok"], result
+          release = json.loads((package / "release_evidence.json").read_text(encoding="utf-8"))
+          assert release["human_review_required"] is True
           PY
           grep -Eqi "HOOK|CONTEXT|ESCALATION|SGALATION|PAYOFF|PAYO|FINAL|IMPACT" "$PACKAGE_DIR/scenes.json"
           cp "$PACKAGE_DIR/v3_readiness.json" "$RESULTS_DIR/v3-readiness.json"

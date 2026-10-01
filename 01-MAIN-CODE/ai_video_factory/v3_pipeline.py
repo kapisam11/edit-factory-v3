@@ -22,9 +22,14 @@ from .media_metadata import extract_media_metadata
 from .audio_normalization import AudioNormalizationError, normalize_loudness
 from .render_engine import stamp_media_metadata
 from .metadata_guardrails import build_upload_metadata
-from .provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest, write_provenance
+from .provenance import build_asset_record, load_provenance, manifest_needs_rights_review, provenance_manifest, write_provenance
 from .system_diagnostics import diagnostics_report, write_diagnostics
-from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk
+from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk, sha256_file
+from .production_assurance import (
+    build_artifact_manifest,
+    build_environment_fingerprint,
+    build_release_evidence,
+)
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
@@ -63,6 +68,7 @@ def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: 
         "thumbnail": payload.get("thumbnail_concept", ""), "platform": payload.get("platform", "youtube_shorts"),
         "audience": audience, "audience_profile": audience_profile, "platform_profile": profile,
         "footage_evidence": footage_evidence or {},
+        "source_metadata": payload.get("source_metadata") or {},
         "v3_directives": {
             "edit_type": payload["edit_type"], "clip_plan": clip_plan, "retention_map": payload.get("retention_map", []),
             "hooks": payload.get("hooks", []), "platform": payload.get("platform", "youtube_shorts"), "platform_profile": profile,
@@ -429,11 +435,13 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 if not semantic_report["ok"]:
                     result.errors.extend("V3 semantic QC: " + e for e in semantic_report["errors"])
                 result.warnings.extend("V3 semantic QC: " + w for w in semantic_report["warnings"])
+            source_meta = source_metadata or {}
             _package_v3_assets(result=result, package=package, topic=topic, platform=platform, source_video=input_video, baseline_summary=baseline_summary)
             metadata_report = build_upload_metadata(
                 topic,
                 summary=baseline_summary,
                 hook=str(baseline_summary.get("hook") or ""),
+                attribution=str(source_meta.get("attribution") or ""),
             )
             _atomic_json_write(package / "metadata_guardrails.json", metadata_report)
             metadata_ok = bool(metadata_report["quality"]["ok"]) and not bool(
@@ -457,7 +465,11 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             _apply_readiness_contract(result, readiness)
 
             source_meta = source_metadata or {}
-            source_rights = str(source_meta.get("rights_status") or "review_required")
+            source_rights = str(
+                source_meta.get("rights_status")
+                or source_meta.get("rights_basis")
+                or "review_required"
+            )
             source_record = build_asset_record(
                 input_video,
                 asset_id="source_video",
@@ -473,6 +485,12 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 final_video=final_video,
                 assets=[source_record],
                 pipeline_version="3.0.0",
+                run_context={
+                    "blueprint_sha256": sha256_file(blueprint_path),
+                    "platform": platform,
+                    "target_seconds": round(float(target_seconds), 6),
+                    "edit_type": payload.get("edit_type"),
+                },
             )
             write_provenance(package / "provenance.json", provenance)
             if manifest_needs_rights_review(provenance):
@@ -483,9 +501,48 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             if not diagnostics["ok"]:
                 result.warnings.append("Environment diagnostics reported one or more failed checks")
 
+            environment_fingerprint = build_environment_fingerprint(
+                pipeline_version="3.0.0",
+                platform_name=platform,
+                target_seconds=target_seconds,
+                platform_profile=payload["platform_variants"][platform],
+            )
+            _atomic_json_write(package / "environment_fingerprint.json", environment_fingerprint)
+
             if readiness.state == "UPLOAD_PACKAGE_VALID":
                 result.warnings.append("V3 artifact readiness: upload package validated; publish readiness is intentionally not claimed")
+
             _persist_v3_reports(package, result, render_report, semantic_report, readiness)
+
+            # Integrity is evaluated after report persistence so recorded hashes cover
+            # the final metadata/report content, not a pre-finalization snapshot.
+            provenance = load_provenance(package / "provenance.json") if (package / "provenance.json").is_file() else provenance
+            artifact_manifest = build_artifact_manifest(
+                package,
+                required_files=(
+                    "final.v3.mp4",
+                    "v3_blueprint.json",
+                    "timeline.json",
+                    "v3_render_qc.json",
+                    "v3_readiness.json",
+                    "upload_package.json",
+                    "provenance.json",
+                    "metadata_guardrails.json",
+                    "diagnostics.json",
+                    "environment_fingerprint.json",
+                ),
+            )
+            _atomic_json_write(package / "artifact_manifest.json", artifact_manifest)
+            release_evidence = build_release_evidence(
+                package_dir=package,
+                readiness=readiness.to_dict(),
+                media_health=final_health,
+                provenance=provenance,
+                environment={**diagnostics, **environment_fingerprint},
+            )
+            _atomic_json_write(package / "release_evidence.json", release_evidence)
+            if not release_evidence["release_candidate"]:
+                result.warnings.append("Automated release evidence is incomplete; human review remains required")
         except (RenderContractError, MediaHealthError, GuardrailError, OSError, ValueError) as exc:
             result.errors.append(f"V3 render contract failed: {exc}")
     result.artifacts.update({
@@ -501,6 +558,9 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
         "provenance": str(package / "provenance.json"),
         "metadata_guardrails": str(package / "metadata_guardrails.json"),
         "diagnostics": str(package / "diagnostics.json"),
+        "environment_fingerprint": str(package / "environment_fingerprint.json"),
+        "artifact_manifest": str(package / "artifact_manifest.json"),
+        "release_evidence": str(package / "release_evidence.json"),
         "v3_renderer_bridge": "ai_video_factory.v3_renderer_bridge",
         "v3_acceptance_matrix": "00-INFO/24-POINT-ACCEPTANCE.md",
     })

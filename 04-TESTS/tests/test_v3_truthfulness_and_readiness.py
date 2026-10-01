@@ -85,3 +85,44 @@ def test_scene_planner_accepts_explicit_ocr_keyword_evidence(monkeypatch):
     )
     assert selected.id == "scene_1"
     assert score > 0.0
+
+
+def test_artifact_readiness_rejects_tampered_package_manifest(monkeypatch, tmp_path):
+    from ai_video_factory.production_assurance import build_artifact_manifest
+
+    package = tmp_path
+    final_video = package / "final.v3.mp4"
+    final_video.write_bytes(b"video")
+    upload = package / "upload_package.json"
+    upload.write_text(
+        '{"platforms":{"youtube_shorts":{"files":{"video":"final.v3.mp4"}}}}',
+        encoding="utf-8",
+    )
+    manifest = build_artifact_manifest(
+        package,
+        required_files=("final.v3.mp4", "upload_package.json"),
+    )
+    (package / "artifact_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "ai_video_factory.artifact_readiness.probe_media",
+        lambda _path: {
+            "duration": 8.0,
+            "width": 1080,
+            "height": 1920,
+            "size": 5,
+            "has_audio": True,
+            "has_video": True,
+        },
+    )
+    final_video.write_bytes(b"tampered")
+    report = evaluate_artifact(
+        str(final_video),
+        target_seconds=8.0,
+        platform_profile={"width": 1080, "height": 1920},
+        package_dir=str(package),
+        upload_package_required=True,
+        metadata_guardrails_ok=True,
+    )
+    assert report.checks["UPLOAD_PACKAGE_VALID"] is False
+    assert any("hash mismatch" in error for error in report.errors)

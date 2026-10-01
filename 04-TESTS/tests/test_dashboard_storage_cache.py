@@ -132,3 +132,56 @@ def test_dashboard_store_retry_policy_is_bounded_and_rejects_deterministic_failu
     store.update_job("job-1", status="error", error="invalid configuration")
     with pytest.raises(JobRetryNotAllowed, match="deterministic|maximum"):
         store.retry_job("job-1", max_attempts=1)
+
+
+def test_dashboard_store_idempotency_is_atomic_and_bounded(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store = DashboardStore(db)
+    store.ensure_indexes()
+
+    assert store.insert_job_idempotent(
+        "job-idem-1",
+        "topic",
+        {"topic": "topic", "_principal": "alice"},
+        principal="alice",
+        idempotency_key="request-1",
+        request_hash="hash-1",
+    ) == ("job-idem-1", True)
+
+    assert store.insert_job_idempotent(
+        "job-idem-2",
+        "topic",
+        {"topic": "topic", "_principal": "alice"},
+        principal="alice",
+        idempotency_key="request-1",
+        request_hash="hash-1",
+    ) == ("job-idem-1", False)
+
+    from dashboard_store import IdempotencyConflict
+    with pytest.raises(IdempotencyConflict):
+        store.insert_job_idempotent(
+            "job-idem-3",
+            "different topic",
+            {"topic": "different", "_principal": "alice"},
+            principal="alice",
+            idempotency_key="request-1",
+            request_hash="different-hash",
+        )
+
+    assert len(store.list_jobs()) == 1
+
+
+def test_dashboard_job_event_history_tracks_lifecycle(tmp_path):
+    db = tmp_path / "jobs.db"
+    _create_schema(db)
+    store = DashboardStore(db)
+    store.ensure_indexes()
+    store.insert_job("job-events", "topic", {"topic": "topic"})
+    assert store.claim_job("job-events") is True
+    assert store.update_job("job-events", status="done", step="Complete") == 1
+
+    events = store.events_since("job-events")
+    assert [event["event"] for event in events][:1] == ["created"]
+    assert ("queued", "running") in {(event["from_status"], event["to_status"]) for event in events}
+    assert ("running", "done") in {(event["from_status"], event["to_status"]) for event in events}

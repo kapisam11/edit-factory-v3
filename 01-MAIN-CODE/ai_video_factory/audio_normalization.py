@@ -90,9 +90,13 @@ def normalize_loudness(
             raise AudioNormalizationError(f"loudness measurement failed: {exc}") from exc
 
         measured = measurement["measured"]
+        # Lossy AAC encoding can add measurable true-peak overshoot after the
+        # loudnorm filter. Reserve 0.5 dB of headroom while keeping the final
+        # validation against the requested target.
+        encoding_target_tp = float(target_tp) - 0.5
         parts = [
             f"loudnorm=I={float(target_i):.1f}",
-            f"TP={float(target_tp):.1f}",
+            f"TP={encoding_target_tp:.1f}",
             f"LRA={float(target_lra):.1f}",
         ]
         for key in ("measured_I", "measured_TP", "measured_LRA", "measured_thresh", "offset"):

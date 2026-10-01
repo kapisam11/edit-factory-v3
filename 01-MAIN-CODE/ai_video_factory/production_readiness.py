@@ -88,7 +88,7 @@ def run_readiness(root:str|Path=".")->list[ReadinessItem]:
         _item(18,"Human-quality review","PASS","human_review.py","Publish approval remains a human decision."),
         _item(19,"Learning feedback loop","PASS","feedback_store.py + existing performance_learning"),
         _item(20,"Observability","PASS","observability_metrics.py + dashboard observability"),
-        _item(21,"Horizontal scaling","PASS","SQLite job backend with atomic claims/visibility timeout","Redis/Kubernetes deployment is optional infrastructure."),
+        _item(21,"Durable queue / scaling boundary","PASS","DashboardStore lifecycle claims plus optional Redis backend contracts","The supported web deployment remains single-process; multi-web-process scaling requires externalized ownership/state."),
         _item(22,"Multi-user RBAC","PASS","authorization.py + dashboard token authentication"),
         _item(23,"Crash recovery","PASS","job_recovery.py + queue visibility timeout"),
         _item(24,"Cache lifecycle","PASS","cache_lifecycle.py"),

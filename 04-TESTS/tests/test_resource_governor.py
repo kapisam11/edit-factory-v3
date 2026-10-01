@@ -137,3 +137,19 @@ def test_principal_queued_jobs_ignores_malformed_params(tmp_path):
         lambda: sqlite3.connect(db_path),
         "valid",
     ) == 1
+
+
+def test_directory_size_does_not_follow_symlinks(tmp_path):
+    from resource_governor import directory_size
+
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"x" * 100)
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "inside.bin").write_bytes(b"y" * 3)
+    try:
+        (root / "outside-link").symlink_to(outside)
+        (root / "dir-link").symlink_to(tmp_path, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable on this platform")
+    assert directory_size(root) == 3

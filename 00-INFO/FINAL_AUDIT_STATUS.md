@@ -51,6 +51,28 @@ The repository-level findings from the September 21 hostile review are closed in
 - Added VAAPI encoder detection/preset handling with automatic CPU fallback when the hardware path is unavailable or fails.
 - Added an enforced Bandit high-severity/high-confidence security scan and lockfile completeness checks in CI.
 
+## Production assurance additions after the 2026-09-30 deep audit
+
+- External-tool timeouts now terminate the entire FFmpeg/FFprobe process group instead of only the immediate child.
+- Storage accounting ignores symlinked files/directories so quota checks cannot be inflated by linked trees.
+- Dashboard job creation now supports durable idempotency keys and performs queue/principal admission in the same SQLite transaction.
+- Job lifecycle events are durably recorded and independently pruned with retention.
+- Request IDs are propagated when safely formatted and response-status metrics are emitted for observability.
+- `/readyz` now checks FFmpeg/FFprobe availability, state-directory writability, and the configured minimum free-disk threshold.
+- V3 media health records VFR detection, audio/video duration deltas, silence ratio, and multi-sample blur/sharpness evidence.
+- V3 packages now include an environment fingerprint, a tamper-evident artifact manifest, and release evidence that keeps human review explicit.
+- Artifact readiness verifies package integrity and deterministic thumbnail dimensions where those artifacts are present.
+- Provenance now binds the run to the blueprint hash, target platform, target duration, and edit type; unresolved rights remain release-blocking for automated candidate evidence.
+- Target-host and dashboard E2E smoke tests verify the new integrity/release evidence artifacts.
+## Final acceptance hardening additions
+
+- The first CI run on the hardening branch exposed a real syntax regression in `02-WEB-FILES/app/web_app_v3.py` introduced while initializing the new lifecycle tables. The exact escaped-newline defect was removed before the next validation cycle.
+- Added an explicit target-host recovery smoke that exercises cancellation, service restart reconciliation, and orphan-FFmpeg detection.
+- Added a manual release-workflow switch for the target-host recovery smoke instead of restarting production automatically on every deployment.
+- Added an auditable human-acceptance record template and verifier bound to the package artifact-manifest SHA-256.
+- Added a Gunicorn configuration guard that prevents accidental multi-web-process deployment until job ownership/runtime state is externalized.
+- Corrected the production-readiness wording so the queue/scaling check reflects the supported single-process web architecture rather than claiming generic horizontal scaling.
+- CI now syntax-checks the deployment Python and shell boundary scripts in addition to the main source tree.
 ## Remaining external acceptance gates
 
 These are deployment evidence gates, not unresolved repository defects:

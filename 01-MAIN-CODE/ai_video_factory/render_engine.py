@@ -12,6 +12,7 @@ from typing import List, Optional
 
 from .ffmpeg_budget import slot
 from .hardware import choose_encoder, ffmpeg_preset_for
+from .production_guardrails import terminate_process_tree
 from .runtime_config import runtime_config
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,7 @@ def _run_ffmpeg_streaming(cmd: List[str], timeout: int) -> subprocess.CompletedP
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        **({"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)} if os.name == "nt" else {"start_new_session": True}),
     )
     stderr_tail = deque(maxlen=200)
 
@@ -151,12 +153,12 @@ def _run_ffmpeg_streaming(cmd: List[str], timeout: int) -> subprocess.CompletedP
     try:
         returncode = process.wait(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        process.kill()
+        terminate_process_tree(process, grace_seconds=2.0)
         try:
-            process.wait(timeout=5)
+            process.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            process.terminate()
-            process.wait(timeout=5)
+            process.kill()
+            process.wait(timeout=3)
         reader.join(timeout=2)
         raise RuntimeError(f"FFmpeg timed out after {timeout}s") from exc
 

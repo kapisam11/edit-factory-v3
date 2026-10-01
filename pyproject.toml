@@ -88,6 +88,7 @@ files = [
   "01-MAIN-CODE/ai_video_factory/reproducible_build.py",
   "01-MAIN-CODE/ai_video_factory/production_readiness.py",
   "01-MAIN-CODE/ai_video_factory/observability_metrics.py",
+  "01-MAIN-CODE/ai_video_factory/production_assurance.py",
   "01-MAIN-CODE/ai_video_factory/resource_metrics.py",
 ]
 

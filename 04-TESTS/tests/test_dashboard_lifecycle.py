@@ -87,7 +87,7 @@ def test_retry_rejects_corrupted_persisted_parameters_without_queueing(monkeypat
         "job-bad-params",
         status="error",
         step="failed",
-        error="previous failure",
+        error="provider temporarily unavailable",
         params="{broken-json",
     )
 
@@ -99,7 +99,7 @@ def test_retry_rejects_corrupted_persisted_parameters_without_queueing(monkeypat
     job = appmod.db_get_job("job-bad-params")
     assert job["status"] == "error"
     assert job["step"] == "failed"
-    assert job["error"] == "previous failure"
+    assert job["error"] == "provider temporarily unavailable"
 
 
 
@@ -110,7 +110,7 @@ def test_retry_reports_worker_start_failure(monkeypatch, tmp_path):
     install_dashboard_optimizations(appmod)
     assert "retry_job" in appmod.app.view_functions
     appmod.db_insert_job("job-start-failure", "topic", {"topic": "topic"})
-    appmod.db_update_job("job-start-failure", status="error", step="failed", error="previous failure")
+    appmod.db_update_job("job-start-failure", status="error", step="failed", error="provider temporarily unavailable")
 
     def failing_start(job_id, params, secrets):
         appmod.db_update_job(
@@ -183,7 +183,7 @@ def test_retry_preserves_retained_one_off_secret(monkeypatch, tmp_path):
         "topic",
         {"topic": "topic", "workflow": "default", "_retry_secret_keys": ["model_key"]},
     )
-    appmod.db_update_job("job-secret-retry", status="error", step="failed", error="previous failure")
+    appmod.db_update_job("job-secret-retry", status="error", step="failed", error="provider temporarily unavailable")
 
     captured = {}
     appmod._runtime_secrets["job-secret-retry"] = {"model_key": "one-off-secret"}
@@ -211,7 +211,7 @@ def test_retry_accepts_missing_one_off_secret_without_persisting_it(monkeypatch,
         "topic",
         {"topic": "topic", "workflow": "default", "_retry_secret_keys": ["model_key"]},
     )
-    appmod.db_update_job("job-restart-safe-retry", status="error", step="failed", error="previous failure")
+    appmod.db_update_job("job-restart-safe-retry", status="error", step="failed", error="provider temporarily unavailable")
     appmod._runtime_secrets.pop("job-restart-safe-retry", None)
     appmod._runtime_secret_expiry.pop("job-restart-safe-retry", None)
 
@@ -522,3 +522,22 @@ def test_stale_reconciliation_keeps_fresh_heartbeat(monkeypatch, tmp_path):
         result = appmod.app.preprocess_request()
         assert result is None
     assert appmod.db_get_job("job-fresh")["status"] == "running"
+
+
+def test_create_job_idempotency_reuses_existing_job_and_rejects_payload_conflict(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    monkeypatch.setattr(appmod, "_start_job", lambda *_args: True)
+    client = appmod.app.test_client()
+    headers = {"Idempotency-Key": "same-browser-request"}
+
+    first = client.post("/api/jobs", data={"topic": "repeatable topic"}, headers=headers)
+    assert first.status_code == 202
+
+    second = client.post("/api/jobs", data={"topic": "repeatable topic"}, headers=headers)
+    assert second.status_code == 200
+    assert second.get_json()["idempotent_replay"] is True
+    assert second.get_json()["job_id"] == first.get_json()["job_id"]
+
+    conflict = client.post("/api/jobs", data={"topic": "different topic"}, headers=headers)
+    assert conflict.status_code == 409
+    assert "different request" in conflict.get_json()["error"]

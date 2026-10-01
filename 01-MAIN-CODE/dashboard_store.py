@@ -20,6 +20,10 @@ class JobAdmissionError(RuntimeError):
     """Raised when an atomic dashboard admission limit rejects a new job."""
 
 
+class IdempotencyConflict(JobAdmissionError):
+    """Raised when a request key is reused for a different request payload."""
+
+
 class JobRetryNotAllowed(RuntimeError):
     """Raised when a retry is exhausted or the recorded failure is deterministic."""
 
@@ -130,10 +134,67 @@ class DashboardStore:
                 "CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id "
                 "ON job_logs(job_id, id)"
             )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    from_status TEXT,
+                    to_status TEXT,
+                    event TEXT NOT NULL,
+                    details TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_events_job_id_id ON job_events(job_id, id)"
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_rate_limits_client_ip_ts "
                 "ON rate_limits(client_ip, ts)"
             )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS idempotency_keys (
+                    principal TEXT NOT NULL,
+                    idem_key TEXT NOT NULL,
+                    request_hash TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    created_at REAL NOT NULL DEFAULT (unixepoch()),
+                    PRIMARY KEY (principal, idem_key)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_idempotency_created "
+                "ON idempotency_keys(created_at)"
+            )
+
+    @staticmethod
+    def _record_event(
+        conn: sqlite3.Connection,
+        job_id: str,
+        event: str,
+
+        *,
+        from_status: str | None = None,
+        to_status: str | None = None,
+        details: str = "",
+    ) -> None:
+        # Unit/integration callers can construct the legacy jobs schema without
+        # running ensure_indexes(). Make event persistence self-contained.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                from_status TEXT,
+                to_status TEXT,
+                event TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "INSERT INTO job_events(job_id, from_status, to_status, event, details) VALUES (?,?,?,?,?)",
+            (job_id, from_status, to_status, str(event)[:120], str(details)[:4000]),
+        )
 
     def insert_job(
         self,
@@ -179,8 +240,83 @@ class DashboardStore:
                 "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 (job_id, topic, encoded),
             )
+            self._record_event(conn, job_id, "created", to_status="queued", details=f"topic={topic[:200]}")
 
         self.write(write)
+
+    def insert_job_idempotent(
+        self,
+        job_id: str,
+        topic: str,
+        params: dict,
+        *,
+        principal: str,
+        idempotency_key: str,
+        request_hash: str,
+        max_queued_jobs: int | None = None,
+        principal_limit: int | None = None,
+    ) -> tuple[str, bool]:
+        """Atomically reserve an idempotency key and insert the job.
+
+        Returns (job_id, created). A repeated identical request returns the
+        original job without creating a second worker. Reusing a key for a
+        different request is rejected as a conflict.
+        """
+        key = str(idempotency_key).strip()
+        if not 1 <= len(key) <= 200:
+            raise ValueError("idempotency key must be 1..200 characters")
+        principal_value = str(principal).strip() or "unknown"
+        fingerprint = str(request_hash).strip()
+        if not fingerprint:
+            raise ValueError("request hash is required")
+        encoded = json.dumps(params)
+
+        def write(conn: sqlite3.Connection) -> tuple[str, bool]:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT job_id, request_hash FROM idempotency_keys WHERE principal=? AND idem_key=?",
+                (principal_value, key),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["request_hash"]) != fingerprint:
+                    raise IdempotencyConflict("idempotency key was already used for a different request")
+                return str(existing["job_id"]), False
+            if max_queued_jobs is not None:
+                queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
+                if queued >= int(max_queued_jobs):
+                    raise JobAdmissionError("queue capacity reached")
+            if principal_limit is not None:
+                rows = conn.execute("SELECT params FROM jobs WHERE status IN ('queued','running')").fetchall()
+                count = 0
+                for row in rows:
+                    try:
+                        payload = json.loads(row["params"] or "{}")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if str(payload.get("_principal", "")) == principal_value:
+                        count += 1
+                if count >= int(principal_limit):
+                    raise JobAdmissionError("principal queue capacity reached")
+            conn.execute(
+                "INSERT INTO idempotency_keys(principal, idem_key, request_hash, job_id) VALUES (?,?,?,?)",
+                (principal_value, key, fingerprint, job_id),
+            )
+            conn.execute(
+                "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (job_id, topic, encoded),
+            )
+            self._record_event(conn, job_id, "created", to_status="queued", details="idempotent request")
+            return job_id, True
+
+        return self.write(write)
+
+    def prune_idempotency(self, *, max_age_seconds: int = 86400, now: float | None = None) -> int:
+        """Bound idempotency storage so request keys cannot become unbounded state."""
+        cutoff = (time.time() if now is None else float(now)) - max(60, int(max_age_seconds))
+        return int(self.write(lambda conn: conn.execute(
+            "DELETE FROM idempotency_keys WHERE created_at<?", (cutoff,)
+        ).rowcount))
 
     def update_job(self, job_id: str, **kwargs: Any) -> int:
         allowed = {"status", "step", "params", "pkg_dir", "error"}
@@ -191,16 +327,28 @@ class DashboardStore:
             return 0
 
         def write(conn: sqlite3.Connection) -> int:
+            row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                return 0
+            previous_status = str(row["status"])
+            target_status = str(kwargs.get("status", previous_status))
             if "status" in kwargs:
-                row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
-                if row is None:
-                    return 0
-                validate_transition(str(row["status"]), str(kwargs["status"]))
+                validate_transition(previous_status, target_status)
             fields = ", ".join(f"{key}=?" for key in kwargs)
-            return int(conn.execute(
+            changed = int(conn.execute(
                 f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 list(kwargs.values()) + [job_id],
             ).rowcount)
+            if changed and target_status != previous_status:
+                self._record_event(
+                    conn,
+                    job_id,
+                    "status_change",
+                    from_status=previous_status,
+                    to_status=target_status,
+                    details=str(kwargs.get("error") or kwargs.get("step") or ""),
+                )
+            return changed
 
         return int(self.write(write))
 
@@ -242,7 +390,7 @@ class DashboardStore:
             if row is None or str(row["status"]) != "queued":
                 return 0
             validate_transition("queued", "running")
-            return int(
+            changed = int(
                 conn.execute(
                     "UPDATE jobs SET status='running', step='starting', "
                     "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, "
@@ -251,6 +399,16 @@ class DashboardStore:
                     (job_id,),
                 ).rowcount
             )
+            if changed:
+                self._record_event(
+                    conn,
+                    job_id,
+                    "status_change",
+                    from_status="queued",
+                    to_status="running",
+                    details="worker lease claimed",
+                )
+            return changed
         return int(self.write(write)) == 1
 
     def heartbeat_job(self, job_id: str) -> bool:
@@ -315,12 +473,22 @@ class DashboardStore:
             if status == "error" and row["error"]:
                 if not is_retryable_error(RuntimeError(str(row["error"]))):
                     raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
-            return int(conn.execute(
+            changed = int(conn.execute(
                 "UPDATE jobs SET status='queued', step='waiting', error=NULL, pkg_dir=NULL, "
                 "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
                 "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
                 (job_id, max_attempts),
             ).rowcount)
+            if changed:
+                self._record_event(
+                    conn,
+                    job_id,
+                    "retry",
+                    from_status=status,
+                    to_status="queued",
+                    details=f"attempt={attempts + 1}",
+                )
+            return changed
 
         return int(self.write(write))
 
@@ -360,6 +528,21 @@ class DashboardStore:
                 (job_id, bounded_last_id),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def events_since(self, job_id: str, last_id: int = 0) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, created_at, from_status, to_status, event, details "
+                "FROM job_events WHERE job_id=? AND id>? ORDER BY id ASC",
+                (job_id, max(0, int(last_id))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def prune_events(self, *, max_age_seconds: int = 30 * 86400, now: float | None = None) -> int:
+        cutoff = (time.time() if now is None else float(now)) - max(300, int(max_age_seconds))
+        return int(self.write(lambda conn: conn.execute(
+            "DELETE FROM job_events WHERE strftime('%s', created_at)<?", (str(int(cutoff)),)
+        ).rowcount))
 
     def check_rate_limit(self, client_ip: str, max_requests: int = 10, window_seconds: int = 60) -> bool:
         if max_requests < 1 or window_seconds < 1:

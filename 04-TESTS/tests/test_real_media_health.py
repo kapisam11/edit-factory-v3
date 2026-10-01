@@ -64,3 +64,18 @@ def test_render_contract_rejects_wrong_duration(tmp_path: Path) -> None:
     assert_render_quality(video, target_seconds=2.0, require_audio=True)
     with pytest.raises(MediaHealthError):
         assert_render_quality(video, target_seconds=5.0, require_audio=True)
+
+
+def test_media_health_detects_vfr_and_av_duration_delta():
+    from ai_video_factory.media_health import av_sync_delta, detect_vfr, silence_ratio
+
+    summary = {
+        "has_audio": True,
+        "avg_frame_rate": "24000/1001",
+        "r_frame_rate": "30/1",
+        "video_duration": 10.0,
+        "audio_duration": 10.75,
+    }
+    assert detect_vfr(summary) is True
+    assert av_sync_delta(summary) == 0.75
+    assert silence_ratio([{"duration": 1.0}, {"duration": 0.5}], 10.0) == 0.15

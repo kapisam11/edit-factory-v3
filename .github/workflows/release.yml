@@ -17,6 +17,11 @@ on:
         default: "latest"
         type: string
 
+      recovery_smoke:
+        description: "Run cancellation + restart recovery smoke on the target host"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 
@@ -140,7 +145,7 @@ jobs:
           scp 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/docker-compose.yml"
 
-      - name: Copy target-host production smoke script
+      - name: Copy target-host production smoke scripts
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -148,7 +153,8 @@ jobs:
         run: |
           set -euo pipefail
           scp 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh"
+            06-CONFIG-AND-DEPLOYMENT/target_recovery_smoke.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/"
 
       - name: Log in to GHCR on remote host
         env:
@@ -199,3 +205,14 @@ jobs:
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh"
 
+      - name: Run target-host cancellation/restart recovery smoke
+        if: >-
+          ${{ github.event_name == 'workflow_dispatch' && inputs.recovery_smoke == true }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/target_recovery_smoke.sh"

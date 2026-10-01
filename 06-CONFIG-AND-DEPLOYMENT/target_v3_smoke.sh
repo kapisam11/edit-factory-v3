@@ -108,6 +108,9 @@ for required in (
     package / "source_media_metadata.json",
     package / "final_media_metadata.json",
     package / "resource_usage.json",
+    package / "artifact_manifest.json",
+    package / "release_evidence.json",
+    package / "environment_fingerprint.json",
 ):
     if not required.is_file():
         raise SystemExit(f"target smoke required artifact is missing: {required}")
@@ -128,6 +131,19 @@ subprocess.run([
     "ffprobe", "-v", "error", "-show_entries", "format=duration",
     "-of", "default=noprint_wrappers=1:nokey=1", str(final_video),
 ], check=True, stdout=subprocess.DEVNULL)
+from ai_video_factory.production_assurance import verify_artifact_manifest
+
+artifact_manifest = json.loads((package / "artifact_manifest.json").read_text(encoding="utf-8"))
+integrity = verify_artifact_manifest(package, artifact_manifest)
+if not integrity["ok"]:
+    raise SystemExit(f"target smoke artifact integrity failed: {integrity['errors'][:5]}")
+
+release_evidence = json.loads((package / "release_evidence.json").read_text(encoding="utf-8"))
+if release_evidence.get("human_review_required") is not True:
+    raise SystemExit("target smoke release evidence lost the human-review boundary")
+if release_evidence.get("release_candidate") is not True:
+    raise SystemExit("target smoke automated release evidence did not pass")
+
 readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
 checks = readiness.get("checks", {})
 for key in ("MEDIA_VALID", "MEDIA_CONTRACT_VALID", "UPLOAD_PACKAGE_VALID"):
@@ -181,6 +197,7 @@ try:
     deleted = store.write(
         lambda conn: (
             conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,)),
+            conn.execute("DELETE FROM job_events WHERE job_id=?", (job_id,)),
             conn.execute("DELETE FROM jobs WHERE id=? AND status='done'", (job_id,)),
         )
     )

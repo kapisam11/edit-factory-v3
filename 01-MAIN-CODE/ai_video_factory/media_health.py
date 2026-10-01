@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json, math, os, re
 from pathlib import Path
+from fractions import Fraction
 from typing import Any, Mapping
 from .production_guardrails import run_tool
 
@@ -40,9 +41,41 @@ def stream_summary(probe: Mapping[str,Any]) -> dict[str,Any]:
         "video_codec":(video or {}).get("codec_name"),
         "audio_codec":(audio or {}).get("codec_name") if audio else None,
         "fps":(video or {}).get("avg_frame_rate") or (video or {}).get("r_frame_rate") or "0/0",
+        "avg_frame_rate": (video or {}).get("avg_frame_rate") or "0/0",
+        "r_frame_rate": (video or {}).get("r_frame_rate") or "0/0",
+        "video_duration": float((video or {}).get("duration") or fmt.get("duration") or 0),
+        "audio_duration": float((audio or {}).get("duration") or fmt.get("duration") or 0) if audio else None,
         "pixel_format":(video or {}).get("pix_fmt"),
         "rotation":((video or {}).get("tags") or {}).get("rotate"),
     }
+
+def _stream_fps(value: str) -> float:
+    try:
+        return float(Fraction(str(value or "0/0")))
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def detect_vfr(summary: Mapping[str, Any], *, tolerance: float = 0.5) -> bool:
+    avg = _stream_fps(str(summary.get("avg_frame_rate", "0/0")))
+    nominal = _stream_fps(str(summary.get("r_frame_rate", "0/0")))
+    return avg > 0 and nominal > 0 and abs(avg - nominal) > float(tolerance)
+
+
+def av_sync_delta(summary: Mapping[str, Any]) -> float | None:
+    if not summary.get("has_audio"):
+        return None
+    video_duration = float(summary.get("video_duration") or 0.0)
+    audio_duration = float(summary.get("audio_duration") or 0.0)
+    if video_duration <= 0 or audio_duration <= 0:
+        return None
+    return round(audio_duration - video_duration, 4)
+
+
+def silence_ratio(silence_segments: list[Mapping[str, float]], duration: float) -> float:
+    total = sum(max(0.0, float(item.get("duration") or 0.0)) for item in silence_segments)
+    return round(min(1.0, total / max(0.001, float(duration))), 4)
+
 
 def parse_fps(rate:str)->float:
     m=re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)\s*",str(rate or ""))
@@ -118,7 +151,7 @@ def audio_loudness(path:str|Path)->dict[str,Any]:
     except json.JSONDecodeError as exc: raise MediaHealthError("loudnorm returned malformed JSON") from exc
     return {"integrated_lufs":payload.get("input_i"),"true_peak":payload.get("input_tp"),"loudness_range":payload.get("input_lra")}
 
-def blur_score(path:str|Path)->float|None:
+def blur_score(path:str|Path, *, samples: int = 5)->float|None:
     try:
         import cv2
     except Exception:
@@ -126,10 +159,20 @@ def blur_score(path:str|Path)->float|None:
     cap=cv2.VideoCapture(str(path))
     if not cap.isOpened(): return None
     try:
-        ok,frame=cap.read()
-        if not ok:return None
-        gray=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
-        return round(min(1.0,float(cv2.Laplacian(gray,cv2.CV_64F).var())/500.0),4)
+        frame_count=int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        indices=sorted({0, max(0, frame_count//4), max(0, frame_count//2), max(0, (3*frame_count)//4), max(0, frame_count-1)})
+        indices=indices[:max(1, int(samples))]
+        scores=[]
+        for index in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+            ok,frame=cap.read()
+            if not ok:
+                continue
+            gray=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
+            scores.append(float(cv2.Laplacian(gray,cv2.CV_64F).var()))
+        if not scores:
+            return None
+        return round(min(1.0, (sum(scores)/len(scores))/500.0),4)
     finally: cap.release()
 
 def media_quality_score(summary:Mapping[str,Any],black_count:int=0,freeze_count:int=0)->float:
@@ -141,24 +184,36 @@ def media_quality_score(summary:Mapping[str,Any],black_count:int=0,freeze_count:
     score-=min(0.35,0.10*int(freeze_count))
     return round(max(0.0,min(1.0,score)),4)
 
-def media_fingerprint(path:str|Path)->dict[str,Any]:
+def media_fingerprint(path:str|Path, summary:Mapping[str,Any]|None=None)->dict[str,Any]:
     from .production_guardrails import sha256_file
-    s=stream_summary(probe_media(path))
+    s=dict(summary) if summary is not None else stream_summary(probe_media(path))
     return {"sha256":sha256_file(path),"size":s["size"],"duration":round(s["duration"],3),"width":s["width"],"height":s["height"],"video_codec":s["video_codec"],"audio_codec":s["audio_codec"]}
 
 def analyze_media(path:str|Path,deep:bool=False,*,max_duration:float=1800.0)->dict[str,Any]:
     s=validate_media_contract(path,require_video=True,max_duration=float(max_duration))
-    report: dict[str, Any] = {"ok":True,"summary":s,"black_frames":[],"freeze_frames":[],"silence_segments":[],"audio":None,"blur_score":None,"defects":[]}
+    report: dict[str, Any] = {"ok":True,"summary":s,"black_frames":[],"freeze_frames":[],"silence_segments":[],"audio":None,"blur_score":None,"defects":[],"warnings":[],
+        "timing":{"av_sync_delta_seconds":av_sync_delta(s),"vfr":detect_vfr(s)}}
     if deep:
         report["black_frames"]=detect_black_frames(path)
         report["freeze_frames"]=detect_freeze_frames(path)
         if s["has_audio"]:
             report["silence_segments"]=detect_silence(path)
             report["audio"]=audio_loudness(path)
-        report["blur_score"]=blur_score(path)
+        report["blur_score"]=blur_score(path, samples=5)
     report["quality_score"]=media_quality_score(s,len(report["black_frames"]),len(report["freeze_frames"]))
-    report["fingerprint"]=media_fingerprint(path)
-    report["warnings"]=[] if report["quality_score"]>=0.8 else ["technical media quality is below the preferred threshold"]
+    if report["timing"]["vfr"]:
+        report["warnings"].append("source appears variable-frame-rate; downstream CFR normalization should be explicit")
+    sync_delta = report["timing"].get("av_sync_delta_seconds")
+    if sync_delta is not None and abs(float(sync_delta)) > 0.5:
+        report["defects"].append(f"audio/video duration delta exceeds tolerance: {sync_delta:.3f}s")
+    report["silence_ratio"] = silence_ratio(report["silence_segments"], s["duration"]) if report["silence_segments"] else 0.0
+    report["fingerprint"]=media_fingerprint(path, s)
+    if report["quality_score"] < 0.8:
+        report["warnings"].append("technical media quality is below the preferred threshold")
+    if report["silence_ratio"] > 0.35:
+        report["warnings"].append("audio contains an unusually high silence ratio")
+    if report["blur_score"] is not None and report["blur_score"] < 0.25:
+        report["warnings"].append("sampled frames have low sharpness; visual review is recommended")
     if report["black_frames"]:
         report["defects"].append(f"detected {len(report['black_frames'])} black-frame event(s)")
     if report["freeze_frames"]:

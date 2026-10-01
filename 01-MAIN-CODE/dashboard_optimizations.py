@@ -74,9 +74,10 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
             )
         except (ResourceLimitExceeded, JobAdmissionError) as exc:
+            app_module.logger.warning("Dashboard job admission rejected: %s", exc)
             if has_request_context():
-                abort(429, description=str(exc))
-            raise ValueError(str(exc)) from exc
+                abort(429, description="Job admission capacity reached")
+            raise ValueError("Job admission capacity reached") from exc
         cache.delete("jobs:list")
 
     def db_update_job(job_id: str, **kwargs: Any) -> int:
@@ -364,6 +365,17 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                             "INSERT INTO job_logs (job_id, level, message) VALUES (?, ?, ?)",
                             (job_id, "ERROR", "Recovered stale worker job after heartbeat timeout"),
                         )
+                        conn.execute(
+                            "INSERT INTO job_events (job_id, from_status, to_status, event, details) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (
+                                job_id,
+                                str(row["status"]),
+                                "interrupted",
+                                "recovery",
+                                "Worker heartbeat expired and worker process was not running",
+                            ),
+                        )
         except Exception:
             app_module.logger.exception("Stale job reconciliation failed")
         return recovered
@@ -399,8 +411,16 @@ def install_dashboard_optimizations(app_module: Any) -> None:
             if stale_ids:
                 placeholders = ",".join("?" for _ in stale_ids)
                 conn.execute(f"DELETE FROM job_logs WHERE job_id IN ({placeholders})", stale_ids)
+                conn.execute(f"DELETE FROM job_events WHERE job_id IN ({placeholders})", stale_ids)
                 conn.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", stale_ids)
             conn.execute("DELETE FROM rate_limits WHERE ts < ?", (cutoff,))
+        # Keep idempotency keys and lifecycle audit history bounded independently
+        # from completed-job retention, so state growth cannot become unbounded.
+        try:
+            store.prune_idempotency(max_age_seconds=max(86400, int(days * 86400)))
+            store.prune_events(max_age_seconds=max(7 * 86400, int(days * 86400)))
+        except Exception as exc:
+            app_module.logger.warning("Dashboard metadata retention cleanup failed: %s", exc)
         upload_cutoff = cutoff
         try:
             for child in app_module.UPLOAD_FOLDER.iterdir():
@@ -524,7 +544,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 max_attempts=runtime_config().max_job_retries,
             )
         except JobRetryNotAllowed as exc:
-            return jsonify({"error": str(exc), "job_id": job_id, "status": previous_status}), 409
+            app_module.logger.info("Retry rejected for %s: %s", job_id, exc)
+            return jsonify({"error": "Retry is not allowed for this job.", "job_id": job_id, "status": previous_status}), 409
         if not changed:
             return jsonify({"error": "Job changed before retry could start"}), 409
 
