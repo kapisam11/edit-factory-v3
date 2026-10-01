@@ -435,6 +435,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 if not semantic_report["ok"]:
                     result.errors.extend("V3 semantic QC: " + e for e in semantic_report["errors"])
                 result.warnings.extend("V3 semantic QC: " + w for w in semantic_report["warnings"])
+            source_meta = source_metadata or {}
             _package_v3_assets(result=result, package=package, topic=topic, platform=platform, source_video=input_video, baseline_summary=baseline_summary)
             metadata_report = build_upload_metadata(
                 topic,
