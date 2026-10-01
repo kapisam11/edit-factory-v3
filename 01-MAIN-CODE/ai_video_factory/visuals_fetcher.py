@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import json
 import tempfile
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from .render_engine import run_ffmpeg, validate_media_output
@@ -52,7 +53,20 @@ def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
                 cleared_public_domain = "public domain" in license_text or license_text in {"cc0", "cc zero"}
                 rights_status = "cleared" if (cleared_cc or cleared_public_domain) else ("license_identified" if license else "review_required")
                 rights_basis = "cc_license" if cleared_cc else ("public_domain" if cleared_public_domain else "")
-                results.append({"url": src, "source": "wikimedia", "title": title, "license": license, "artist": artist, "license_url": license_url, "rights_status": rights_status, "rights_basis": rights_basis})
+                declaration_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                results.append({
+                    "url": src,
+                    "source": "wikimedia",
+                    "title": title,
+                    "license": license,
+                    "artist": artist,
+                    "license_url": license_url,
+                    "evidence_url": license_url or src or "",
+                    "declared_by": "wikimedia-commons-metadata",
+                    "declared_at": declaration_time,
+                    "rights_status": rights_status,
+                    "rights_basis": rights_basis,
+                })
     except Exception:
         return results
     return results
@@ -494,7 +508,7 @@ def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = T
                     meta = download_youtube_clip(url, out_dir, max_duration=clip_max_duration, rights_cleared=_media_rights_cleared(v))
                     if meta:
                         meta.update(v)
-                        meta["downloaded_at"] = datetime.utcnow().isoformat() + "Z"
+                        meta["downloaded_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                         saved.append(meta)
                         continue
                 if v.get("thumbnail") and _media_rights_cleared(v):
