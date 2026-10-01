@@ -155,3 +155,24 @@ def test_required_rights_status_only_declaration_is_not_dropped(monkeypatch):
     })
     assert report["publish_blocked"] is True
     assert report["status"] == "review_required"
+
+
+def test_cleared_wikimedia_asset_can_pass_rights_evidence(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "1")
+    report = media_rights_report({
+        "source_credits": [{
+            "title": "Licensed Wikimedia image",
+            "creator": "Artist",
+            "url": "https://commons.wikimedia.org/wiki/File:Example",
+            "source": "wikimedia",
+            "license": "CC BY",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "evidence_url": "https://creativecommons.org/licenses/by/4.0/",
+            "rights_status": "cleared",
+            "rights_basis": "cc_license",
+            "declared_by": "wikimedia-commons-metadata",
+            "declared_at": "2026-10-01T15:00:00Z",
+        }],
+    })
+    assert report["publish_blocked"] is False
+    assert report["status"] == "cleared"
