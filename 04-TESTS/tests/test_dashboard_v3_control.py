@@ -165,3 +165,25 @@ def test_v3_defaults_are_platform_safe(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError):
         appmod.set_setting("default_v3_platform", "not-a-platform")
+
+
+def test_dashboard_idempotency_fingerprint_includes_uploaded_media(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    first = tmp_path / "first.mp4"
+    second = tmp_path / "second.mp4"
+    first.write_bytes(b"video-one")
+    second.write_bytes(b"video-two")
+
+    first_hash = appmod._request_fingerprint(
+        {"topic": "same", "workflow": "v3", "_principal": "alice"},
+        first,
+    )
+    second_hash = appmod._request_fingerprint(
+        {"topic": "same", "workflow": "v3", "_principal": "alice"},
+        second,
+    )
+    assert first_hash != second_hash
+    assert first_hash == appmod._request_fingerprint(
+        {"topic": "same", "workflow": "v3", "_principal": "alice"},
+        first,
+    )
