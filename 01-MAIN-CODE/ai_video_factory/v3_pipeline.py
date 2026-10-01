@@ -29,7 +29,14 @@ from .production_assurance import (
     build_artifact_manifest,
     build_environment_fingerprint,
     build_release_evidence,
+    verify_artifact_manifest,
 )
+
+
+def _source_rights_status(source_metadata: Optional[Dict[str, Any]]) -> str:
+    """Return only an explicit rights status; rights_basis never grants approval."""
+    metadata = source_metadata or {}
+    return str(metadata.get("rights_status") or "review_required").strip().lower()
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
@@ -465,11 +472,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             _apply_readiness_contract(result, readiness)
 
             source_meta = source_metadata or {}
-            source_rights = str(
-                source_meta.get("rights_status")
-                or source_meta.get("rights_basis")
-                or "review_required"
-            )
+            source_rights = _source_rights_status(source_meta)
             source_record = build_asset_record(
                 input_video,
                 asset_id="source_video",
@@ -524,7 +527,6 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     "v3_blueprint.json",
                     "timeline.json",
                     "v3_render_qc.json",
-                    "v3_readiness.json",
                     "upload_package.json",
                     "provenance.json",
                     "metadata_guardrails.json",
@@ -533,12 +535,34 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 ),
             )
             _atomic_json_write(package / "artifact_manifest.json", artifact_manifest)
+            artifact_integrity = verify_artifact_manifest(package, artifact_manifest)
+            if not artifact_integrity["ok"]:
+                result.errors.extend(
+                    f"Artifact integrity: {error}"
+                    for error in list(artifact_integrity.get("errors") or [])[:10]
+                )
+
+            # Re-evaluate package readiness after the integrity manifest exists.
+            # v3_readiness.json is derived evidence and is excluded from the
+            # manifest to avoid a self-referential hash cycle.
+            readiness = evaluate_artifact(
+                final_video,
+                target_seconds=target_seconds,
+                platform_profile=payload["platform_variants"][platform],
+                package_dir=package_dir,
+                upload_package_required=True,
+                publish_required=False,
+                metadata_guardrails_ok=metadata_ok,
+            )
+            _atomic_json_write(package / "v3_readiness.json", readiness.to_dict())
+
             release_evidence = build_release_evidence(
                 package_dir=package,
                 readiness=readiness.to_dict(),
                 media_health=final_health,
                 provenance=provenance,
                 environment={**diagnostics, **environment_fingerprint},
+                artifact_integrity=artifact_integrity,
             )
             _atomic_json_write(package / "release_evidence.json", release_evidence)
             if not release_evidence["release_candidate"]:
