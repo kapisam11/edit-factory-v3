@@ -64,6 +64,15 @@ The repository-level findings from the September 21 hostile review are closed in
 - Artifact readiness verifies package integrity and deterministic thumbnail dimensions where those artifacts are present.
 - Provenance now binds the run to the blueprint hash, target platform, target duration, and edit type; unresolved rights remain release-blocking for automated candidate evidence.
 - Target-host and dashboard E2E smoke tests verify the new integrity/release evidence artifacts.
+## Final acceptance hardening additions
+
+- The first CI run on the hardening branch exposed a real syntax regression in `02-WEB-FILES/app/web_app_v3.py` introduced while initializing the new lifecycle tables. The exact escaped-newline defect was removed before the next validation cycle.
+- Added an explicit target-host recovery smoke that exercises cancellation, service restart reconciliation, and orphan-FFmpeg detection.
+- Added a manual release-workflow switch for the target-host recovery smoke instead of restarting production automatically on every deployment.
+- Added an auditable human-acceptance record template and verifier bound to the package artifact-manifest SHA-256.
+- Added a Gunicorn configuration guard that prevents accidental multi-web-process deployment until job ownership/runtime state is externalized.
+- Corrected the production-readiness wording so the queue/scaling check reflects the supported single-process web architecture rather than claiming generic horizontal scaling.
+- CI now syntax-checks the deployment Python and shell boundary scripts in addition to the main source tree.
 ## Remaining external acceptance gates
 
 These are deployment evidence gates, not unresolved repository defects:
