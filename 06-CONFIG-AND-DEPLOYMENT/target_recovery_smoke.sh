@@ -37,9 +37,9 @@ with open(fixture, "rb") as handle:
         f"{BASE}/api/jobs",
         data={
             "topic": "target host recovery smoke",
-            "target_seconds": "60",
+            "target_seconds": "120",
             "workflow": "v3",
-            "platform": "youtube_shorts",
+            "platform": "tiktok",
             "audience": "recovery smoke viewers",
             "context": "recovery smoke",
             "bpm": "120",
@@ -105,7 +105,7 @@ prepare_fixture() {
     -hide_banner -loglevel error -y \
     -f lavfi -i 'testsrc=size=1080x1920:rate=24' \
     -f lavfi -i 'anullsrc=r=48000:cl=mono' \
-    -t 20 -shortest -pix_fmt yuv420p \
+    -t 60 -shortest -pix_fmt yuv420p \
     -c:v libx264 -c:a aac /tmp/aivf-recovery-smoke.mp4
 }
 
