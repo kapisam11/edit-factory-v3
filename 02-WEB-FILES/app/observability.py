@@ -52,8 +52,9 @@ def install_observability(app: Flask) -> None:
 
     @app.route("/readyz")
     def readyz():
-        configured_state = os.environ.get("AIVF_STATE_DIR", "").strip()
-        state_dir = configured_state or str(Path(app.root_path).parent / "state")
+        state_dir = str(app.config.get("AIVF_STATE_DIR") or os.environ.get("AIVF_STATE_DIR", "").strip())
+        if not state_dir:
+            state_dir = str(Path(app.root_path).parent / "state")
         report = diagnostics_report(required_tools=("ffmpeg", "ffprobe"), directories=[state_dir])
         try:
             minimum_free = max(0, int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "512"))) * 1024 * 1024
@@ -65,7 +66,10 @@ def install_observability(app: Flask) -> None:
             report["ok"] = False
             report.setdefault("checks", []).append({"key": "minimum_free_disk", "ok": False, "detail": f"free disk {free_bytes} bytes is below required {minimum_free} bytes"})
         status = 200 if report["ok"] else 503
-        return jsonify({"status": "ready" if status == 200 else "not_ready", "request_id": getattr(g, "request_id", ""), "diagnostics": report}), status
+        # Public probes expose only the readiness contract. Detailed host,
+        # filesystem and executable diagnostics stay behind authenticated APIs.
+        checks = [{"key": str(item.get("key") or ""), "ok": bool(item.get("ok"))} for item in (report.get("checks") or [])]
+        return jsonify({"status": "ready" if status == 200 else "not_ready", "request_id": getattr(g, "request_id", ""), "checks": checks}), status
 
     @app.route("/healthz")
     def healthz():
