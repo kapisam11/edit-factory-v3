@@ -287,6 +287,7 @@ def build_release_evidence(
     final_video = provenance.get("final_video")
     final_video_record = final_video if isinstance(final_video, Mapping) else {}
     rights_gate = provenance.get("rights_gate")
+    cleared_rights = {"owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"}
     asset_ids = {
         str(item.get("asset_id") or "")
         for item in (assets or [])
@@ -316,7 +317,6 @@ def build_release_evidence(
             for item in checked_rights
         )
     )
-    cleared_rights = {"owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"}
     asset_records_valid = (
         isinstance(assets, list)
         and all(
