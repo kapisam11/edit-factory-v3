@@ -419,7 +419,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
             store.prune_idempotency(max_age_seconds=max(86400, int(days * 86400)))
             store.prune_events(max_age_seconds=max(7 * 86400, int(days * 86400)))
         except Exception as exc:
-            logger.warning("Dashboard metadata retention cleanup failed: %s", exc)
+            app_module.logger.warning("Dashboard metadata retention cleanup failed: %s", exc)
         upload_cutoff = cutoff
         try:
             for child in app_module.UPLOAD_FOLDER.iterdir():
