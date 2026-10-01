@@ -878,14 +878,6 @@ def create_job():
     principal = principal_for_request(request)
     params["_principal"] = principal
 
-    # Hash only user-visible request intent; runtime paths and credentials are excluded.
-    request_fingerprint_payload = {
-        key: value
-        for key, value in params.items()
-        if key not in {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
-    }
-    request_hash = request_idempotency_hash(request_fingerprint_payload, namespace="dashboard-request")
-
     target_seconds = params["target_seconds"]
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
