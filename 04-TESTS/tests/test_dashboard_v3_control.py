@@ -187,3 +187,28 @@ def test_dashboard_idempotency_fingerprint_includes_uploaded_media(monkeypatch, 
         {"topic": "same", "workflow": "v3", "_principal": "alice"},
         first,
     )
+
+
+def test_build_job_params_carries_license_url():
+    from app.job_service import build_job_params
+
+    params = build_job_params(
+        {
+            "topic": "Licensed clip",
+            "workflow": "v3",
+            "target_seconds": "15",
+            "platform": "youtube_shorts",
+            "audience": "short-form viewers",
+            "rights_basis": "cc_license",
+            "license_url": "https://example.com/license",
+        },
+        {
+            "default_workflow": "v3",
+            "default_target_seconds": 15,
+            "default_v3_platform": "youtube_shorts",
+            "default_v3_audience": "short-form viewers",
+            "default_v3_bpm": 120,
+        },
+        allow_skip_qc=False,
+    )
+    assert params["source_metadata"]["license_url"] == "https://example.com/license"
