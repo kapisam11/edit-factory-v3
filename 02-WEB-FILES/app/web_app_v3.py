@@ -843,7 +843,13 @@ def _request_fingerprint(params: dict, upload_path: Optional[Path] = None) -> st
     payload = {
         key: value
         for key, value in params.items()
-        if key not in {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
+        if key not in {
+            "_principal",
+            "_retry_secret_keys",
+            "raw_video",
+            "pkg_dir",
+            "declared_at",
+        }
     }
     if upload_path is not None:
         payload["_input_media_sha256"] = sha256_file(upload_path)
