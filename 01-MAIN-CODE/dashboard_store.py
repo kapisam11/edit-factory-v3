@@ -172,11 +172,25 @@ class DashboardStore:
         conn: sqlite3.Connection,
         job_id: str,
         event: str,
+
         *,
         from_status: str | None = None,
         to_status: str | None = None,
         details: str = "",
     ) -> None:
+        # Unit/integration callers can construct the legacy jobs schema without
+        # running ensure_indexes(). Make event persistence self-contained.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                from_status TEXT,
+                to_status TEXT,
+                event TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.execute(
             "INSERT INTO job_events(job_id, from_status, to_status, event, details) VALUES (?,?,?,?,?)",
             (job_id, from_status, to_status, str(event)[:120], str(details)[:4000]),
