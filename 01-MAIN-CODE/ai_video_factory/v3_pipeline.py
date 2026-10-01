@@ -553,6 +553,9 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             # into the worker-facing result so UI/job status cannot disagree
             # with the persisted readiness evidence.
             _apply_readiness_contract(result, readiness)
+            # Refresh metadata after the final readiness evaluation and before
+            # the integrity snapshot so all persisted readiness surfaces agree.
+            _persist_v3_reports(package, result, render_report, semantic_report, readiness)
 
             artifact_manifest = build_artifact_manifest(
                 package,
