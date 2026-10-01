@@ -177,9 +177,23 @@ PY
   sleep 1
 done
 
-if docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" sh -c 'pgrep -af ffmpeg >/dev/null'; then
+if ! docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" python - <<'PY'
+from pathlib import Path
+
+orphans = []
+for proc in Path("/proc").glob("[0-9]*"):
+    try:
+        command = (proc / "cmdline").read_bytes().replace(b"\\x00", b" ").decode("utf-8", "replace")
+    except (OSError, UnicodeDecodeError):
+        continue
+    if "ffmpeg" in command.lower():
+        orphans.append(command.strip())
+if orphans:
+    print("\n".join(orphans))
+    raise SystemExit(1)
+PY
+then
   echo "[AIVF] orphan FFmpeg process detected after restart"
-  docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" sh -c 'pgrep -af ffmpeg || true'
   exit 1
 fi
 
