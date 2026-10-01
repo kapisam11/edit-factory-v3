@@ -6,6 +6,7 @@ from ai_video_factory.production_assurance import (
     build_release_evidence,
     fingerprint_mapping,
     verify_artifact_manifest,
+    verify_release_evidence,
 )
 
 
