@@ -150,8 +150,13 @@ def verify_artifact_manifest(
     files = manifest.get("files") or []
     if not isinstance(files, list):
         return {"ok": False, "errors": ["manifest.files must be a list"]}
+    if manifest.get("ok") is not True:
+        errors.append("manifest ok flag is not true")
+    if manifest.get("file_count") != len(files):
+        errors.append("manifest file_count does not match files length")
 
     expected_paths = []
+    seen_paths: set[str] = set()
     for raw in files:
         if not isinstance(raw, Mapping):
             errors.append("manifest contains a non-object file entry")
@@ -161,6 +166,9 @@ def verify_artifact_manifest(
         except ValueError as exc:
             errors.append(str(exc))
             continue
+        if rel in seen_paths:
+            errors.append(f"duplicate manifest path: {rel}")
+        seen_paths.add(rel)
         expected_paths.append(rel)
         target = (root / rel).resolve()
         if root not in target.parents or not target.is_file():
@@ -197,6 +205,8 @@ def verify_artifact_manifest(
             required.append(_safe_manifest_relative_path(raw))
         except ValueError as exc:
             errors.append(str(exc))
+    if not isinstance(manifest.get("required_files") or [], list):
+        errors.append("manifest.required_files must be a list")
     for rel in required:
         target = (root / rel).resolve()
         if root not in target.parents or not target.is_file():
