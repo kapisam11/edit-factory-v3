@@ -57,6 +57,7 @@ def test_environment_and_release_evidence_are_explicit_about_human_review():
         media_health={"ok": True},
         provenance={"assets": []},
         environment={"ok": True},
+        artifact_integrity={"ok": True},
     )
     assert evidence["release_candidate"] is True
     assert evidence["human_review_required"] is True
@@ -80,6 +81,20 @@ def test_manifest_self_hash_and_rights_gate_prevent_false_green(tmp_path):
         media_health={"ok": True},
         provenance={"assets": [{"rights_status": "review_required"}]},
         environment={"ok": True},
+        artifact_integrity={"ok": True},
     )
     assert blocked["release_candidate"] is False
     assert blocked["checks"]["rights_clear"] is False
+
+
+def test_release_evidence_requires_artifact_integrity(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        media_health={"ok": True},
+        provenance={"assets": []},
+        environment={"ok": True},
+        artifact_integrity={"ok": False, "errors": ["hash mismatch"]},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["artifact_integrity_valid"] is False
