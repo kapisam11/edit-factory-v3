@@ -98,3 +98,21 @@ def test_release_evidence_requires_artifact_integrity(tmp_path: Path):
     )
     assert evidence["release_candidate"] is False
     assert evidence["checks"]["artifact_integrity_valid"] is False
+
+
+def test_human_acceptance_verifier_bootstraps_source_checkout():
+    import runpy
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[2] / "06-CONFIG-AND-DEPLOYMENT" / "verify_human_acceptance.py"
+    main_code = str(Path(__file__).resolve().parents[2] / "01-MAIN-CODE")
+    old_path = list(sys.path)
+    try:
+        while main_code in sys.path:
+            sys.path.remove(main_code)
+        namespace = runpy.run_path(str(script), run_name="aivf.acceptance_test")
+        assert callable(namespace["main"])
+        assert str(script.parents[1] / "01-MAIN-CODE") in sys.path
+    finally:
+        sys.path[:] = old_path
