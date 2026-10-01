@@ -244,6 +244,27 @@ class DashboardStore:
 
         self.write(write)
 
+    def lookup_idempotency(
+        self,
+        *,
+        principal: str,
+        idempotency_key: str,
+    ) -> tuple[str, str] | None:
+        """Return (job_id, request_hash) for an existing request key, if present."""
+        key = str(idempotency_key).strip()
+        principal_value = str(principal).strip() or "unknown"
+        if not key:
+            return None
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT job_id, request_hash FROM idempotency_keys WHERE principal=? AND idem_key=?",
+                (principal_value, key),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["job_id"]), str(row["request_hash"])
+
+
     def insert_job_idempotent(
         self,
         job_id: str,
