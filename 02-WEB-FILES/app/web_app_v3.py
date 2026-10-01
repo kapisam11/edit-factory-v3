@@ -838,7 +838,6 @@ def settings():
     return jsonify(get_settings())
 
 
-@app.route("/api/jobs", methods=["POST"])
 def _request_fingerprint(params: dict, upload_path: Optional[Path] = None) -> str:
     """Fingerprint request intent and, when present, the uploaded media bytes."""
     payload = {
@@ -851,6 +850,7 @@ def _request_fingerprint(params: dict, upload_path: Optional[Path] = None) -> st
     return request_idempotency_hash(payload, namespace="dashboard-request")
 
 
+@app.route("/api/jobs", methods=["POST"])
 def create_job():
     role_gate = app.extensions.get("aivf_require_role")
     if callable(role_gate):
