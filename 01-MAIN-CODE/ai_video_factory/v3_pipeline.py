@@ -536,6 +536,20 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             # Integrity is evaluated after report persistence so recorded hashes cover
             # the final metadata/report content, not a pre-finalization snapshot.
             provenance = load_provenance(package / "provenance.json") if (package / "provenance.json").is_file() else provenance
+            # Finalize readiness before the integrity snapshot. The readiness
+            # report does not depend on artifact_manifest.json, so it can safely
+            # be included in the manifest without a self-hash cycle.
+            readiness = evaluate_artifact(
+                final_video,
+                target_seconds=target_seconds,
+                platform_profile=payload["platform_variants"][platform],
+                package_dir=package_dir,
+                upload_package_required=True,
+                publish_required=False,
+                metadata_guardrails_ok=metadata_ok,
+            )
+            _atomic_json_write(package / "v3_readiness.json", readiness.to_dict())
+
             artifact_manifest = build_artifact_manifest(
                 package,
                 required_files=(
@@ -543,6 +557,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     "v3_blueprint.json",
                     "timeline.json",
                     "v3_render_qc.json",
+                    "v3_readiness.json",
                     "upload_package.json",
                     "provenance.json",
                     "metadata_guardrails.json",
@@ -557,20 +572,6 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     f"Artifact integrity: {error}"
                     for error in list(artifact_integrity.get("errors") or [])[:10]
                 )
-
-            # Re-evaluate package readiness after the integrity manifest exists.
-            # v3_readiness.json is derived evidence and is excluded from the
-            # manifest to avoid a self-referential hash cycle.
-            readiness = evaluate_artifact(
-                final_video,
-                target_seconds=target_seconds,
-                platform_profile=payload["platform_variants"][platform],
-                package_dir=package_dir,
-                upload_package_required=True,
-                publish_required=False,
-                metadata_guardrails_ok=metadata_ok,
-            )
-            _atomic_json_write(package / "v3_readiness.json", readiness.to_dict())
 
             release_evidence = build_release_evidence(
                 package_dir=package,
