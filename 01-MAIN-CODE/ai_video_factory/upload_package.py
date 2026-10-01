@@ -170,7 +170,11 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
 
     if summary.get("requires_rights_declaration"):
         supplied = summary.get("source_metadata")
-        if not isinstance(supplied, Mapping):
+        declaration_present = isinstance(supplied, Mapping) and any(
+            str(supplied.get(key) or "").strip()
+            for key in ("rights_status", "rights_basis", "source_url", "evidence_url", "declared_by", "declared_at")
+        )
+        if not declaration_present:
             external.append({
                 "title": "Input media",
                 "creator": "",
@@ -211,7 +215,7 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
 
     return {
         "status": "cleared" if external and not unresolved else ("review_required" if unresolved else "not_declared"),
-        "publish_blocked": bool(unresolved) and strict_rights,
+        "publish_blocked": bool(unresolved),
         "requires_explicit_declaration": bool(external),
         "sources": records,
         "unverified_sources": unresolved,
