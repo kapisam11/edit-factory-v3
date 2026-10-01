@@ -307,8 +307,12 @@ def build_release_evidence(
         and checked_asset_ids == asset_ids
         and len(checked_asset_ids) == len(asset_ids)
         and len(asset_ids) == len(assets or [])
-        and not any(
-            isinstance(item, Mapping) and bool(item.get("errors"))
+        and all(
+            isinstance(item, Mapping)
+            and isinstance(item.get("errors"), list)
+            and not item.get("errors")
+            and str(item.get("rights_basis") or "").strip().lower() in cleared_rights
+            and bool(str(item.get("asset_id") or "").strip())
             for item in checked_rights
         )
     )
@@ -349,11 +353,11 @@ def build_release_evidence(
     )
     checks = {
         "readiness_valid": readiness_valid,
-        "media_valid": bool(media_health.get("ok")),
+        "media_valid": media_health.get("ok") is True,
         "provenance_present": provenance_present,
         "rights_clear": rights_clear,
-        "environment_valid": bool(environment.get("ok")),
-        "artifact_integrity_valid": bool(artifact_integrity.get("ok")),
+        "environment_valid": environment.get("ok") is True,
+        "artifact_integrity_valid": artifact_integrity.get("ok") is True,
         "rights_gate_valid": rights_gate_ok,
     }
     return {
