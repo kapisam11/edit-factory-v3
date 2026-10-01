@@ -98,7 +98,7 @@ def _windows_kill_surviving_descendants(pid: int, *, timeout_seconds: float = 3.
 param([int]$RootPid)
 $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)
 $seen = @{}
-$targets = New-Object System.Collections.Generic.List[int]
+$targets = [System.Collections.Generic.List[int]]::new()
 function Add-Descendants([int]$ParentPid) {
     foreach ($proc in $all) {
         $childPid = [int]$proc.ProcessId
