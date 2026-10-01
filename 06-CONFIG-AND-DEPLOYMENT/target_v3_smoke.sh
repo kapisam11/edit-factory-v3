@@ -56,6 +56,7 @@ with fixture.open("rb") as handle:
             "platform": "youtube_shorts",
             "audience": "release smoke viewers",
             "context": "deterministic production smoke",
+            "rights_basis": "owned",
             "bpm": "120",
             "enable_ocr": "false",
             "enable_object_detection": "false",
