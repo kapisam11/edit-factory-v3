@@ -22,6 +22,8 @@ _DEFAULT_EXCLUDES = {
     ".ruff_cache",
     "artifact_manifest.json",
     "release_evidence.json",
+    "v3_readiness.json",
+    "metadata.json",
     "resource_usage.json",
     # Created outside the final integrity snapshot or intentionally transient.
     "v3_job_result.json",
@@ -192,6 +194,7 @@ def build_release_evidence(
     media_health: Mapping[str, Any],
     provenance: Mapping[str, Any],
     environment: Mapping[str, Any],
+    artifact_integrity: Mapping[str, Any],
 ) -> dict[str, Any]:
     checks = {
         "readiness_valid": readiness.get("state") == "UPLOAD_PACKAGE_VALID",
@@ -204,6 +207,7 @@ def build_release_evidence(
         ) and str((provenance.get("final_video") or {}).get("rights_status") or "").lower()
         not in {"review_required", "unverified"},
         "environment_valid": bool(environment.get("ok")),
+        "artifact_integrity_valid": bool(artifact_integrity.get("ok")),
     }
     return {
         "schema_version": SCHEMA_VERSION,
