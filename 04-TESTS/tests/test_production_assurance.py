@@ -59,6 +59,7 @@ def test_environment_and_release_evidence_are_explicit_about_human_review():
             "assets": [{"asset_id": "source", "rights_status": "owned"}],
             "final_video": {"rights_status": "owned", "sha256": "a" * 64},
             "run_context": {"platform": "youtube_shorts"},
+            "rights_gate": {"status": "cleared", "publish_blocked": False},
         },
         environment={"ok": True},
         artifact_integrity={"ok": True},
@@ -145,6 +146,23 @@ def test_release_evidence_missing_rights_status_fails_closed(tmp_path: Path):
         media_health={"ok": True},
         provenance={
             "assets": [{"asset_id": "source"}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+        },
+        environment={"ok": True},
+        artifact_integrity={"ok": True},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["rights_clear"] is False
+
+
+def test_release_evidence_requires_explicit_rights_gate(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        media_health={"ok": True},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "cc_license"}],
             "final_video": {"rights_status": "owned", "sha256": "a" * 64},
             "run_context": {"platform": "youtube_shorts"},
         },
