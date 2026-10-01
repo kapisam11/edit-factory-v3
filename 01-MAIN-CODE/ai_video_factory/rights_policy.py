@@ -22,7 +22,7 @@ def build_rights_evidence(raw: Mapping[str, Any]) -> RightsEvidence:
         asset_id=str(raw.get("asset_id") or raw.get("id") or "asset"),
         source=str(raw.get("source") or "unknown"),
         rights_basis=str(raw.get("rights_basis") or raw.get("rights_status") or "review_required").strip().lower(),
-        evidence_url=str(raw.get("evidence_url") or raw.get("source_url") or "").strip(),
+        evidence_url=str(raw.get("evidence_url") or "").strip(),
         license_url=str(raw.get("license_url") or "").strip(),
         declared_by=str(raw.get("declared_by") or "").strip(),
         declared_at=str(raw.get("declared_at") or "").strip(),
@@ -61,7 +61,14 @@ def rights_gate(records: Sequence[Mapping[str, Any]], *, strict: bool = True) ->
         checked.append(item)
         if errors:
             unresolved.append(item)
-    return {"status":"cleared" if not unresolved else "review_required","publish_blocked":bool(unresolved) and strict,"checked":checked,"evidence_contract":"explicit rights basis + evidence + declaration identity/time"}
+    # Rights failures are always publishing blockers. The strict flag is retained
+    # for API compatibility but cannot disable a safety-critical gate.
+    return {
+        "status": "cleared" if not unresolved else "review_required",
+        "publish_blocked": bool(unresolved),
+        "checked": checked,
+        "evidence_contract": "explicit rights basis + evidence + declaration identity/time",
+    }
 
 def make_declaration(*, asset_id: str, source: str, rights_basis: str, evidence_url: str = "", license_url: str = "", declared_by: str = "local-user", now: datetime | None = None) -> dict[str, str]:
     when = now or datetime.now(timezone.utc)
