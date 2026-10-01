@@ -74,9 +74,10 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
             )
         except (ResourceLimitExceeded, JobAdmissionError) as exc:
+            app_module.logger.warning("Dashboard job admission rejected: %s", exc)
             if has_request_context():
-                abort(429, description=str(exc))
-            raise ValueError(str(exc)) from exc
+                abort(429, description="Job admission capacity reached")
+            raise ValueError("Job admission capacity reached") from exc
         cache.delete("jobs:list")
 
     def db_update_job(job_id: str, **kwargs: Any) -> int:
