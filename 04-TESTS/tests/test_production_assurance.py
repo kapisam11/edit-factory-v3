@@ -55,7 +55,11 @@ def test_environment_and_release_evidence_are_explicit_about_human_review():
         package_dir="/tmp/package",
         readiness={"state": "UPLOAD_PACKAGE_VALID"},
         media_health={"ok": True},
-        provenance={"assets": []},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "owned"}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+        },
         environment={"ok": True},
         artifact_integrity={"ok": True},
     )
@@ -116,3 +120,36 @@ def test_human_acceptance_verifier_bootstraps_source_checkout():
         assert str(script.parents[1] / "01-MAIN-CODE") in sys.path
     finally:
         sys.path[:] = old_path
+
+
+def test_manifest_rejects_wrong_package_and_unsafe_paths(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    target = package / "final.v3.mp4"
+    target.write_bytes(b"video")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4",))
+
+    wrong_package = dict(manifest)
+    wrong_package["package"] = "other-package"
+    assert verify_artifact_manifest(package, wrong_package)["ok"] is False
+
+    unsafe = dict(manifest)
+    unsafe["files"] = [{"path": "../final.v3.mp4", "size_bytes": 5, "sha256": "0" * 64}]
+    assert verify_artifact_manifest(package, unsafe)["ok"] is False
+
+
+def test_release_evidence_missing_rights_status_fails_closed(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        media_health={"ok": True},
+        provenance={
+            "assets": [{"asset_id": "source"}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+        },
+        environment={"ok": True},
+        artifact_integrity={"ok": True},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["rights_clear"] is False
