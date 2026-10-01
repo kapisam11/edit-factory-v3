@@ -23,6 +23,7 @@ from .audio_normalization import AudioNormalizationError, normalize_loudness
 from .render_engine import stamp_media_metadata
 from .metadata_guardrails import build_upload_metadata
 from .provenance import build_asset_record, load_provenance, manifest_needs_rights_review, provenance_manifest, write_provenance
+from .rights_policy import rights_gate
 from .system_diagnostics import diagnostics_report, write_diagnostics
 from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk, sha256_file
 from .production_assurance import (
@@ -473,6 +474,19 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
 
             source_meta = source_metadata or {}
             source_rights = _source_rights_status(source_meta)
+            # Only explicit rights_status enters the rights gate. A rights_basis
+            # field is evidence context and cannot itself grant approval.
+            rights_record = {
+                "asset_id": "source_video",
+                "source": "user_upload",
+                "rights_basis": source_rights,
+                "evidence_url": str(source_meta.get("evidence_url") or source_meta.get("source_url") or ""),
+                "license_url": str(source_meta.get("license_url") or ""),
+                "declared_by": str(source_meta.get("declared_by") or ""),
+                "declared_at": str(source_meta.get("declared_at") or ""),
+                "attribution": str(source_meta.get("attribution") or ""),
+            }
+            rights_report = rights_gate([rights_record], strict=True)
             source_record = build_asset_record(
                 input_video,
                 asset_id="source_video",
@@ -482,6 +496,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 license_name=str(source_meta.get("license_name") or ""),
                 license_url=str(source_meta.get("license_url") or ""),
                 attribution=str(source_meta.get("attribution") or ""),
+                extra={"rights_evidence": rights_record},
             )
             provenance = provenance_manifest(
                 package,
@@ -495,6 +510,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     "edit_type": payload.get("edit_type"),
                 },
             )
+            provenance["rights_gate"] = rights_report
             write_provenance(package / "provenance.json", provenance)
             if manifest_needs_rights_review(provenance):
                 result.warnings.append("Media provenance contains assets requiring rights review")
