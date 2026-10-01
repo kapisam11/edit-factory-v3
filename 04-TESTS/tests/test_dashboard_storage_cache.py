@@ -170,6 +170,7 @@ def test_dashboard_store_idempotency_is_atomic_and_bounded(tmp_path):
         )
 
     assert len(store.list_jobs()) == 1
+    assert store.lookup_idempotency(principal="alice", idempotency_key="request-1") == ("job-idem-1", "hash-1")
 
 
 def test_dashboard_job_event_history_tracks_lifecycle(tmp_path):
