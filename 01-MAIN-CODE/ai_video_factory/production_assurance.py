@@ -197,7 +197,9 @@ def verify_release_evidence(package_dir: str | Path, evidence: Mapping[str, Any]
         readiness = json.loads((root / "v3_readiness.json").read_text(encoding="utf-8"))
         provenance = json.loads((root / "provenance.json").read_text(encoding="utf-8"))
         media_health = json.loads((root / "final_media_health.json").read_text(encoding="utf-8"))
-        environment = json.loads((root / "environment_fingerprint.json").read_text(encoding="utf-8"))
+        diagnostics = json.loads((root / "diagnostics.json").read_text(encoding="utf-8"))
+        environment_fingerprint = json.loads((root / "environment_fingerprint.json").read_text(encoding="utf-8"))
+        environment = {**diagnostics, **environment_fingerprint}
         manifest = json.loads((root / "artifact_manifest.json").read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         return {"ok": False, "errors": [f"release evidence inputs are unreadable: {exc}"]}
@@ -218,6 +220,8 @@ def verify_release_evidence(package_dir: str | Path, evidence: Mapping[str, Any]
         errors.append("stored release-evidence checks do not match recomputed checks")
     if bool(evidence.get("release_candidate")) != bool(expected.get("release_candidate")):
         errors.append("stored release_candidate does not match recomputed release_candidate")
+    if evidence.get("human_review_required") is not True:
+        errors.append("release-evidence human-review boundary is missing")
     if str(evidence.get("package") or "") != root.name:
         errors.append("release-evidence package name mismatch")
     return {"ok": not errors, "errors": errors, "recomputed": expected}
