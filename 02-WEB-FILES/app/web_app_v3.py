@@ -920,7 +920,13 @@ def create_job():
     try:
         from dashboard_store import DashboardStore, IdempotencyConflict, JobAdmissionError
         from resource_governor import ResourceLimitExceeded, check_job_creation_limits
-        store = globals().get("dashboard_store") or DashboardStore(DB_PATH)
+        configured_store = globals().get("dashboard_store")
+        store = configured_store
+        if store is None or Path(store.db_path).resolve() != DB_PATH.resolve():
+            # Test reloads and app factory boundaries can leave an old store
+            # object on the module. Never write a new request into another
+            # deployment/test database.
+            store = DashboardStore(DB_PATH)
         store.ensure_indexes()
         try:
             check_job_creation_limits(
