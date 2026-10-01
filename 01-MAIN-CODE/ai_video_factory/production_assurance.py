@@ -280,6 +280,7 @@ def build_release_evidence(
         and bool(checked_rights)
         and checked_asset_ids == asset_ids
         and len(checked_asset_ids) == len(asset_ids)
+        and len(asset_ids) == len(assets or [])
         and not any(
             isinstance(item, Mapping) and bool(item.get("errors"))
             for item in checked_rights
