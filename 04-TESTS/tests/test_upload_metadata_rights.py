@@ -76,6 +76,10 @@ def test_explicit_permission_clears_publish_gate():
             "title": "Unstable Universe",
             "url": "https://www.youtube.com/watch?v=example",
             "rights_basis": "explicit_permission",
+            "rights_status": "explicit_permission",
+            "declared_by": "tester",
+            "declared_at": "2026-10-01T15:00:00Z",
+            "evidence_url": "https://www.youtube.com/watch?v=example",
             "source": "user_provided",
         }
     }
