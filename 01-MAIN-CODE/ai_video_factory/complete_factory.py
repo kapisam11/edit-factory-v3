@@ -362,7 +362,7 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
                     "rights_basis": str((youtube_options or {}).get("rights_basis", "")).strip().lower(),
                     "rights_status": str((youtube_options or {}).get("rights_status") or (youtube_options or {}).get("rights_basis", "")).strip().lower(),
                     "license_url": str((youtube_options or {}).get("license_url", "")).strip(),
-                    "evidence_url": str((youtube_options or {}).get("evidence_url") or (youtube_options or {}).get("source_url", "")).strip(),
+                    "evidence_url": str((youtube_options or {}).get("evidence_url", "")).strip(),
                     "declared_by": str((youtube_options or {}).get("rights_declared_by") or os.environ.get("AIVF_RIGHTS_DECLARED_BY") or "local-user").strip(),
                     "declared_at": str((youtube_options or {}).get("rights_declared_at") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")),
                     "source": "user_provided",
