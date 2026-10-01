@@ -161,6 +161,31 @@ def validate_metadata_quality(
 
 def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     records = _source_records(summary)
+    # A required input-media declaration must produce a concrete record even
+    # when it contains only rights fields; otherwise the gate could see no
+    # external source at all and incorrectly allow publishing.
+    if summary.get("requires_rights_declaration") and not any(
+        str(item.get("source") or "").strip().lower() == "user_provided"
+        for item in records
+        if isinstance(item, Mapping)
+    ):
+        supplied = summary.get("source_metadata")
+        raw = supplied if isinstance(supplied, Mapping) else {}
+        records.append({
+            "title": _normalize_phrase(str(raw.get("title") or "")),
+            "creator": _normalize_phrase(str(raw.get("creator") or "")),
+            "url": str(raw.get("url") or raw.get("source_url") or "").strip(),
+            "license": _normalize_phrase(str(raw.get("license") or "")),
+            "license_url": str(raw.get("license_url") or "").strip(),
+            "rights_basis": _normalize_phrase(str(raw.get("rights_basis") or "")).lower(),
+            "rights_status": _normalize_phrase(str(raw.get("rights_status") or "review_required")).lower(),
+            "source": "user_provided",
+            "evidence_url": str(raw.get("evidence_url") or "").strip(),
+            "declared_by": _normalize_phrase(str(raw.get("declared_by") or "")),
+            "declared_at": str(raw.get("declared_at") or "").strip(),
+            "attribution": _normalize_phrase(str(raw.get("attribution") or "")),
+        })
+
     external = [
         item for item in records
         if item.get("source") in {"youtube", "reddit", "wikimedia", "user_provided"}
