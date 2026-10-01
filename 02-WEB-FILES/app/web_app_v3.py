@@ -189,7 +189,8 @@ def init_db() -> None:
                 created_at REAL NOT NULL DEFAULT (unixepoch()),
                 PRIMARY KEY (principal, idem_key)
             )
-        """)\n        conn.execute("""
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS job_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id TEXT NOT NULL,
