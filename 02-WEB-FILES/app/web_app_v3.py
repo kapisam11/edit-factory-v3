@@ -838,19 +838,27 @@ def settings():
     return jsonify(get_settings())
 
 
+def _strip_idempotency_volatile(value: Any) -> Any:
+    """Remove server-generated volatile declaration timestamps recursively."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_idempotency_volatile(item)
+            for key, item in value.items()
+            if key != "declared_at"
+        }
+    if isinstance(value, list):
+        return [_strip_idempotency_volatile(item) for item in value]
+    return value
+
+
 def _request_fingerprint(params: dict, upload_path: Optional[Path] = None) -> str:
     """Fingerprint request intent and, when present, the uploaded media bytes."""
     payload = {
         key: value
         for key, value in params.items()
-        if key not in {
-            "_principal",
-            "_retry_secret_keys",
-            "raw_video",
-            "pkg_dir",
-            "declared_at",
-        }
+        if key not in {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
     }
+    payload = _strip_idempotency_volatile(payload)
     if upload_path is not None:
         payload["_input_media_sha256"] = sha256_file(upload_path)
     return request_idempotency_hash(payload, namespace="dashboard-request")
