@@ -176,3 +176,21 @@ def test_cleared_wikimedia_asset_can_pass_rights_evidence(monkeypatch):
     })
     assert report["publish_blocked"] is False
     assert report["status"] == "cleared"
+
+
+def test_source_url_is_not_permission_evidence(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "1")
+    report = media_rights_report({
+        "source_metadata": {
+            "creator": "Creator",
+            "title": "Third-party clip",
+            "source": "youtube",
+            "rights_basis": "explicit_permission",
+            "rights_status": "explicit_permission",
+            "source_url": "https://youtube.com/watch?v=example",
+            "declared_by": "tester",
+            "declared_at": "2026-10-01T15:00:00Z",
+        }
+    })
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
