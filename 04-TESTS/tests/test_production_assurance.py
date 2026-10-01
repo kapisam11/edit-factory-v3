@@ -367,3 +367,18 @@ def test_manifest_rejects_malformed_size_and_missing_hash(tmp_path: Path):
     result = verify_artifact_manifest(package, missing_hash)
     assert result["ok"] is False
     assert any("invalid sha256" in error for error in result["errors"])
+
+
+def test_manifest_rejects_false_ok_flag(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4",))
+    tampered = dict(manifest)
+    tampered["ok"] = False
+    tampered["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps({k: v for k, v in tampered.items() if k != "manifest_sha256"}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    result = verify_artifact_manifest(package, tampered)
+    assert result["ok"] is False
+    assert any("ok flag" in error for error in result["errors"])
