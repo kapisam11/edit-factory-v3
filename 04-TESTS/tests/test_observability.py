@@ -72,4 +72,4 @@ def test_readyz_fails_when_disk_below_configured_threshold(monkeypatch, tmp_path
     response = app.test_client().get("/readyz")
     assert response.status_code == 503
     assert response.get_json()["status"] == "not_ready"
-    assert any(item["key"] == "minimum_free_disk" for item in response.get_json()["diagnostics"]["checks"])
+    assert set(response.get_json()) == {"status", "request_id"}
