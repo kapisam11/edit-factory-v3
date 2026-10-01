@@ -549,6 +549,10 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 metadata_guardrails_ok=metadata_ok,
             )
             _atomic_json_write(package / "v3_readiness.json", readiness.to_dict())
+            # The final package readiness is authoritative; propagate it back
+            # into the worker-facing result so UI/job status cannot disagree
+            # with the persisted readiness evidence.
+            _apply_readiness_contract(result, readiness)
 
             artifact_manifest = build_artifact_manifest(
                 package,
