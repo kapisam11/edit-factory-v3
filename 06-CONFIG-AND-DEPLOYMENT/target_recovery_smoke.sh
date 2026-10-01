@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-COMPOSE_FILE="\${AIVF_COMPOSE_FILE:-06-CONFIG-AND-DEPLOYMENT/docker-compose.yml}"
-SERVICE="\${AIVF_COMPOSE_SERVICE:-web}"
+COMPOSE_FILE="${AIVF_COMPOSE_FILE:-06-CONFIG-AND-DEPLOYMENT/docker-compose.yml}"
+SERVICE="${AIVF_COMPOSE_SERVICE:-web}"
 
 echo "[AIVF] target-host recovery smoke: cancellation + restart reconciliation"
 docker compose -f "$COMPOSE_FILE" config >/dev/null
