@@ -134,7 +134,7 @@ def evaluate_artifact(
     elif package and package.exists() and not upload_package_required:
         warnings.append("No upload manifest is present; upload-package readiness is not claimed")
     integrity_manifest = package / "artifact_manifest.json" if package else None
-    if upload_ok and integrity_manifest is not None and integrity_manifest.is_file():
+    if upload_ok and package is not None and integrity_manifest is not None and integrity_manifest.is_file():
         try:
             integrity = verify_artifact_manifest(
                 package,
