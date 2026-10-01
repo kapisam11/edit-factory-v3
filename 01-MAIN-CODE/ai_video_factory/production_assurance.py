@@ -110,6 +110,15 @@ def build_artifact_manifest(
     return manifest
 
 
+def _safe_manifest_relative_path(value: object) -> str:
+    """Normalize and validate manifest paths so integrity checks cannot escape the package."""
+    rel = str(value or "").replace("\\", "/")
+    path = Path(rel)
+    if not rel or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"unsafe manifest path: {rel!r}")
+    return path.as_posix()
+
+
 def verify_artifact_manifest(
     package_dir: str | Path,
     manifest: Mapping[str, Any],
@@ -119,6 +128,10 @@ def verify_artifact_manifest(
     """Verify an existing artifact manifest against the current package contents."""
     root = Path(package_dir).resolve()
     errors: list[str] = []
+    if manifest.get("schema_version") != SCHEMA_VERSION:
+        errors.append("unsupported manifest schema")
+    if str(manifest.get("package") or "") != root.name:
+        errors.append("manifest package name mismatch")
     supplied_manifest_hash = str(manifest.get("manifest_sha256") or "")
     if supplied_manifest_hash:
         canonical = {
@@ -141,7 +154,11 @@ def verify_artifact_manifest(
         if not isinstance(raw, Mapping):
             errors.append("manifest contains a non-object file entry")
             continue
-        rel = str(raw.get("path") or "").replace("\\", "/")
+        try:
+            rel = _safe_manifest_relative_path(raw.get("path"))
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
         expected_paths.append(rel)
         target = (root / rel).resolve()
         if root not in target.parents or not target.is_file():
@@ -160,9 +177,15 @@ def verify_artifact_manifest(
         errors.append("unexpected package files present: " + ", ".join(unexpected[:20]))
     if missing:
         errors.append("manifest files missing from package: " + ", ".join(missing[:20]))
-    required = [str(item) for item in (manifest.get("required_files") or [])]
+    required: list[str] = []
+    for raw in (manifest.get("required_files") or []):
+        try:
+            required.append(_safe_manifest_relative_path(raw))
+        except ValueError as exc:
+            errors.append(str(exc))
     for rel in required:
-        if not (root / rel).is_file():
+        target = (root / rel).resolve()
+        if root not in target.parents or not target.is_file():
             errors.append(f"required artifact missing: {rel}")
 
     return {"ok": not errors, "errors": errors, "checked_files": len(expected_paths)}
@@ -196,16 +219,28 @@ def build_release_evidence(
     environment: Mapping[str, Any],
     artifact_integrity: Mapping[str, Any],
 ) -> dict[str, Any]:
+    assets = provenance.get("assets")
+    final_video = provenance.get("final_video")
+    cleared_rights = {"owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"}
+    provenance_present = (
+        isinstance(assets, list)
+        and isinstance(final_video, Mapping)
+        and bool(final_video.get("sha256"))
+        and isinstance(provenance.get("run_context"), Mapping)
+    )
+    rights_records = [item for item in (assets or []) if isinstance(item, Mapping)]
+    rights_clear = (
+        provenance_present
+        and len(rights_records) == len(assets or [])
+        and bool(rights_records)
+        and str(final_video.get("rights_status") or "").strip().lower() in cleared_rights
+        and all(str(item.get("rights_status") or "").strip().lower() in cleared_rights for item in rights_records)
+    )
     checks = {
         "readiness_valid": readiness.get("state") == "UPLOAD_PACKAGE_VALID",
         "media_valid": bool(media_health.get("ok")),
-        "provenance_present": isinstance(provenance.get("assets"), list),
-        "rights_clear": not any(
-            str(item.get("rights_status") or "").lower() in {"review_required", "unverified"}
-            for item in (provenance.get("assets") or [])
-            if isinstance(item, Mapping)
-        ) and str((provenance.get("final_video") or {}).get("rights_status") or "").lower()
-        not in {"review_required", "unverified"},
+        "provenance_present": provenance_present,
+        "rights_clear": rights_clear,
         "environment_valid": bool(environment.get("ok")),
         "artifact_integrity_valid": bool(artifact_integrity.get("ok")),
     }
