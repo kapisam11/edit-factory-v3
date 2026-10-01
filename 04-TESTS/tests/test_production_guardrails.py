@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from ai_video_factory.ai_gateway import AIResponseError, classify_api_failure, parse_json_object, reject_prompt_injection, validate_confidence
 from ai_video_factory.retry_policy import backoff_seconds, classify_failure, idempotency_key, is_stale, is_retryable_error, retry_after, retry_deadline_exceeded
 from ai_video_factory.metadata_guardrails import build_upload_metadata, duplicate_phrase_score, hashtags_from_text, validate_metadata
-from ai_video_factory.production_guardrails import GuardrailError, atomic_write_json, redact_mapping, safe_filename, validate_path_inside
+from ai_video_factory.production_guardrails import GuardrailError, atomic_write_json, redact_mapping, run_tool, safe_filename, validate_path_inside
 from ai_video_factory.provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest
 from ai_video_factory.system_diagnostics import diagnostics_json, summarize_failures
 
@@ -81,3 +82,11 @@ def test_diagnostics_helpers() -> None:
     report={'checks':[{'detail':'missing','ok':False}], 'directories':[{'path':'x','writable':False}]}
     assert 'missing' in diagnostics_json(report)
     assert summarize_failures(report) == ['missing','x: not writable']
+
+
+def test_run_tool_timeout_terminates_process_group():
+    with pytest.raises(GuardrailError, match="timed out"):
+        run_tool(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            timeout=1,
+        )
