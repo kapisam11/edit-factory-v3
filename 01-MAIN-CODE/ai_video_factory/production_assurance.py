@@ -287,10 +287,20 @@ def build_release_evidence(
         )
     )
     cleared_rights = {"owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"}
-    provenance_present = (
+    asset_records_valid = (
         isinstance(assets, list)
+        and all(
+            isinstance(item, Mapping)
+            and bool(str(item.get("asset_id") or "").strip())
+            and len(str(item.get("sha256") or "")) == 64
+            for item in assets
+        )
+    )
+    final_hash = str(final_video_record.get("sha256") or "")
+    provenance_present = (
+        asset_records_valid
         and isinstance(final_video, Mapping)
-        and bool(final_video.get("sha256"))
+        and len(final_hash) == 64
         and isinstance(provenance.get("run_context"), Mapping)
     )
     rights_records = [item for item in (assets or []) if isinstance(item, Mapping)]
