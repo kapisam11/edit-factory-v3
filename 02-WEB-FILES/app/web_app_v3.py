@@ -64,6 +64,7 @@ if not configured_secret:
 app.config.update(
     MAX_CONTENT_LENGTH=RUNTIME_CONFIG.max_upload_mb * 1024 * 1024,
     SECRET_KEY=configured_secret,
+    AIVF_STATE_DIR=str(STATE_DIR),
 )
 
 logger = logging.getLogger("web_app_v3")
