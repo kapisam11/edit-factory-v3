@@ -212,3 +212,26 @@ def test_build_job_params_carries_license_url():
         allow_skip_qc=False,
     )
     assert params["source_metadata"]["license_url"] == "https://example.com/license"
+
+
+def test_idempotency_ignores_volatile_rights_timestamp(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    first = tmp_path / "video.mp4"
+    first.write_bytes(b"same-video")
+    base = {
+        "topic": "same",
+        "workflow": "v3",
+        "_principal": "alice",
+        "source_metadata": {
+            "rights_status": "owned",
+            "declared_at": "2026-10-01T15:00:00Z",
+        },
+    }
+    later = {
+        **base,
+        "source_metadata": {
+            **base["source_metadata"],
+            "declared_at": "2026-10-01T15:05:00Z",
+        },
+    }
+    assert appmod._request_fingerprint(base, first) == appmod._request_fingerprint(later, first)
