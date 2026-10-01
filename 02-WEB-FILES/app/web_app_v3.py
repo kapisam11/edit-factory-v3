@@ -18,7 +18,7 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -877,6 +877,36 @@ def create_job():
     from resource_governor import principal_for_request, MAX_QUEUED_PER_PRINCIPAL
     principal = principal_for_request(request)
     params["_principal"] = principal
+
+    source_meta = params.get("source_metadata")
+    if isinstance(source_meta, dict):
+        rights_basis = str(source_meta.get("rights_basis") or "").strip().lower()
+        if rights_basis:
+            from ai_video_factory.rights_policy import rights_gate
+            source_meta.update({
+                "rights_status": rights_basis,
+                "evidence_url": str(source_meta.get("url") or "").strip(),
+                "declared_by": principal,
+                "declared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            })
+            rights_check = rights_gate([{
+                "asset_id": "source_video",
+                "source": "user_upload",
+                "rights_basis": rights_basis,
+                "evidence_url": source_meta["evidence_url"],
+                "license_url": str(source_meta.get("license_url") or "").strip(),
+                "declared_by": principal,
+                "declared_at": source_meta["declared_at"],
+            }], strict=True)
+            if rights_check.get("publish_blocked"):
+                return jsonify({
+                    "error": "Selected rights basis needs supporting evidence",
+                    "rights_errors": [
+                        item.get("errors", [])
+                        for item in (rights_check.get("checked") or [])
+                        if isinstance(item, dict) and item.get("errors")
+                    ],
+                }), 400
 
     target_seconds = params["target_seconds"]
     secrets = get_runtime_default_secrets()
