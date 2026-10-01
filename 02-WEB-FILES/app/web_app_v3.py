@@ -1002,10 +1002,12 @@ def create_job():
                     except (TypeError, ValueError, json.JSONDecodeError):
                         existing_params = {}
                     try:
-                        legacy_hash = _request_fingerprint(existing_params, None)
+                        legacy_current_hash = _request_fingerprint(params, None)
+                        legacy_existing_hash = _request_fingerprint(existing_params, None)
                     except Exception:
-                        legacy_hash = ""
-                    if legacy_hash == existing_request_hash:
+                        legacy_current_hash = ""
+                        legacy_existing_hash = ""
+                    if legacy_current_hash == existing_request_hash and legacy_existing_hash == existing_request_hash:
                         current_media_hash = sha256_file(upload_path) if upload_path is not None else None
                         original_path = Path(str(existing_params.get("raw_video") or "")).resolve() if existing_params.get("raw_video") else None
                         upload_root = UPLOAD_FOLDER.resolve()
