@@ -112,3 +112,17 @@ def test_media_rights_report_does_not_clear_rights_basis_alone(monkeypatch):
     })
     assert report["publish_blocked"] is True
     assert report["status"] == "review_required"
+
+
+def test_media_rights_report_blocks_unresolved_rights_in_non_strict_mode(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "0")
+    report = media_rights_report({
+        "source_metadata": {
+            "title": "External clip",
+            "source": "youtube",
+            "rights_status": "owned",
+            "source_url": "https://example.com/video",
+        }
+    })
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
