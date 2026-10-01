@@ -9,11 +9,13 @@ import hashlib
 import json
 import os
 import platform
+import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 SCHEMA_VERSION = 1
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 _DEFAULT_EXCLUDES = {
     ".git",
     "__pycache__",
@@ -132,6 +134,8 @@ def verify_artifact_manifest(
         errors.append("manifest package name mismatch")
     supplied_manifest_hash = str(manifest.get("manifest_sha256") or "")
     if supplied_manifest_hash:
+        if not SHA256_RE.fullmatch(supplied_manifest_hash):
+            errors.append("manifest_sha256 has invalid format")
         canonical = {
             key: value for key, value in manifest.items()
             if key != "manifest_sha256"
@@ -163,10 +167,22 @@ def verify_artifact_manifest(
             errors.append(f"missing artifact: {rel}")
             continue
         size = raw.get("size_bytes")
-        if size is not None and int(size) != target.stat().st_size:
-            errors.append(f"size mismatch: {rel}")
-        if verify_hashes and raw.get("sha256") and file_sha256(target) != str(raw["sha256"]):
-            errors.append(f"hash mismatch: {rel}")
+        if size is not None:
+            try:
+                parsed_size = int(size)
+            except (TypeError, ValueError):
+                errors.append(f"invalid size_bytes: {rel}")
+            else:
+                if parsed_size < 0:
+                    errors.append(f"invalid size_bytes: {rel}")
+                elif parsed_size != target.stat().st_size:
+                    errors.append(f"size mismatch: {rel}")
+        if verify_hashes:
+            digest = str(raw.get("sha256") or "")
+            if not SHA256_RE.fullmatch(digest):
+                errors.append(f"invalid sha256: {rel}")
+            elif file_sha256(target) != digest:
+                errors.append(f"hash mismatch: {rel}")
 
     actual = {path.relative_to(root).as_posix() for path in _relative_files(root)}
     unexpected = sorted(actual - set(expected_paths))
@@ -292,7 +308,7 @@ def build_release_evidence(
         and all(
             isinstance(item, Mapping)
             and bool(str(item.get("asset_id") or "").strip())
-            and len(str(item.get("sha256") or "")) == 64
+            and bool(SHA256_RE.fullmatch(str(item.get("sha256") or "")))
             for item in assets
         )
     )
@@ -300,7 +316,7 @@ def build_release_evidence(
     provenance_present = (
         asset_records_valid
         and isinstance(final_video, Mapping)
-        and len(final_hash) == 64
+        and bool(SHA256_RE.fullmatch(final_hash))
         and isinstance(provenance.get("run_context"), Mapping)
     )
     rights_records = [item for item in (assets or []) if isinstance(item, Mapping)]
