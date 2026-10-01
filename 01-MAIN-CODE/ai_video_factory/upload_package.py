@@ -163,7 +163,7 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     records = _source_records(summary)
     external = [
         item for item in records
-        if item.get("source") in {"youtube", "reddit", "wikimedia"}
+        if item.get("source") in {"youtube", "reddit", "wikimedia", "user_provided"}
         or item.get("creator")
         or item.get("url")
     ]
