@@ -339,3 +339,31 @@ def test_release_evidence_rejects_duplicate_rights_asset_ids(tmp_path: Path):
     )
     assert evidence["release_candidate"] is False
     assert evidence["checks"]["rights_gate_valid"] is False
+
+
+def test_manifest_rejects_malformed_size_and_missing_hash(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4",))
+
+    malformed = dict(manifest)
+    malformed["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps({k: v for k, v in malformed.items() if k != "manifest_sha256"}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    malformed["files"] = [{"path": "final.v3.mp4", "size_bytes": "not-a-number", "sha256": "f" * 64}]
+    malformed["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps({k: v for k, v in malformed.items() if k != "manifest_sha256"}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    result = verify_artifact_manifest(package, malformed)
+    assert result["ok"] is False
+    assert any("invalid size_bytes" in error for error in result["errors"])
+
+    missing_hash = dict(manifest)
+    missing_hash["files"] = [{"path": "final.v3.mp4", "size_bytes": 5}]
+    missing_hash["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps({k: v for k, v in missing_hash.items() if k != "manifest_sha256"}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    result = verify_artifact_manifest(package, missing_hash)
+    assert result["ok"] is False
+    assert any("invalid sha256" in error for error in result["errors"])
