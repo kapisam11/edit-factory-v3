@@ -899,7 +899,7 @@ def create_job():
             from ai_video_factory.rights_policy import rights_gate
             source_meta.update({
                 "rights_status": rights_basis,
-                "evidence_url": str(source_meta.get("url") or "").strip(),
+                "evidence_url": str(source_meta.get("evidence_url") or "").strip(),
                 "declared_by": principal,
                 "declared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             })
