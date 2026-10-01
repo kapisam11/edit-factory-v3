@@ -215,7 +215,6 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
                 "attribution": "",
             })
 
-    strict_rights = True
     evidence_records = []
     for item in external:
         # rights_basis is the caller's explicit declaration. A legacy
