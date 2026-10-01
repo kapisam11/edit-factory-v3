@@ -126,3 +126,16 @@ def test_media_rights_report_blocks_unresolved_rights_in_non_strict_mode(monkeyp
     })
     assert report["publish_blocked"] is True
     assert report["status"] == "review_required"
+
+
+def test_user_provided_rights_metadata_cannot_bypass_gate(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "1")
+    report = media_rights_report({
+        "requires_rights_declaration": True,
+        "source_metadata": {
+            "rights_basis": "cc_license",
+            "source": "user_provided",
+        },
+    })
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
