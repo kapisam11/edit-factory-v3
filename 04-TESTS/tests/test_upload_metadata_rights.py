@@ -98,3 +98,17 @@ def test_publish_gate_requires_explicit_input_media_rights():
     report = media_rights_report(summary)
     assert report["publish_blocked"] is True
     assert report["status"] == "review_required"
+
+
+def test_media_rights_report_does_not_clear_rights_basis_alone(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "1")
+    report = media_rights_report({
+        "source_metadata": {
+            "title": "External clip",
+            "source": "youtube",
+            "rights_basis": "cc_license",
+            "source_url": "https://example.com/video",
+        }
+    })
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
