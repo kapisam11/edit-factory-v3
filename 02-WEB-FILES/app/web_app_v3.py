@@ -937,7 +937,8 @@ def create_job():
         except ResourceLimitExceeded as exc:
             if upload_path is not None:
                 upload_path.unlink(missing_ok=True)
-            return jsonify({"error": str(exc)}), 429
+            logger.warning("Job admission resource limit reached: %s", exc)
+            return jsonify({"error": "Job admission resource limit reached"}), 429
         if idem_key:
             actual_job_id, created = store.insert_job_idempotent(
                 job_id,
@@ -966,11 +967,13 @@ def create_job():
     except IdempotencyConflict as exc:
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
-        return jsonify({"error": str(exc)}), 409
+        logger.info("Idempotency conflict for job creation request")
+        return jsonify({"error": "Idempotency key was already used for a different request"}), 409
     except JobAdmissionError as exc:
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
-        return jsonify({"error": str(exc)}), 429
+        logger.info("Job admission limit rejected request: %s", type(exc).__name__)
+        return jsonify({"error": "Job admission limit reached"}), 429
     except Exception:
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
