@@ -480,7 +480,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 "asset_id": "source_video",
                 "source": "user_upload",
                 "rights_basis": source_rights,
-                "evidence_url": str(source_meta.get("evidence_url") or source_meta.get("source_url") or ""),
+                "evidence_url": str(source_meta.get("evidence_url") or ""),
                 "license_url": str(source_meta.get("license_url") or ""),
                 "declared_by": str(source_meta.get("declared_by") or ""),
                 "declared_at": str(source_meta.get("declared_at") or ""),
