@@ -1058,6 +1058,29 @@ def create_job():
                 (UPLOAD_FOLDER, OUTPUT_FOLDER),
             )
         except ResourceLimitExceeded as exc:
+            # A concurrent identical request may have committed the idempotency
+            # key between our initial lookup and this admission check. Re-check
+            # before returning 429 so a replay never fails because the first
+            # request consumed the newly-created queue slot.
+            if idem_key:
+                concurrent = store.lookup_idempotency(
+                    principal=principal,
+                    idempotency_key=idem_key,
+                )
+                if concurrent is not None:
+                    existing_job_id, existing_request_hash = concurrent
+                    if existing_request_hash == request_hash:
+                        if upload_path is not None:
+                            upload_path.unlink(missing_ok=True)
+                        existing = store.get_job(existing_job_id) or {}
+                        return jsonify({
+                            "job_id": existing_job_id,
+                            "status": existing.get("status", "queued"),
+                            "idempotent_replay": True,
+                        }), 200
+                    if upload_path is not None:
+                        upload_path.unlink(missing_ok=True)
+                    return jsonify({"error": "Idempotency key was already used for a different request"}), 409
             if upload_path is not None:
                 upload_path.unlink(missing_ok=True)
             logger.warning("Job admission resource limit reached: %s", exc)
