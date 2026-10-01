@@ -544,7 +544,8 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 max_attempts=runtime_config().max_job_retries,
             )
         except JobRetryNotAllowed as exc:
-            return jsonify({"error": str(exc), "job_id": job_id, "status": previous_status}), 409
+            app_module.logger.info("Retry rejected for %s: %s", job_id, exc)
+            return jsonify({"error": "Retry is not allowed for this job.", "job_id": job_id, "status": previous_status}), 409
         if not changed:
             return jsonify({"error": "Job changed before retry could start"}), 409
 
