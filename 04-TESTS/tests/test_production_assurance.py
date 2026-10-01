@@ -382,3 +382,31 @@ def test_manifest_rejects_false_ok_flag(tmp_path: Path):
     result = verify_artifact_manifest(package, tampered)
     assert result["ok"] is False
     assert any("ok flag" in error for error in result["errors"])
+
+
+def test_release_evidence_requires_boolean_checks(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={
+            "state": "UPLOAD_PACKAGE_VALID",
+            "checks": {"MEDIA_VALID": True, "MEDIA_CONTRACT_VALID": True, "UPLOAD_PACKAGE_VALID": True},
+            "errors": [],
+        },
+        media_health={"ok": "true"},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "owned", "sha256": "b" * 64}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+            "rights_gate": {
+                "status": "cleared",
+                "publish_blocked": False,
+                "checked": [{"asset_id": "source", "rights_basis": "owned", "errors": []}],
+            },
+        },
+        environment={"ok": "true"},
+        artifact_integrity={"ok": "true"},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["media_valid"] is False
+    assert evidence["checks"]["environment_valid"] is False
+    assert evidence["checks"]["artifact_integrity_valid"] is False
