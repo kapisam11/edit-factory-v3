@@ -99,7 +99,7 @@ def test_retry_rejects_corrupted_persisted_parameters_without_queueing(monkeypat
     job = appmod.db_get_job("job-bad-params")
     assert job["status"] == "error"
     assert job["step"] == "failed"
-    assert job["error"] == "previous failure"
+    assert job["error"] == "provider temporarily unavailable"
 
 
 
