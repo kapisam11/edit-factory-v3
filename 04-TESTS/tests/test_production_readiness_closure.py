@@ -119,3 +119,14 @@ def test_upload_publish_review_gate():
     finally:
         if old is None: os.environ.pop("AIVF_REQUIRE_HUMAN_REVIEW",None)
         else: os.environ["AIVF_REQUIRE_HUMAN_REVIEW"]=old
+
+
+def test_rights_declaration_timestamp_is_valid():
+    future = make_declaration(
+        asset_id="x",
+        source="licensed",
+        rights_basis="owned",
+        declared_by="tester",
+        now=__import__("datetime").datetime.now(__import__("datetime").timezone.utc) + __import__("datetime").timedelta(days=1),
+    )
+    assert rights_gate([future])["publish_blocked"] is True
