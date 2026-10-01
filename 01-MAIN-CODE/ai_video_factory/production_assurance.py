@@ -189,6 +189,40 @@ def verify_artifact_manifest(
     return {"ok": not errors, "errors": errors, "checked_files": len(expected_paths)}
 
 
+def verify_release_evidence(package_dir: str | Path, evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """Recompute release checks from package contents and compare them with stored evidence."""
+    root = Path(package_dir).resolve()
+    errors: list[str] = []
+    try:
+        readiness = json.loads((root / "v3_readiness.json").read_text(encoding="utf-8"))
+        provenance = json.loads((root / "provenance.json").read_text(encoding="utf-8"))
+        media_health = json.loads((root / "final_media_health.json").read_text(encoding="utf-8"))
+        environment = json.loads((root / "environment_fingerprint.json").read_text(encoding="utf-8"))
+        manifest = json.loads((root / "artifact_manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return {"ok": False, "errors": [f"release evidence inputs are unreadable: {exc}"]}
+
+    integrity = verify_artifact_manifest(root, manifest)
+    if not integrity.get("ok"):
+        errors.extend(str(error) for error in (integrity.get("errors") or [])[:10])
+
+    expected = build_release_evidence(
+        package_dir=root,
+        readiness=readiness,
+        media_health=media_health,
+        provenance=provenance,
+        environment=environment,
+        artifact_integrity=integrity,
+    )
+    if evidence.get("checks") != expected.get("checks"):
+        errors.append("stored release-evidence checks do not match recomputed checks")
+    if bool(evidence.get("release_candidate")) != bool(expected.get("release_candidate")):
+        errors.append("stored release_candidate does not match recomputed release_candidate")
+    if str(evidence.get("package") or "") != root.name:
+        errors.append("release-evidence package name mismatch")
+    return {"ok": not errors, "errors": errors, "recomputed": expected}
+
+
 def build_environment_fingerprint(
     *,
     pipeline_version: str,
@@ -278,4 +312,5 @@ __all__ = [
     "verify_artifact_manifest",
     "build_environment_fingerprint",
     "build_release_evidence",
+    "verify_release_evidence",
 ]
