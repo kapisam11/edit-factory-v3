@@ -22,7 +22,6 @@ _DEFAULT_EXCLUDES = {
     ".ruff_cache",
     "artifact_manifest.json",
     "release_evidence.json",
-    "v3_readiness.json",
     "resource_usage.json",
     # Created outside the final integrity snapshot or intentionally transient.
     "v3_job_result.json",
@@ -220,6 +219,17 @@ def build_release_evidence(
 ) -> dict[str, Any]:
     assets = provenance.get("assets")
     final_video = provenance.get("final_video")
+    final_video_record = final_video if isinstance(final_video, Mapping) else {}
+    rights_gate = provenance.get("rights_gate")
+    rights_gate_ok = (
+        isinstance(rights_gate, Mapping)
+        and str(rights_gate.get("status") or "").strip().lower() == "cleared"
+        and not bool(rights_gate.get("publish_blocked"))
+        and not any(
+            isinstance(item, Mapping) and bool(item.get("errors"))
+            for item in (rights_gate.get("checked") or [])
+        )
+    )
     cleared_rights = {"owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"}
     provenance_present = (
         isinstance(assets, list)
@@ -232,7 +242,8 @@ def build_release_evidence(
         provenance_present
         and len(rights_records) == len(assets or [])
         and bool(rights_records)
-        and str(final_video.get("rights_status") or "").strip().lower() in cleared_rights
+        and rights_gate_ok
+        and str(final_video_record.get("rights_status") or "").strip().lower() in cleared_rights
         and all(str(item.get("rights_status") or "").strip().lower() in cleared_rights for item in rights_records)
     )
     checks = {
@@ -242,6 +253,7 @@ def build_release_evidence(
         "rights_clear": rights_clear,
         "environment_valid": bool(environment.get("ok")),
         "artifact_integrity_valid": bool(artifact_integrity.get("ok")),
+        "rights_gate_valid": rights_gate_ok,
     }
     return {
         "schema_version": SCHEMA_VERSION,
