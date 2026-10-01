@@ -74,17 +74,18 @@ def main(argv: list[str]) -> int:
         die("accepted package no longer matches its artifact manifest: " + "; ".join(list(integrity.get("errors") or [])[:10]))
 
     release_evidence_path = package / "release_evidence.json"
-    if release_evidence_path.is_file():
-        try:
-            release_evidence = json.loads(release_evidence_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-            die(f"invalid release evidence: {exc}")
-        release_verification = verify_release_evidence(package, release_evidence)
-        if not release_verification.get("ok"):
-            die(
-                "release evidence no longer matches package state: "
-                + "; ".join(list(release_verification.get("errors") or [])[:10])
-            )
+    if not release_evidence_path.is_file():
+        die("release_evidence.json is required for human acceptance")
+    try:
+        release_evidence = json.loads(release_evidence_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        die(f"invalid release evidence: {exc}")
+    release_verification = verify_release_evidence(package, release_evidence)
+    if not release_verification.get("ok"):
+        die(
+            "release evidence no longer matches package state: "
+            + "; ".join(list(release_verification.get("errors") or [])[:10])
+        )
 
     result = {
         "ok": True,
