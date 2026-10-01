@@ -66,10 +66,12 @@ def install_observability(app: Flask) -> None:
             report["ok"] = False
             report.setdefault("checks", []).append({"key": "minimum_free_disk", "ok": False, "detail": f"free disk {free_bytes} bytes is below required {minimum_free} bytes"})
         status = 200 if report["ok"] else 503
-        # Public probes expose only the readiness contract. Detailed host,
-        # filesystem and executable diagnostics stay behind authenticated APIs.
-        checks = [{"key": str(item.get("key") or ""), "ok": bool(item.get("ok"))} for item in (report.get("checks") or [])]
-        return jsonify({"status": "ready" if status == 200 else "not_ready", "request_id": getattr(g, "request_id", ""), "checks": checks}), status
+        # Public probes expose only the binary readiness contract. All diagnostic
+        # details remain behind authenticated APIs, including filesystem paths.
+        return jsonify({
+            "status": "ready" if status == 200 else "not_ready",
+            "request_id": getattr(g, "request_id", ""),
+        }), status
 
     @app.route("/healthz")
     def healthz():
