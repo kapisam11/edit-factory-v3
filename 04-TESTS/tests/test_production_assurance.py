@@ -92,6 +92,25 @@ def test_manifest_self_hash_and_rights_gate_prevent_false_green(tmp_path):
     assert blocked["checks"]["rights_clear"] is False
 
 
+def test_release_evidence_rejects_blocked_rights_gate(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        media_health={"ok": True},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "owned"}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+            "rights_gate": {"status": "review_required", "publish_blocked": True, "checked": [{"errors": ["missing declaration"]}]},
+        },
+        environment={"ok": True},
+        artifact_integrity={"ok": True},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["rights_gate_valid"] is False
+    assert evidence["checks"]["rights_clear"] is False
+
+
 def test_release_evidence_requires_artifact_integrity(tmp_path: Path):
     evidence = build_release_evidence(
         package_dir=tmp_path,
@@ -171,3 +190,15 @@ def test_release_evidence_requires_explicit_rights_gate(tmp_path: Path):
     )
     assert evidence["release_candidate"] is False
     assert evidence["checks"]["rights_clear"] is False
+
+
+def test_manifest_detects_readiness_tamper(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    (package / "v3_readiness.json").write_text('{"state":"UPLOAD_PACKAGE_VALID"}', encoding="utf-8")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4", "v3_readiness.json"))
+    (package / "v3_readiness.json").write_text('{"state":"PUBLISH_READY"}', encoding="utf-8")
+    verified = verify_artifact_manifest(package, manifest)
+    assert verified["ok"] is False
+    assert any("hash mismatch: v3_readiness.json" in error for error in verified["errors"])
