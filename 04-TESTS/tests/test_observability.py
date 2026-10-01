@@ -58,9 +58,7 @@ def test_readyz_reports_tool_and_directory_readiness(monkeypatch, tmp_path):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "ready"
-    assert payload["checks"]
-    assert all(set(item) == {"key", "ok"} for item in payload["checks"])
-    assert all("detail" not in item for item in payload["checks"])
+    assert set(payload) == {"status", "request_id"}
 
 
 def test_readyz_fails_when_disk_below_configured_threshold(monkeypatch, tmp_path):
