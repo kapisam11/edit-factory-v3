@@ -2,7 +2,6 @@
 """Validate a signed-off human media acceptance record against a package manifest."""
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sys
