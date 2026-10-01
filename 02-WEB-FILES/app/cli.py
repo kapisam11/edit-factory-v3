@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 from uuid import uuid4
@@ -225,6 +226,11 @@ def _run_one(args: argparse.Namespace, topic: str, overrides: Optional[Dict[str,
                         "title": str(getattr(args, "source_title", "")).strip(),
                         "url": str(getattr(args, "source_url", "")).strip(),
                         "rights_basis": str(getattr(args, "rights_basis", "")).strip().lower(),
+                        "rights_status": str(getattr(args, "rights_basis", "")).strip().lower(),
+                        "license_url": str(getattr(args, "license_url", "")).strip(),
+                        "evidence_url": str(getattr(args, "source_url", "")).strip(),
+                        "declared_by": str(getattr(args, "rights_declared_by", "") or os.environ.get("AIVF_RIGHTS_DECLARED_BY") or "local-user").strip(),
+                        "declared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                         "source": "user_provided",
                     },
                     "requires_rights_declaration": bool(getattr(args, "youtube_upload", False)),
@@ -329,6 +335,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-creator", default="", help="Creator of source footage/work used in the edit")
     parser.add_argument("--source-title", default="", help="Title of source footage/work used in the edit")
     parser.add_argument("--source-url", default="", help="URL of source footage/work used in the edit")
+    parser.add_argument("--license-url", default="", help="License or permission evidence URL for licensed source media")
+    parser.add_argument("--rights-declared-by", default="", help="Identity recorded for the source-rights declaration")
     parser.add_argument(
         "--rights-basis",
         default="",
