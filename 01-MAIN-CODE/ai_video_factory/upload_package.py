@@ -234,7 +234,7 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
             "rights_basis": basis,
         })
 
-    evidence_gate = rights_gate(evidence_records, strict=strict_rights) if evidence_records else {
+    evidence_gate = rights_gate(evidence_records) if evidence_records else {
         "status": "not_declared",
         "publish_blocked": False,
         "checked": [],
