@@ -88,11 +88,60 @@ def _process_group_kwargs() -> dict[str, Any]:
         return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
     return {"start_new_session": True}
 
+def _windows_kill_surviving_descendants(pid: int, *, timeout_seconds: float = 3.0) -> None:
+    """Kill descendants by parent-PID lineage when the original process already exited."""
+    if os.name != "nt":
+        return
+    # Use PowerShell's CIM process table as a fallback after taskkill. This is
+    # executed without a shell and the only interpolated value is an integer PID.
+    script = r"""
+param([int]$RootPid)
+$all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)
+$seen = @{}
+$targets = New-Object System.Collections.Generic.List[int]
+function Add-Descendants([int]$ParentPid) {
+    foreach ($proc in $all) {
+        $childPid = [int]$proc.ProcessId
+        if ([int]$proc.ParentProcessId -eq $ParentPid -and -not $seen.ContainsKey($childPid)) {
+            $seen[$childPid] = $true
+            $targets.Add($childPid)
+            Add-Descendants $childPid
+        }
+    }
+}
+Add-Descendants $RootPid
+foreach ($childPid in $targets) {
+    Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue
+}
+Stop-Process -Id $RootPid -Force -ErrorAction SilentlyContinue
+"""
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, str(int(pid))],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=max(1.0, float(timeout_seconds)),
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def terminate_process_tree(process: subprocess.Popen[Any], *, grace_seconds: float = 2.0) -> None:
-    """Terminate an external process group even when the immediate parent already exited."""
+    """Terminate an external process group/tree, including exited-parent Windows descendants."""
     try:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=max(1.0, float(grace_seconds) + 1.0))
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=max(1.0, float(grace_seconds) + 1.0),
+            )
+            _windows_kill_surviving_descendants(
+                process.pid,
+                timeout_seconds=max(1.0, float(grace_seconds) + 1.0),
+            )
         else:
             os.killpg(process.pid, signal.SIGTERM)
             deadline = time.monotonic() + max(0.1, float(grace_seconds))
