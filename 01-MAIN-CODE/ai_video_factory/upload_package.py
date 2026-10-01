@@ -195,11 +195,17 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     for item in external:
         # Rights status is the only field allowed to declare the intended basis
         # at this boundary. A free-form rights_basis must never grant approval.
+        status = str(item.get("rights_status") or "").strip().lower()
+        basis = (
+            str(item.get("rights_basis") or "").strip().lower()
+            if status in {"", "review_required", "unverified", "license_identified", "cleared"}
+            else status
+        )
         evidence_records.append({
             **item,
             "asset_id": item.get("asset_id") or item.get("title") or item.get("url") or "source",
             "source": item.get("source") or "external",
-            "rights_basis": item.get("rights_status") or "review_required",
+            "rights_basis": basis or "review_required",
         })
 
     evidence_gate = rights_gate(evidence_records, strict=strict_rights) if evidence_records else {
