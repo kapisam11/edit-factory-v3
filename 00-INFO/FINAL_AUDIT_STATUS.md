@@ -91,3 +91,11 @@ The earlier branch advertised Python 3.9 support, but the frozen dependency envi
 ## Release rule
 
 Do not label Edit Factory V3 "10/10 verified" until the automated CI gates are green on the current branch and the deployment/real-render acceptance gates have actually passed.
+
+
+## Latest hardening closure — 2026-10-01
+- Dashboard idempotency is bound to uploaded-media SHA-256 and safely replays existing jobs.
+- Rights approval is evidence-based and fail-closed across production paths.
+- V3 readiness is integrity-covered and release evidence is independently recomputable.
+- Public /readyz exposes only binary readiness state.
+- Windows timeout cleanup handles surviving descendants.
