@@ -994,9 +994,55 @@ def create_job():
             if existing_idempotency is not None:
                 existing_job_id, existing_request_hash = existing_idempotency
                 if existing_request_hash != request_hash:
-                    if upload_path is not None:
-                        upload_path.unlink(missing_ok=True)
-                    return jsonify({"error": "Idempotency key was already used for a different request"}), 409
+                    legacy_replay_safe = False
+                    existing = store.get_job(existing_job_id) or {}
+                    raw_existing_params = existing.get("params")
+                    try:
+                        existing_params = json.loads(raw_existing_params or "{}") if isinstance(raw_existing_params, str) else (raw_existing_params or {})
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        existing_params = {}
+                    try:
+                        legacy_hash = _request_fingerprint(existing_params, None)
+                    except Exception:
+                        legacy_hash = ""
+                    if legacy_hash == existing_request_hash:
+                        current_media_hash = sha256_file(upload_path) if upload_path is not None else None
+                        original_path = Path(str(existing_params.get("raw_video") or "")).resolve() if existing_params.get("raw_video") else None
+                        upload_root = UPLOAD_FOLDER.resolve()
+                        original_media_hash = None
+                        if original_path is not None and upload_root in original_path.parents and original_path.is_file():
+                            try:
+                                original_media_hash = sha256_file(original_path)
+                            except OSError:
+                                original_media_hash = None
+                        legacy_replay_safe = (
+                            (current_media_hash is None and original_media_hash is None)
+                            or (
+                                current_media_hash is not None
+                                and original_media_hash is not None
+                                and current_media_hash == original_media_hash
+                            )
+                        )
+                    if not legacy_replay_safe:
+                        if upload_path is not None:
+                            upload_path.unlink(missing_ok=True)
+                        return jsonify({"error": "Idempotency key was already used for a different request"}), 409
+                    # Upgrade only after proving the request intent and media bytes
+                    # still identify the exact original job.
+                    if not store.migrate_idempotency_hash(
+                        principal=principal,
+                        idempotency_key=idem_key,
+                        expected_old_hash=existing_request_hash,
+                        new_hash=request_hash,
+                    ):
+                        refreshed = store.lookup_idempotency(
+                            principal=principal,
+                            idempotency_key=idem_key,
+                        )
+                        if refreshed is None or refreshed[1] != request_hash:
+                            if upload_path is not None:
+                                upload_path.unlink(missing_ok=True)
+                            return jsonify({"error": "Idempotency key could not be safely migrated"}), 409
                 if upload_path is not None:
                     upload_path.unlink(missing_ok=True)
                 existing = store.get_job(existing_job_id) or {}
