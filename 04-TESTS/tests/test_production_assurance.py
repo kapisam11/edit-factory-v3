@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from ai_video_factory.production_assurance import (
@@ -54,13 +55,21 @@ def test_environment_and_release_evidence_are_explicit_about_human_review():
 
     evidence = build_release_evidence(
         package_dir="/tmp/package",
-        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        readiness={
+            "state": "UPLOAD_PACKAGE_VALID",
+            "checks": {"MEDIA_VALID": True, "MEDIA_CONTRACT_VALID": True, "UPLOAD_PACKAGE_VALID": True},
+            "errors": [],
+        },
         media_health={"ok": True},
         provenance={
             "assets": [{"asset_id": "source", "rights_status": "owned"}],
             "final_video": {"rights_status": "owned", "sha256": "a" * 64},
             "run_context": {"platform": "youtube_shorts"},
-            "rights_gate": {"status": "cleared", "publish_blocked": False},
+            "rights_gate": {
+                "status": "cleared",
+                "publish_blocked": False,
+                "checked": [{"asset_id": "source", "errors": []}],
+            },
         },
         environment={"ok": True},
         artifact_integrity={"ok": True},
@@ -209,30 +218,54 @@ def test_release_evidence_tamper_is_detected(tmp_path: Path):
     package = tmp_path / "package"
     package.mkdir()
     (package / "final.v3.mp4").write_bytes(b"video")
-    (package / "v3_readiness.json").write_text('{"state":"UPLOAD_PACKAGE_VALID"}', encoding="utf-8")
-    (package / "provenance.json").write_text(
-        '{"assets":[{"asset_id":"source","rights_status":"owned"}],"final_video":{"rights_status":"owned","sha256":"' + ("a" * 64) + '"},"run_context":{"platform":"youtube_shorts"},"rights_gate":{"status":"cleared","publish_blocked":false,"checked":[]}}',
+    (package / "v3_readiness.json").write_text(
+        json.dumps({
+            "state": "UPLOAD_PACKAGE_VALID",
+            "checks": {"MEDIA_VALID": True, "MEDIA_CONTRACT_VALID": True, "UPLOAD_PACKAGE_VALID": True},
+            "errors": [],
+        }),
         encoding="utf-8",
     )
+    provenance = {
+        "assets": [{"asset_id": "source", "rights_status": "owned", "sha256": "b" * 64}],
+        "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+        "run_context": {"platform": "youtube_shorts"},
+        "rights_gate": {
+            "status": "cleared",
+            "publish_blocked": False,
+            "checked": [{"asset_id": "source", "errors": []}],
+        },
+    }
+    (package / "provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
     (package / "final_media_health.json").write_text('{"ok":true}', encoding="utf-8")
+    (package / "diagnostics.json").write_text('{"ok":true}', encoding="utf-8")
     (package / "environment_fingerprint.json").write_text('{"ok":true}', encoding="utf-8")
     manifest = build_artifact_manifest(
         package,
-        required_files=("final.v3.mp4", "v3_readiness.json", "provenance.json", "final_media_health.json", "environment_fingerprint.json"),
+        required_files=(
+            "final.v3.mp4",
+            "v3_readiness.json",
+            "provenance.json",
+            "final_media_health.json",
+            "diagnostics.json",
+            "environment_fingerprint.json",
+        ),
     )
-    (package / "artifact_manifest.json").write_text(__import__("json").dumps(manifest), encoding="utf-8")
+    (package / "artifact_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     integrity = verify_artifact_manifest(package, manifest)
     assert integrity["ok"] is True
 
     evidence = build_release_evidence(
         package_dir=package,
-        readiness={"state":"UPLOAD_PACKAGE_VALID"},
-        media_health={"ok":True},
-        provenance=json.loads((package / "provenance.json").read_text(encoding="utf-8")),
-        environment={"ok":True},
+        readiness=json.loads((package / "v3_readiness.json").read_text(encoding="utf-8")),
+        media_health={"ok": True},
+        provenance=provenance,
+        environment={"ok": True},
         artifact_integrity=integrity,
     )
-    (package / "release_evidence.json").write_text(__import__("json").dumps(evidence), encoding="utf-8")
+    assert evidence["release_candidate"] is True
+    (package / "release_evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
+
     tampered = dict(evidence)
     tampered["release_candidate"] = False
     checked = verify_release_evidence(package, tampered)
