@@ -275,6 +275,33 @@ class DashboardStore:
         return str(row["job_id"]), str(row["request_hash"])
 
 
+    def migrate_idempotency_hash(
+        self,
+        *,
+        principal: str,
+        idempotency_key: str,
+        expected_old_hash: str,
+        new_hash: str,
+    ) -> bool:
+        """Atomically upgrade a legacy idempotency fingerprint after safe replay validation."""
+        key = str(idempotency_key).strip()
+        principal_value = str(principal).strip() or "unknown"
+        old_hash = str(expected_old_hash).strip()
+        replacement = str(new_hash).strip()
+        if not key or not old_hash or not replacement:
+            return False
+
+        def write(conn: sqlite3.Connection) -> bool:
+            changed = conn.execute(
+                "UPDATE idempotency_keys SET request_hash=? "
+                "WHERE principal=? AND idem_key=? AND request_hash=?",
+                (replacement, principal_value, key, old_hash),
+            ).rowcount
+            return bool(changed)
+
+        return bool(self.write(write))
+
+
     def insert_job_idempotent(
         self,
         job_id: str,
