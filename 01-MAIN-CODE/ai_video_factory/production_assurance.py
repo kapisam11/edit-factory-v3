@@ -23,7 +23,6 @@ _DEFAULT_EXCLUDES = {
     "artifact_manifest.json",
     "release_evidence.json",
     "v3_readiness.json",
-    "metadata.json",
     "resource_usage.json",
     # Created outside the final integrity snapshot or intentionally transient.
     "v3_job_result.json",
