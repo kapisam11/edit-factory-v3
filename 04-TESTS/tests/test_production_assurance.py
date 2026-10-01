@@ -62,7 +62,7 @@ def test_environment_and_release_evidence_are_explicit_about_human_review():
         },
         media_health={"ok": True},
         provenance={
-            "assets": [{"asset_id": "source", "rights_status": "owned"}],
+            "assets": [{"asset_id": "source", "rights_status": "owned", "sha256": "b" * 64}],
             "final_video": {"rights_status": "owned", "sha256": "a" * 64},
             "run_context": {"platform": "youtube_shorts"},
             "rights_gate": {
