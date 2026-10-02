@@ -730,7 +730,9 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
 
     # Long narrative gaps get one low-intensity support event at a meaningful
     # midpoint. This is a fallback, not the primary planning mechanism.
-    max_semantic_gap = max(3.5, config.target_seconds * 0.25)
+    # Preserve the existing safety ceiling for downstream consumers, but only fill
+    # genuine narrative gaps; this is not a periodic retention grid.
+    max_semantic_gap = 3.0
     ordered = sorted(events, key=lambda event: event.time)
     filled: list[RetentionEvent] = []
     for event in ordered:
