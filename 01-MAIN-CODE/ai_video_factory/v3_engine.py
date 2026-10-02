@@ -947,6 +947,7 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
         platform=platform_value,
         audience=cfg.audience,
         score_bundle=score_bundle,
+        editorial_decisions=editorial_decisions,
     )
     validate_blueprint(blueprint)
     return blueprint
