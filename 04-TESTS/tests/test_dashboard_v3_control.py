@@ -182,6 +182,7 @@ def test_legacy_idempotency_media_hash_can_use_persisted_provenance(monkeypatch,
         {},
     ) == "a" * 64
 
+
 def test_dashboard_idempotency_fingerprint_includes_uploaded_media(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
     first = tmp_path / "first.mp4"
