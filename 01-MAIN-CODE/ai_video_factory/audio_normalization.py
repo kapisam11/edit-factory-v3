@@ -1,5 +1,6 @@
 """Two-pass EBU R128 loudness normalization helpers."""
 from __future__ import annotations
+from .v3_exceptions import V3ExternalToolError
 import json
 import math
 import os
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from .render_engine import run_ffmpeg, validate_media_output
 
-class AudioNormalizationError(RuntimeError):
+class AudioNormalizationError(V3ExternalToolError):
     pass
 
 def _last_json(text: str) -> dict[str, Any]:
