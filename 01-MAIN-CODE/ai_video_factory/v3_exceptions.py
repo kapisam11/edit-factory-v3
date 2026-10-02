@@ -18,7 +18,7 @@ class V3ExternalToolError(V3PipelineError):
     """An expected external tool operation failed."""
 
 
-class V3ValidationError(V3PipelineError):
+class V3ValidationError(V3PipelineError, ValueError):
     """A production or media contract was violated."""
 
 
