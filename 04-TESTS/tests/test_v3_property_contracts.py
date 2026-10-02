@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from ai_video_factory.idempotency import idempotency_key
+from ai_video_factory.retry_policy import idempotency_key
 from ai_video_factory.v3_contracts import V3Request
 from ai_video_factory.v3_engine import PLATFORM_PROFILES, V3Config, V3Blueprint, create_v3_blueprint
 from ai_video_factory.v3_retention import evaluate_retention_editorial_fit
