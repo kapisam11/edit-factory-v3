@@ -885,6 +885,30 @@ def _persisted_input_media_hash(existing_job: Mapping[str, Any], existing_params
     return None
 
 
+def _legacy_idempotency_projection(value: Any, template: Any, *, top_level: bool = False) -> Any:
+    """Project a current request onto fields present in an older stored request."""
+    if isinstance(value, dict) and isinstance(template, dict):
+        ignored = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"} if top_level else set()
+        return {
+            key: _legacy_idempotency_projection(value[key], template_value)
+            for key, template_value in template.items()
+            if key in value and key not in ignored
+        }
+    if isinstance(value, list) and isinstance(template, list):
+        # Lists were already part of the legacy contract; preserve their complete value.
+        return [_strip_idempotency_volatile(item) for item in value]
+    return _strip_idempotency_volatile(value)
+
+
+def _legacy_request_fingerprint(params: Mapping[str, Any], existing_params: Mapping[str, Any]) -> str:
+    """Fingerprint only the request fields understood by the legacy stored hash."""
+    projected = _legacy_idempotency_projection(params, existing_params, top_level=True)
+    return request_idempotency_hash(
+        _strip_idempotency_volatile(projected),
+        namespace="dashboard-request",
+    )
+
+
 def _request_fingerprint(params: dict, upload_path: Optional[Path] = None) -> str:
     """Fingerprint request intent and, when present, the uploaded media bytes."""
     payload = {
@@ -1036,8 +1060,8 @@ def create_job():
                     except (TypeError, ValueError, json.JSONDecodeError):
                         existing_params = {}
                     try:
-                        legacy_current_hash = _request_fingerprint(params, None)
-                        legacy_existing_hash = _request_fingerprint(existing_params, None)
+                        legacy_current_hash = _legacy_request_fingerprint(params, existing_params)
+                        legacy_existing_hash = _legacy_request_fingerprint(existing_params, existing_params)
                     except Exception:
                         legacy_current_hash = ""
                         legacy_existing_hash = ""
@@ -1197,207 +1221,3 @@ def get_job_status(job_id):
         return jsonify({"error": "Job not found"}), 404
     return jsonify({"id": job_id, "status": job["status"], "step": job["step"], "error": job["error"]})
 
-
-@app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
-def cancel_job(job_id):
-    role_gate = app.extensions.get("aivf_require_role")
-    if callable(role_gate):
-        role_gate("editor")
-    from dashboard_compat import cancel_process
-    return cancel_process(job_id)
-
-
-@app.route("/api/jobs/<job_id>/logs")
-@app.route("/api/jobs/<job_id>/logs/stream")
-def job_logs_stream(job_id):
-    lookup = globals().get("authorized_db_get_job", db_get_job)
-    authorized_job = lookup(job_id)
-    if not authorized_job:
-        return jsonify({"error": "Job not found"}), 404
-
-    def stream():
-        last_id = 0
-        job = dict(authorized_job)
-        while True:
-            current = db_get_job(job_id)
-            if not current:
-                yield "data: " + json.dumps({"level": "ERROR", "msg": "Job not found"}) + "\n\n"
-                return
-            job["status"] = current.get("status")
-            for row in db_logs_since(job_id, last_id):
-                last_id = row["id"]
-                yield "data: " + json.dumps({"time": row["created_at"], "level": row["level"], "msg": row["message"]}) + "\n\n"
-            if job["status"] in TERMINAL_STATUSES:
-                return
-            yield ": heartbeat\n\n"
-            time.sleep(0.5)
-    return Response(
-        stream(),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-def _package_access_allowed(pkg_dir: Optional[Path]) -> bool:
-    """Allow package access only to admins or the principal that owns the job."""
-    if pkg_dir is None or not pkg_dir.is_dir():
-        return False
-    from flask import session
-    if not app.config.get("_AIVF_AUTH_CONFIGURED"):
-        return True
-    if not session.get("aivf_authenticated"):
-        return False
-    if str(session.get("aivf_role") or "viewer").strip().lower() == "admin":
-        return True
-    try:
-        from resource_governor import principal_for_request
-        principal = principal_for_request(request)
-        with get_db() as conn:
-            rows = conn.execute(
-                "SELECT params, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL"
-            ).fetchall()
-        for row in rows:
-            if str(Path(str(row["pkg_dir"])).resolve()) != str(pkg_dir.resolve()):
-                continue
-            payload = json.loads(row["params"] or "{}")
-            return str(payload.get("_principal") or "") == principal
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        return False
-    return False
-
-
-def _request_is_admin() -> bool:
-    from flask import session
-    return (
-        not app.config.get("_AIVF_AUTH_CONFIGURED")
-        or (
-            bool(session.get("aivf_authenticated"))
-            and str(session.get("aivf_role") or "viewer").strip().lower() == "admin"
-        )
-    )
-
-
-@app.route("/api/packages")
-def list_packages():
-    global _package_cache
-    now = time.monotonic()
-    use_cache = _request_is_admin()
-    if use_cache:
-        with _package_cache_lock:
-            if _package_cache and now - _package_cache[0] < _PACKAGE_CACHE_TTL:
-                return jsonify(_package_cache[1])
-
-    packages = []
-    try:
-        package_paths = [p for p in OUTPUT_FOLDER.iterdir() if p.is_dir()]
-    except OSError:
-        package_paths = []
-    package_paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    for pkg_path in package_paths:
-        try:
-            if not _package_access_allowed(pkg_path):
-                continue
-            thumbnail_name = next(
-                (name for name in ("thumbnail.png", "thumbnail_vertical.png") if (pkg_path / name).exists()),
-                None,
-            )
-            script = pkg_path / "script.txt"
-            preview = script.read_text(encoding="utf-8", errors="replace")[:200] if script.exists() else ""
-            created = datetime.fromtimestamp(pkg_path.stat().st_ctime).strftime("%Y-%m-%d %H:%M")
-            readiness_state = None
-            readiness_path = pkg_path / "v3_readiness.json"
-            if readiness_path.exists():
-                try:
-                    readiness_state = json.loads(readiness_path.read_text(encoding="utf-8")).get("state")
-                except (OSError, ValueError, TypeError):
-                    readiness_state = None
-            packages.append({
-                "name": pkg_path.name,
-                "created": created,
-                "thumbnail": f"/api/packages/{pkg_path.name}/file/{thumbnail_name}" if thumbnail_name else None,
-                "script_preview": preview,
-                "has_video": any(
-                    (pkg_path / name).exists()
-                    for name in ("final_short.mp4", "final_with_music.mp4", "final_short_vo.mp4", "final.v3.mp4")
-                ),
-                "v3_readiness": readiness_state,
-            })
-        except OSError:
-            continue
-
-    if use_cache:
-        with _package_cache_lock:
-            _package_cache = (time.monotonic(), packages)
-    return jsonify(packages)
-
-
-def _resolve_package_file(package: Optional[Path], filename: str) -> Optional[Path]:
-    """Resolve an existing regular file discovered beneath a package root."""
-    if package is None or not isinstance(filename, str):
-        return None
-    requested = filename.replace("\\", "/")
-    if not requested or requested.startswith("/") or requested.startswith("../") or "/../" in requested:
-        return None
-    root = package.resolve()
-    try:
-        candidates = package.rglob("*")
-    except OSError:
-        return None
-    for candidate in candidates:
-        try:
-            if not candidate.is_file() or candidate.is_symlink():
-                continue
-            relative = candidate.relative_to(package).as_posix()
-            if relative != requested:
-                continue
-            resolved = candidate.resolve()
-            resolved.relative_to(root)
-            return resolved
-        except (OSError, ValueError):
-            continue
-    return None
-
-
-@app.route("/api/packages/<name>/file/<path:filename>")
-def package_file(name, filename):
-    pkg_dir = _resolve_package(name)
-    if not _package_access_allowed(pkg_dir):
-        abort(404)
-    if pkg_dir is None:
-        abort(404)
-    resolved = _resolve_package_file(pkg_dir, filename)
-    if resolved is None:
-        abort(404)
-    return send_file(resolved)
-
-
-@app.route("/api/health")
-def health():
-    """Minimal unauthenticated liveness/readiness response."""
-    return jsonify({"status": "ok"})
-
-
-@app.route("/api/health/details")
-def health_details():
-    """Authenticated operational health; detailed capacity data is not public."""
-    usage = shutil.disk_usage(UPLOAD_FOLDER)
-    return jsonify({
-        "status": "ok",
-        "disk_free_mb": round(usage.free / (1024 * 1024), 1),
-        "ffmpeg_available": shutil.which("ffmpeg") is not None,
-        "ffprobe_available": shutil.which("ffprobe") is not None,
-        "active_jobs": _running_count(),
-        "max_content_length_mb": app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024),
-        "max_concurrent_jobs": int(get_settings().get("max_concurrent_jobs", 2)),
-        "capabilities": _runtime_capabilities(),
-    })
-
-
-init_db()
-
-if __name__ == "__main__":
-    from dashboard_auth import configure_dashboard_auth
-    from dashboard_compat import register_dashboard_compat
-    configure_dashboard_auth(app)
-    register_dashboard_compat(app)
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
