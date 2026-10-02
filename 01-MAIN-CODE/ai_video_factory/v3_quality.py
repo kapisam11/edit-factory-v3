@@ -133,17 +133,17 @@ def enforce_retention_events(input_path: str, output_path: str, retention_events
     # Effects must be visibly measurable after rendering, not merely serialized into the plan.
     # Keep them restrained enough for editorial use but large enough for independent QC to detect.
     kind_settings = {
-        "zoom": (1.07, 0.060),
-        "text": (1.05, 0.065),
-        "motion": (1.08, 0.065),
-        "angle": (1.09, 0.060),
-        "clip": (1.15, 0.080),
-        "beat drop": (1.20, 0.050),
+        "zoom": (1.12, 0.080),
+        "text": (1.10, 0.080),
+        "motion": (1.13, 0.085),
+        "angle": (1.15, 0.080),
+        "clip": (1.18, 0.100),
+        "beat drop": (1.25, 0.070),
     }
     filters = []
     for timestamp, kind in events:
         if timestamp >= info["duration"] - 0.02: raise RenderContractError(f"retention event at {timestamp:.3f}s is outside rendered duration")
-        contrast, brightness = kind_settings.get(kind, (1.04, 0.030)); start = max(0.0, timestamp - 0.04); end = min(info["duration"], timestamp + 0.16)
+        contrast, brightness = kind_settings.get(kind, (1.04, 0.030)); start = max(0.0, timestamp - 0.04); end = min(info["duration"], timestamp + 0.20)
         filters.append(f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:enable='between(t,{start:.3f},{end:.3f})'")
     fd, temp_path = tempfile.mkstemp(suffix=".mp4", dir=os.path.dirname(output_path) or "."); os.close(fd)
     try:
