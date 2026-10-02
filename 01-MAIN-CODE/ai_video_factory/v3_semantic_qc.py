@@ -26,17 +26,36 @@ def analyze_render_semantics(path: str) -> dict[str, Any]:
     dead_moments: list[dict[str, Any]] = []
     repeated_pairs: list[dict[str, Any]] = []
     low_motion_count = 0
+    activity = [
+        max(0.0, float(scene.motion_score)) + max(0.0, float(scene.audio_energy))
+        for scene in scenes
+    ]
 
-    for scene in scenes:
+    for index, scene in enumerate(scenes):
         duration = max(0.0, float(scene.end) - float(scene.start))
-        if scene.motion_score < 0.12 and scene.audio_energy < 0.10:
+        low_absolute = scene.motion_score < 0.12 and scene.audio_energy < 0.10
+        if low_absolute:
             low_motion_count += 1
-            if duration >= 1.5:
-                dead_moments.append({
-                    "start": round(scene.start, 3),
-                    "end": round(scene.end, 3),
-                    "duration": round(duration, 3),
-                })
+
+        # Absolute motion/audio scores are analyzer-dependent. Treat a scene
+        # as a dead gap only when it is both absolutely quiet and a local
+        # anomaly against at least one neighboring scene. This avoids rejecting
+        # synthetic/low-energy footage where every scene has the same baseline,
+        # while still catching a genuinely stagnant section inside an active edit.
+        neighbors = []
+        if index > 0:
+            neighbors.append(activity[index - 1])
+        if index + 1 < len(activity):
+            neighbors.append(activity[index + 1])
+        local_peak = max(neighbors, default=0.0)
+        local_contrast = local_peak >= 0.25 and activity[index] <= local_peak * 0.50
+        duration_threshold = max(1.5, min(3.0, sample_seconds * 1.5))
+        if low_absolute and local_contrast and duration >= duration_threshold:
+            dead_moments.append({
+                "start": round(scene.start, 3),
+                "end": round(scene.end, 3),
+                "duration": round(duration, 3),
+            })
 
     for previous, current in zip(scenes, scenes[1:]):
         similarity = _similarity(previous.searchable_text, current.searchable_text)

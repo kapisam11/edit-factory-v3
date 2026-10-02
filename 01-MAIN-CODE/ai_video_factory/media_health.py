@@ -1,12 +1,13 @@
 """Media health analysis and render-contract checks."""
 from __future__ import annotations
+from .v3_exceptions import V3ValidationError
 import json, math, os, re
 from pathlib import Path
 from fractions import Fraction
 from typing import Any, Mapping
 from .production_guardrails import run_tool
 
-class MediaHealthError(RuntimeError):
+class MediaHealthError(V3ValidationError):
     pass
 
 def probe_media(path: str | Path) -> dict[str, Any]:

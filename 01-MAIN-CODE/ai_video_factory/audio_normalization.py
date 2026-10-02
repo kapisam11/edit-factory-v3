@@ -7,8 +7,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 from .render_engine import run_ffmpeg, validate_media_output
+from .v3_exceptions import V3ExternalToolError
 
-class AudioNormalizationError(RuntimeError):
+class AudioNormalizationError(V3ExternalToolError):
     pass
 
 def _last_json(text: str) -> dict[str, Any]:

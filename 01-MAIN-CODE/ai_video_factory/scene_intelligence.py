@@ -13,11 +13,12 @@ from dataclasses import asdict
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .production_models import Scene
+from .v3_exceptions import V3ExternalToolError
 from .render_engine import run_ffprobe
 from .scene_detect_adapter import scene_windows
 
 
-class SceneAnalysisError(RuntimeError):
+class SceneAnalysisError(V3ExternalToolError):
     pass
 
 

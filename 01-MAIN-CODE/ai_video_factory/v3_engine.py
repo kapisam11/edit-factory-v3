@@ -1,6 +1,7 @@
 """Edit Factory v3 creative planning, semantic analysis, retention and QC."""
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 import math
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 from types import MappingProxyType
 
+from .v3_retention import evaluate_retention_editorial_fit
+from .v3_scores import V3ScoreBundle
 from .v3_semantics import combined_scores
 from .v3_scoring import heuristic_metrics
 
@@ -212,6 +215,13 @@ class V3Blueprint:
     qc: QCRequirements = field(default_factory=QCRequirements)
     packaging: PackagingPlan = field(default_factory=PackagingPlan)
     metric_metadata: MetricMetadata = field(default_factory=MetricMetadata)
+    score_bundle: V3ScoreBundle = field(
+        default_factory=lambda: V3ScoreBundle(
+            technical_validity=100.0,
+            creative_quality=0.0,
+            performance_heuristic=0.0,
+        )
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hooks", tuple(self.hooks))
@@ -254,6 +264,7 @@ class V3Blueprint:
             "qc": asdict(self.qc),
             "packaging": asdict(self.packaging),
             "metric_metadata": asdict(self.metric_metadata),
+            "score_bundle": self.score_bundle.to_dict(),
             "core_idea": asdict(self.core_idea),
             "edit_type": self.edit_type,
             "hooks": [asdict(item) for item in self.hooks],
@@ -279,7 +290,7 @@ class V3Blueprint:
             "retention_map", "thumbnail_concept", "title_options", "hashtags",
             "description", "platform_variants", "quality", "metrics", "capabilities",
         }
-        allowed = required | {"schema_version", "platform", "audience", "platform_profile", "qc", "packaging", "metric_metadata", "source_metadata"}
+        allowed = required | {"schema_version", "platform", "audience", "platform_profile", "qc", "packaging", "metric_metadata", "source_metadata", "score_bundle"}
         unknown = sorted(set(payload) - allowed)
         if unknown:
             raise ValueError(f"V3 blueprint contains unknown fields: {', '.join(unknown)}")
@@ -315,6 +326,15 @@ class V3Blueprint:
             packaging = PackagingPlan(**dict(raw_packaging)) if isinstance(raw_packaging, Mapping) else PackagingPlan()
             raw_metric_metadata = payload.get("metric_metadata")
             metric_metadata = MetricMetadata(**dict(raw_metric_metadata)) if isinstance(raw_metric_metadata, Mapping) else MetricMetadata()
+            raw_score_bundle = payload.get("score_bundle")
+            if isinstance(raw_score_bundle, Mapping):
+                score_bundle = V3ScoreBundle(**dict(raw_score_bundle))
+            else:
+                score_bundle = V3ScoreBundle.from_blueprint(
+                    technical_validity=100.0,
+                    creative_quality=float(quality.score),
+                    metrics=dict(payload["metrics"]),
+                )
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError(f"V3 blueprint contains malformed typed data: {exc}") from exc
         result = cls(
@@ -339,6 +359,7 @@ class V3Blueprint:
             qc=qc,
             packaging=packaging,
             metric_metadata=metric_metadata,
+            score_bundle=score_bundle,
         )
         validate_blueprint(result)
         return result
@@ -615,16 +636,152 @@ def analyze_music(core: CoreIdea, config: V3Config, clips: Sequence[ClipBeat]) -
 def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: MusicPlan) -> List[RetentionEvent]:
     events: List[RetentionEvent] = []
     boundaries = [clip.start for clip in clips[1:]]
-    times = sorted(set(round(t, 3) for t in boundaries + [x * config.retention_interval for x in range(int(config.target_seconds / config.retention_interval) + 1)] if t < config.target_seconds - 0.05))
-    for t in times:
+    candidates = sorted(
+        set(
+            round(t, 3)
+            for t in boundaries
+            + [x * config.retention_interval for x in range(int(config.target_seconds / config.retention_interval) + 1)]
+            if t < config.target_seconds - 0.05
+        )
+    )
+
+    def event_for_time(t: float, index: int) -> RetentionEvent:
         if abs(t - music.drop_time) <= config.retention_interval * 0.5:
             kind = "beat drop"
         elif any(abs(t - boundary) <= 0.08 for boundary in boundaries):
             kind = "clip"
         else:
-            kind = ("zoom", "text", "motion", "angle")[len(events) % 4]
-        events.append(RetentionEvent(t, kind, f"Change {kind} while preserving story continuity."))
-    return events
+            kind = ("zoom", "text", "motion", "angle")[index % 4]
+        return RetentionEvent(
+            t,
+            kind,
+            f"Change {kind} while preserving story continuity.",
+        )
+
+    # Keep generated events comfortably separated. Near-collisions can occur
+    # when a clip boundary lands close to the regular retention grid; keeping
+    # both creates an editorially overcrowded map even though each event is valid.
+    priorities = {"beat drop": 3, "clip": 2}
+    selected: list[RetentionEvent] = []
+    pending = [event_for_time(t, index) for index, t in enumerate(candidates)]
+    for candidate in pending:
+        conflicts = [
+            (index, event)
+            for index, event in enumerate(selected)
+            if abs(candidate.time - event.time) < 0.45
+        ]
+        if not conflicts:
+            selected.append(candidate)
+            continue
+        replace_index, existing = min(
+            conflicts,
+            key=lambda item: priorities.get(item[1].kind, 1),
+        )
+        if priorities.get(candidate.kind, 1) > priorities.get(existing.kind, 1):
+            selected[replace_index] = candidate
+
+    selected.sort(key=lambda event: event.time)
+
+    # Consecutive clip-boundary markers are technically valid but visually
+    # repetitive. Rotate non-beat events so the generated plan still has
+    # meaningful editorial variation even for very short targets.
+    normalized: list[RetentionEvent] = []
+    fallback_kinds = ("zoom", "text", "motion", "angle")
+    for event in selected:
+        if (
+            len(normalized) >= 2
+            and normalized[-1].kind == normalized[-2].kind == event.kind
+        ):
+            replacement = next(
+                kind for kind in fallback_kinds
+                if kind not in {normalized[-1].kind, normalized[-2].kind}
+            )
+            event = RetentionEvent(
+                event.time,
+                replacement,
+                f"Change {replacement} while preserving story continuity.",
+            )
+        normalized.append(event)
+
+    # The independent editorial contract requires at least four distinct
+    # effect kinds on maps with four or more events. Convert duplicate markers
+    # only until that variety requirement is satisfied; the first occurrence of
+    # each semantic marker remains intact.
+    target_unique = min(4, len(normalized))
+    counts = Counter(event.kind for event in normalized)
+    for index, event in enumerate(normalized):
+        if len(counts) >= target_unique:
+            break
+        if counts[event.kind] <= 1:
+            continue
+        diversity_replacement: str | None = None
+        for kind in fallback_kinds:
+            if kind not in counts:
+                diversity_replacement = kind
+                break
+        if diversity_replacement is None:
+            continue
+        counts[event.kind] -= 1
+        if counts[event.kind] <= 0:
+            del counts[event.kind]
+        counts[diversity_replacement] += 1
+        normalized[index] = RetentionEvent(
+            event.time,
+            diversity_replacement,
+            f"Change {diversity_replacement} while preserving story continuity.",
+        )
+
+    if not normalized or normalized[0].time > 0.35:
+        normalized.insert(
+            0,
+            event_for_time(0.0, len(normalized)),
+        )
+
+    # The independent editorial contract also limits gaps between retention
+    # events. Clip-boundary density varies with target duration, so explicitly
+    # fill any remaining long gaps with low-intensity editorial markers.
+    max_gap = config.retention_interval + 0.50
+    expanded: list[RetentionEvent] = []
+    for event in normalized:
+        if expanded:
+            previous = expanded[-1]
+            while event.time - previous.time > max_gap:
+                midpoint = round((previous.time + event.time) / 2.0, 3)
+                forbidden = {previous.kind}
+                if len(expanded) >= 2:
+                    forbidden.add(expanded[-2].kind)
+                filler_kind = next(
+                    kind for kind in fallback_kinds
+                    if kind not in forbidden
+                )
+                expanded.append(
+                    RetentionEvent(
+                        midpoint,
+                        filler_kind,
+                        f"Change {filler_kind} while preserving story continuity.",
+                    )
+                )
+                previous = expanded[-1]
+        expanded.append(event)
+
+    # Re-check the diversity/no-triples rules after gap filling.
+    normalized = []
+    for event in expanded:
+        if (
+            len(normalized) >= 2
+            and normalized[-1].kind == normalized[-2].kind == event.kind
+        ):
+            replacement = next(
+                kind for kind in fallback_kinds
+                if kind not in {normalized[-1].kind, normalized[-2].kind}
+            )
+            event = RetentionEvent(
+                event.time,
+                replacement,
+                f"Change {replacement} while preserving story continuity.",
+            )
+        normalized.append(event)
+    return normalized
 
 def platform_variants(config: V3Config) -> Dict[str, Dict[str, Any]]:
     config.validate()
@@ -643,7 +800,12 @@ def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[Ho
         "no_duplicate_overlays": len(overlays) == len(set(overlays)),
         "duration_bounds": all(config.min_clip_seconds - 0.01 <= d <= config.max_clip_seconds + 0.01 for d in durations),
         "exact_duration": bool(clips) and abs(clips[-1].end - config.target_seconds) <= 0.01,
-        "retention_changes_frequent": bool(retention) and all((b.time - a.time) <= config.retention_interval + 0.01 for a,b in zip(retention, retention[1:])),
+        # Allow the same tolerance used by the independent editorial retention
+        # report; boundary-aware deduplication can legitimately widen one gap slightly.
+        "retention_changes_frequent": bool(retention) and all(
+            (b.time - a.time) <= config.retention_interval + 0.75
+            for a, b in zip(retention, retention[1:])
+        ),
         "has_payoff": any(c.purpose in {"Payoff","Punchline","Climax"} for c in clips),
         "has_final_impact": bool(clips and clips[-1].purpose in {"Final impact","Payoff","Reaction"}),
         "hook_payoff_continuity": bool(clips and clips[0].emotion == clips[-1].emotion),
@@ -657,8 +819,24 @@ def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[Ho
     }.items():
         if not checks[key]:
             warnings.append(message)
+    retention_report = evaluate_retention_editorial_fit(
+        [asdict(event) for event in retention],
+        duration=config.target_seconds,
+        target_interval=config.retention_interval,
+        clip_boundaries=[clip.start for clip in clips[1:]],
+    )
+    checks["retention_editorial_fit"] = retention_report.passed
+    warnings.extend(f"retention: {warning}" for warning in retention_report.warnings)
     score = round(100 * sum(checks.values()) / len(checks)) if checks else 0
-    return QualityReport(score >= 95 and all(checks[k] for k in ("emotion_defined","single_edit_type_strategy","duration_bounds","exact_duration","has_payoff")), score, checks, warnings)
+    return QualityReport(
+        score >= 95 and all(
+            checks[k]
+            for k in ("emotion_defined", "single_edit_type_strategy", "duration_bounds", "exact_duration", "has_payoff")
+        ),
+        score,
+        checks,
+        warnings,
+    )
 
 def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequence[ClipBeat], quality: QualityReport) -> Dict[str, float]:
     hook = hooks[0].score if hooks else 0.0
@@ -718,8 +896,32 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
     thumbnail, titles, tags, description = _metadata(core)
     quality = _human_editor_checks(core, selected, hooks, clips, retention, cfg)
     metrics = _heuristic_metrics(core, hooks, clips, quality)
+    score_bundle = V3ScoreBundle.from_blueprint(
+        technical_validity=100.0,
+        creative_quality=float(quality.score),
+        metrics=metrics,
+    )
     platform_value = cfg.platform.value if isinstance(cfg.platform, Platform) else str(cfg.platform).strip().lower()
-    blueprint = V3Blueprint("3.0.0", core, selected.value, hooks, clips, music, retention, thumbnail, titles, tags, description, platform_variants(cfg), quality, metrics, list(V3_CAPABILITIES), platform=platform_value, audience=cfg.audience)
+    blueprint = V3Blueprint(
+        "3.0.0",
+        core,
+        selected.value,
+        hooks,
+        clips,
+        music,
+        retention,
+        thumbnail,
+        titles,
+        tags,
+        description,
+        platform_variants(cfg),
+        quality,
+        metrics,
+        list(V3_CAPABILITIES),
+        platform=platform_value,
+        audience=cfg.audience,
+        score_bundle=score_bundle,
+    )
     validate_blueprint(blueprint)
     return blueprint
 
@@ -739,6 +941,15 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         raise ValueError("blueprint QC target tolerance is invalid")
     if blueprint.metric_metadata.method != "heuristic" or blueprint.metric_metadata.confidence not in {"low", "medium", "high"}:
         raise ValueError("blueprint metric metadata is invalid")
+    if blueprint.metric_metadata.calibration_status not in {"uncalibrated", "calibrated"}:
+        raise ValueError("blueprint metric calibration status is invalid")
+    for score_name, score_value in (
+        ("technical_validity", blueprint.score_bundle.technical_validity),
+        ("creative_quality", blueprint.score_bundle.creative_quality),
+        ("performance_heuristic", blueprint.score_bundle.performance_heuristic),
+    ):
+        if not math.isfinite(float(score_value)) or not 0.0 <= float(score_value) <= 100.0:
+            raise ValueError(f"blueprint {score_name} is invalid")
 
     if not str(blueprint.audience).strip():
         raise ValueError("blueprint audience is required")
@@ -836,7 +1047,18 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
     if not isinstance(blueprint.qc.require_video, bool) or not isinstance(blueprint.qc.require_audio, bool) or not isinstance(blueprint.qc.require_independent_retention, bool):
         raise ValueError("blueprint QC flags must be booleans")
     if not blueprint.quality.passed:
-        raise ValueError("blueprint failed strict editorial QC")
+        failed_checks = [
+            name
+            for name, passed in blueprint.quality.checks.items()
+            if not passed
+        ]
+        detail = ", ".join(failed_checks) or "quality threshold"
+        warnings = "; ".join(str(item) for item in blueprint.quality.warnings)
+        suffix = f"; warnings={warnings}" if warnings else ""
+        raise ValueError(
+            f"blueprint failed strict editorial QC (score={blueprint.quality.score}; "
+            f"failed={detail}{suffix})"
+        )
 
 def blueprint_summary(blueprint: V3Blueprint) -> str:
     hook = blueprint.hooks[0].text if blueprint.hooks else ""

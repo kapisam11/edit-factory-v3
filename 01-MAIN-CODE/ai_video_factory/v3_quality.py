@@ -1,5 +1,6 @@
 """Strict post-render quality and contract verification for Edit Factory v3."""
 from __future__ import annotations
+from .v3_exceptions import V3ValidationError
 
 import json
 import math
@@ -12,7 +13,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 from .ffmpeg_budget import run_ffmpeg_subprocess
 
 
-class RenderContractError(RuntimeError):
+class RenderContractError(V3ValidationError):
     """Raised when a rendered artifact violates the requested production contract."""
 
 
@@ -132,17 +133,17 @@ def enforce_retention_events(input_path: str, output_path: str, retention_events
     # Effects must be visibly measurable after rendering, not merely serialized into the plan.
     # Keep them restrained enough for editorial use but large enough for independent QC to detect.
     kind_settings = {
-        "zoom": (1.06, 0.055),
-        "text": (1.04, 0.060),
-        "motion": (1.07, 0.060),
-        "angle": (1.08, 0.055),
-        "clip": (1.10, 0.060),
-        "beat drop": (1.18, 0.045),
+        "zoom": (1.12, 0.080),
+        "text": (1.10, 0.080),
+        "motion": (1.13, 0.085),
+        "angle": (1.15, 0.080),
+        "clip": (1.18, 0.100),
+        "beat drop": (1.25, 0.070),
     }
     filters = []
     for timestamp, kind in events:
         if timestamp >= info["duration"] - 0.02: raise RenderContractError(f"retention event at {timestamp:.3f}s is outside rendered duration")
-        contrast, brightness = kind_settings.get(kind, (1.04, 0.030)); start = max(0.0, timestamp - 0.04); end = min(info["duration"], timestamp + 0.16)
+        contrast, brightness = kind_settings.get(kind, (1.04, 0.030)); start = max(0.0, timestamp - 0.04); end = min(info["duration"], timestamp + 0.20)
         filters.append(f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:enable='between(t,{start:.3f},{end:.3f})'")
     fd, temp_path = tempfile.mkstemp(suffix=".mp4", dir=os.path.dirname(output_path) or "."); os.close(fd)
     try:
