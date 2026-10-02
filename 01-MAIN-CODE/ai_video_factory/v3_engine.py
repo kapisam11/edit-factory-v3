@@ -736,6 +736,51 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
             0,
             event_for_time(0.0, len(normalized)),
         )
+
+    # The independent editorial contract also limits gaps between retention
+    # events. Clip-boundary density varies with target duration, so explicitly
+    # fill any remaining long gaps with low-intensity editorial markers.
+    max_gap = config.retention_interval + 0.50
+    expanded: list[RetentionEvent] = []
+    for event in normalized:
+        if expanded:
+            previous = expanded[-1]
+            while event.time - previous.time > max_gap:
+                midpoint = round((previous.time + event.time) / 2.0, 3)
+                forbidden = {previous.kind}
+                if len(expanded) >= 2:
+                    forbidden.add(expanded[-2].kind)
+                filler_kind = next(
+                    kind for kind in fallback_kinds
+                    if kind not in forbidden
+                )
+                expanded.append(
+                    RetentionEvent(
+                        midpoint,
+                        filler_kind,
+                        f"Change {filler_kind} while preserving story continuity.",
+                    )
+                )
+                previous = expanded[-1]
+        expanded.append(event)
+
+    # Re-check the diversity/no-triples rules after gap filling.
+    normalized = []
+    for event in expanded:
+        if (
+            len(normalized) >= 2
+            and normalized[-1].kind == normalized[-2].kind == event.kind
+        ):
+            replacement = next(
+                kind for kind in fallback_kinds
+                if kind not in {normalized[-1].kind, normalized[-2].kind}
+            )
+            event = RetentionEvent(
+                event.time,
+                replacement,
+                f"Change {replacement} while preserving story continuity.",
+            )
+        normalized.append(event)
     return normalized
 
 def platform_variants(config: V3Config) -> Dict[str, Dict[str, Any]]:
