@@ -1051,6 +1051,8 @@ def create_job():
                                 original_media_hash = sha256_file(original_path)
                             except OSError:
                                 original_media_hash = None
+                        if original_media_hash is None:
+                            original_media_hash = _persisted_input_media_hash(existing, existing_params)
                         legacy_replay_safe = (
                             (current_media_hash is None and original_media_hash is None)
                             or (
