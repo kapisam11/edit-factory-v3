@@ -49,7 +49,10 @@ def analyze_render_semantics(path: str) -> dict[str, Any]:
             neighbors.append(activity[index + 1])
         local_peak = max(neighbors, default=0.0)
         local_contrast = local_peak >= 0.25 and activity[index] <= local_peak * 0.50
-        duration_threshold = max(1.5, min(3.0, sample_seconds * 1.5))
+        # Scene sampling is normally capped at 2.5s. Requiring 3.0s here
+        # lets an entire sampled dead scene evade QC. Use the sampled scene
+        # duration as the baseline while retaining a 1.5s floor.
+        duration_threshold = max(1.5, min(2.5, sample_seconds))
         if low_absolute and local_contrast and duration >= duration_threshold:
             dead_moments.append({
                 "start": round(scene.start, 3),
