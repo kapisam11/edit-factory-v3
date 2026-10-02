@@ -187,6 +187,28 @@ def test_legacy_idempotency_media_hash_can_use_persisted_provenance(monkeypatch,
     ) == "a" * 64
 
 
+def test_legacy_idempotency_fingerprint_ignores_new_nested_metadata(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    legacy = {
+        "topic": "same",
+        "workflow": "v3",
+        "_principal": "alice",
+        "source_metadata": {
+            "rights_basis": "owned",
+        },
+    }
+    current = {
+        **legacy,
+        "source_metadata": {
+            **legacy["source_metadata"],
+            "rights_status": "owned",
+            "evidence_url": "https://example.com/evidence",
+            "license_url": "https://example.com/license",
+        },
+    }
+    assert appmod._legacy_request_fingerprint(current, legacy) == appmod._request_fingerprint(legacy, None)
+
+
 def test_dashboard_idempotency_fingerprint_includes_uploaded_media(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
     first = tmp_path / "first.mp4"
