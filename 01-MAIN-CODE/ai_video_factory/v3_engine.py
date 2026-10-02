@@ -13,6 +13,7 @@ from types import MappingProxyType
 from .v3_retention import evaluate_retention_editorial_fit
 from .v3_scores import V3ScoreBundle
 from .editorial_evaluation import EditorialDecision, Evidence, build_retention_decisions, summarize_editorial_evidence
+from .idempotency import stable_hash
 from .v3_semantics import combined_scores
 from .v3_scoring import heuristic_metrics
 
@@ -742,10 +743,10 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
                 RetentionEvent(
                     midpoint,
                     "motion",
-                    "Visual continuity: add a restrained motion change only where the narrative beat needs support.",
+                    "Visual continuity: consider no effect unless the narrative beat needs support.",
                     "VISUAL_CONTINUITY",
-                    0.58,
-                    0.58,
+                    0.25,
+                    0.25,
                 )
             )
         filled.append(event)
@@ -765,10 +766,10 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
                 RetentionEvent(
                     midpoint,
                     filler_kind,
-                    "Visual continuity: add a restrained transition only where the narrative gap requires support.",
+                    "Visual continuity: consider no effect unless the narrative gap needs support.",
                     "VISUAL_CONTINUITY",
-                    0.55,
-                    0.55,
+                    0.25,
+                    0.25,
                 )
             )
         if len(result) >= 2 and result[-1].kind == result[-2].kind == event.kind:
@@ -906,7 +907,14 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
     quality = _human_editor_checks(core, selected, hooks, clips, retention, cfg)
     metrics = _heuristic_metrics(core, hooks, clips, quality)
     clip_purposes = {round(clip.start, 3): clip.purpose for clip in clips}
-    editorial_decisions = build_retention_decisions([asdict(event) for event in retention], clip_purposes=clip_purposes)
+    config_hash = stable_hash(asdict(cfg))
+    editorial_decisions = build_retention_decisions(
+        [asdict(event) for event in retention],
+        clip_purposes=clip_purposes,
+        config_hash=config_hash,
+        policy_version="2.0.0-semantic",
+        planner_version="3.0.0",
+    )
     score_bundle = V3ScoreBundle.from_blueprint(
         technical_validity=100.0,
         creative_quality=float(quality.score),
