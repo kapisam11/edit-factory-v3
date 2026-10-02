@@ -19,7 +19,7 @@ from .v3_quality import RenderContractError, enforce_retention_events, normalize
 from .v3_semantic_qc import analyze_render_semantics
 from .v3_contracts import V3Request
 from .v3_exceptions import V3PipelineError
-from .v3_stage_pipeline import V3PipelineRunner
+from .v3_stage_pipeline import V3PipelineRunner, _reset_v3_package
 from .media_health import MediaHealthError, analyze_media
 from .media_metadata import extract_media_metadata
 from .audio_normalization import AudioNormalizationError, normalize_loudness
@@ -372,6 +372,11 @@ def run_v3_pipeline(
         enable_diarization=enable_diarization,
         diarization_token=diarization_token,
     )
+
+    # Clear stale package evidence before any public preflight can fail. The
+    # reset helper protects package-local source media and rejects dangerous
+    # generated filenames without leaving a stale READY package behind.
+    _reset_v3_package(Path(package_dir), input_video=input_video)
 
     # Public callers historically received input-contract failures immediately.
     # Keep that behavior while the stage runner handles later operational failures
