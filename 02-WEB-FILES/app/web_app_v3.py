@@ -20,7 +20,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory
 from werkzeug.exceptions import RequestEntityTooLarge
