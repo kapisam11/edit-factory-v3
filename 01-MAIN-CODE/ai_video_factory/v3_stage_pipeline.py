@@ -614,6 +614,7 @@ class ReleaseEvidenceStage:
                 "diagnostics.json",
                 "environment_fingerprint.json",
                 "editorial_decisions.json",
+                "v3_stage_cache.json",
             ),
         )
         atomic_write_json(context.package / "artifact_manifest.json", manifest)
