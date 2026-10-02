@@ -100,8 +100,41 @@ class DashboardStore:
                     raise
 
     def ensure_indexes(self) -> None:
-        """Add indexes, retry state migration, and lifecycle guards."""
+        """Bootstrap required tables, then add indexes and lifecycle guards."""
         with self.connect() as conn:
+            # DashboardStore is also used against fresh/empty SQLite files in
+            # tests and recovery paths. Bootstrap the minimal storage schema
+            # before creating triggers or indexes that reference these tables.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY,
+                    topic TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    step TEXT NOT NULL DEFAULT 'waiting',
+                    params TEXT NOT NULL DEFAULT '{}',
+                    pkg_dir TEXT,
+                    error TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    worker_heartbeat_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS rate_limits (
+                    client_ip TEXT NOT NULL,
+                    ts REAL NOT NULL
+                )
+            """)
             self._ensure_job_columns(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
