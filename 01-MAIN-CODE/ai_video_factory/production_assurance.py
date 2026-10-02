@@ -25,6 +25,9 @@ _DEFAULT_EXCLUDES = {
     "artifact_manifest.json",
     "release_evidence.json",
     "resource_usage.json",
+    # Generated after release evidence/manifest finalization. It is operational
+    # telemetry, not a release artifact, so it must not invalidate the snapshot.
+    "v3_stage_timings.json",
     # Created outside the final integrity snapshot or intentionally transient.
     "v3_job_result.json",
     "final.v3.retention.mp4",
