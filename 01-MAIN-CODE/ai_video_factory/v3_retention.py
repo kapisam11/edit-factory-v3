@@ -57,7 +57,16 @@ def evaluate_retention_editorial_fit(
     min_gap = min(gaps) if gaps else float(duration)
     max_gap = max(gaps) if gaps else float(duration)
     counts = Counter(kinds)
-    diversity = len(counts) / max(1, len(kinds))
+    unique_kinds = len(counts)
+    most_common_share = max(counts.values(), default=0) / max(1, len(kinds))
+    # There are only six registered retention kinds. A raw
+    # unique-kind/event-count ratio therefore becomes mathematically
+    # impossible as timelines get longer. Measure variety by requiring
+    # multiple distinct kinds while preventing one effect from dominating.
+    diversity = round(
+        unique_kinds / min(6, max(1, len(kinds))),
+        3,
+    )
 
     checks: dict[str, bool] = {
         "has_events": bool(events),
@@ -66,7 +75,10 @@ def evaluate_retention_editorial_fit(
         "positive_gaps": all(gap > 0 for gap in gaps),
         "not_overcrowded": min_gap >= max(0.35, float(target_interval) * 0.20),
         "no_long_gaps": max_gap <= float(target_interval) + 0.75,
-        "effect_diversity": diversity >= (0.30 if len(kinds) >= 6 else 0.20),
+        "effect_diversity": (
+            unique_kinds >= min(4, len(kinds))
+            and most_common_share <= 0.70
+        ),
         "no_three_same_in_row": all(
             not (a == b == c) for a, b, c in zip(kinds, kinds[1:], kinds[2:])
         ),
