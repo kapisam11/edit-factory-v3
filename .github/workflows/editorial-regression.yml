@@ -1,0 +1,19 @@
+name: Editorial regression
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  editorial:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Deterministic replay and editorial regression tests
+        run: pytest -q 04-TESTS/tests/test_deterministic_replay.py 04-TESTS/tests/test_editorial_regression.py 04-TESTS/tests/test_editorial_benchmark.py 04-TESTS/tests/test_editorial_decision_provenance.py
