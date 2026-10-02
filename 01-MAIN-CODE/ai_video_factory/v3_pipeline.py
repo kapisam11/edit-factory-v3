@@ -385,14 +385,14 @@ def run_v3_pipeline(
         # Keep that behavior while the stage runner handles later operational failures
         # as structured ProductionResult errors.
         request.validate()
-    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
-    qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
-    if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0" and (
-        environment not in {"development", "test"} or not qc_override
-    ):
-        raise V3InputError(
-            "AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1"
-        )
+        environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+        qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
+        if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0" and (
+            environment not in {"development", "test"} or not qc_override
+        ):
+            raise V3InputError(
+                "AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1"
+            )
     except V3PipelineError as exc:
         _write_failed_evidence(
             package,
