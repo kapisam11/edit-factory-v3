@@ -736,7 +736,7 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
     ordered = sorted(events, key=lambda event: event.time)
     filled: list[RetentionEvent] = []
     for event in ordered:
-        if filled and event.time - filled[-1].time > max_semantic_gap:
+        while filled and event.time - filled[-1].time > max_semantic_gap:
             midpoint = round((filled[-1].time + event.time) / 2.0, 3)
             filled.append(
                 RetentionEvent(
