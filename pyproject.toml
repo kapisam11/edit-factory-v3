@@ -96,6 +96,7 @@ files = [
   "01-MAIN-CODE/ai_video_factory/v3_retention.py",
   "01-MAIN-CODE/ai_video_factory/v3_asset_packager.py",
   "01-MAIN-CODE/ai_video_factory/v3_stage_pipeline.py",
+  "01-MAIN-CODE/ai_video_factory/v3_performance.py",
 ]
 
 [tool.ruff]
@@ -112,6 +113,7 @@ module = [
   "ai_video_factory.v3_retention",
   "ai_video_factory.v3_asset_packager",
   "ai_video_factory.v3_stage_pipeline",
+  "ai_video_factory.v3_performance",
   "ai_video_factory.v3_scoring",
 ]
 disallow_untyped_defs = true
