@@ -851,6 +851,40 @@ def _strip_idempotency_volatile(value: Any) -> Any:
     return value
 
 
+def _persisted_input_media_hash(existing_job: Mapping[str, Any], existing_params: Mapping[str, Any]) -> Optional[str]:
+    """Recover an old job's source-media hash from its persisted provenance."""
+    package_candidates = [
+        existing_job.get("pkg_dir"),
+        existing_params.get("pkg_dir"),
+    ]
+    output_root = OUTPUT_FOLDER.resolve()
+    for raw_package in package_candidates:
+        if not raw_package:
+            continue
+        try:
+            package = Path(str(raw_package)).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if package == output_root or output_root not in package.parents:
+            continue
+        provenance_path = package / "provenance.json"
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        assets = provenance.get("assets") if isinstance(provenance, dict) else None
+        if not isinstance(assets, list):
+            continue
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            asset_id = str(asset.get("asset_id") or "").strip().lower()
+            media_hash = str(asset.get("sha256") or "").strip().lower()
+            if asset_id == "source_video" and re.fullmatch(r"[0-9a-f]{64}", media_hash):
+                return media_hash
+    return None
+
+
 def _request_fingerprint(params: dict, upload_path: Optional[Path] = None) -> str:
     """Fingerprint request intent and, when present, the uploaded media bytes."""
     payload = {
