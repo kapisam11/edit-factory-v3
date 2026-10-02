@@ -225,8 +225,10 @@ class InputValidationStage:
             minimum_free_mb = int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "512"))
         except ValueError as exc:
             raise V3InputError("AIVF_MIN_FREE_DISK_MB must be an integer") from exc
-        if minimum_free_mb < 0:
-            raise V3InputError("AIVF_MIN_FREE_DISK_MB cannot be negative")
+        if not 256 <= minimum_free_mb <= 1024 * 1024:
+            raise V3InputError(
+                "AIVF_MIN_FREE_DISK_MB must be between 256 and 1048576"
+            )
         require_free_disk(context.package, minimum_free_mb * 1024 * 1024)
         _cleanup_transients(context.package)
 
