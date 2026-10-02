@@ -1,7 +1,11 @@
+import json
 from pathlib import Path
 
+import pytest
+
 from ai_video_factory import artifact_readiness, render_engine, v3_pipeline
-from ai_video_factory.production_models import ProductionResult
+from ai_video_factory.production_models import ProductionResult, Scene
+from ai_video_factory.v3_engine import V3Config, create_v3_blueprint
 
 
 def test_silent_source_voiceover_preserves_video_duration(monkeypatch, tmp_path):
@@ -81,3 +85,214 @@ def test_resolve_final_video_rejects_invalid_v3_artifact(monkeypatch, tmp_path):
 
     monkeypatch.setattr(artifact_readiness, "probe_media", reject)
     assert artifact_readiness.resolve_final_video(package) is None
+
+
+def test_v3_audience_profile_and_research_summary_cover_editorial_metadata(monkeypatch):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    blueprint = create_v3_blueprint("Minecraft clutch", config=V3Config(target_seconds=12))
+    payload = blueprint.to_dict()
+    payload["audience"] = "gaming viewers"
+    payload["source_metadata"] = {"rights_status": "owned"}
+
+    summary = v3_pipeline._research_summary_from_blueprint(
+        payload,
+        {"scene_count": 2, "top_scenes": [{"id": "scene_1"}]},
+    )
+
+    assert summary["audience_profile"]["tone"] == "energetic"
+    assert summary["target_total_seconds"] == blueprint.duration
+    assert summary["cuts_per_minute"] > 0
+    assert summary["source_metadata"]["rights_status"] == "owned"
+    assert summary["v3_directives"]["disable_templates"] is True
+    assert summary["v3_directives"]["blueprint_contract"] == "3.0.0"
+
+
+def test_v3_footage_evidence_ranks_and_serializes_scenes(monkeypatch):
+    scenes = [
+        Scene(
+            "low",
+            2.0,
+            4.0,
+            description="low",
+            transcript="later",
+            objects=["tree"],
+            text=["TEXT"],
+            motion_score=0.2,
+            audio_energy=0.3,
+            face_count=1,
+            importance_score=0.2,
+        ),
+        Scene(
+            "high",
+            0.0,
+            2.0,
+            description="high",
+            transcript="hook",
+            objects=["player"],
+            text=["HOOK"],
+            motion_score=0.9,
+            audio_energy=0.8,
+            face_count=2,
+            importance_score=0.9,
+        ),
+    ]
+    monkeypatch.setattr(v3_pipeline, "analyze_video", lambda *args, **kwargs: scenes)
+
+    evidence = v3_pipeline._build_footage_evidence("source.mp4", enable_ocr=True, min_scenes=2)
+
+    assert evidence["scene_count"] == 2
+    assert evidence["top_scenes"][0]["id"] == "high"
+    assert evidence["top_scenes"][0]["motion_score"] == 0.9
+    assert evidence["top_scenes"][0]["audio_energy"] == 0.8
+    assert evidence["top_scenes"][0]["objects"] == ["player"]
+    assert evidence["top_scenes"][0]["text"] == ["HOOK"]
+
+
+def test_v3_timeline_contract_accepts_valid_boundaries_and_rejects_corruption(tmp_path):
+    package = Path(tmp_path)
+    blueprint_payload = {
+        "clip_plan": [
+            {"start": 0.0, "end": 2.0},
+            {"start": 2.0, "end": 5.0},
+        ],
+    }
+    (package / "timeline.json").write_text(
+        json.dumps({
+            "duration": 5.0,
+            "segments": [
+                {"start": 0.0, "end": 2.0},
+                {"start": 2.0, "end": 5.0},
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    assert v3_pipeline._validate_timeline_contract(package, blueprint_payload, 5.0) is None
+
+    (package / "timeline.json").write_text(
+        json.dumps({
+            "duration": 5.0,
+            "segments": [{"start": 0.0, "end": 3.0}, {"start": 2.0, "end": 5.0}],
+        }),
+        encoding="utf-8",
+    )
+    with pytest.raises(v3_pipeline.RenderContractError, match="diverges from blueprint"):
+        v3_pipeline._validate_timeline_contract(package, blueprint_payload, 5.0)
+
+    (package / "timeline.json").write_text(
+        json.dumps({
+            "duration": 4.0,
+            "segments": [
+                {"start": 0.0, "end": 2.0},
+                {"start": 2.0, "end": 5.0},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    with pytest.raises(v3_pipeline.RenderContractError, match="timeline duration diverges"):
+        v3_pipeline._validate_timeline_contract(package, blueprint_payload, 5.0)
+
+
+def test_v3_cleanup_removes_only_known_transients(tmp_path):
+    package = Path(tmp_path)
+    for name in (
+        "final.v3.retention.mp4",
+        ".final.v3.normalized.mp4",
+        ".final.v3.audio-normalized.mp4",
+        ".aivf-render.partial",
+    ):
+        (package / name).write_bytes(b"x")
+    thumb = package / "aivf-v3-thumb-example"
+    thumb.mkdir()
+    (thumb / "frame.jpg").write_bytes(b"x")
+    keep = package / "final.v3.mp4"
+    keep.write_bytes(b"canonical")
+
+    v3_pipeline._cleanup_v3_transients(package)
+
+    assert not (package / "final.v3.retention.mp4").exists()
+    assert not (package / ".final.v3.normalized.mp4").exists()
+    assert not (package / ".final.v3.audio-normalized.mp4").exists()
+    assert not (package / ".aivf-render.partial").exists()
+    assert not thumb.exists()
+    assert keep.read_bytes() == b"canonical"
+
+
+def test_v3_prepare_blueprint_persists_source_metadata(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    source_metadata = {"rights_status": "owned", "declared_by": "tester"}
+
+    blueprint, payload, blueprint_path = v3_pipeline._prepare_blueprint(
+        "A subject",
+        "context",
+        8.0,
+        "youtube_shorts",
+        "general short-form viewers",
+        120,
+        Path(tmp_path),
+        None,
+        source_metadata,
+    )
+
+    stored = json.loads(blueprint_path.read_text(encoding="utf-8"))
+    assert blueprint.duration == 8.0
+    assert payload["source_metadata"] == source_metadata
+    assert stored["source_metadata"] == source_metadata
+
+
+def test_v3_baseline_request_is_contract_derived(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=8))
+    payload = blueprint.to_dict()
+    request = v3_pipeline._build_baseline_request(
+        input_video="source.mp4",
+        topic="A subject",
+        package_dir=str(tmp_path),
+        target_seconds=8.0,
+        platform="youtube_shorts",
+        blueprint=blueprint,
+        blueprint_payload=payload,
+        footage_evidence={"scene_count": 1, "top_scenes": []},
+        model_key=None,
+        skip_qc=False,
+        music_path=None,
+        enable_ocr=False,
+        enable_object_detection=True,
+        enable_diarization=False,
+        diarization_token=None,
+    )
+
+    assert request.input_video == "source.mp4"
+    assert request.platform == "youtube_shorts"
+    assert request.target_seconds == 8.0
+    assert request.render_plan.retention_map == ()
+    assert request.research_summary["v3_directives"]["blueprint_contract"] == "3.0.0"
+
+
+def test_v3_audio_normalization_returns_original_when_disabled(monkeypatch, tmp_path):
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"video")
+    monkeypatch.setenv("AIVF_EBU_R128", "0")
+    assert v3_pipeline._normalize_final_audio(tmp_path, str(source)) == str(source)
+
+
+def test_v3_audio_normalization_replaces_source_on_success(monkeypatch, tmp_path):
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"source")
+    normalized = tmp_path / ".final.v3.audio-normalized.mp4"
+
+    monkeypatch.setenv("AIVF_EBU_R128", "1")
+    monkeypatch.setattr(
+        v3_pipeline,
+        "analyze_media",
+        lambda *args, **kwargs: {"summary": {"has_audio": True}},
+    )
+
+    def fake_normalize(_source, destination):
+        Path(destination).write_bytes(b"normalized")
+
+    monkeypatch.setattr(v3_pipeline, "normalize_loudness", fake_normalize)
+
+    assert v3_pipeline._normalize_final_audio(tmp_path, str(source)) == str(source)
+    assert source.read_bytes() == b"normalized"
+    assert not normalized.exists()
