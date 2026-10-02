@@ -48,6 +48,7 @@ from .v3_exceptions import (
 from .v3_renderer_bridge import V3RenderPlan, V3RenderRequest, render_v3
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
 from .v3_scores import V3ScoreBundle
+from .v3_performance import analyze_stage_timings
 from .v3_semantic_qc import analyze_render_semantics
 from .render_engine import stamp_media_metadata
 
@@ -704,11 +705,21 @@ class V3PipelineRunner:
         # Persist timing evidence even when a stage fails. This gives operators
         # enough information to identify the expensive or failing stage.
         if context.package.exists():
+            performance = analyze_stage_timings(context.stage_timings_ms)
             atomic_write_json(
                 context.package / "v3_stage_timings.json",
                 {
                     "stages_ms": context.stage_timings_ms,
-                    "total_ms": round(sum(context.stage_timings_ms.values()), 3),
+                    "total_ms": performance.total_ms,
+                    "bottleneck": performance.bottleneck,
+                    "stages": [
+                        {
+                            "name": item.name,
+                            "milliseconds": item.milliseconds,
+                            "share": item.share,
+                        }
+                        for item in performance.stages
+                    ],
                 },
             )
 
