@@ -90,9 +90,32 @@ files = [
   "01-MAIN-CODE/ai_video_factory/observability_metrics.py",
   "01-MAIN-CODE/ai_video_factory/production_assurance.py",
   "01-MAIN-CODE/ai_video_factory/resource_metrics.py",
+  "01-MAIN-CODE/ai_video_factory/v3_exceptions.py",
+  "01-MAIN-CODE/ai_video_factory/v3_contracts.py",
+  "01-MAIN-CODE/ai_video_factory/v3_scores.py",
+  "01-MAIN-CODE/ai_video_factory/v3_retention.py",
+  "01-MAIN-CODE/ai_video_factory/v3_asset_packager.py",
+  "01-MAIN-CODE/ai_video_factory/v3_stage_pipeline.py",
 ]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 100
 exclude = [".tools", ".models", "output", "uploads"]
+
+
+[[tool.mypy.overrides]]
+module = [
+  "ai_video_factory.v3_exceptions",
+  "ai_video_factory.v3_contracts",
+  "ai_video_factory.v3_scores",
+  "ai_video_factory.v3_retention",
+  "ai_video_factory.v3_asset_packager",
+  "ai_video_factory.v3_stage_pipeline",
+  "ai_video_factory.v3_scoring",
+]
+disallow_untyped_defs = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_optional = true
+check_untyped_defs = true
