@@ -667,7 +667,7 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
         conflicts = [
             (index, event)
             for index, event in enumerate(selected)
-            if abs(candidate.time - event.time) < 0.35
+            if abs(candidate.time - event.time) < 0.45
         ]
         if not conflicts:
             selected.append(candidate)
