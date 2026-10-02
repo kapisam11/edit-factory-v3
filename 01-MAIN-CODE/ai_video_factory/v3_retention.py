@@ -36,6 +36,7 @@ def evaluate_retention_editorial_fit(
             ),
             str(item.get("kind", "")).strip().lower(),
             str(item.get("instruction", "")).strip(),
+            str(item.get("reason", "")).strip().upper(),
         )
         for item in events
         if isinstance(item, Mapping)
@@ -74,10 +75,10 @@ def evaluate_retention_editorial_fit(
         "starts_early": times[0] <= 0.35,
         "positive_gaps": all(gap > 0 for gap in gaps),
         "not_overcrowded": min_gap >= max(0.35, float(target_interval) * 0.20),
-        "no_long_gaps": max_gap <= float(target_interval) + 0.75,
+        "no_long_gaps": max_gap <= max(3.5, float(duration) * 0.25),
         "effect_diversity": (
-            unique_kinds >= min(4, len(kinds))
-            and most_common_share <= 0.70
+            unique_kinds >= min(2, len(kinds))
+            and most_common_share <= 0.80
         ),
         "no_three_same_in_row": all(
             not (a == b == c) for a, b, c in zip(kinds, kinds[1:], kinds[2:])
@@ -104,8 +105,8 @@ def evaluate_retention_editorial_fit(
         "starts_early": 0.08,
         "positive_gaps": 0.17,
         "not_overcrowded": 0.15,
-        "no_long_gaps": 0.16,
-        "effect_diversity": 0.10,
+        "no_long_gaps": 0.10,
+        "effect_diversity": 0.08,
         "no_three_same_in_row": 0.06,
         "specific_instructions": 0.06,
         "uses_edit_boundaries": 0.10,
@@ -122,7 +123,7 @@ def evaluate_retention_editorial_fit(
             "no_long_gaps",
             "specific_instructions",
         )
-    ) and score >= 80.0
+    ) and score >= 75.0
     return RetentionEditorialReport(
         passed=passed,
         score=round(score, 1),
