@@ -24,7 +24,7 @@ def test_isolated_short_dead_gap_is_warning(monkeypatch, tmp_path):
         "analyze_video",
         lambda *args, **kwargs: [
             _scene("a", 0.0, 2.0, 0.9, 0.9, "active"),
-            _scene("b", 2.0, 3.0, 0.05, 0.02, "hold"),
+            _scene("b", 2.0, 3.5, 0.05, 0.02, "hold"),
             _scene("c", 3.0, 8.0, 0.8, 0.8, "payoff"),
         ],
     )
@@ -33,7 +33,7 @@ def test_isolated_short_dead_gap_is_warning(monkeypatch, tmp_path):
 
     assert report["ok"] is True
     assert report["dead_gap_blocking"] is False
-    assert report["dead_duration"] == 1.0
+    assert report["dead_duration"] == 1.5
     assert "isolated low-motion/low-audio section detected" in report["warnings"]
 
 
