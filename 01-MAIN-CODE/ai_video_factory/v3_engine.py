@@ -714,21 +714,21 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
             break
         if counts[event.kind] <= 1:
             continue
-        replacement: str | None = None
+        diversity_replacement: str | None = None
         for kind in fallback_kinds:
             if kind not in counts:
-                replacement = kind
+                diversity_replacement = kind
                 break
-        if replacement is None:
+        if diversity_replacement is None:
             continue
         counts[event.kind] -= 1
         if counts[event.kind] <= 0:
             del counts[event.kind]
-        counts[replacement] += 1
+        counts[diversity_replacement] += 1
         normalized[index] = RetentionEvent(
             event.time,
-            replacement,
-            f"Change {replacement} while preserving story continuity.",
+            diversity_replacement,
+            f"Change {diversity_replacement} while preserving story continuity.",
         )
 
     if not normalized or normalized[0].time > 0.35:
