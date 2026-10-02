@@ -293,6 +293,71 @@ def test_v3_cleanup_removes_only_known_transients(tmp_path):
     assert keep.read_bytes() == b"canonical"
 
 
+def test_v3_package_reset_never_deletes_package_local_source(monkeypatch, tmp_path):
+    from ai_video_factory import v3_stage_pipeline
+
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"source-media")
+    (tmp_path / "final.v3.mp4").write_bytes(b"stale-output")
+    (tmp_path / "v3_readiness.json").write_text(
+        json.dumps({"state": "UPLOAD_PACKAGE_VALID"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(v3_stage_pipeline.V3InputError, match="generated package filename"):
+        v3_stage_pipeline._reset_v3_package(tmp_path, input_video=str(source))
+
+    assert source.read_bytes() == b"source-media"
+    assert not (tmp_path / "final.v3.mp4").exists()
+    assert not (tmp_path / "v3_readiness.json").exists()
+
+
+def test_v3_preflight_failure_replaces_stale_readiness(monkeypatch, tmp_path):
+    from ai_video_factory import v3_stage_pipeline
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source-media")
+    (tmp_path / "v3_readiness.json").write_text(
+        json.dumps(
+            {
+                "state": "UPLOAD_PACKAGE_VALID",
+                "checks": {
+                    "MEDIA_VALID": True,
+                    "MEDIA_CONTRACT_VALID": True,
+                    "UPLOAD_PACKAGE_VALID": True,
+                    "PUBLISH_READY": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        v3_stage_pipeline,
+        "validate_capabilities",
+        lambda: (_ for _ in ()).throw(ValueError("capability registry invalid")),
+    )
+
+    request = v3_stage_pipeline.V3Request(
+        input_video=str(source),
+        topic="preflight failure",
+        package_dir=str(tmp_path),
+        target_seconds=8.0,
+        platform="youtube_shorts",
+        audience="general short-form viewers",
+        bpm=120,
+    )
+    result = v3_stage_pipeline.V3PipelineRunner(request).run()
+
+    readiness = json.loads(
+        (tmp_path / "v3_readiness.json").read_text(encoding="utf-8")
+    )
+    assert result.errors
+    assert readiness["state"] == "FAILED"
+    assert readiness["checks"]["PUBLISH_READY"] is False
+    assert (tmp_path / "v3_failure.json").is_file()
+
+
 def test_v3_prepare_blueprint_persists_source_metadata(monkeypatch, tmp_path):
     monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
     source_metadata = {"rights_status": "owned", "declared_by": "tester"}
