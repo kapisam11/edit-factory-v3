@@ -690,7 +690,6 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
         if (
             len(normalized) >= 2
             and normalized[-1].kind == normalized[-2].kind == event.kind
-            and event.kind != "beat drop"
         ):
             replacement = next(
                 kind for kind in fallback_kinds
