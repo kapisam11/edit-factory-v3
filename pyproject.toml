@@ -97,6 +97,10 @@ files = [
   "01-MAIN-CODE/ai_video_factory/v3_asset_packager.py",
   "01-MAIN-CODE/ai_video_factory/v3_stage_pipeline.py",
   "01-MAIN-CODE/ai_video_factory/v3_performance.py",
+  "01-MAIN-CODE/ai_video_factory/editorial_evaluation.py",
+  "01-MAIN-CODE/ai_video_factory/editorial_benchmark.py",
+  "01-MAIN-CODE/ai_video_factory/editorial_regression.py",
+  "01-MAIN-CODE/ai_video_factory/deterministic_replay.py",
 ]
 
 [tool.ruff]
