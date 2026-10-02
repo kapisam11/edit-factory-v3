@@ -68,7 +68,7 @@ def test_environment_and_release_evidence_are_explicit_about_human_review():
             "rights_gate": {
                 "status": "cleared",
                 "publish_blocked": False,
-                "checked": [{"asset_id": "source", "errors": []}],
+                "checked": [{"asset_id": "source", "rights_basis": "owned", "errors": []}],
             },
         },
         environment={"ok": True},
