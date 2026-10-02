@@ -5,6 +5,7 @@ are installed, the analyzer can add shot-change, motion, face, and OCR signals.
 Heavy object-detection models are deliberately opt-in through model paths.
 """
 from __future__ import annotations
+from .v3_exceptions import V3ExternalToolError
 
 import json
 import math
@@ -17,7 +18,7 @@ from .render_engine import run_ffprobe
 from .scene_detect_adapter import scene_windows
 
 
-class SceneAnalysisError(RuntimeError):
+class SceneAnalysisError(V3ExternalToolError):
     pass
 
 
