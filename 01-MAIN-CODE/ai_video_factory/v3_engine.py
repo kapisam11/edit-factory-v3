@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 from types import MappingProxyType
 
+from .v3_retention import evaluate_retention_editorial_fit
+from .v3_scores import V3ScoreBundle
 from .v3_semantics import combined_scores
 from .v3_scoring import heuristic_metrics
 
@@ -212,6 +214,13 @@ class V3Blueprint:
     qc: QCRequirements = field(default_factory=QCRequirements)
     packaging: PackagingPlan = field(default_factory=PackagingPlan)
     metric_metadata: MetricMetadata = field(default_factory=MetricMetadata)
+    score_bundle: V3ScoreBundle = field(
+        default_factory=lambda: V3ScoreBundle(
+            technical_validity=100.0,
+            creative_quality=0.0,
+            performance_heuristic=0.0,
+        )
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hooks", tuple(self.hooks))
@@ -254,6 +263,7 @@ class V3Blueprint:
             "qc": asdict(self.qc),
             "packaging": asdict(self.packaging),
             "metric_metadata": asdict(self.metric_metadata),
+            "score_bundle": self.score_bundle.to_dict(),
             "core_idea": asdict(self.core_idea),
             "edit_type": self.edit_type,
             "hooks": [asdict(item) for item in self.hooks],
@@ -279,7 +289,7 @@ class V3Blueprint:
             "retention_map", "thumbnail_concept", "title_options", "hashtags",
             "description", "platform_variants", "quality", "metrics", "capabilities",
         }
-        allowed = required | {"schema_version", "platform", "audience", "platform_profile", "qc", "packaging", "metric_metadata", "source_metadata"}
+        allowed = required | {"schema_version", "platform", "audience", "platform_profile", "qc", "packaging", "metric_metadata", "source_metadata", "score_bundle"}
         unknown = sorted(set(payload) - allowed)
         if unknown:
             raise ValueError(f"V3 blueprint contains unknown fields: {', '.join(unknown)}")
@@ -315,6 +325,15 @@ class V3Blueprint:
             packaging = PackagingPlan(**dict(raw_packaging)) if isinstance(raw_packaging, Mapping) else PackagingPlan()
             raw_metric_metadata = payload.get("metric_metadata")
             metric_metadata = MetricMetadata(**dict(raw_metric_metadata)) if isinstance(raw_metric_metadata, Mapping) else MetricMetadata()
+            raw_score_bundle = payload.get("score_bundle")
+            if isinstance(raw_score_bundle, Mapping):
+                score_bundle = V3ScoreBundle(**dict(raw_score_bundle))
+            else:
+                score_bundle = V3ScoreBundle.from_blueprint(
+                    technical_validity=100.0,
+                    creative_quality=float(quality.score),
+                    metrics=dict(payload["metrics"]),
+                )
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError(f"V3 blueprint contains malformed typed data: {exc}") from exc
         result = cls(
@@ -339,6 +358,7 @@ class V3Blueprint:
             qc=qc,
             packaging=packaging,
             metric_metadata=metric_metadata,
+            score_bundle=score_bundle,
         )
         validate_blueprint(result)
         return result
@@ -657,8 +677,24 @@ def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[Ho
     }.items():
         if not checks[key]:
             warnings.append(message)
+    retention_report = evaluate_retention_editorial_fit(
+        [asdict(event) for event in retention],
+        duration=config.target_seconds,
+        target_interval=config.retention_interval,
+        clip_boundaries=[clip.start for clip in clips[1:]],
+    )
+    checks["retention_editorial_fit"] = retention_report.passed
+    warnings.extend(f"retention: {warning}" for warning in retention_report.warnings)
     score = round(100 * sum(checks.values()) / len(checks)) if checks else 0
-    return QualityReport(score >= 95 and all(checks[k] for k in ("emotion_defined","single_edit_type_strategy","duration_bounds","exact_duration","has_payoff")), score, checks, warnings)
+    return QualityReport(
+        score >= 95 and all(
+            checks[k]
+            for k in ("emotion_defined", "single_edit_type_strategy", "duration_bounds", "exact_duration", "has_payoff")
+        ),
+        score,
+        checks,
+        warnings,
+    )
 
 def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequence[ClipBeat], quality: QualityReport) -> Dict[str, float]:
     hook = hooks[0].score if hooks else 0.0
@@ -739,6 +775,15 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         raise ValueError("blueprint QC target tolerance is invalid")
     if blueprint.metric_metadata.method != "heuristic" or blueprint.metric_metadata.confidence not in {"low", "medium", "high"}:
         raise ValueError("blueprint metric metadata is invalid")
+    if blueprint.metric_metadata.calibration_status not in {"uncalibrated", "calibrated"}:
+        raise ValueError("blueprint metric calibration status is invalid")
+    for score_name, score_value in (
+        ("technical_validity", blueprint.score_bundle.technical_validity),
+        ("creative_quality", blueprint.score_bundle.creative_quality),
+        ("performance_heuristic", blueprint.score_bundle.performance_heuristic),
+    ):
+        if not math.isfinite(float(score_value)) or not 0.0 <= float(score_value) <= 100.0:
+            raise ValueError(f"blueprint {score_name} is invalid")
 
     if not str(blueprint.audience).strip():
         raise ValueError("blueprint audience is required")
