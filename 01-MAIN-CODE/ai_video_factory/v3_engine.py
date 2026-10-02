@@ -350,6 +350,10 @@ class V3Blueprint:
                     reason=str(item["reason"]), confidence=float(item["confidence"]),
                     source=str(item.get("source", "v3")),
                     decision_version=str(item.get("decision_version", "1.0.0")),
+                    policy_version=str(item.get("policy_version", "1.0.0")),
+                    config_hash=str(item.get("config_hash", "")),
+                    source_hash=str(item.get("source_hash", "")),
+                    planner_version=str(item.get("planner_version", "3.0.0")),
                     evidence=tuple(
                         Evidence(
                             kind=str(e.get("kind", "heuristic")), method=str(e.get("method", "unknown")),
