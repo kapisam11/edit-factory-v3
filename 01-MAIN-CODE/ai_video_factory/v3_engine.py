@@ -791,11 +791,11 @@ def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[Ho
         "no_duplicate_overlays": len(overlays) == len(set(overlays)),
         "duration_bounds": all(config.min_clip_seconds - 0.01 <= d <= config.max_clip_seconds + 0.01 for d in durations),
         "exact_duration": bool(clips) and abs(clips[-1].end - config.target_seconds) <= 0.01,
-        # Allow the same tolerance used by the independent editorial retention
-        # report; boundary-aware deduplication can legitimately widen one gap slightly.
-        "retention_changes_frequent": bool(retention) and all(
-            (b.time - a.time) <= config.retention_interval + 0.75
-            for a, b in zip(retention, retention[1:])
+        # Retention is judged by semantic anchors, not a fixed edit clock.
+        # The independent retention report remains responsible for cadence/spacing diagnostics.
+        "retention_semantic_coverage": bool(retention) and (
+            any(event.time <= 0.35 for event in retention)
+            and any(event.reason in {"PAYOFF_ALIGNMENT", "FINAL_IMPACT"} for event in retention)
         ),
         "has_payoff": any(c.purpose in {"Payoff","Punchline","Climax"} for c in clips),
         "has_final_impact": bool(clips and clips[-1].purpose in {"Final impact","Payoff","Reaction"}),
@@ -805,7 +805,7 @@ def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[Ho
     for key, message in {
         "hook_under_two_seconds":"hook exceeds preferred opening window",
         "no_duplicate_overlays":"repeated overlay text detected",
-        "retention_changes_frequent":"retention event interval exceeded",
+        "retention_semantic_coverage":"retention map is missing an opening or payoff anchor",
         "hook_payoff_continuity":"hook and payoff emotion differ",
     }.items():
         if not checks[key]:
