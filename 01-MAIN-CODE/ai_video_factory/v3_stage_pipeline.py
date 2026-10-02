@@ -40,6 +40,7 @@ from .v3_engine import V3Blueprint, V3Config, create_v3_blueprint, validate_blue
 from .v3_exceptions import (
     V3ArtifactError,
     V3ComplianceError,
+    V3ConfigurationError,
     V3InputError,
     V3PackagingError,
     V3PipelineError,
@@ -161,6 +162,114 @@ def _research_summary(payload: dict[str, Any], footage_evidence: dict[str, Any])
     }
 
 
+_V3_GENERATED_FILES = frozenset({
+    "final.v3.mp4",
+    "final.mp4",
+    "timeline.json",
+    "metadata.json",
+    "upload_package.json",
+    "v3_blueprint.json",
+    "v3_render_qc.json",
+    "v3_semantic_qc.json",
+    "v3_readiness.json",
+    "v3_baseline.mp4",
+    "source_media_health.json",
+    "source_media_metadata.json",
+    "final_media_health.json",
+    "final_media_metadata.json",
+    "provenance.json",
+    "metadata_guardrails.json",
+    "diagnostics.json",
+    "environment_fingerprint.json",
+    "artifact_manifest.json",
+    "release_evidence.json",
+    "v3_scores.json",
+    "v3_stage_timings.json",
+    "v3_failure.json",
+    "v3_stage_cache.json",
+    "editorial_decisions.json",
+    "v3_cumulative_metrics.json",
+    "v3_performance.json",
+})
+_V3_TRANSIENT_FILE_NAMES = (
+    "final.v3.retention.mp4",
+    ".final.v3.normalized.mp4",
+    ".final.v3.audio-normalized.mp4",
+)
+
+def _write_failed_evidence(
+    package: Path,
+    errors: list[str],
+    stage_timings_ms: dict[str, float] | None = None,
+) -> None:
+    package.mkdir(parents=True, exist_ok=True)
+    timings = dict(stage_timings_ms or {})
+    atomic_write_json(
+        package / "v3_failure.json",
+        {
+            "ok": False,
+            "errors": list(errors),
+            "stage_timings_ms": timings,
+        },
+    )
+    atomic_write_json(
+        package / "v3_readiness.json",
+        {
+            "state": "FAILED",
+            "checks": {
+                "MEDIA_VALID": False,
+                "MEDIA_CONTRACT_VALID": False,
+                "UPLOAD_PACKAGE_VALID": False,
+                "PUBLISH_READY": False,
+            },
+            "errors": list(errors),
+            "warnings": [],
+        },
+    )
+
+def _reset_v3_package(
+    package: Path,
+    *,
+    input_video: str | None = None,
+) -> None:
+    """Remove stale V3 outputs without following package-entry symlinks."""
+    package.mkdir(parents=True, exist_ok=True)
+    package_entry = package.absolute()
+    protected_input = Path(input_video).absolute() if input_video else None
+    protected_name: str | None = None
+
+    if protected_input is not None:
+        try:
+            relative_input = protected_input.relative_to(package_entry)
+        except ValueError:
+            pass
+        else:
+            # Compare the lexical package entry, not resolve(), so a symlink
+            # source is protected too and can never be followed into its target.
+            if relative_input.name in _V3_GENERATED_FILES:
+                protected_name = relative_input.name
+                stale_paths = [package / name for name in _V3_GENERATED_FILES if name != protected_name]
+                for target in stale_paths:
+                    target.unlink(missing_ok=True)
+                _cleanup_transients(package)
+                _write_failed_evidence(
+                    package,
+                    [
+                        "V3 input video cannot use a generated package filename inside package_dir: "
+                        + protected_name
+                    ],
+                )
+                raise V3InputError(
+                    "V3 input video cannot use a generated package filename inside package_dir: "
+                    + protected_name
+                )
+
+    for name in _V3_GENERATED_FILES:
+        if name == protected_name:
+            continue
+        (package / name).unlink(missing_ok=True)
+    _cleanup_transients(package)
+
 def _cleanup_transients(package: Path) -> None:
     for name in (
         "final.v3.retention.mp4",
@@ -171,7 +280,9 @@ def _cleanup_transients(package: Path) -> None:
     for child in package.glob(".aivf-*.partial"):
         child.unlink(missing_ok=True)
     for child in package.glob("aivf-v3-thumb-*"):
-        if child.is_dir():
+        if child.is_symlink():
+            child.unlink(missing_ok=True)
+        elif child.is_dir():
             shutil.rmtree(child, ignore_errors=True)
 
 
@@ -210,7 +321,12 @@ class InputValidationStage:
 
     def run(self, context: V3ExecutionContext) -> None:
         from .v3_capabilities import validate_capabilities
-        validate_capabilities()
+        try:
+            validate_capabilities()
+        except (TypeError, ValueError) as exc:
+            raise V3ConfigurationError(
+                f"V3 capability validation failed: {exc}"
+            ) from exc
         context.request.validate()
         environment = os.environ.get("AIVF_ENV", "production").strip().lower()
         override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
@@ -709,6 +825,24 @@ class V3PipelineRunner:
             package=Path(self.request.package_dir),
         )
         try:
+            _reset_v3_package(
+                context.package,
+                input_video=self.request.input_video,
+            )
+        except V3PipelineError as exc:
+            context.result.errors.append(f"[preflight] {exc}")
+            _write_failed_evidence(
+                context.package,
+                context.result.errors,
+                context.stage_timings_ms,
+            )
+            context.result.artifacts.update({
+                "v3_failure": str(context.package / "v3_failure.json"),
+                "v3_readiness": str(context.package / "v3_readiness.json"),
+            })
+            return
+
+        try:
             source_hash = file_hash(self.request.input_video)
         except (OSError, ValueError):
             source_hash = "unavailable"
@@ -752,29 +886,12 @@ class V3PipelineRunner:
             # Do not fabricate successful media/provenance evidence; only record
             # what is actually known at the point of failure.
             if context.result.errors:
-                atomic_write_json(
-                    context.package / "v3_failure.json",
-                    {
-                        "ok": False,
-                        "errors": list(context.result.errors),
-                        "stage_timings_ms": dict(context.stage_timings_ms),
-                    },
+                # A failed rerun must never leave a previous READY readiness artifact.
+                _write_failed_evidence(
+                    context.package,
+                    context.result.errors,
+                    context.stage_timings_ms,
                 )
-                if not (context.package / "v3_readiness.json").is_file():
-                    atomic_write_json(
-                        context.package / "v3_readiness.json",
-                        {
-                            "state": "FAILED",
-                            "checks": {
-                                "MEDIA_VALID": False,
-                                "MEDIA_CONTRACT_VALID": False,
-                                "UPLOAD_PACKAGE_VALID": False,
-                                "PUBLISH_READY": False,
-                            },
-                            "errors": list(context.result.errors),
-                            "warnings": [],
-                        },
-                    )
 
         artifact_names = (
             "v3_blueprint",
