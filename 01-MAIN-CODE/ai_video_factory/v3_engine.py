@@ -12,6 +12,7 @@ from types import MappingProxyType
 
 from .v3_retention import evaluate_retention_editorial_fit
 from .v3_scores import V3ScoreBundle
+from .editorial_evaluation import EditorialDecision, Evidence, build_retention_decisions, summarize_editorial_evidence
 from .v3_semantics import combined_scores
 from .v3_scoring import heuristic_metrics
 
@@ -137,6 +138,9 @@ class RetentionEvent:
     time: float
     kind: str
     instruction: str
+    reason: str = "ATTENTION_RISK"
+    semantic_importance: float = 0.5
+    confidence: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -222,6 +226,7 @@ class V3Blueprint:
             performance_heuristic=0.0,
         )
     )
+    editorial_decisions: Sequence[EditorialDecision] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hooks", tuple(self.hooks))
@@ -230,6 +235,7 @@ class V3Blueprint:
         object.__setattr__(self, "title_options", tuple(self.title_options))
         object.__setattr__(self, "hashtags", tuple(self.hashtags))
         object.__setattr__(self, "capabilities", tuple(self.capabilities))
+        object.__setattr__(self, "editorial_decisions", tuple(self.editorial_decisions))
         object.__setattr__(self, "platform_variants", _freeze_mapping(self.platform_variants))
         object.__setattr__(self, "metrics", MappingProxyType({str(k): float(v) for k, v in dict(self.metrics).items()}))
         platform_value = self.platform.value if isinstance(self.platform, Platform) else str(self.platform).strip().lower()
@@ -265,6 +271,8 @@ class V3Blueprint:
             "packaging": asdict(self.packaging),
             "metric_metadata": asdict(self.metric_metadata),
             "score_bundle": self.score_bundle.to_dict(),
+            "editorial_decisions": [item.to_dict() for item in self.editorial_decisions],
+            "editorial_evidence_summary": summarize_editorial_evidence(self.editorial_decisions),
             "core_idea": asdict(self.core_idea),
             "edit_type": self.edit_type,
             "hooks": [asdict(item) for item in self.hooks],
@@ -290,7 +298,7 @@ class V3Blueprint:
             "retention_map", "thumbnail_concept", "title_options", "hashtags",
             "description", "platform_variants", "quality", "metrics", "capabilities",
         }
-        allowed = required | {"schema_version", "platform", "audience", "platform_profile", "qc", "packaging", "metric_metadata", "source_metadata", "score_bundle"}
+        allowed = required | {"schema_version", "platform", "audience", "platform_profile", "qc", "packaging", "metric_metadata", "source_metadata", "score_bundle", "editorial_decisions", "editorial_evidence_summary"}
         unknown = sorted(set(payload) - allowed)
         if unknown:
             raise ValueError(f"V3 blueprint contains unknown fields: {', '.join(unknown)}")
@@ -335,6 +343,21 @@ class V3Blueprint:
                     creative_quality=float(quality.score),
                     metrics=dict(payload["metrics"]),
                 )
+            editorial_decisions = tuple(
+                EditorialDecision(
+                    operation=str(item["operation"]), timestamp=float(item["timestamp"]),
+                    reason=str(item["reason"]), confidence=float(item["confidence"]),
+                    source=str(item.get("source", "v3")),
+                    decision_version=str(item.get("decision_version", "1.0.0")),
+                    evidence=tuple(
+                        Evidence(
+                            kind=str(e.get("kind", "heuristic")), method=str(e.get("method", "unknown")),
+                            confidence=float(e.get("confidence", 0.0)), version=str(e.get("version", "unknown")),
+                            details=e.get("details") or {},
+                        ) for e in item.get("evidence", ())
+                    ),
+                ) for item in payload.get("editorial_decisions", ()) if isinstance(item, Mapping)
+            )
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError(f"V3 blueprint contains malformed typed data: {exc}") from exc
         result = cls(
@@ -360,6 +383,7 @@ class V3Blueprint:
             packaging=packaging,
             metric_metadata=metric_metadata,
             score_bundle=score_bundle,
+            editorial_decisions=editorial_decisions,
         )
         validate_blueprint(result)
         return result
@@ -896,6 +920,8 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
     thumbnail, titles, tags, description = _metadata(core)
     quality = _human_editor_checks(core, selected, hooks, clips, retention, cfg)
     metrics = _heuristic_metrics(core, hooks, clips, quality)
+    clip_purposes = {round(clip.start, 3): clip.purpose for clip in clips}
+    editorial_decisions = build_retention_decisions([asdict(event) for event in retention], clip_purposes=clip_purposes)
     score_bundle = V3ScoreBundle.from_blueprint(
         technical_validity=100.0,
         creative_quality=float(quality.score),
@@ -921,6 +947,7 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
         platform=platform_value,
         audience=cfg.audience,
         score_bundle=score_bundle,
+        editorial_decisions=editorial_decisions,
     )
     validate_blueprint(blueprint)
     return blueprint

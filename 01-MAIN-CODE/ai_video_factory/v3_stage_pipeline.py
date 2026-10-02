@@ -49,6 +49,8 @@ from .v3_renderer_bridge import V3RenderPlan, V3RenderRequest, render_v3
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
 from .v3_scores import V3ScoreBundle
 from .v3_performance import analyze_stage_timings
+from .editorial_evaluation import summarize_editorial_evidence
+from .idempotency import file_hash, stage_cache_key, cache_record
 from .v3_semantic_qc import analyze_render_semantics
 from .render_engine import stamp_media_metadata
 
@@ -80,6 +82,7 @@ class V3ExecutionContext:
     stage_timings_ms: dict[str, float] = field(default_factory=dict)
     baseline_path: Path | None = None
     score_bundle: V3ScoreBundle | None = None
+    stage_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.result = ProductionResult(package_dir=str(self.package))
@@ -258,6 +261,7 @@ class PlanningStage:
         # Replacing the loaded blueprint's serialized score metadata is intentional:
         # the score contract is part of the V3 artifact and remains backward compatible.
         context.payload["score_bundle"] = context.blueprint.score_bundle.to_dict()
+        atomic_write_json(context.package / "editorial_decisions.json", {"version": "1.0.0", "decisions": [item.to_dict() for item in context.blueprint.editorial_decisions], "summary": summarize_editorial_evidence(context.blueprint.editorial_decisions)})
 
 
 class SourceAnalysisStage:
@@ -566,6 +570,20 @@ class ComplianceStage:
         )
 
 
+class StageIdentityStage:
+    name = "stage_identity"
+
+    def run(self, context: V3ExecutionContext) -> None:
+        atomic_write_json(
+            context.package / "v3_stage_cache.json",
+            {
+                "version": "1.0.0",
+                "stages": dict(context.stage_cache),
+                "reuse_policy": "identity-only; stages are not blindly skipped until their output contracts are declared",
+            },
+        )
+
+
 class ReleaseEvidenceStage:
     name = "release_evidence"
 
@@ -609,6 +627,7 @@ class ReleaseEvidenceStage:
                 "metadata_guardrails.json",
                 "diagnostics.json",
                 "environment_fingerprint.json",
+                "editorial_decisions.json",
             ),
         )
         atomic_write_json(context.package / "artifact_manifest.json", manifest)
@@ -679,6 +698,7 @@ class V3PipelineRunner:
             MediaValidationStage(),
             PackagingStage(),
             ComplianceStage(),
+            StageIdentityStage(),
             ReleaseEvidenceStage(),
         ))
 
@@ -688,18 +708,23 @@ class V3PipelineRunner:
             source_metadata=self.source_metadata,
             package=Path(self.request.package_dir),
         )
+        try:
+            source_hash = file_hash(self.request.input_video)
+        except (OSError, ValueError):
+            source_hash = "unavailable"
+        cache_records: dict[str, dict[str, Any]] = {}
         for stage in self.stages:
             started = time.perf_counter()
+            stage_version = "1.0.0"
+            key = stage_cache_key(source_hash=source_hash, stage_name=stage.name, stage_version=stage_version, configuration={"topic": self.request.topic, "context": self.request.context, "target_seconds": self.request.target_seconds, "platform": self.request.platform, "audience": self.request.audience, "bpm": self.request.bpm, "edit_type": self.request.edit_type, "model_key": self.request.model_key, "enable_ocr": self.request.enable_ocr, "enable_object_detection": self.request.enable_object_detection, "enable_diarization": self.request.enable_diarization})
             try:
                 stage.run(context)
             except V3PipelineError as exc:
                 context.result.errors.append(f"[{stage.name}] {exc}")
                 break
             finally:
-                context.stage_timings_ms[stage.name] = round(
-                    (time.perf_counter() - started) * 1000.0,
-                    3,
-                )
+                context.stage_timings_ms[stage.name] = round((time.perf_counter() - started) * 1000.0, 3)
+                context.stage_cache[stage.name] = cache_record(key=key, stage_name=stage.name, stage_version=stage_version, inputs=[self.request.input_video], outputs=[])
 
             if context.result.errors:
                 break
@@ -770,6 +795,8 @@ class V3PipelineRunner:
             "v3_scores",
             "v3_stage_timings",
             "v3_failure",
+            "v3_stage_cache",
+            "editorial_decisions",
         )
         context.result.artifacts.update(
             {
