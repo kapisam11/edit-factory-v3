@@ -167,7 +167,21 @@ def test_v3_defaults_are_platform_safe(monkeypatch, tmp_path):
         appmod.set_setting("default_v3_platform", "not-a-platform")
 
 
-def test_dashboard_idempotency_fingerprint_includes_uploaded_media(monkeypatch, tmp_path):
+def test_legacy_idempotency_media_hash_can_use_persisted_provenance(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    package = Path(appmod.OUTPUT_FOLDER) / "legacy-job"
+    package.mkdir(parents=True)
+    (package / "provenance.json").write_text(
+        json.dumps({
+            "assets": [{"asset_id": "source_video", "sha256": "a" * 64}],
+        }),
+        encoding="utf-8",
+    )
+    assert appmod._persisted_input_media_hash(
+        {"pkg_dir": str(package)},
+        {},
+    ) == "a" * 64
+\ndef test_dashboard_idempotency_fingerprint_includes_uploaded_media(monkeypatch, tmp_path):
     appmod = _load_dashboard(monkeypatch, tmp_path)
     first = tmp_path / "first.mp4"
     second = tmp_path / "second.mp4"
