@@ -70,8 +70,21 @@ def analyze_render_semantics(path: str) -> dict[str, Any]:
     slideshow_like = len(scenes) >= 4 and low_motion_ratio >= 0.70
     errors = []
     warnings = []
-    if dead_moments:
+
+    dead_duration = sum(item["duration"] for item in dead_moments)
+    dead_ratio = dead_duration / max(0.001, float(info["duration"]))
+    # A single short dead section can be intentional (breathing room, reaction,
+    # freeze, title hold). Only block when dead footage is substantial enough
+    # to materially dominate the edit, or when multiple independent dead gaps
+    # indicate a real pacing defect.
+    dead_gap_blocking = bool(dead_moments) and (
+        dead_ratio >= 0.25
+        or len(dead_moments) >= 2 and dead_ratio >= 0.12
+    )
+    if dead_gap_blocking:
         errors.append("long low-motion/low-audio gaps detected")
+    elif dead_moments:
+        warnings.append("isolated low-motion/low-audio section detected")
     if slideshow_like:
         errors.append("render resembles a low-motion slideshow")
     if repeated_pairs:
@@ -85,6 +98,9 @@ def analyze_render_semantics(path: str) -> dict[str, Any]:
         "repeated_pairs": repeated_pairs,
         "low_motion_ratio": round(low_motion_ratio, 3),
         "slideshow_like": slideshow_like,
+        "dead_duration": round(dead_duration, 3),
+        "dead_ratio": round(dead_ratio, 3),
+        "dead_gap_blocking": dead_gap_blocking,
         "errors": errors,
         "warnings": warnings,
         "mode": "scene_intelligence",
