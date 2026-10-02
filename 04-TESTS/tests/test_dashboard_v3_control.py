@@ -181,6 +181,10 @@ def test_legacy_idempotency_media_hash_can_use_persisted_provenance(monkeypatch,
         {"pkg_dir": str(package)},
         {},
     ) == "a" * 64
+    assert appmod._persisted_input_media_hash(
+        {},
+        {"pkg_dir": str(package)},
+    ) == "a" * 64
 
 
 def test_dashboard_idempotency_fingerprint_includes_uploaded_media(monkeypatch, tmp_path):
