@@ -979,9 +979,11 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
             if not passed
         ]
         detail = ", ".join(failed_checks) or "quality threshold"
+        warnings = "; ".join(str(item) for item in blueprint.quality.warnings)
+        suffix = f"; warnings={warnings}" if warnings else ""
         raise ValueError(
             f"blueprint failed strict editorial QC (score={blueprint.quality.score}; "
-            f"failed={detail})"
+            f"failed={detail}{suffix})"
         )
 
 def blueprint_summary(blueprint: V3Blueprint) -> str:
