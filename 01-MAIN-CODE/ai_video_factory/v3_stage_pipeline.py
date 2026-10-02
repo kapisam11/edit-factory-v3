@@ -183,6 +183,12 @@ _V3_GENERATED_FILES = (
     "v3_stage_timings.json",
     "v3_failure.json",
 )
+_V3_TRANSIENT_FILE_NAMES = (
+    "final.v3.retention.mp4",
+    ".final.v3.normalized.mp4",
+    ".final.v3.audio-normalized.mp4",
+)
+_V3_CLEANUP_FILE_NAMES = frozenset(_V3_GENERATED_FILES + _V3_TRANSIENT_FILE_NAMES)
 
 
 def _reset_v3_package(
@@ -202,7 +208,7 @@ def _reset_v3_package(
         except ValueError:
             pass
         else:
-            source_overlap = protected_source.name in _V3_GENERATED_FILES
+            source_overlap = protected_source.name in _V3_CLEANUP_FILE_NAMES
             if source_overlap:
                 # Invalidate stale release evidence first, then reject the unsafe
                 # layout without ever unlinking the caller's source media.
