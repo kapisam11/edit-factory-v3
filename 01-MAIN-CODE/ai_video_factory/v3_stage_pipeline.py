@@ -205,6 +205,8 @@ class InputValidationStage:
     name = "input_validation"
 
     def run(self, context: V3ExecutionContext) -> None:
+        from .v3_capabilities import validate_capabilities
+        validate_capabilities()
         context.request.validate()
         environment = os.environ.get("AIVF_ENV", "production").strip().lower()
         override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
