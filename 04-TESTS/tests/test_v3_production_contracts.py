@@ -332,8 +332,10 @@ def test_v3_preflight_failure_replaces_stale_readiness(monkeypatch, tmp_path):
         encoding="utf-8",
     )
 
+    import ai_video_factory.v3_capabilities as v3_capabilities
+
     monkeypatch.setattr(
-        v3_stage_pipeline,
+        v3_capabilities,
         "validate_capabilities",
         lambda: (_ for _ in ()).throw(ValueError("capability registry invalid")),
     )
