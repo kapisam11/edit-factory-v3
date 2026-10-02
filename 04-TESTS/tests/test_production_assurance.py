@@ -233,7 +233,7 @@ def test_release_evidence_tamper_is_detected(tmp_path: Path):
         "rights_gate": {
             "status": "cleared",
             "publish_blocked": False,
-            "checked": [{"asset_id": "source", "errors": []}],
+            "checked": [{"asset_id": "source", "rights_basis": "owned", "errors": []}],
         },
     }
     (package / "provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
