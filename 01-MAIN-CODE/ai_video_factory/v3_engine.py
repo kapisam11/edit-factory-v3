@@ -973,7 +973,16 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
     if not isinstance(blueprint.qc.require_video, bool) or not isinstance(blueprint.qc.require_audio, bool) or not isinstance(blueprint.qc.require_independent_retention, bool):
         raise ValueError("blueprint QC flags must be booleans")
     if not blueprint.quality.passed:
-        raise ValueError("blueprint failed strict editorial QC")
+        failed_checks = [
+            name
+            for name, passed in blueprint.quality.checks.items()
+            if not passed
+        ]
+        detail = ", ".join(failed_checks) or "quality threshold"
+        raise ValueError(
+            f"blueprint failed strict editorial QC (score={blueprint.quality.score}; "
+            f"failed={detail})"
+        )
 
 def blueprint_summary(blueprint: V3Blueprint) -> str:
     hook = blueprint.hooks[0].text if blueprint.hooks else ""
