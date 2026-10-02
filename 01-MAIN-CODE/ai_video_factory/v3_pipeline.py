@@ -49,7 +49,6 @@ def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
     result.artifacts = getattr(result, "artifacts", {}) or {}
     result.artifacts["v3_readiness_state"] = str(getattr(readiness, "state", "") or "")
     errors = getattr(readiness, "errors", None) or []
-    checks = getattr(readiness, "checks", None) or {}
     if errors:
         result.errors.extend(
             f"V3 artifact readiness: {error}"
