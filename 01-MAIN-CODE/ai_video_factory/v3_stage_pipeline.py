@@ -570,6 +570,20 @@ class ComplianceStage:
         )
 
 
+class StageIdentityStage:
+    name = "stage_identity"
+
+    def run(self, context: V3ExecutionContext) -> None:
+        atomic_write_json(
+            context.package / "v3_stage_cache.json",
+            {
+                "version": "1.0.0",
+                "stages": dict(context.stage_cache),
+                "reuse_policy": "identity-only; stages are not blindly skipped until their output contracts are declared",
+            },
+        )
+
+
 class ReleaseEvidenceStage:
     name = "release_evidence"
 
@@ -684,6 +698,7 @@ class V3PipelineRunner:
             MediaValidationStage(),
             PackagingStage(),
             ComplianceStage(),
+            StageIdentityStage(),
             ReleaseEvidenceStage(),
         ))
 
@@ -709,14 +724,12 @@ class V3PipelineRunner:
                 break
             finally:
                 context.stage_timings_ms[stage.name] = round((time.perf_counter() - started) * 1000.0, 3)
-                cache_records[stage.name] = cache_record(key=key, stage_name=stage.name, stage_version=stage_version, inputs=[self.request.input_video], outputs=[])
+                context.stage_cache[stage.name] = cache_record(key=key, stage_name=stage.name, stage_version=stage_version, inputs=[self.request.input_video], outputs=[])
 
             if context.result.errors:
                 break
 
         if context.package.exists():
-            context.stage_cache = cache_records
-            atomic_write_json(context.package / "v3_stage_cache.json", {"source_hash": source_hash, "stages": cache_records, "reuse_policy": "identity-only; stages are not blindly skipped until their output contracts are declared"})
             performance = analyze_stage_timings(context.stage_timings_ms)
             atomic_write_json(
                 context.package / "v3_stage_timings.json",
