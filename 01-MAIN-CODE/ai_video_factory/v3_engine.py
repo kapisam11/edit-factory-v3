@@ -714,10 +714,11 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
             break
         if counts[event.kind] <= 1:
             continue
-        replacement = next(
-            (kind for kind in fallback_kinds if kind not in counts),
-            None,
-        )
+        replacement: str | None = None
+        for kind in fallback_kinds:
+            if kind not in counts:
+                replacement = kind
+                break
         if replacement is None:
             continue
         counts[event.kind] -= 1
