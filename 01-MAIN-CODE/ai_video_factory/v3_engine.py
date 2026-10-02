@@ -680,12 +680,35 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
             selected[replace_index] = candidate
 
     selected.sort(key=lambda event: event.time)
-    if not selected or selected[0].time > 0.35:
-        selected.insert(
+
+    # Consecutive clip-boundary markers are technically valid but visually
+    # repetitive. Rotate non-beat events so the generated plan still has
+    # meaningful editorial variation even for very short targets.
+    normalized: list[RetentionEvent] = []
+    fallback_kinds = ("zoom", "text", "motion", "angle")
+    for event in selected:
+        if (
+            len(normalized) >= 2
+            and normalized[-1].kind == normalized[-2].kind == event.kind
+            and event.kind != "beat drop"
+        ):
+            replacement = next(
+                kind for kind in fallback_kinds
+                if kind not in {normalized[-1].kind, normalized[-2].kind}
+            )
+            event = RetentionEvent(
+                event.time,
+                replacement,
+                f"Change {replacement} while preserving story continuity.",
+            )
+        normalized.append(event)
+
+    if not normalized or normalized[0].time > 0.35:
+        normalized.insert(
             0,
-            event_for_time(0.0, len(selected)),
+            event_for_time(0.0, len(normalized)),
         )
-    return selected
+    return normalized
 
 def platform_variants(config: V3Config) -> Dict[str, Dict[str, Any]]:
     config.validate()
