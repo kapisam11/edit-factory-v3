@@ -702,8 +702,6 @@ class V3PipelineRunner:
             if context.result.errors:
                 break
 
-        # Persist timing evidence even when a stage fails. This gives operators
-        # enough information to identify the expensive or failing stage.
         if context.package.exists():
             performance = analyze_stage_timings(context.stage_timings_ms)
             atomic_write_json(
@@ -723,25 +721,63 @@ class V3PipelineRunner:
                 },
             )
 
+            # A failed stage must still leave a machine-readable failure record.
+            # Do not fabricate successful media/provenance evidence; only record
+            # what is actually known at the point of failure.
+            if context.result.errors:
+                atomic_write_json(
+                    context.package / "v3_failure.json",
+                    {
+                        "ok": False,
+                        "errors": list(context.result.errors),
+                        "stage_timings_ms": dict(context.stage_timings_ms),
+                    },
+                )
+                if not (context.package / "v3_readiness.json").is_file():
+                    atomic_write_json(
+                        context.package / "v3_readiness.json",
+                        {
+                            "state": "FAILED",
+                            "checks": {
+                                "MEDIA_VALID": False,
+                                "MEDIA_CONTRACT_VALID": False,
+                                "UPLOAD_PACKAGE_VALID": False,
+                                "PUBLISH_READY": False,
+                            },
+                            "errors": list(context.result.errors),
+                            "warnings": [],
+                        },
+                    )
+
+        artifact_names = (
+            "v3_blueprint",
+            "v3_render_qc",
+            "v3_semantic_qc",
+            "v3_readiness",
+            "v3_baseline",
+            "source_media_health",
+            "source_media_metadata",
+            "final_media_health",
+            "final_media_metadata",
+            "provenance",
+            "metadata_guardrails",
+            "diagnostics",
+            "environment_fingerprint",
+            "artifact_manifest",
+            "release_evidence",
+            "v3_scores",
+            "v3_stage_timings",
+            "v3_failure",
+        )
         context.result.artifacts.update(
             {
-                "v3_blueprint": str(context.package / "v3_blueprint.json"),
-                "v3_render_qc": str(context.package / "v3_render_qc.json"),
-                "v3_semantic_qc": str(context.package / "v3_semantic_qc.json"),
-                "v3_readiness": str(context.package / "v3_readiness.json"),
-                "v3_baseline": str(context.package / "v3_baseline.mp4"),
-                "source_media_health": str(context.package / "source_media_health.json"),
-                "source_media_metadata": str(context.package / "source_media_metadata.json"),
-                "final_media_health": str(context.package / "final_media_health.json"),
-                "final_media_metadata": str(context.package / "final_media_metadata.json"),
-                "provenance": str(context.package / "provenance.json"),
-                "metadata_guardrails": str(context.package / "metadata_guardrails.json"),
-                "diagnostics": str(context.package / "diagnostics.json"),
-                "environment_fingerprint": str(context.package / "environment_fingerprint.json"),
-                "artifact_manifest": str(context.package / "artifact_manifest.json"),
-                "release_evidence": str(context.package / "release_evidence.json"),
-                "v3_scores": str(context.package / "v3_scores.json"),
-                "v3_stage_timings": str(context.package / "v3_stage_timings.json"),
+                name: str(context.package / f"{name}.json")
+                if name not in {"v3_baseline"}
+                else str(context.package / "v3_baseline.mp4")
+                for name in artifact_names
+                if (context.package / (
+                    "v3_baseline.mp4" if name == "v3_baseline" else f"{name}.json"
+                )).is_file()
             }
         )
         _cleanup_transients(context.package)
