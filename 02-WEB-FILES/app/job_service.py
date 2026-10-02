@@ -57,6 +57,9 @@ def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, al
             "title": str(data.get("source_title", "")).strip()[:300],
             "url": str(data.get("source_url", "")).strip()[:1000],
             "rights_basis": str(data.get("rights_basis", "")).strip().lower(),
+            # Preserve the caller's explicit declaration for the downstream
+            # evidence gate. The gate still requires valid evidence/identity/time.
+            "rights_status": str(data.get("rights_status") or data.get("rights_basis", "")).strip().lower(),
             "evidence_url": str(data.get("rights_evidence_url", "")).strip()[:1000],
             "license_url": str(data.get("license_url", "")).strip()[:1000],
             "source": "user_provided",
