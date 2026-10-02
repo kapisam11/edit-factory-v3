@@ -658,154 +658,139 @@ def analyze_music(core: CoreIdea, config: V3Config, clips: Sequence[ClipBeat]) -
     return MusicPlan(config.bpm, "high" if core.target_emotion in {"dramatic","inspiring","funny"} else "medium", core.target_emotion, beat_seconds, round(drop, 3), sync)
 
 def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: MusicPlan) -> List[RetentionEvent]:
-    events: List[RetentionEvent] = []
-    boundaries = [clip.start for clip in clips[1:]]
-    candidates = sorted(
-        set(
-            round(t, 3)
-            for t in boundaries
-            + [x * config.retention_interval for x in range(int(config.target_seconds / config.retention_interval) + 1)]
-            if t < config.target_seconds - 0.05
-        )
-    )
+    """Build retention events from story beats, not from a fixed time grid.
 
-    def event_for_time(t: float, index: int) -> RetentionEvent:
-        if abs(t - music.drop_time) <= config.retention_interval * 0.5:
-            kind = "beat drop"
-        elif any(abs(t - boundary) <= 0.08 for boundary in boundaries):
-            kind = "clip"
-        else:
-            kind = ("zoom", "text", "motion", "angle")[index % 4]
-        return RetentionEvent(
-            t,
-            kind,
-            f"Change {kind} while preserving story continuity.",
-        )
+    Events are semantic anchors: the opening hook, meaningful scene changes,
+    the musical payoff/drop, and the final impact. Extra effects are only added
+    when a long narrative beat needs support. We intentionally do not force a
+    fixed number of effects or four distinct effect kinds.
+    """
+    config.validate()
+    if not clips:
+        return []
 
-    # Keep generated events comfortably separated. Near-collisions can occur
-    # when a clip boundary lands close to the regular retention grid; keeping
-    # both creates an editorially overcrowded map even though each event is valid.
-    priorities = {"beat drop": 3, "clip": 2}
-    selected: list[RetentionEvent] = []
-    pending = [event_for_time(t, index) for index, t in enumerate(candidates)]
-    for candidate in pending:
-        conflicts = [
-            (index, event)
-            for index, event in enumerate(selected)
-            if abs(candidate.time - event.time) < 0.45
-        ]
-        if not conflicts:
-            selected.append(candidate)
-            continue
-        replace_index, existing = min(
-            conflicts,
-            key=lambda item: priorities.get(item[1].kind, 1),
-        )
-        if priorities.get(candidate.kind, 1) > priorities.get(existing.kind, 1):
-            selected[replace_index] = candidate
+    purpose_kind = {
+        "Hook": ("clip", "HOOK_ESTABLISHMENT", 0.92),
+        "Setup": ("clip", "STORY_SETUP", 0.82),
+        "Build": ("motion", "ESCALATION", 0.80),
+        "Conflict": ("motion", "CONFLICT_EMPHASIS", 0.82),
+        "Climax": ("beat drop", "PAYOFF_ALIGNMENT", 0.94),
+        "Payoff": ("beat drop", "PAYOFF_ALIGNMENT", 0.96),
+        "Punchline": ("beat drop", "PAYOFF_ALIGNMENT", 0.94),
+        "Reaction": ("angle", "REACTION_EMPHASIS", 0.78),
+        "Final impact": ("text", "FINAL_IMPACT", 0.86),
+    }
 
-    selected.sort(key=lambda event: event.time)
+    events: list[RetentionEvent] = []
 
-    # Consecutive clip-boundary markers are technically valid but visually
-    # repetitive. Rotate non-beat events so the generated plan still has
-    # meaningful editorial variation even for very short targets.
-    normalized: list[RetentionEvent] = []
-    fallback_kinds = ("zoom", "text", "motion", "angle")
-    for event in selected:
-        if (
-            len(normalized) >= 2
-            and normalized[-1].kind == normalized[-2].kind == event.kind
-        ):
-            replacement = next(
-                kind for kind in fallback_kinds
-                if kind not in {normalized[-1].kind, normalized[-2].kind}
+    def add_event(time_value: float, kind: str, reason: str, confidence: float) -> None:
+        t = round(max(0.0, min(float(time_value), config.target_seconds - 0.01)), 3)
+        if events and abs(events[-1].time - t) < 0.35:
+            # Prefer the stronger semantic anchor when two anchors overlap.
+            if confidence <= events[-1].confidence:
+                return
+            events.pop()
+        events.append(
+            RetentionEvent(
+                t,
+                kind,
+                f"{reason.replace('_', ' ').capitalize()}: change the visual treatment here while preserving story continuity.",
+                reason,
+                min(1.0, confidence),
+                min(1.0, confidence),
             )
-            event = RetentionEvent(
-                event.time,
-                replacement,
-                f"Change {replacement} while preserving story continuity.",
-            )
-        normalized.append(event)
-
-    # The independent editorial contract requires at least four distinct
-    # effect kinds on maps with four or more events. Convert duplicate markers
-    # only until that variety requirement is satisfied; the first occurrence of
-    # each semantic marker remains intact.
-    target_unique = min(4, len(normalized))
-    counts = Counter(event.kind for event in normalized)
-    for index, event in enumerate(normalized):
-        if len(counts) >= target_unique:
-            break
-        if counts[event.kind] <= 1:
-            continue
-        diversity_replacement: str | None = None
-        for kind in fallback_kinds:
-            if kind not in counts:
-                diversity_replacement = kind
-                break
-        if diversity_replacement is None:
-            continue
-        counts[event.kind] -= 1
-        if counts[event.kind] <= 0:
-            del counts[event.kind]
-        counts[diversity_replacement] += 1
-        normalized[index] = RetentionEvent(
-            event.time,
-            diversity_replacement,
-            f"Change {diversity_replacement} while preserving story continuity.",
         )
 
-    if not normalized or normalized[0].time > 0.35:
-        normalized.insert(
-            0,
-            event_for_time(0.0, len(normalized)),
-        )
+    # The opening is an editorial anchor, not merely the first grid tick.
+    first = clips[0]
+    kind, reason, confidence = purpose_kind.get(first.purpose, ("clip", "HOOK_ESTABLISHMENT", 0.86))
+    add_event(first.start, kind, reason, confidence)
 
-    # The independent editorial contract also limits gaps between retention
-    # events. Clip-boundary density varies with target duration, so explicitly
-    # fill any remaining long gaps with low-intensity editorial markers.
-    max_gap = config.retention_interval + 0.50
-    expanded: list[RetentionEvent] = []
-    for event in normalized:
-        if expanded:
-            previous = expanded[-1]
-            while event.time - previous.time > max_gap:
-                midpoint = round((previous.time + event.time) / 2.0, 3)
-                forbidden = {previous.kind}
-                if len(expanded) >= 2:
-                    forbidden.add(expanded[-2].kind)
-                filler_kind = next(
-                    kind for kind in fallback_kinds
-                    if kind not in forbidden
+    # Scene/beat boundaries carry meaning from the clip plan.
+    for clip in clips[1:]:
+        kind, reason, confidence = purpose_kind.get(
+            clip.purpose,
+            ("clip", "SCENE_CHANGE", 0.84),
+        )
+        add_event(clip.start, kind, reason, confidence)
+
+    # Music is synchronized to an existing narrative payoff rather than used
+    # to manufacture arbitrary events on a clock.
+    payoff_candidates = [
+        clip.start
+        for clip in clips
+        if clip.purpose in {"Climax", "Payoff", "Punchline", "Final impact"}
+    ]
+    if payoff_candidates:
+        nearest = min(payoff_candidates, key=lambda t: abs(t - music.drop_time))
+        if abs(nearest - music.drop_time) <= max(0.75, config.retention_interval * 0.5):
+            add_event(nearest, "beat drop", "PAYOFF_ALIGNMENT", 0.96)
+    elif abs(music.drop_time - config.target_seconds * 0.72) <= 1.0:
+        add_event(music.drop_time, "beat drop", "MUSICAL_TRANSITION", 0.72)
+
+    # Long narrative gaps get one low-intensity support event at a meaningful
+    # midpoint. This is a fallback, not the primary planning mechanism.
+    # Preserve the existing safety ceiling for downstream consumers, but only fill
+    # genuine narrative gaps; this is not a periodic retention grid.
+    max_semantic_gap = 3.0
+    ordered = sorted(events, key=lambda event: event.time)
+    filled: list[RetentionEvent] = []
+    for event in ordered:
+        while filled and event.time - filled[-1].time > max_semantic_gap:
+            midpoint = round((filled[-1].time + event.time) / 2.0, 3)
+            filled.append(
+                RetentionEvent(
+                    midpoint,
+                    "motion",
+                    "Visual continuity: add a restrained motion change only where the narrative beat needs support.",
+                    "VISUAL_CONTINUITY",
+                    0.58,
+                    0.58,
                 )
-                expanded.append(
-                    RetentionEvent(
-                        midpoint,
-                        filler_kind,
-                        f"Change {filler_kind} while preserving story continuity.",
-                    )
-                )
-                previous = expanded[-1]
-        expanded.append(event)
+            )
+        filled.append(event)
 
-    # Re-check the diversity/no-triples rules after gap filling.
-    normalized = []
-    for event in expanded:
-        if (
-            len(normalized) >= 2
-            and normalized[-1].kind == normalized[-2].kind == event.kind
-        ):
-            replacement = next(
-                kind for kind in fallback_kinds
-                if kind not in {normalized[-1].kind, normalized[-2].kind}
+    # Final compatibility pass: keep semantic anchors, but never leave a gap
+    # above the established three-second safety ceiling. Fill only real gaps.
+    result: list[RetentionEvent] = []
+    for event in sorted(filled, key=lambda item: item.time):
+        if result and abs(event.time - result[-1].time) < 0.35:
+            continue
+        while result and event.time - result[-1].time > max_semantic_gap:
+            filler_kind = "motion"
+            if len(result) >= 2 and result[-1].kind == result[-2].kind == filler_kind:
+                filler_kind = "text"
+            midpoint = round((result[-1].time + event.time) / 2.0, 3)
+            result.append(
+                RetentionEvent(
+                    midpoint,
+                    filler_kind,
+                    "Visual continuity: add a restrained transition only where the narrative gap requires support.",
+                    "VISUAL_CONTINUITY",
+                    0.55,
+                    0.55,
+                )
             )
-            event = RetentionEvent(
-                event.time,
-                replacement,
-                f"Change {replacement} while preserving story continuity.",
+        if len(result) >= 2 and result[-1].kind == result[-2].kind == event.kind:
+            continue
+        result.append(event)
+
+    # A final impact is useful when the clip plan explicitly contains one.
+    final_clip = clips[-1]
+    if final_clip.purpose in {"Final impact", "Payoff", "Reaction"} and not any(
+        abs(event.time - final_clip.start) < 0.35 for event in result
+    ):
+        result.append(
+            RetentionEvent(
+                round(final_clip.start, 3),
+                "text",
+                "Final impact: reinforce the closing beat without obscuring the payoff.",
+                "FINAL_IMPACT",
+                0.86,
+                0.86,
             )
-        normalized.append(event)
-    return normalized
+        )
+    return sorted(result, key=lambda event: event.time)
 
 def platform_variants(config: V3Config) -> Dict[str, Dict[str, Any]]:
     config.validate()
@@ -824,11 +809,11 @@ def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[Ho
         "no_duplicate_overlays": len(overlays) == len(set(overlays)),
         "duration_bounds": all(config.min_clip_seconds - 0.01 <= d <= config.max_clip_seconds + 0.01 for d in durations),
         "exact_duration": bool(clips) and abs(clips[-1].end - config.target_seconds) <= 0.01,
-        # Allow the same tolerance used by the independent editorial retention
-        # report; boundary-aware deduplication can legitimately widen one gap slightly.
-        "retention_changes_frequent": bool(retention) and all(
-            (b.time - a.time) <= config.retention_interval + 0.75
-            for a, b in zip(retention, retention[1:])
+        # Retention is judged by semantic anchors, not a fixed edit clock.
+        # The independent retention report remains responsible for cadence/spacing diagnostics.
+        "retention_semantic_coverage": bool(retention) and (
+            any(event.time <= 0.35 for event in retention)
+            and any(event.reason in {"PAYOFF_ALIGNMENT", "FINAL_IMPACT"} for event in retention)
         ),
         "has_payoff": any(c.purpose in {"Payoff","Punchline","Climax"} for c in clips),
         "has_final_impact": bool(clips and clips[-1].purpose in {"Final impact","Payoff","Reaction"}),
@@ -838,7 +823,7 @@ def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[Ho
     for key, message in {
         "hook_under_two_seconds":"hook exceeds preferred opening window",
         "no_duplicate_overlays":"repeated overlay text detected",
-        "retention_changes_frequent":"retention event interval exceeded",
+        "retention_semantic_coverage":"retention map is missing an opening or payoff anchor",
         "hook_payoff_continuity":"hook and payoff emotion differ",
     }.items():
         if not checks[key]:
