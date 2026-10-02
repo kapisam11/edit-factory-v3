@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_video_factory.media_health import probe_media
+from ai_video_factory.media_health import probe_media, stream_summary
 from ai_video_factory.v3_pipeline import run_v3_pipeline
 
 
@@ -59,7 +59,7 @@ def test_v3_golden_media_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     final_video = package / "final.v3.mp4"
     assert final_video.is_file()
-    media = probe_media(str(final_video))
+    media = stream_summary(probe_media(str(final_video)))
     assert media["width"] == 1080
     assert media["height"] == 1920
     assert media["duration"] == pytest.approx(8.0, abs=0.08)
