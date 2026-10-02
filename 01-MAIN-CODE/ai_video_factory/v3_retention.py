@@ -29,7 +29,11 @@ def evaluate_retention_editorial_fit(
 ) -> RetentionEditorialReport:
     values = sorted(
         (
-            float(item.get("time", -1.0)),
+            (
+                float(raw_time)
+                if isinstance(raw_time := item.get("time", -1.0), (int, float, str))
+                else -1.0
+            ),
             str(item.get("kind", "")).strip().lower(),
             str(item.get("instruction", "")).strip(),
         )
