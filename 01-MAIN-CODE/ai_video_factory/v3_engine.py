@@ -1,6 +1,7 @@
 """Edit Factory v3 creative planning, semantic analysis, retention and QC."""
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 import math
