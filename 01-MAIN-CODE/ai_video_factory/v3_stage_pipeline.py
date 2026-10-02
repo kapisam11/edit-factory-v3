@@ -185,11 +185,41 @@ _V3_GENERATED_FILES = (
 )
 
 
-def _reset_v3_package(package: Path) -> None:
-    """Remove stale outputs before a rerun so failed jobs cannot expose old evidence."""
+def _reset_v3_package(
+    package: Path,
+    *,
+    input_video: str | None = None,
+) -> None:
+    """Remove stale outputs without deleting a package-local source video."""
     package.mkdir(parents=True, exist_ok=True)
+    package_root = package.resolve()
+    protected_source: Path | None = None
+    source_overlap = False
+    if input_video:
+        protected_source = Path(input_video).resolve()
+        try:
+            protected_source.relative_to(package_root)
+        except ValueError:
+            pass
+        else:
+            source_overlap = protected_source.name in _V3_GENERATED_FILES
+            if source_overlap:
+                # Invalidate stale release evidence first, then reject the unsafe
+                # layout without ever unlinking the caller's source media.
+                for name in _V3_GENERATED_FILES:
+                    target = (package / name).resolve()
+                    if target != protected_source:
+                        target.unlink(missing_ok=True)
+                _cleanup_transients(package)
+                raise V3InputError(
+                    "V3 input video cannot use a generated package filename inside package_dir: "
+                    + protected_source.name
+                )
     for name in _V3_GENERATED_FILES:
-        (package / name).unlink(missing_ok=True)
+        target = (package / name).resolve()
+        if protected_source is not None and target == protected_source:
+            continue
+        target.unlink(missing_ok=True)
     _cleanup_transients(package)
 
 
@@ -242,7 +272,12 @@ class InputValidationStage:
 
     def run(self, context: V3ExecutionContext) -> None:
         from .v3_capabilities import validate_capabilities
-        validate_capabilities()
+        try:
+            validate_capabilities()
+        except (TypeError, ValueError) as exc:
+            raise V3ConfigurationError(
+                f"V3 capability validation failed: {exc}"
+            ) from exc
         context.request.validate()
         environment = os.environ.get("AIVF_ENV", "production").strip().lower()
         override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
@@ -255,7 +290,6 @@ class InputValidationStage:
             raise V3InputError(
                 "AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1"
             )
-        _reset_v3_package(context.package)
         try:
             minimum_free_mb = int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "512"))
         except ValueError as exc:
@@ -723,6 +757,41 @@ class V3PipelineRunner:
             source_metadata=self.source_metadata,
             package=Path(self.request.package_dir),
         )
+        try:
+            _reset_v3_package(
+                context.package,
+                input_video=self.request.input_video,
+            )
+        except V3PipelineError as exc:
+            context.result.errors.append(f"[preflight] {exc}")
+            atomic_write_json(
+                context.package / "v3_failure.json",
+                {
+                    "ok": False,
+                    "errors": list(context.result.errors),
+                    "stage_timings_ms": {},
+                },
+            )
+            atomic_write_json(
+                context.package / "v3_readiness.json",
+                {
+                    "state": "FAILED",
+                    "checks": {
+                        "MEDIA_VALID": False,
+                        "MEDIA_CONTRACT_VALID": False,
+                        "UPLOAD_PACKAGE_VALID": False,
+                        "PUBLISH_READY": False,
+                    },
+                    "errors": list(context.result.errors),
+                    "warnings": [],
+                },
+            )
+            context.result.artifacts.update({
+                "v3_failure": str(context.package / "v3_failure.json"),
+                "v3_readiness": str(context.package / "v3_readiness.json"),
+            })
+            return context.result
+
         for stage in self.stages:
             started = time.perf_counter()
             try:
