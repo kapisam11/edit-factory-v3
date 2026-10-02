@@ -19,9 +19,9 @@ Topic + context + optional raw video
                 ↓
  text overlays + music beat grid
                 ↓
- retention change every 1–3 sec
+ semantic retention + attention-gap constraint
                 ↓
-      human-editor QC pass
+ explainable editorial decisions + human feedback
                 ↓
  FFmpeg production + validation
                 ↓
@@ -76,6 +76,20 @@ aivf-diagnose --media input.mp4 --deep --directory output
 ```
 
 V3 renders now emit technical media-health, provenance, metadata-guardrail, and environment-diagnostics artifacts alongside the existing render/QC reports. Rights metadata is treated as a review signal; the pipeline does not infer that online media is licensed for reuse.
+
+## Empirical editorial evaluation
+
+V3 now separates pipeline validity from editorial-quality evidence. The repository
+contains an `evaluation/` corpus layout, structured human annotations, automated
+prediction storage, Spearman/MAE reporting, deterministic decision-graph replay,
+and a creative-regression gate.
+
+Human scores are never fabricated by the pipeline. Correlation is reported only
+when at least three matched human annotations exist.
+
+Each editorial decision records its operation, reason, confidence, evidence,
+policy version, planner version, configuration hash, and source hash when available.
+Low-confidence decisions can explicitly resolve to `DO_NOTHING`.
 
 ## Windows one-click start
 
