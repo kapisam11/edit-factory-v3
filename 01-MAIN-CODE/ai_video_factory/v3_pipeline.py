@@ -29,6 +29,7 @@ from .provenance import build_asset_record, load_provenance, manifest_needs_righ
 from .rights_policy import rights_gate
 from .system_diagnostics import diagnostics_report, write_diagnostics
 from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk, sha256_file
+from .v3_exceptions import V3InputError
 from .production_assurance import (
     build_artifact_manifest,
     build_environment_fingerprint,
@@ -41,6 +42,24 @@ def _source_rights_status(source_metadata: Optional[Dict[str, Any]]) -> str:
     """Return only an explicit rights status; rights_basis never grants approval."""
     metadata = source_metadata if isinstance(source_metadata, dict) else {}
     return str(metadata.get("rights_status") or "review_required").strip().lower()
+
+
+def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
+    """Promote required artifact-readiness failures into the V3 job result."""
+    result.artifacts = getattr(result, "artifacts", {}) or {}
+    result.artifacts["v3_readiness_state"] = str(getattr(readiness, "state", "") or "")
+    errors = getattr(readiness, "errors", None) or []
+    checks = getattr(readiness, "checks", None) or {}
+    if errors:
+        result.errors.extend(
+            f"V3 artifact readiness: {error}"
+            for error in errors
+            if f"V3 artifact readiness: {error}" not in result.errors
+        )
+    if str(getattr(readiness, "state", "") or "") != "UPLOAD_PACKAGE_VALID":
+        result.warnings.append(
+            "V3 artifact readiness is not upload-package valid"
+        )
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
@@ -354,5 +373,18 @@ def run_v3_pipeline(
         enable_diarization=enable_diarization,
         diarization_token=diarization_token,
     )
+
+    # Public callers historically received input-contract failures immediately.
+    # Keep that behavior while the stage runner handles later operational failures
+    # as structured ProductionResult errors.
+    request.validate()
+    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+    qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
+    if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0" and (
+        environment not in {"development", "test"} or not qc_override
+    ):
+        raise V3InputError(
+            "AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1"
+        )
     return V3PipelineRunner(request, source_metadata=source_metadata).run()
 
