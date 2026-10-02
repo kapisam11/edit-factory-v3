@@ -347,9 +347,12 @@ def test_semantic_qc_catches_a_sample_length_dead_scene(monkeypatch, tmp_path):
 
     report = v3_semantic_qc.analyze_render_semantics(str(video))
 
-    assert report["ok"] is False
+    # The scene must be detected at exactly the sampled 2.5s length, while
+    # an isolated gap remains a warning rather than a release blocker.
+    assert report["ok"] is True
     assert report["dead_moments"] == [{"start": 2.5, "end": 5.0, "duration": 2.5}]
-    assert "long low-motion/low-audio gaps detected" in report["errors"]
+    assert "isolated low-motion/low-audio section detected" in report["warnings"]
+    assert report["dead_gap_blocking"] is False
 
 
 def test_v3_package_reset_protects_symlinked_external_source(tmp_path):
