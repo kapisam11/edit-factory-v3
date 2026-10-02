@@ -750,11 +750,27 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
             )
         filled.append(event)
 
-    # Never manufacture duplicate timestamps or repetitive effect chains.
+    # Final compatibility pass: keep semantic anchors, but never leave a gap
+    # above the established three-second safety ceiling. Fill only real gaps.
     result: list[RetentionEvent] = []
     for event in sorted(filled, key=lambda item: item.time):
         if result and abs(event.time - result[-1].time) < 0.35:
             continue
+        while result and event.time - result[-1].time > max_semantic_gap:
+            filler_kind = "motion"
+            if len(result) >= 2 and result[-1].kind == result[-2].kind == filler_kind:
+                filler_kind = "text"
+            midpoint = round((result[-1].time + event.time) / 2.0, 3)
+            result.append(
+                RetentionEvent(
+                    midpoint,
+                    filler_kind,
+                    "Visual continuity: add a restrained transition only where the narrative gap requires support.",
+                    "VISUAL_CONTINUITY",
+                    0.55,
+                    0.55,
+                )
+            )
         if len(result) >= 2 and result[-1].kind == result[-2].kind == event.kind:
             continue
         result.append(event)
