@@ -123,8 +123,8 @@ def evaluate_retention_editorial_fit(
             "events_within_duration",
             "positive_gaps",
             "not_overcrowded",
-            "no_long_gaps",
             "specific_instructions",
+            "semantic_anchors",
         )
     ) and score >= 75.0
     return RetentionEditorialReport(
