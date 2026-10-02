@@ -54,6 +54,7 @@ def evaluate_retention_editorial_fit(
 
     times = [value[0] for value in values]
     kinds = [value[1] for value in values]
+    reasons = [value[3] for value in values]
     gaps = [b - a for a, b in zip(times, times[1:])]
     min_gap = min(gaps) if gaps else float(duration)
     max_gap = max(gaps) if gaps else float(duration)
@@ -83,7 +84,8 @@ def evaluate_retention_editorial_fit(
         "no_three_same_in_row": all(
             not (a == b == c) for a, b, c in zip(kinds, kinds[1:], kinds[2:])
         ),
-        "specific_instructions": all(len(instruction.split()) >= 4 for _, _, instruction in values),
+        "specific_instructions": all(len(instruction.split()) >= 4 for _, _, instruction, _ in values),
+        "semantic_anchors": bool(reasons) and any(reason in {"PAYOFF_ALIGNMENT", "FINAL_IMPACT"} for reason in reasons),
     }
 
     if clip_boundaries:
@@ -109,6 +111,7 @@ def evaluate_retention_editorial_fit(
         "effect_diversity": 0.08,
         "no_three_same_in_row": 0.06,
         "specific_instructions": 0.06,
+        "semantic_anchors": 0.10,
         "uses_edit_boundaries": 0.10,
     }
     denominator = sum(weights[key] for key in checks)
