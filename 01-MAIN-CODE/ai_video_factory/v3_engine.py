@@ -635,16 +635,57 @@ def analyze_music(core: CoreIdea, config: V3Config, clips: Sequence[ClipBeat]) -
 def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: MusicPlan) -> List[RetentionEvent]:
     events: List[RetentionEvent] = []
     boundaries = [clip.start for clip in clips[1:]]
-    times = sorted(set(round(t, 3) for t in boundaries + [x * config.retention_interval for x in range(int(config.target_seconds / config.retention_interval) + 1)] if t < config.target_seconds - 0.05))
-    for t in times:
+    candidates = sorted(
+        set(
+            round(t, 3)
+            for t in boundaries
+            + [x * config.retention_interval for x in range(int(config.target_seconds / config.retention_interval) + 1)]
+            if t < config.target_seconds - 0.05
+        )
+    )
+
+    def event_for_time(t: float, index: int) -> RetentionEvent:
         if abs(t - music.drop_time) <= config.retention_interval * 0.5:
             kind = "beat drop"
         elif any(abs(t - boundary) <= 0.08 for boundary in boundaries):
             kind = "clip"
         else:
-            kind = ("zoom", "text", "motion", "angle")[len(events) % 4]
-        events.append(RetentionEvent(t, kind, f"Change {kind} while preserving story continuity."))
-    return events
+            kind = ("zoom", "text", "motion", "angle")[index % 4]
+        return RetentionEvent(
+            t,
+            kind,
+            f"Change {kind} while preserving story continuity.",
+        )
+
+    # Keep generated events comfortably separated. Near-collisions can occur
+    # when a clip boundary lands close to the regular retention grid; keeping
+    # both creates an editorially overcrowded map even though each event is valid.
+    priorities = {"beat drop": 3, "clip": 2}
+    selected: list[RetentionEvent] = []
+    pending = [event_for_time(t, index) for index, t in enumerate(candidates)]
+    for candidate in pending:
+        conflicts = [
+            (index, event)
+            for index, event in enumerate(selected)
+            if abs(candidate.time - event.time) < 0.35
+        ]
+        if not conflicts:
+            selected.append(candidate)
+            continue
+        replace_index, existing = min(
+            conflicts,
+            key=lambda item: priorities.get(item[1].kind, 1),
+        )
+        if priorities.get(candidate.kind, 1) > priorities.get(existing.kind, 1):
+            selected[replace_index] = candidate
+
+    selected.sort(key=lambda event: event.time)
+    if not selected or selected[0].time > 0.35:
+        selected.insert(
+            0,
+            event_for_time(0.0, len(selected)),
+        )
+    return selected
 
 def platform_variants(config: V3Config) -> Dict[str, Dict[str, Any]]:
     config.validate()
@@ -754,8 +795,32 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
     thumbnail, titles, tags, description = _metadata(core)
     quality = _human_editor_checks(core, selected, hooks, clips, retention, cfg)
     metrics = _heuristic_metrics(core, hooks, clips, quality)
+    score_bundle = V3ScoreBundle.from_blueprint(
+        technical_validity=100.0,
+        creative_quality=float(quality.score),
+        metrics=metrics,
+    )
     platform_value = cfg.platform.value if isinstance(cfg.platform, Platform) else str(cfg.platform).strip().lower()
-    blueprint = V3Blueprint("3.0.0", core, selected.value, hooks, clips, music, retention, thumbnail, titles, tags, description, platform_variants(cfg), quality, metrics, list(V3_CAPABILITIES), platform=platform_value, audience=cfg.audience)
+    blueprint = V3Blueprint(
+        "3.0.0",
+        core,
+        selected.value,
+        hooks,
+        clips,
+        music,
+        retention,
+        thumbnail,
+        titles,
+        tags,
+        description,
+        platform_variants(cfg),
+        quality,
+        metrics,
+        list(V3_CAPABILITIES),
+        platform=platform_value,
+        audience=cfg.audience,
+        score_bundle=score_bundle,
+    )
     validate_blueprint(blueprint)
     return blueprint
 
