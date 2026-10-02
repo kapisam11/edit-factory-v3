@@ -702,6 +702,33 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
             )
         normalized.append(event)
 
+    # The independent editorial contract requires at least four distinct
+    # effect kinds on maps with four or more events. Convert duplicate markers
+    # only until that variety requirement is satisfied; the first occurrence of
+    # each semantic marker remains intact.
+    target_unique = min(4, len(normalized))
+    counts = Counter(event.kind for event in normalized)
+    for index, event in enumerate(normalized):
+        if len(counts) >= target_unique:
+            break
+        if counts[event.kind] <= 1:
+            continue
+        replacement = next(
+            (kind for kind in fallback_kinds if kind not in counts),
+            None,
+        )
+        if replacement is None:
+            continue
+        counts[event.kind] -= 1
+        if counts[event.kind] <= 0:
+            del counts[event.kind]
+        counts[replacement] += 1
+        normalized[index] = RetentionEvent(
+            event.time,
+            replacement,
+            f"Change {replacement} while preserving story continuity.",
+        )
+
     if not normalized or normalized[0].time > 0.35:
         normalized.insert(
             0,
