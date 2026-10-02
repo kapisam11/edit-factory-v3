@@ -226,6 +226,14 @@ def test_v3_renderer_bridge_forces_legacy_auto_fix_off(monkeypatch):
     assert captured["research_summary"]["v3_directives"]["blueprint_contract"] == "3.0.0"
 
 
+def test_v3_blueprint_populates_nonzero_score_bundle(monkeypatch):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=12))
+    assert blueprint.score_bundle.technical_validity == 100.0
+    assert blueprint.score_bundle.creative_quality == float(blueprint.quality.score)
+    assert blueprint.score_bundle.performance_heuristic > 0.0
+
+
 def test_v3_planning_accepts_eight_second_target(monkeypatch):
     monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
     from ai_video_factory.plan import make_idea
