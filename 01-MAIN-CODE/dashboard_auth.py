@@ -12,7 +12,7 @@ from flask import abort, g, redirect, render_template, request, session, url_for
 from ai_video_factory.authorization import Role, normalize_role, role_allows
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-PUBLIC_PATHS = {"/login", "/logout", "/api/health"}
+PUBLIC_PATHS = {"/login", "/logout", "/api/health", "/readyz"}
 _LOGIN_LIMIT = 10
 _LOGIN_WINDOW_SECONDS = 60.0
 _login_attempts: dict[str, list[float]] = {}
@@ -61,17 +61,10 @@ def _login_allowed(client: str) -> bool:
         _login_attempts[client] = recent
         if len(_login_attempts) > 1024:
             cutoff = now - _LOGIN_WINDOW_SECONDS
-            for key in [
-                key for key, timestamps in _login_attempts.items()
-                if key != client and not any(ts >= cutoff for ts in timestamps)
-            ]:
+            for key in [key for key, timestamps in _login_attempts.items() if key != client and not any(ts >= cutoff for ts in timestamps)]:
                 _login_attempts.pop(key, None)
             while len(_login_attempts) > 1024:
-                evictable = [
-                    (key, max(timestamps))
-                    for key, timestamps in _login_attempts.items()
-                    if key != client and timestamps
-                ]
+                evictable = [(key, max(timestamps)) for key, timestamps in _login_attempts.items() if key != client and timestamps]
                 if not evictable:
                     break
                 oldest_client = min(evictable, key=lambda item: item[1])[0]
@@ -79,23 +72,17 @@ def _login_allowed(client: str) -> bool:
         return True
 
 
-
 def _same_origin_request() -> bool:
-    """Require an explicit browser origin signal for authenticated state changes."""
     expected = request.host_url.rstrip("/")
     origin = request.headers.get("Origin")
     if origin:
         return origin.rstrip("/") == expected
-
     referer = request.headers.get("Referer")
     if referer:
         parsed = urlparse(referer)
         if not parsed.scheme or not parsed.netloc:
             return False
         return f"{parsed.scheme}://{parsed.netloc}".rstrip("/") == expected
-
-    # A browser state-changing request without either header is ambiguous and
-    # must not be accepted as same-origin merely because authentication exists.
     return False
 
 
@@ -106,40 +93,27 @@ def configure_dashboard_auth(app):
     token = os.environ.get("AIVF_DASHBOARD_TOKEN", "").strip()
     allow_insecure_local = os.environ.get("AIVF_ALLOW_INSECURE_LOCAL", "0") == "1"
     configured_role = normalize_role(os.environ.get("AIVF_DASHBOARD_ROLE", "admin"))
-
-    # Flask sessions need a stable secret shared by all workers.
-    # Never derive a key from the public local-development login string.
     session_key = os.environ.get("AIVF_DASHBOARD_SECRET_KEY", "").strip()
     if not session_key:
         session_key = os.environ.get("FLASK_SECRET_KEY", "").strip()
     if not session_key and token:
-        session_key = hashlib.sha256(
-            ("AIVF-DASHBOARD-SESSION:" + token).encode("utf-8")
-        ).hexdigest()
+        session_key = hashlib.sha256(("AIVF-DASHBOARD-SESSION:" + token).encode("utf-8")).hexdigest()
     if not session_key:
         raw_users = os.environ.get("AIVF_DASHBOARD_USERS", "").strip()
         if raw_users:
-            session_key = hashlib.sha256(
-                ("AIVF-DASHBOARD-USERS-SESSION:" + raw_users).encode("utf-8")
-            ).hexdigest()
+            session_key = hashlib.sha256(("AIVF-DASHBOARD-USERS-SESSION:" + raw_users).encode("utf-8")).hexdigest()
     local_only = False
     if not session_key:
         session_key = secrets.token_hex(32)
         local_only = bool(allow_insecure_local)
     app.secret_key = session_key
     app.config["_AIVF_LOCAL_ONLY"] = local_only
-
     configured_users = _configured_users(configured_role)
     default_user = os.environ.get("AIVF_DASHBOARD_USER", "local-user").strip() or "local-user"
     if not token and not allow_insecure_local:
         app.logger.warning("AIVF_DASHBOARD_TOKEN is unset; dashboard access will fail closed")
-
     cookie_secure_default = "0" if allow_insecure_local else "1"
-    app.config.update(
-        SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE="Strict",
-        SESSION_COOKIE_SECURE=os.environ.get("AIVF_COOKIE_SECURE", cookie_secure_default) == "1",
-    )
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict", SESSION_COOKIE_SECURE=os.environ.get("AIVF_COOKIE_SECURE", cookie_secure_default) == "1")
 
     @app.before_request
     def assign_csp_nonce():
@@ -150,11 +124,7 @@ def configure_dashboard_auth(app):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self' 'nonce-%s'; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
-            "base-uri 'self'; form-action 'self'"
-        ) % g.aivf_csp_nonce
+        response.headers["Content-Security-Policy"] = ("default-src 'self'; script-src 'self' 'nonce-%s'; script-src-attr 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'") % g.aivf_csp_nonce
         if app.config.get("SESSION_COOKIE_SECURE"):
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
@@ -187,16 +157,11 @@ def configure_dashboard_auth(app):
         if configured_users:
             for user_id, user_config in configured_users.items():
                 candidate = user_config["token"]
-                if hmac.compare_digest(
-                    hashlib.sha256(supplied.encode()).digest(),
-                    hashlib.sha256(candidate.encode()).digest(),
-                ):
+                if hmac.compare_digest(hashlib.sha256(supplied.encode()).digest(), hashlib.sha256(candidate.encode()).digest()):
                     matched_user = user_id
                     matched_role = normalize_role(user_config["role"])
                     break
-        valid = bool(token) and hmac.compare_digest(
-            hashlib.sha256(supplied.encode()).digest(), hashlib.sha256(token.encode()).digest()
-        )
+        valid = bool(token) and hmac.compare_digest(hashlib.sha256(supplied.encode()).digest(), hashlib.sha256(token.encode()).digest())
         local_dev_valid = allow_insecure_local and supplied == "local-development" and _loopback_request()
         if valid or local_dev_valid or matched_user:
             session.clear()
@@ -214,10 +179,7 @@ def configure_dashboard_auth(app):
             role = normalize_role(raw_role)
         except ValueError:
             role = Role.VIEWER
-        return {
-            "aivf_role": role.value,
-            "aivf_user_id": str(session.get("aivf_user_id") or default_user),
-        }
+        return {"aivf_role": role.value, "aivf_user_id": str(session.get("aivf_user_id") or default_user)}
 
     def require_dashboard_role(required: str | Role) -> None:
         raw_role = session.get("aivf_role") or configured_role.value

@@ -243,6 +243,10 @@ def produce_package(
                     "license_url": visual.get("license_url"),
                     "rights_status": visual.get("rights_status", "review_required"),
                     "rights_basis": visual.get("rights_basis", ""),
+                    "evidence_url": visual.get("evidence_url", ""),
+                    "declared_by": visual.get("declared_by", ""),
+                    "declared_at": visual.get("declared_at", ""),
+                    "attribution": visual.get("attribution") or visual.get("artist", ""),
                 }
                 for visual in saved
                 if isinstance(visual, dict)

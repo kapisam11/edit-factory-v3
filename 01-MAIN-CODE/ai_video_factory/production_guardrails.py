@@ -88,11 +88,47 @@ def _process_group_kwargs() -> dict[str, Any]:
         return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
     return {"start_new_session": True}
 
+def _windows_kill_surviving_descendants(pid: int, *, timeout_seconds: float = 3.0) -> None:
+    """Kill descendants by parent-PID lineage when the original process already exited."""
+    if os.name != "nt":
+        return
+    # Use PowerShell's CIM process table as a fallback after taskkill. This is
+    # executed without a shell and the only interpolated value is an integer PID.
+    script = r"""
+param([int]$RootPid)
+$all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)
+$seen = @{}
+$targets = [System.Collections.Generic.List[int]]::new()
+function Add-Descendants([int]$ParentPid) {
+    foreach ($proc in $all) {
+        $childPid = [int]$proc.ProcessId
+        if ([int]$proc.ParentProcessId -eq $ParentPid -and -not $seen.ContainsKey($childPid)) {
+            $seen[$childPid] = $true
+            $targets.Add($childPid)
+            Add-Descendants $childPid
+        }
+    }
+}
+Add-Descendants $RootPid
+foreach ($childPid in $targets) {
+    Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue
+}
+Stop-Process -Id $RootPid -Force -ErrorAction SilentlyContinue
+"""
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, str(int(pid))],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=max(1.0, float(timeout_seconds)),
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
 
 def terminate_process_tree(process: subprocess.Popen[Any], *, grace_seconds: float = 2.0) -> None:
-    """Terminate an external process and its children without leaking work past cancellation."""
-    if process.poll() is not None:
-        return
+    """Terminate an external process group/tree, including exited-parent Windows descendants."""
     try:
         if os.name == "nt":
             subprocess.run(
@@ -102,22 +138,30 @@ def terminate_process_tree(process: subprocess.Popen[Any], *, grace_seconds: flo
                 stderr=subprocess.DEVNULL,
                 timeout=max(1.0, float(grace_seconds) + 1.0),
             )
+            _windows_kill_surviving_descendants(
+                process.pid,
+                timeout_seconds=max(1.0, float(grace_seconds) + 1.0),
+            )
         else:
             os.killpg(process.pid, signal.SIGTERM)
             deadline = time.monotonic() + max(0.1, float(grace_seconds))
-            while process.poll() is None and time.monotonic() < deadline:
+            while time.monotonic() < deadline:
+                try:
+                    os.killpg(process.pid, 0)
+                except OSError:
+                    break
                 time.sleep(0.05)
-            if process.poll() is None:
+            try:
                 os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
     except (OSError, subprocess.SubprocessError):
         try:
             process.kill()
         except OSError:
             pass
 
-
-def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None = None,
-             env: Mapping[str, str] | None = None, stderr_limit: int = 4000) -> ToolResult:
+def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None = None, env: Mapping[str, str] | None = None, stderr_limit: int = 4000) -> ToolResult:
     """Run an external tool without a shell and retain a bounded diagnostic tail."""
     args = tuple(str(item) for item in argv)
     if not args or not args[0]:
@@ -126,26 +170,20 @@ def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None =
         raise GuardrailError("tool timeout must be positive")
     limit = max(256, int(stderr_limit))
     try:
-        process = subprocess.Popen(
-            list(args),
-            cwd=str(cwd) if cwd else None,
-            env=dict(env) if env is not None else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            **_process_group_kwargs(),
-        )
+        process = subprocess.Popen(list(args), cwd=str(cwd) if cwd else None, env=dict(env) if env is not None else None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **_process_group_kwargs())
         try:
             stdout, stderr = process.communicate(timeout=int(timeout))
         except subprocess.TimeoutExpired as exc:
             terminate_process_tree(process)
             try:
-                process.communicate(timeout=2)
+                stdout, stderr = process.communicate(timeout=2)
             except subprocess.TimeoutExpired:
                 process.kill()
+                stdout, stderr = process.communicate(timeout=1)
             raise GuardrailError(f"tool timed out after {timeout}s: {args[0]}") from exc
         completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
     except subprocess.TimeoutExpired as exc:
+        terminate_process_tree(process)
         raise GuardrailError(f"tool timed out after {timeout}s: {args[0]}") from exc
     except OSError as exc:
         raise GuardrailError(f"could not start tool {args[0]}: {exc}") from exc
@@ -155,14 +193,10 @@ def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None =
 def redact_log_message(message: object, *, max_length: int = 4000) -> str:
     """Redact common credential-bearing values before they reach logs."""
     value = str(message or "")
-    patterns = (
-        r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
-        r"(?i)(\b(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+",
-    )
+    patterns = (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"(?i)(\b(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+")
     for pattern in patterns:
         value = re.sub(pattern, r"\1<REDACTED>", value)
     return value[:max(256, int(max_length))]
-
 
 class SecretRedactionFilter(logging.Filter):
     """Logging filter for accidental credential leakage."""
@@ -170,7 +204,6 @@ class SecretRedactionFilter(logging.Filter):
         record.msg = redact_log_message(record.getMessage())
         record.args = ()
         return True
-
 
 @dataclass(frozen=True)
 class Diagnostic:
@@ -193,7 +226,6 @@ def redact_mapping(payload: Mapping[str, Any], *, secret_names: Iterable[str] = 
     """Recursively redact secret-like keys in mappings and nested sequences."""
     secrets = {str(name).lower() for name in secret_names}
     markers = ("token", "secret", "password", "api_key", "authorization")
-
     def clean(value: Any, depth: int) -> Any:
         if depth > 8:
             return "[TRUNCATED]"
@@ -209,10 +241,7 @@ def redact_mapping(payload: Mapping[str, Any], *, secret_names: Iterable[str] = 
         if isinstance(value, (list, tuple)):
             return [clean(item, depth + 1) for item in value]
         return value
-
     result = clean(payload, 0)
     return dict(result)
 
-__all__ = ["Diagnostic","GuardrailError","ToolResult","atomic_write_bytes","atomic_write_json","diagnose_environment",
-           "executable_path","free_disk_bytes","redact_log_message","SecretRedactionFilter","redact_mapping","require_free_disk","run_tool","safe_filename",
-           "sha256_file","terminate_process_tree","validate_path_inside"]
+__all__ = ["Diagnostic","GuardrailError","ToolResult","atomic_write_bytes","atomic_write_json","diagnose_environment","executable_path","free_disk_bytes","redact_log_message","SecretRedactionFilter","redact_mapping","require_free_disk","run_tool","safe_filename","sha256_file","terminate_process_tree","validate_path_inside"]

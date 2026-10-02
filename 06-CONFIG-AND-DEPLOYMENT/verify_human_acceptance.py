@@ -8,6 +8,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Make the verifier runnable directly from a source checkout as well as an
+# installed environment; do not require callers to set PYTHONPATH manually.
+_MAIN_CODE = Path(__file__).resolve().parents[1] / "01-MAIN-CODE"
+if _MAIN_CODE.is_dir() and str(_MAIN_CODE) not in sys.path:
+    sys.path.insert(0, str(_MAIN_CODE))
+
+from ai_video_factory.production_assurance import verify_artifact_manifest, verify_release_evidence
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$", re.I)
 
@@ -59,6 +66,26 @@ def main(argv: list[str]) -> int:
     supplied = str(acceptance.get("artifact_manifest_sha256") or "").lower()
     if not SHA256.fullmatch(manifest_hash) or manifest_hash != supplied:
         die("acceptance artifact hash does not match artifact_manifest.json")
+
+    # The stored manifest hash alone is insufficient: it can still describe
+    # files that were modified after the human review. Re-hash the package now.
+    integrity = verify_artifact_manifest(package, manifest)
+    if not integrity.get("ok"):
+        die("accepted package no longer matches its artifact manifest: " + "; ".join(list(integrity.get("errors") or [])[:10]))
+
+    release_evidence_path = package / "release_evidence.json"
+    if not release_evidence_path.is_file():
+        die("release_evidence.json is required for human acceptance")
+    try:
+        release_evidence = json.loads(release_evidence_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        die(f"invalid release evidence: {exc}")
+    release_verification = verify_release_evidence(package, release_evidence)
+    if not release_verification.get("ok"):
+        die(
+            "release evidence no longer matches package state: "
+            + "; ".join(list(release_verification.get("errors") or [])[:10])
+        )
 
     result = {
         "ok": True,

@@ -12,6 +12,9 @@ RIGHTS_STATUSES = {
     "owned", "explicit_permission", "commercial_license", "public_domain",
     "cc_license", "license_identified", "unverified", "review_required",
 }
+CLEARED_RIGHTS_STATUSES = frozenset({
+    "owned", "explicit_permission", "commercial_license", "public_domain", "cc_license",
+})
 
 def normalize_rights_status(value: str | None) -> str:
     candidate = str(value or "review_required").strip().lower()
@@ -99,14 +102,17 @@ def load_provenance(path: str | Path) -> dict[str, Any]:
     return payload
 
 def manifest_needs_rights_review(manifest: Mapping[str, Any]) -> bool:
+    rights_gate = manifest.get("rights_gate")
+    if not isinstance(rights_gate, Mapping) or rights_gate.get("status") != "cleared" or rights_gate.get("publish_blocked"):
+        return True
     for asset in manifest.get("assets") or []:
-        if normalize_rights_status(asset.get("rights_status")) in {"review_required", "unverified"}:
+        if normalize_rights_status(asset.get("rights_status")) not in CLEARED_RIGHTS_STATUSES:
             return True
     final_video = manifest.get("final_video") or {}
-    return normalize_rights_status(final_video.get("rights_status")) in {"review_required", "unverified"}
+    return normalize_rights_status(final_video.get("rights_status")) not in CLEARED_RIGHTS_STATUSES
 
 __all__ = [
-    "RIGHTS_STATUSES", "normalize_rights_status", "build_asset_record",
+    "RIGHTS_STATUSES", "CLEARED_RIGHTS_STATUSES", "normalize_rights_status", "build_asset_record",
     "add_asset", "provenance_manifest", "write_provenance",
     "load_provenance", "manifest_needs_rights_review",
 ]

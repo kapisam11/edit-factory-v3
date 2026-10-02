@@ -76,6 +76,10 @@ def test_explicit_permission_clears_publish_gate():
             "title": "Unstable Universe",
             "url": "https://www.youtube.com/watch?v=example",
             "rights_basis": "explicit_permission",
+            "rights_status": "explicit_permission",
+            "declared_by": "tester",
+            "declared_at": "2026-10-01T15:00:00Z",
+            "evidence_url": "https://example.com/permission",
             "source": "user_provided",
         }
     }
@@ -96,5 +100,97 @@ def test_publish_gate_requires_explicit_input_media_rights():
         },
     }
     report = media_rights_report(summary)
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
+
+
+def test_media_rights_report_does_not_clear_rights_basis_alone(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "1")
+    report = media_rights_report({
+        "source_metadata": {
+            "title": "External clip",
+            "source": "youtube",
+            "rights_basis": "cc_license",
+            "source_url": "https://example.com/video",
+        }
+    })
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
+
+
+def test_media_rights_report_blocks_unresolved_rights_in_non_strict_mode(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "0")
+    report = media_rights_report({
+        "source_metadata": {
+            "title": "External clip",
+            "source": "youtube",
+            "rights_status": "owned",
+            "source_url": "https://example.com/video",
+        }
+    })
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
+
+
+def test_user_provided_rights_metadata_cannot_bypass_gate(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "1")
+    report = media_rights_report({
+        "requires_rights_declaration": True,
+        "source_metadata": {
+            "rights_basis": "cc_license",
+            "source": "user_provided",
+        },
+    })
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
+
+
+def test_required_rights_status_only_declaration_is_not_dropped(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "1")
+    report = media_rights_report({
+        "requires_rights_declaration": True,
+        "source_metadata": {
+            "rights_status": "owned",
+        },
+    })
+    assert report["publish_blocked"] is True
+    assert report["status"] == "review_required"
+
+
+def test_cleared_wikimedia_asset_can_pass_rights_evidence(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "1")
+    report = media_rights_report({
+        "source_credits": [{
+            "title": "Licensed Wikimedia image",
+            "creator": "Artist",
+            "url": "https://commons.wikimedia.org/wiki/File:Example",
+            "source": "wikimedia",
+            "license": "CC BY",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "evidence_url": "https://creativecommons.org/licenses/by/4.0/",
+            "rights_status": "cleared",
+            "rights_basis": "cc_license",
+            "declared_by": "wikimedia-commons-metadata",
+            "declared_at": "2026-10-01T15:00:00Z",
+        }],
+    })
+    assert report["publish_blocked"] is False
+    assert report["status"] == "cleared"
+
+
+def test_source_url_is_not_permission_evidence(monkeypatch):
+    monkeypatch.setenv("AIVF_STRICT_RIGHTS", "1")
+    report = media_rights_report({
+        "source_metadata": {
+            "creator": "Creator",
+            "title": "Third-party clip",
+            "source": "youtube",
+            "rights_basis": "explicit_permission",
+            "rights_status": "explicit_permission",
+            "source_url": "https://youtube.com/watch?v=example",
+            "declared_by": "tester",
+            "declared_at": "2026-10-01T15:00:00Z",
+        }
+    })
     assert report["publish_blocked"] is True
     assert report["status"] == "review_required"

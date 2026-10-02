@@ -56,6 +56,7 @@ with fixture.open("rb") as handle:
             "platform": "youtube_shorts",
             "audience": "release smoke viewers",
             "context": "deterministic production smoke",
+            "rights_basis": "owned",
             "bpm": "120",
             "enable_ocr": "false",
             "enable_object_detection": "false",
@@ -131,7 +132,7 @@ subprocess.run([
     "ffprobe", "-v", "error", "-show_entries", "format=duration",
     "-of", "default=noprint_wrappers=1:nokey=1", str(final_video),
 ], check=True, stdout=subprocess.DEVNULL)
-from ai_video_factory.production_assurance import verify_artifact_manifest
+from ai_video_factory.production_assurance import verify_artifact_manifest, verify_release_evidence
 
 artifact_manifest = json.loads((package / "artifact_manifest.json").read_text(encoding="utf-8"))
 integrity = verify_artifact_manifest(package, artifact_manifest)
@@ -139,6 +140,9 @@ if not integrity["ok"]:
     raise SystemExit(f"target smoke artifact integrity failed: {integrity['errors'][:5]}")
 
 release_evidence = json.loads((package / "release_evidence.json").read_text(encoding="utf-8"))
+release_verification = verify_release_evidence(package, release_evidence)
+if not release_verification["ok"]:
+    raise SystemExit(f"target smoke release evidence integrity failed: {release_verification['errors'][:5]}")
 if release_evidence.get("human_review_required") is not True:
     raise SystemExit("target smoke release evidence lost the human-review boundary")
 if release_evidence.get("release_candidate") is not True:

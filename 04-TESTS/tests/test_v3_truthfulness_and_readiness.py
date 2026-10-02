@@ -4,6 +4,7 @@ import pytest
 
 from ai_video_factory.artifact_readiness import evaluate_artifact
 from ai_video_factory.v3_capabilities import CAPABILITIES, validate_capabilities
+from ai_video_factory.v3_pipeline import _source_rights_status
 
 
 def test_capability_registry_exposes_truthful_evidence_levels():
@@ -126,3 +127,8 @@ def test_artifact_readiness_rejects_tampered_package_manifest(monkeypatch, tmp_p
     )
     assert report.checks["UPLOAD_PACKAGE_VALID"] is False
     assert any("hash mismatch" in error for error in report.errors)
+
+
+def test_rights_basis_cannot_be_treated_as_approval():
+    assert _source_rights_status({"rights_basis": "cc_license"}) == "review_required"
+    assert _source_rights_status({"rights_status": "owned", "rights_basis": "review_required"}) == "owned"

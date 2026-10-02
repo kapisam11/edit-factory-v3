@@ -18,9 +18,9 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -28,6 +28,7 @@ from werkzeug.utils import secure_filename
 
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 from ai_video_factory.render_engine import run_ffprobe
+from ai_video_factory.production_guardrails import sha256_file
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
@@ -63,6 +64,7 @@ if not configured_secret:
 app.config.update(
     MAX_CONTENT_LENGTH=RUNTIME_CONFIG.max_upload_mb * 1024 * 1024,
     SECRET_KEY=configured_secret,
+    AIVF_STATE_DIR=str(STATE_DIR),
 )
 
 logger = logging.getLogger("web_app_v3")
@@ -836,6 +838,90 @@ def settings():
     return jsonify(get_settings())
 
 
+def _strip_idempotency_volatile(value: Any) -> Any:
+    """Remove server-generated volatile declaration timestamps recursively."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_idempotency_volatile(item)
+            for key, item in value.items()
+            if key != "declared_at"
+        }
+    if isinstance(value, list):
+        return [_strip_idempotency_volatile(item) for item in value]
+    return value
+
+
+def _persisted_input_media_hash(existing_job: Mapping[str, Any], existing_params: Mapping[str, Any]) -> Optional[str]:
+    """Recover an old job's source-media hash from its persisted provenance."""
+    package_candidates = [
+        existing_job.get("pkg_dir"),
+        existing_params.get("pkg_dir"),
+    ]
+    output_root = OUTPUT_FOLDER.resolve()
+    for raw_package in package_candidates:
+        if not raw_package:
+            continue
+        try:
+            package = Path(str(raw_package)).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if package == output_root or output_root not in package.parents:
+            continue
+        provenance_path = package / "provenance.json"
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        assets = provenance.get("assets") if isinstance(provenance, dict) else None
+        if not isinstance(assets, list):
+            continue
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            asset_id = str(asset.get("asset_id") or "").strip().lower()
+            media_hash = str(asset.get("sha256") or "").strip().lower()
+            if asset_id == "source_video" and re.fullmatch(r"[0-9a-f]{64}", media_hash):
+                return media_hash
+    return None
+
+
+def _legacy_idempotency_projection(value: Any, template: Any, *, top_level: bool = False) -> Any:
+    """Project a current request onto fields present in an older stored request."""
+    if isinstance(value, dict) and isinstance(template, dict):
+        ignored = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"} if top_level else set()
+        return {
+            key: _legacy_idempotency_projection(value[key], template_value)
+            for key, template_value in template.items()
+            if key in value and key not in ignored
+        }
+    if isinstance(value, list) and isinstance(template, list):
+        # Lists were already part of the legacy contract; preserve their complete value.
+        return [_strip_idempotency_volatile(item) for item in value]
+    return _strip_idempotency_volatile(value)
+
+
+def _legacy_request_fingerprint(params: Mapping[str, Any], existing_params: Mapping[str, Any]) -> str:
+    """Fingerprint only the request fields understood by the legacy stored hash."""
+    projected = _legacy_idempotency_projection(params, existing_params, top_level=True)
+    return request_idempotency_hash(
+        _strip_idempotency_volatile(projected),
+        namespace="dashboard-request",
+    )
+
+
+def _request_fingerprint(params: dict, upload_path: Optional[Path] = None) -> str:
+    """Fingerprint request intent and, when present, the uploaded media bytes."""
+    payload = {
+        key: value
+        for key, value in params.items()
+        if key not in {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
+    }
+    payload = _strip_idempotency_volatile(payload)
+    if upload_path is not None:
+        payload["_input_media_sha256"] = sha256_file(upload_path)
+    return request_idempotency_hash(payload, namespace="dashboard-request")
+
+
 @app.route("/api/jobs", methods=["POST"])
 def create_job():
     role_gate = app.extensions.get("aivf_require_role")
@@ -864,13 +950,35 @@ def create_job():
     principal = principal_for_request(request)
     params["_principal"] = principal
 
-    # Hash only user-visible request intent; runtime paths and credentials are excluded.
-    request_fingerprint_payload = {
-        key: value
-        for key, value in params.items()
-        if key not in {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
-    }
-    request_hash = request_idempotency_hash(request_fingerprint_payload, namespace="dashboard-request")
+    source_meta = params.get("source_metadata")
+    if isinstance(source_meta, dict):
+        rights_basis = str(source_meta.get("rights_basis") or "").strip().lower()
+        if rights_basis:
+            from ai_video_factory.rights_policy import rights_gate
+            source_meta.update({
+                "rights_status": rights_basis,
+                "evidence_url": str(source_meta.get("evidence_url") or "").strip(),
+                "declared_by": principal,
+                "declared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            })
+            rights_check = rights_gate([{
+                "asset_id": "source_video",
+                "source": "user_upload",
+                "rights_basis": rights_basis,
+                "evidence_url": source_meta["evidence_url"],
+                "license_url": str(source_meta.get("license_url") or "").strip(),
+                "declared_by": principal,
+                "declared_at": source_meta["declared_at"],
+            }], strict=True)
+            if rights_check.get("publish_blocked"):
+                return jsonify({
+                    "error": "Selected rights basis needs supporting evidence",
+                    "rights_errors": [
+                        item.get("errors", [])
+                        for item in (rights_check.get("checked") or [])
+                        if isinstance(item, dict) and item.get("errors")
+                    ],
+                }), 400
 
     target_seconds = params["target_seconds"]
     secrets = get_runtime_default_secrets()
@@ -916,6 +1024,14 @@ def create_job():
             return jsonify({"error": "Upload is too large or is not a valid supported video stream"}), 400
         params["raw_video"] = str(upload_path)
 
+    request_hash = ""
+    if idem_key:
+        try:
+            request_hash = _request_fingerprint(params, upload_path)
+        except OSError:
+            upload_path.unlink(missing_ok=True)
+            return jsonify({"error": "Uploaded video could not be fingerprinted safely"}), 400
+
     job_id = f"job_{uuid.uuid4().hex[:12]}"
     try:
         from dashboard_store import DashboardStore, IdempotencyConflict, JobAdmissionError
@@ -928,6 +1044,75 @@ def create_job():
             # deployment/test database.
             store = DashboardStore(DB_PATH)
         store.ensure_indexes()
+        if idem_key:
+            existing_idempotency = store.lookup_idempotency(
+                principal=principal,
+                idempotency_key=idem_key,
+            )
+            if existing_idempotency is not None:
+                existing_job_id, existing_request_hash = existing_idempotency
+                if existing_request_hash != request_hash:
+                    legacy_replay_safe = False
+                    existing = store.get_job(existing_job_id) or {}
+                    raw_existing_params = existing.get("params")
+                    try:
+                        existing_params = json.loads(raw_existing_params or "{}") if isinstance(raw_existing_params, str) else (raw_existing_params or {})
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        existing_params = {}
+                    try:
+                        legacy_current_hash = _legacy_request_fingerprint(params, existing_params)
+                        legacy_existing_hash = _legacy_request_fingerprint(existing_params, existing_params)
+                    except Exception:
+                        legacy_current_hash = ""
+                        legacy_existing_hash = ""
+                    if legacy_current_hash == existing_request_hash and legacy_existing_hash == existing_request_hash:
+                        current_media_hash = sha256_file(upload_path) if upload_path is not None else None
+                        original_path = Path(str(existing_params.get("raw_video") or "")).resolve() if existing_params.get("raw_video") else None
+                        upload_root = UPLOAD_FOLDER.resolve()
+                        original_media_hash = None
+                        if original_path is not None and upload_root in original_path.parents and original_path.is_file():
+                            try:
+                                original_media_hash = sha256_file(original_path)
+                            except OSError:
+                                original_media_hash = None
+                        if original_media_hash is None:
+                            original_media_hash = _persisted_input_media_hash(existing, existing_params)
+                        legacy_replay_safe = (
+                            (current_media_hash is None and original_media_hash is None)
+                            or (
+                                current_media_hash is not None
+                                and original_media_hash is not None
+                                and current_media_hash == original_media_hash
+                            )
+                        )
+                    if not legacy_replay_safe:
+                        if upload_path is not None:
+                            upload_path.unlink(missing_ok=True)
+                        return jsonify({"error": "Idempotency key was already used for a different request"}), 409
+                    # Upgrade only after proving the request intent and media bytes
+                    # still identify the exact original job.
+                    if not store.migrate_idempotency_hash(
+                        principal=principal,
+                        idempotency_key=idem_key,
+                        expected_old_hash=existing_request_hash,
+                        new_hash=request_hash,
+                    ):
+                        refreshed = store.lookup_idempotency(
+                            principal=principal,
+                            idempotency_key=idem_key,
+                        )
+                        if refreshed is None or refreshed[1] != request_hash:
+                            if upload_path is not None:
+                                upload_path.unlink(missing_ok=True)
+                            return jsonify({"error": "Idempotency key could not be safely migrated"}), 409
+                if upload_path is not None:
+                    upload_path.unlink(missing_ok=True)
+                existing = store.get_job(existing_job_id) or {}
+                return jsonify({
+                    "job_id": existing_job_id,
+                    "status": existing.get("status", "queued"),
+                    "idempotent_replay": True,
+                }), 200
         try:
             check_job_creation_limits(
                 store.connect,
@@ -935,6 +1120,29 @@ def create_job():
                 (UPLOAD_FOLDER, OUTPUT_FOLDER),
             )
         except ResourceLimitExceeded as exc:
+            # A concurrent identical request may have committed the idempotency
+            # key between our initial lookup and this admission check. Re-check
+            # before returning 429 so a replay never fails because the first
+            # request consumed the newly-created queue slot.
+            if idem_key:
+                concurrent = store.lookup_idempotency(
+                    principal=principal,
+                    idempotency_key=idem_key,
+                )
+                if concurrent is not None:
+                    existing_job_id, existing_request_hash = concurrent
+                    if existing_request_hash == request_hash:
+                        if upload_path is not None:
+                            upload_path.unlink(missing_ok=True)
+                        existing = store.get_job(existing_job_id) or {}
+                        return jsonify({
+                            "job_id": existing_job_id,
+                            "status": existing.get("status", "queued"),
+                            "idempotent_replay": True,
+                        }), 200
+                    if upload_path is not None:
+                        upload_path.unlink(missing_ok=True)
+                    return jsonify({"error": "Idempotency key was already used for a different request"}), 409
             if upload_path is not None:
                 upload_path.unlink(missing_ok=True)
             logger.warning("Job admission resource limit reached: %s", exc)

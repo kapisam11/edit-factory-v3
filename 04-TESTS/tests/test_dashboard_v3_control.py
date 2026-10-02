@@ -165,3 +165,116 @@ def test_v3_defaults_are_platform_safe(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError):
         appmod.set_setting("default_v3_platform", "not-a-platform")
+
+
+def test_legacy_idempotency_media_hash_can_use_persisted_provenance(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    package = Path(appmod.OUTPUT_FOLDER) / "legacy-job"
+    package.mkdir(parents=True)
+    (package / "provenance.json").write_text(
+        json.dumps({
+            "assets": [{"asset_id": "source_video", "sha256": "a" * 64}],
+        }),
+        encoding="utf-8",
+    )
+    assert appmod._persisted_input_media_hash(
+        {"pkg_dir": str(package)},
+        {},
+    ) == "a" * 64
+    assert appmod._persisted_input_media_hash(
+        {},
+        {"pkg_dir": str(package)},
+    ) == "a" * 64
+
+
+def test_legacy_idempotency_fingerprint_ignores_new_nested_metadata(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    legacy = {
+        "topic": "same",
+        "workflow": "v3",
+        "_principal": "alice",
+        "source_metadata": {
+            "rights_basis": "owned",
+        },
+    }
+    current = {
+        **legacy,
+        "source_metadata": {
+            **legacy["source_metadata"],
+            "rights_status": "owned",
+            "evidence_url": "https://example.com/evidence",
+            "license_url": "https://example.com/license",
+        },
+    }
+    assert appmod._legacy_request_fingerprint(current, legacy) == appmod._request_fingerprint(legacy, None)
+
+
+def test_dashboard_idempotency_fingerprint_includes_uploaded_media(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    first = tmp_path / "first.mp4"
+    second = tmp_path / "second.mp4"
+    first.write_bytes(b"video-one")
+    second.write_bytes(b"video-two")
+
+    first_hash = appmod._request_fingerprint(
+        {"topic": "same", "workflow": "v3", "_principal": "alice"},
+        first,
+    )
+    second_hash = appmod._request_fingerprint(
+        {"topic": "same", "workflow": "v3", "_principal": "alice"},
+        second,
+    )
+    assert first_hash != second_hash
+    assert first_hash == appmod._request_fingerprint(
+        {"topic": "same", "workflow": "v3", "_principal": "alice"},
+        first,
+    )
+
+
+def test_build_job_params_carries_license_url():
+    from app.job_service import build_job_params
+
+    params = build_job_params(
+        {
+            "topic": "Licensed clip",
+            "workflow": "v3",
+            "target_seconds": "15",
+            "platform": "youtube_shorts",
+            "audience": "short-form viewers",
+            "rights_basis": "cc_license",
+            "rights_evidence_url": "https://example.com/rights",
+            "license_url": "https://example.com/license",
+        },
+        {
+            "default_workflow": "v3",
+            "default_target_seconds": 15,
+            "default_v3_platform": "youtube_shorts",
+            "default_v3_audience": "short-form viewers",
+            "default_v3_bpm": 120,
+        },
+        allow_skip_qc=False,
+    )
+    assert params["source_metadata"]["license_url"] == "https://example.com/license"
+
+
+def test_idempotency_ignores_volatile_rights_timestamp(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    first = tmp_path / "video.mp4"
+    first.write_bytes(b"same-video")
+    base = {
+        "topic": "same",
+        "workflow": "v3",
+        "_principal": "alice",
+        "source_metadata": {
+            "rights_status": "owned",
+            "declared_at": "2026-10-01T15:00:00Z",
+        },
+    }
+    later = {
+        **base,
+        "source_metadata": {
+            **base["source_metadata"],
+            "declared_at": "2026-10-01T15:05:00Z",
+        },
+    }
+    assert appmod._request_fingerprint(base, first) == appmod._request_fingerprint(later, first)

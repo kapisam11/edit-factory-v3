@@ -23,13 +23,21 @@ from .audio_normalization import AudioNormalizationError, normalize_loudness
 from .render_engine import stamp_media_metadata
 from .metadata_guardrails import build_upload_metadata
 from .provenance import build_asset_record, load_provenance, manifest_needs_rights_review, provenance_manifest, write_provenance
+from .rights_policy import rights_gate
 from .system_diagnostics import diagnostics_report, write_diagnostics
 from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk, sha256_file
 from .production_assurance import (
     build_artifact_manifest,
     build_environment_fingerprint,
     build_release_evidence,
+    verify_artifact_manifest,
 )
+
+
+def _source_rights_status(source_metadata: Optional[Dict[str, Any]]) -> str:
+    """Return only an explicit rights status; rights_basis never grants approval."""
+    metadata = source_metadata if isinstance(source_metadata, dict) else {}
+    return str(metadata.get("rights_status") or "review_required").strip().lower()
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
@@ -465,11 +473,20 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             _apply_readiness_contract(result, readiness)
 
             source_meta = source_metadata or {}
-            source_rights = str(
-                source_meta.get("rights_status")
-                or source_meta.get("rights_basis")
-                or "review_required"
-            )
+            source_rights = _source_rights_status(source_meta)
+            # Only explicit rights_status enters the rights gate. A rights_basis
+            # field is evidence context and cannot itself grant approval.
+            rights_record = {
+                "asset_id": "source_video",
+                "source": "user_upload",
+                "rights_basis": source_rights,
+                "evidence_url": str(source_meta.get("evidence_url") or ""),
+                "license_url": str(source_meta.get("license_url") or ""),
+                "declared_by": str(source_meta.get("declared_by") or ""),
+                "declared_at": str(source_meta.get("declared_at") or ""),
+                "attribution": str(source_meta.get("attribution") or ""),
+            }
+            rights_report = rights_gate([rights_record], strict=True)
             source_record = build_asset_record(
                 input_video,
                 asset_id="source_video",
@@ -479,6 +496,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 license_name=str(source_meta.get("license_name") or ""),
                 license_url=str(source_meta.get("license_url") or ""),
                 attribution=str(source_meta.get("attribution") or ""),
+                extra={"rights_evidence": rights_record},
             )
             provenance = provenance_manifest(
                 package,
@@ -492,6 +510,7 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                     "edit_type": payload.get("edit_type"),
                 },
             )
+            provenance["rights_gate"] = rights_report
             write_provenance(package / "provenance.json", provenance)
             if manifest_needs_rights_review(provenance):
                 result.warnings.append("Media provenance contains assets requiring rights review")
@@ -517,6 +536,27 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
             # Integrity is evaluated after report persistence so recorded hashes cover
             # the final metadata/report content, not a pre-finalization snapshot.
             provenance = load_provenance(package / "provenance.json") if (package / "provenance.json").is_file() else provenance
+            # Finalize readiness before the integrity snapshot. The readiness
+            # report does not depend on artifact_manifest.json, so it can safely
+            # be included in the manifest without a self-hash cycle.
+            readiness = evaluate_artifact(
+                final_video,
+                target_seconds=target_seconds,
+                platform_profile=payload["platform_variants"][platform],
+                package_dir=package_dir,
+                upload_package_required=True,
+                publish_required=False,
+                metadata_guardrails_ok=metadata_ok,
+            )
+            _atomic_json_write(package / "v3_readiness.json", readiness.to_dict())
+            # The final package readiness is authoritative; propagate it back
+            # into the worker-facing result so UI/job status cannot disagree
+            # with the persisted readiness evidence.
+            _apply_readiness_contract(result, readiness)
+            # Refresh metadata after the final readiness evaluation and before
+            # the integrity snapshot so all persisted readiness surfaces agree.
+            _persist_v3_reports(package, result, render_report, semantic_report, readiness)
+
             artifact_manifest = build_artifact_manifest(
                 package,
                 required_files=(
@@ -533,12 +573,20 @@ def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: 
                 ),
             )
             _atomic_json_write(package / "artifact_manifest.json", artifact_manifest)
+            artifact_integrity = verify_artifact_manifest(package, artifact_manifest)
+            if not artifact_integrity["ok"]:
+                result.errors.extend(
+                    f"Artifact integrity: {error}"
+                    for error in list(artifact_integrity.get("errors") or [])[:10]
+                )
+
             release_evidence = build_release_evidence(
                 package_dir=package,
                 readiness=readiness.to_dict(),
                 media_health=final_health,
                 provenance=provenance,
                 environment={**diagnostics, **environment_fingerprint},
+                artifact_integrity=artifact_integrity,
             )
             _atomic_json_write(package / "release_evidence.json", release_evidence)
             if not release_evidence["release_candidate"]:

@@ -170,6 +170,7 @@ def test_dashboard_store_idempotency_is_atomic_and_bounded(tmp_path):
         )
 
     assert len(store.list_jobs()) == 1
+    assert store.lookup_idempotency(principal="alice", idempotency_key="request-1") == ("job-idem-1", "hash-1")
 
 
 def test_dashboard_job_event_history_tracks_lifecycle(tmp_path):
@@ -185,3 +186,46 @@ def test_dashboard_job_event_history_tracks_lifecycle(tmp_path):
     assert [event["event"] for event in events][:1] == ["created"]
     assert ("queued", "running") in {(event["from_status"], event["to_status"]) for event in events}
     assert ("running", "done") in {(event["from_status"], event["to_status"]) for event in events}
+
+
+def test_stale_idempotency_key_is_self_healed(tmp_path):
+    store = DashboardStore(tmp_path / "jobs.db")
+    store.ensure_indexes()
+
+    def seed(conn):
+        conn.execute(
+            "INSERT INTO idempotency_keys(principal, idem_key, request_hash, job_id) VALUES (?,?,?,?)",
+            ("alice", "stale-key", "hash-stale", "missing-job"),
+        )
+    store.write(seed)
+
+    assert store.lookup_idempotency(principal="alice", idempotency_key="stale-key") is None
+    with store.connect() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM idempotency_keys WHERE principal=? AND idem_key=?",
+            ("alice", "stale-key"),
+        ).fetchone() is None
+
+
+def test_idempotency_hash_migration_is_atomic(tmp_path):
+    store = DashboardStore(tmp_path / "jobs.db")
+    store.ensure_indexes()
+
+    def seed(conn):
+        conn.execute(
+            "INSERT INTO idempotency_keys(principal, idem_key, request_hash, job_id) VALUES (?,?,?,?)",
+            ("alice", "legacy-key", "legacy-hash", "job-1"),
+        )
+        conn.execute(
+            "INSERT INTO jobs(id, topic, status, step, params, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+            ("job-1", "topic", "done", "complete", "{}", "2026-10-01", "2026-10-01"),
+        )
+    store.write(seed)
+
+    assert store.migrate_idempotency_hash(
+        principal="alice",
+        idempotency_key="legacy-key",
+        expected_old_hash="legacy-hash",
+        new_hash="new-hash",
+    ) is True
+    assert store.lookup_idempotency(principal="alice", idempotency_key="legacy-key") == ("job-1", "new-hash")

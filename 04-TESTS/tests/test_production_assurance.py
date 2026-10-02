@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from ai_video_factory.production_assurance import (
@@ -6,6 +7,7 @@ from ai_video_factory.production_assurance import (
     build_release_evidence,
     fingerprint_mapping,
     verify_artifact_manifest,
+    verify_release_evidence,
 )
 
 
@@ -53,10 +55,24 @@ def test_environment_and_release_evidence_are_explicit_about_human_review():
 
     evidence = build_release_evidence(
         package_dir="/tmp/package",
-        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        readiness={
+            "state": "UPLOAD_PACKAGE_VALID",
+            "checks": {"MEDIA_VALID": True, "MEDIA_CONTRACT_VALID": True, "UPLOAD_PACKAGE_VALID": True},
+            "errors": [],
+        },
         media_health={"ok": True},
-        provenance={"assets": []},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "owned", "sha256": "b" * 64}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+            "rights_gate": {
+                "status": "cleared",
+                "publish_blocked": False,
+                "checked": [{"asset_id": "source", "rights_basis": "owned", "errors": []}],
+            },
+        },
         environment={"ok": True},
+        artifact_integrity={"ok": True},
     )
     assert evidence["release_candidate"] is True
     assert evidence["human_review_required"] is True
@@ -80,6 +96,367 @@ def test_manifest_self_hash_and_rights_gate_prevent_false_green(tmp_path):
         media_health={"ok": True},
         provenance={"assets": [{"rights_status": "review_required"}]},
         environment={"ok": True},
+        artifact_integrity={"ok": True},
     )
     assert blocked["release_candidate"] is False
     assert blocked["checks"]["rights_clear"] is False
+
+
+def test_release_evidence_rejects_blocked_rights_gate(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        media_health={"ok": True},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "owned"}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+            "rights_gate": {"status": "review_required", "publish_blocked": True, "checked": [{"errors": ["missing declaration"]}]},
+        },
+        environment={"ok": True},
+        artifact_integrity={"ok": True},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["rights_gate_valid"] is False
+    assert evidence["checks"]["rights_clear"] is False
+
+
+def test_release_evidence_requires_artifact_integrity(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        media_health={"ok": True},
+        provenance={"assets": []},
+        environment={"ok": True},
+        artifact_integrity={"ok": False, "errors": ["hash mismatch"]},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["artifact_integrity_valid"] is False
+
+
+def test_human_acceptance_verifier_bootstraps_source_checkout():
+    import runpy
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[2] / "06-CONFIG-AND-DEPLOYMENT" / "verify_human_acceptance.py"
+    main_code = str(Path(__file__).resolve().parents[2] / "01-MAIN-CODE")
+    old_path = list(sys.path)
+    try:
+        while main_code in sys.path:
+            sys.path.remove(main_code)
+        namespace = runpy.run_path(str(script), run_name="aivf.acceptance_test")
+        assert callable(namespace["main"])
+        assert str(script.parents[1] / "01-MAIN-CODE") in sys.path
+    finally:
+        sys.path[:] = old_path
+
+
+def test_manifest_rejects_wrong_package_and_unsafe_paths(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    target = package / "final.v3.mp4"
+    target.write_bytes(b"video")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4",))
+
+    wrong_package = dict(manifest)
+    wrong_package["package"] = "other-package"
+    assert verify_artifact_manifest(package, wrong_package)["ok"] is False
+
+    unsafe = dict(manifest)
+    unsafe["files"] = [{"path": "../final.v3.mp4", "size_bytes": 5, "sha256": "0" * 64}]
+    assert verify_artifact_manifest(package, unsafe)["ok"] is False
+
+
+def test_release_evidence_missing_rights_status_fails_closed(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        media_health={"ok": True},
+        provenance={
+            "assets": [{"asset_id": "source"}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+        },
+        environment={"ok": True},
+        artifact_integrity={"ok": True},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["rights_clear"] is False
+
+
+def test_release_evidence_requires_explicit_rights_gate(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={"state": "UPLOAD_PACKAGE_VALID"},
+        media_health={"ok": True},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "cc_license"}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+        },
+        environment={"ok": True},
+        artifact_integrity={"ok": True},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["rights_clear"] is False
+
+
+def test_manifest_detects_readiness_tamper(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    (package / "v3_readiness.json").write_text('{"state":"UPLOAD_PACKAGE_VALID"}', encoding="utf-8")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4", "v3_readiness.json"))
+    (package / "v3_readiness.json").write_text('{"state":"PUBLISH_READY"}', encoding="utf-8")
+    verified = verify_artifact_manifest(package, manifest)
+    assert verified["ok"] is False
+    assert any("hash mismatch: v3_readiness.json" in error for error in verified["errors"])
+
+
+def test_release_evidence_tamper_is_detected(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    (package / "v3_readiness.json").write_text(
+        json.dumps({
+            "state": "UPLOAD_PACKAGE_VALID",
+            "checks": {"MEDIA_VALID": True, "MEDIA_CONTRACT_VALID": True, "UPLOAD_PACKAGE_VALID": True},
+            "errors": [],
+        }),
+        encoding="utf-8",
+    )
+    provenance = {
+        "assets": [{"asset_id": "source", "rights_status": "owned", "sha256": "b" * 64}],
+        "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+        "run_context": {"platform": "youtube_shorts"},
+        "rights_gate": {
+            "status": "cleared",
+            "publish_blocked": False,
+            "checked": [{"asset_id": "source", "rights_basis": "owned", "errors": []}],
+        },
+    }
+    (package / "provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
+    (package / "final_media_health.json").write_text('{"ok":true}', encoding="utf-8")
+    (package / "diagnostics.json").write_text('{"ok":true}', encoding="utf-8")
+    (package / "environment_fingerprint.json").write_text('{"ok":true}', encoding="utf-8")
+    manifest = build_artifact_manifest(
+        package,
+        required_files=(
+            "final.v3.mp4",
+            "v3_readiness.json",
+            "provenance.json",
+            "final_media_health.json",
+            "diagnostics.json",
+            "environment_fingerprint.json",
+        ),
+    )
+    (package / "artifact_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    integrity = verify_artifact_manifest(package, manifest)
+    assert integrity["ok"] is True
+
+    evidence = build_release_evidence(
+        package_dir=package,
+        readiness=json.loads((package / "v3_readiness.json").read_text(encoding="utf-8")),
+        media_health={"ok": True},
+        provenance=provenance,
+        environment={"ok": True},
+        artifact_integrity=integrity,
+    )
+    assert evidence["release_candidate"] is True
+    (package / "release_evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
+
+    tampered = dict(evidence)
+    tampered["release_candidate"] = False
+    checked = verify_release_evidence(package, tampered)
+    assert checked["ok"] is False
+
+
+def test_manifest_rejects_non_list_required_files(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4",))
+
+    malformed = dict(manifest)
+    malformed["required_files"] = 1
+    malformed["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps(
+            {k: v for k, v in malformed.items() if k != "manifest_sha256"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    result = verify_artifact_manifest(package, malformed)
+    assert result["ok"] is False
+    assert "manifest.required_files must be a list" in result["errors"]
+
+
+def test_release_evidence_rejects_non_object_inputs(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "v3_readiness.json").write_text('{}', encoding="utf-8")
+    (package / "provenance.json").write_text('[]', encoding="utf-8")
+    (package / "final_media_health.json").write_text('{}', encoding="utf-8")
+    (package / "diagnostics.json").write_text('{}', encoding="utf-8")
+    (package / "environment_fingerprint.json").write_text('{}', encoding="utf-8")
+
+    manifest = build_artifact_manifest(
+        package,
+        required_files=(
+            "v3_readiness.json",
+            "provenance.json",
+            "final_media_health.json",
+            "diagnostics.json",
+            "environment_fingerprint.json",
+        ),
+    )
+    (package / "artifact_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = verify_release_evidence(package, {"schema_version": "1"})
+    assert result["ok"] is False
+    assert any(
+        "release evidence input must be a JSON object: provenance" in error
+        for error in result["errors"]
+    )
+
+
+def test_release_evidence_rejects_empty_rights_gate(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={
+            "state": "UPLOAD_PACKAGE_VALID",
+            "checks": {"MEDIA_VALID": True, "MEDIA_CONTRACT_VALID": True, "UPLOAD_PACKAGE_VALID": True},
+            "errors": [],
+        },
+        media_health={"ok": True},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "owned"}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+            "rights_gate": {"status": "cleared", "publish_blocked": False, "checked": []},
+        },
+        environment={"ok": True},
+        artifact_integrity={"ok": True},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["rights_gate_valid"] is False
+
+
+def test_release_evidence_rejects_forged_readiness_state(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={"state": "UPLOAD_PACKAGE_VALID", "checks": {"MEDIA_VALID": True}, "errors": []},
+        media_health={"ok": True},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "owned"}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+            "rights_gate": {"status": "cleared", "publish_blocked": False, "checked": [{"asset_id": "source", "errors": []}]},
+        },
+        environment={"ok": True},
+        artifact_integrity={"ok": True},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["readiness_valid"] is False
+
+
+def test_release_evidence_rejects_duplicate_rights_asset_ids(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={
+            "state": "UPLOAD_PACKAGE_VALID",
+            "checks": {"MEDIA_VALID": True, "MEDIA_CONTRACT_VALID": True, "UPLOAD_PACKAGE_VALID": True},
+            "errors": [],
+        },
+        media_health={"ok": True},
+        provenance={
+            "assets": [
+                {"asset_id": "source", "rights_status": "owned"},
+                {"asset_id": "source", "rights_status": "owned"},
+            ],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+            "rights_gate": {
+                "status": "cleared",
+                "publish_blocked": False,
+                "checked": [{"asset_id": "source", "errors": []}],
+            },
+        },
+        environment={"ok": True},
+        artifact_integrity={"ok": True},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["rights_gate_valid"] is False
+
+
+def test_manifest_rejects_malformed_size_and_missing_hash(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4",))
+
+    malformed = dict(manifest)
+    malformed["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps({k: v for k, v in malformed.items() if k != "manifest_sha256"}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    malformed["files"] = [{"path": "final.v3.mp4", "size_bytes": "not-a-number", "sha256": "f" * 64}]
+    malformed["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps({k: v for k, v in malformed.items() if k != "manifest_sha256"}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    result = verify_artifact_manifest(package, malformed)
+    assert result["ok"] is False
+    assert any("invalid size_bytes" in error for error in result["errors"])
+
+    missing_hash = dict(manifest)
+    missing_hash["files"] = [{"path": "final.v3.mp4", "size_bytes": 5}]
+    missing_hash["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps({k: v for k, v in missing_hash.items() if k != "manifest_sha256"}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    result = verify_artifact_manifest(package, missing_hash)
+    assert result["ok"] is False
+    assert any("invalid sha256" in error for error in result["errors"])
+
+
+def test_manifest_rejects_false_ok_flag(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4",))
+    tampered = dict(manifest)
+    tampered["ok"] = False
+    tampered["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps({k: v for k, v in tampered.items() if k != "manifest_sha256"}, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    result = verify_artifact_manifest(package, tampered)
+    assert result["ok"] is False
+    assert any("ok flag" in error for error in result["errors"])
+
+
+def test_release_evidence_requires_boolean_checks(tmp_path: Path):
+    evidence = build_release_evidence(
+        package_dir=tmp_path,
+        readiness={
+            "state": "UPLOAD_PACKAGE_VALID",
+            "checks": {"MEDIA_VALID": True, "MEDIA_CONTRACT_VALID": True, "UPLOAD_PACKAGE_VALID": True},
+            "errors": [],
+        },
+        media_health={"ok": "true"},
+        provenance={
+            "assets": [{"asset_id": "source", "rights_status": "owned", "sha256": "b" * 64}],
+            "final_video": {"rights_status": "owned", "sha256": "a" * 64},
+            "run_context": {"platform": "youtube_shorts"},
+            "rights_gate": {
+                "status": "cleared",
+                "publish_blocked": False,
+                "checked": [{"asset_id": "source", "rights_basis": "owned", "errors": []}],
+            },
+        },
+        environment={"ok": "true"},
+        artifact_integrity={"ok": "true"},
+    )
+    assert evidence["release_candidate"] is False
+    assert evidence["checks"]["media_valid"] is False
+    assert evidence["checks"]["environment_valid"] is False
+    assert evidence["checks"]["artifact_integrity_valid"] is False

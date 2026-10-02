@@ -100,8 +100,41 @@ class DashboardStore:
                     raise
 
     def ensure_indexes(self) -> None:
-        """Add indexes, retry state migration, and lifecycle guards."""
+        """Bootstrap required tables, then add indexes and lifecycle guards."""
         with self.connect() as conn:
+            # DashboardStore is also used against fresh/empty SQLite files in
+            # tests and recovery paths. Bootstrap the minimal storage schema
+            # before creating triggers or indexes that reference these tables.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY,
+                    topic TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    step TEXT NOT NULL DEFAULT 'waiting',
+                    params TEXT NOT NULL DEFAULT '{}',
+                    pkg_dir TEXT,
+                    error TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    worker_heartbeat_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS rate_limits (
+                    client_ip TEXT NOT NULL,
+                    ts REAL NOT NULL
+                )
+            """)
             self._ensure_job_columns(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
@@ -243,6 +276,64 @@ class DashboardStore:
             self._record_event(conn, job_id, "created", to_status="queued", details=f"topic={topic[:200]}")
 
         self.write(write)
+
+    def lookup_idempotency(
+        self,
+        *,
+        principal: str,
+        idempotency_key: str,
+    ) -> tuple[str, str] | None:
+        """Return (job_id, request_hash) for an existing request key, if present."""
+        key = str(idempotency_key).strip()
+        principal_value = str(principal).strip() or "unknown"
+        if not key:
+            return None
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT job_id, request_hash FROM idempotency_keys WHERE principal=? AND idem_key=?",
+                (principal_value, key),
+            ).fetchone()
+            if row is None:
+                return None
+            job_exists = conn.execute(
+                "SELECT 1 FROM jobs WHERE id=?",
+                (str(row["job_id"]),),
+            ).fetchone()
+            if job_exists is None:
+                conn.execute(
+                    "DELETE FROM idempotency_keys WHERE principal=? AND idem_key=?",
+                    (principal_value, key),
+                )
+                return None
+        return str(row["job_id"]), str(row["request_hash"])
+
+
+    def migrate_idempotency_hash(
+        self,
+        *,
+        principal: str,
+        idempotency_key: str,
+        expected_old_hash: str,
+        new_hash: str,
+    ) -> bool:
+        """Atomically upgrade a legacy idempotency fingerprint after safe replay validation."""
+        key = str(idempotency_key).strip()
+        principal_value = str(principal).strip() or "unknown"
+        old_hash = str(expected_old_hash).strip()
+        replacement = str(new_hash).strip()
+        if not key or not old_hash or not replacement:
+            return False
+
+        def write(conn: sqlite3.Connection) -> bool:
+            changed = conn.execute(
+                "UPDATE idempotency_keys SET request_hash=? "
+                "WHERE principal=? AND idem_key=? AND request_hash=?",
+                (replacement, principal_value, key, old_hash),
+            ).rowcount
+            return bool(changed)
+
+        return bool(self.write(write))
+
 
     def insert_job_idempotent(
         self,
