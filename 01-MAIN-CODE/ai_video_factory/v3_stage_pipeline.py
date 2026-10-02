@@ -158,6 +158,41 @@ def _research_summary(payload: dict[str, Any], footage_evidence: dict[str, Any])
     }
 
 
+_V3_GENERATED_FILES = (
+    "final.v3.mp4",
+    "final.mp4",
+    "timeline.json",
+    "metadata.json",
+    "upload_package.json",
+    "v3_blueprint.json",
+    "v3_render_qc.json",
+    "v3_semantic_qc.json",
+    "v3_readiness.json",
+    "v3_baseline.mp4",
+    "source_media_health.json",
+    "source_media_metadata.json",
+    "final_media_health.json",
+    "final_media_metadata.json",
+    "provenance.json",
+    "metadata_guardrails.json",
+    "diagnostics.json",
+    "environment_fingerprint.json",
+    "artifact_manifest.json",
+    "release_evidence.json",
+    "v3_scores.json",
+    "v3_stage_timings.json",
+    "v3_failure.json",
+)
+
+
+def _reset_v3_package(package: Path) -> None:
+    """Remove stale outputs before a rerun so failed jobs cannot expose old evidence."""
+    package.mkdir(parents=True, exist_ok=True)
+    for name in _V3_GENERATED_FILES:
+        (package / name).unlink(missing_ok=True)
+    _cleanup_transients(package)
+
+
 def _cleanup_transients(package: Path) -> None:
     for name in (
         "final.v3.retention.mp4",
@@ -220,7 +255,7 @@ class InputValidationStage:
             raise V3InputError(
                 "AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1"
             )
-        context.package.mkdir(parents=True, exist_ok=True)
+        _reset_v3_package(context.package)
         try:
             minimum_free_mb = int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "512"))
         except ValueError as exc:
@@ -735,21 +770,22 @@ class V3PipelineRunner:
                         "stage_timings_ms": dict(context.stage_timings_ms),
                     },
                 )
-                if not (context.package / "v3_readiness.json").is_file():
-                    atomic_write_json(
-                        context.package / "v3_readiness.json",
-                        {
-                            "state": "FAILED",
-                            "checks": {
-                                "MEDIA_VALID": False,
-                                "MEDIA_CONTRACT_VALID": False,
-                                "UPLOAD_PACKAGE_VALID": False,
-                                "PUBLISH_READY": False,
-                            },
-                            "errors": list(context.result.errors),
-                            "warnings": [],
+                # Always replace readiness on failure. Never let a previous successful
+                # run remain visible after a failed rerun.
+                atomic_write_json(
+                    context.package / "v3_readiness.json",
+                    {
+                        "state": "FAILED",
+                        "checks": {
+                            "MEDIA_VALID": False,
+                            "MEDIA_CONTRACT_VALID": False,
+                            "UPLOAD_PACKAGE_VALID": False,
+                            "PUBLISH_READY": False,
                         },
-                    )
+                        "errors": list(context.result.errors),
+                        "warnings": [],
+                    },
+                )
 
         artifact_names = (
             "v3_blueprint",
