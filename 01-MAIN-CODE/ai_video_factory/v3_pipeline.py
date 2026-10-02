@@ -36,8 +36,8 @@ from .production_assurance import (
 
 def _source_rights_status(source_metadata: Optional[Dict[str, Any]]) -> str:
     """Return only an explicit rights status; rights_basis never grants approval."""
-    metadata = source_metadata or {}
-    return str(metadata.get("rights_status") or metadata.get("rights_basis") or "review_required").strip().lower()
+    metadata = source_metadata if isinstance(source_metadata, dict) else {}
+    return str(metadata.get("rights_status") or "review_required").strip().lower()
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
