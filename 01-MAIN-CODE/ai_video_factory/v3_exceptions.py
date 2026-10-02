@@ -6,7 +6,7 @@ class V3PipelineError(RuntimeError):
     """Base class for expected V3 pipeline failures."""
 
 
-class V3InputError(V3PipelineError):
+class V3InputError(V3PipelineError, ValueError):
     """User input or source media is invalid."""
 
 
