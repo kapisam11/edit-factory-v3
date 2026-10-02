@@ -24,7 +24,7 @@ def test_v3_golden_media_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("AIVF_DEEP_FINAL_MEDIA_QC", "0")
     monkeypatch.setenv("AIVF_EBU_R128", "0")
     monkeypatch.setenv("AIVF_REQUIRE_HUMAN_REVIEW", "0")
-    monkeypatch.setenv("AIVF_MIN_FREE_DISK_MB", "64")
+    monkeypatch.setenv("AIVF_MIN_FREE_DISK_MB", "256")
 
     source = tmp_path / "golden-source.mp4"
     package = tmp_path / "golden-package"
