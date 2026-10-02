@@ -272,6 +272,56 @@ def test_release_evidence_tamper_is_detected(tmp_path: Path):
     assert checked["ok"] is False
 
 
+def test_manifest_rejects_non_list_required_files(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "final.v3.mp4").write_bytes(b"video")
+    manifest = build_artifact_manifest(package, required_files=("final.v3.mp4",))
+
+    malformed = dict(manifest)
+    malformed["required_files"] = 1
+    malformed["manifest_sha256"] = __import__("hashlib").sha256(
+        json.dumps(
+            {k: v for k, v in malformed.items() if k != "manifest_sha256"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    result = verify_artifact_manifest(package, malformed)
+    assert result["ok"] is False
+    assert "manifest.required_files must be a list" in result["errors"]
+
+
+def test_release_evidence_rejects_non_object_inputs(tmp_path: Path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "v3_readiness.json").write_text('{}', encoding="utf-8")
+    (package / "provenance.json").write_text('[]', encoding="utf-8")
+    (package / "final_media_health.json").write_text('{}', encoding="utf-8")
+    (package / "diagnostics.json").write_text('{}', encoding="utf-8")
+    (package / "environment_fingerprint.json").write_text('{}', encoding="utf-8")
+
+    manifest = build_artifact_manifest(
+        package,
+        required_files=(
+            "v3_readiness.json",
+            "provenance.json",
+            "final_media_health.json",
+            "diagnostics.json",
+            "environment_fingerprint.json",
+        ),
+    )
+    (package / "artifact_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = verify_release_evidence(package, {"schema_version": "1"})
+    assert result["ok"] is False
+    assert any(
+        "release evidence input must be a JSON object: provenance" in error
+        for error in result["errors"]
+    )
+
+
 def test_release_evidence_rejects_empty_rights_gate(tmp_path: Path):
     evidence = build_release_evidence(
         package_dir=tmp_path,
