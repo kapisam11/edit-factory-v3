@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_video_factory import artifact_readiness, render_engine, v3_pipeline
+from ai_video_factory import artifact_readiness, render_engine, v3_pipeline, v3_semantic_qc, v3_stage_pipeline
 from ai_video_factory.production_models import ProductionResult, Scene
 from ai_video_factory.v3_engine import V3Config, create_v3_blueprint
 
@@ -167,7 +167,7 @@ def test_v3_timeline_contract_accepts_valid_boundaries_and_rejects_corruption(tm
         encoding="utf-8",
     )
 
-    assert v3_pipeline._validate_timeline_contract(package, blueprint_payload, 5.0) is None
+    assert v3_stage_pipeline._validate_timeline(package, blueprint_payload, 5.0) is None
 
     (package / "timeline.json").write_text(
         json.dumps({
@@ -176,8 +176,8 @@ def test_v3_timeline_contract_accepts_valid_boundaries_and_rejects_corruption(tm
         }),
         encoding="utf-8",
     )
-    with pytest.raises(v3_pipeline.RenderContractError, match="diverges from blueprint"):
-        v3_pipeline._validate_timeline_contract(package, blueprint_payload, 5.0)
+    with pytest.raises(v3_stage_pipeline.V3PipelineError, match="diverges from blueprint"):
+        v3_stage_pipeline._validate_timeline(package, blueprint_payload, 5.0)
 
     (package / "timeline.json").write_text(
         json.dumps({
@@ -189,8 +189,83 @@ def test_v3_timeline_contract_accepts_valid_boundaries_and_rejects_corruption(tm
         }),
         encoding="utf-8",
     )
-    with pytest.raises(v3_pipeline.RenderContractError, match="timeline duration diverges"):
-        v3_pipeline._validate_timeline_contract(package, blueprint_payload, 5.0)
+    with pytest.raises(v3_stage_pipeline.V3PipelineError, match="timeline duration diverges"):
+        v3_stage_pipeline._validate_timeline(package, blueprint_payload, 5.0)
+
+
+def test_stage_runner_overwrites_stale_readiness_after_failure(tmp_path):
+    from ai_video_factory.v3_exceptions import V3PipelineError
+
+    class SeedThenFailStage:
+        name = "seed_then_fail"
+
+        def run(self, context):
+            context.package.mkdir(parents=True, exist_ok=True)
+            (context.package / "v3_readiness.json").write_text(
+                json.dumps({"state": "UPLOAD_PACKAGE_VALID", "checks": {"MEDIA_VALID": True}}),
+                encoding="utf-8",
+            )
+            raise V3PipelineError("intentional stage failure")
+
+    request = v3_stage_pipeline.V3Request(
+        input_video="missing.mp4",
+        topic="failure test",
+        package_dir=str(tmp_path),
+        target_seconds=8.0,
+        platform="youtube_shorts",
+        audience="general short-form viewers",
+        bpm=120,
+    )
+    result = v3_stage_pipeline.V3PipelineRunner(
+        request,
+        stages=(SeedThenFailStage(),),
+    ).run()
+
+    readiness = json.loads((tmp_path / "v3_readiness.json").read_text(encoding="utf-8"))
+    assert result.errors
+    assert readiness["state"] == "FAILED"
+    assert readiness["checks"]["MEDIA_VALID"] is False
+    assert (tmp_path / "v3_failure.json").is_file()
+    assert (tmp_path / "v3_stage_timings.json").is_file()
+
+
+def test_stage_runner_production_timeline_validator_is_the_tested_contract(tmp_path):
+    package = Path(tmp_path)
+    blueprint_payload = {
+        "clip_plan": [
+            {"start": 0.0, "end": 2.0},
+            {"start": 2.0, "end": 5.0},
+        ],
+    }
+    (package / "timeline.json").write_text(
+        json.dumps({
+            "duration": 5.0,
+            "segments": [
+                {"start": 0.0, "end": 2.0},
+                {"start": 2.0, "end": 5.0},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    v3_stage_pipeline._validate_timeline(package, blueprint_payload, 5.0)
+
+
+def test_semantic_qc_catches_a_sample_length_dead_scene(monkeypatch, tmp_path):
+    video = tmp_path / "final.mp4"
+    video.write_bytes(b"video")
+    scenes = [
+        Scene("active-1", 0.0, 2.5, description="active", motion_score=0.8, audio_energy=0.7),
+        Scene("dead", 2.5, 5.0, description="quiet", motion_score=0.0, audio_energy=0.0),
+        Scene("active-2", 5.0, 7.5, description="active", motion_score=0.8, audio_energy=0.7),
+    ]
+    monkeypatch.setattr(v3_semantic_qc, "probe_media", lambda _path: {"duration": 30.0})
+    monkeypatch.setattr(v3_semantic_qc, "analyze_video", lambda *args, **kwargs: scenes)
+
+    report = v3_semantic_qc.analyze_render_semantics(str(video))
+
+    assert report["ok"] is False
+    assert report["dead_moments"] == [{"start": 2.5, "end": 5.0, "duration": 2.5}]
+    assert "long low-motion/low-audio gaps detected" in report["errors"]
 
 
 def test_v3_cleanup_removes_only_known_transients(tmp_path):
