@@ -17,6 +17,9 @@ from .v3_capabilities import validate_capabilities
 from .v3_engine import V3Blueprint, V3Config, create_v3_blueprint, validate_blueprint
 from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
 from .v3_semantic_qc import analyze_render_semantics
+from .v3_contracts import V3Request
+from .v3_exceptions import V3PipelineError
+from .v3_stage_pipeline import V3PipelineRunner
 from .media_health import MediaHealthError, analyze_media
 from .media_metadata import extract_media_metadata
 from .audio_normalization import AudioNormalizationError, normalize_loudness
@@ -118,451 +121,76 @@ def _validate_timeline_contract(package: Path, blueprint_payload: Dict[str, Any]
     except (KeyError, TypeError, ValueError) as exc:
         raise RenderContractError("timeline duration is invalid") from exc
     if abs(timeline_duration - float(target_seconds)) > 0.01:
-        raise RenderContractError("timeline duration diverges from V3 target")
+        raise RenderContractError("timeline duration divergesdef _validate_v3_inputs(
+    input_video: str,
+    topic: str,
+    target_seconds: float,
+    platform: str,
+    audience: str,
+    bpm: int,
+) -> None:
+    """Compatibility wrapper around the canonical V3Request validator."""
+    from .v3_contracts import V3Request
+    from .v3_exceptions import V3InputError
 
-
-def _atomic_json_write(path: Path, payload: Dict[str, Any]) -> None:
-    atomic_write_json(path, payload)
-
-
-def _validate_v3_inputs(input_video: str, topic: str, target_seconds: float, platform: str, audience: str, bpm: int) -> None:
-    path = Path(input_video)
-    if not path.is_file():
-        raise RenderContractError(f"V3 input video is missing or not a file: {path}")
-    if path.stat().st_size <= 0:
-        raise RenderContractError("V3 input video is empty")
-    if not str(topic).strip() or len(str(topic)) > 500:
-        raise ValueError("topic must be non-empty and <= 500 characters")
     try:
-        target = float(target_seconds)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("target_seconds must be numeric") from exc
-    if not math.isfinite(target) or not 8.0 <= target <= 180.0:
-        raise ValueError("target_seconds must be between 8 and 180 seconds")
-    if not str(platform).strip() or len(str(platform)) > 64:
-        raise ValueError("platform must be non-empty and <= 64 characters")
-    if not str(audience).strip() or len(str(audience)) > 500:
-        raise ValueError("audience must be non-empty and <= 500 characters")
-    try:
-        bpm_value = int(bpm)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("bpm must be an integer") from exc
-    if not 40 <= bpm_value <= 240:
-        raise ValueError("bpm must be between 40 and 240")
+        V3Request(
+            input_video=input_video,
+            topic=topic,
+            package_dir=".",
+            target_seconds=target_seconds,
+            platform=platform,
+            audience=audience,
+            bpm=bpm,
+        ).validate()
+    except V3InputError as exc:
+        raise RenderContractError(str(exc)) from exc
 
 
-def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
-    """Promote required artifact-readiness failures into the V3 job result."""
-    result.artifacts = getattr(result, "artifacts", {}) or {}
-    result.artifacts["v3_readiness_state"] = str(getattr(readiness, "state", "") or "")
-    errors = list(getattr(readiness, "errors", []) or [])
-    if errors:
-        result.errors.extend(f"V3 artifact readiness: {error}" for error in errors)
-    if getattr(readiness, "state", None) != "UPLOAD_PACKAGE_VALID" and not errors:
-        result.errors.append(
-            f"V3 artifact readiness stopped at {getattr(readiness, 'state', 'UNKNOWN')}; "
-            "required upload-package validation did not pass"
-        )
-
-def _normalize_final_audio(package: Path, final_video: str) -> str:
-    """Normalize final-program audio while preserving the video stream."""
-    if os.environ.get("AIVF_EBU_R128", "1").strip() == "0":
-        return final_video
-    source = Path(final_video)
-    normalized = package / ".final.v3.audio-normalized.mp4"
-    try:
-        media = analyze_media(source, deep=False, max_duration=3600.0)
-        if not media["summary"].get("has_audio"):
-            return final_video
-        normalize_loudness(source, normalized)
-        if not normalized.is_file() or normalized.stat().st_size <= 0:
-            raise AudioNormalizationError("normalized final audio artifact is missing")
-        os.replace(normalized, source)
-        return str(source)
-    except (AudioNormalizationError, MediaHealthError, OSError, ValueError) as exc:
-        normalized.unlink(missing_ok=True)
-        raise RenderContractError(f"EBU R128 final audio normalization failed: {exc}") from exc
-
-
-def _cleanup_v3_transients(package: Path) -> None:
-    """Remove only known V3 temporary artifacts; preserve canonical outputs for inspection."""
-    for name in ("final.v3.retention.mp4", ".final.v3.normalized.mp4", ".final.v3.audio-normalized.mp4"):
-        (package / name).unlink(missing_ok=True)
-    for child in package.glob(".aivf-*.partial"):
-        child.unlink(missing_ok=True)
-    for child in package.glob("aivf-v3-thumb-*"):
-        if child.is_dir():
-            shutil.rmtree(child, ignore_errors=True)
-
-
-def _prepare_blueprint(
-    topic: str, context: str, target_seconds: float, platform: str, audience: str, bpm: int,
-    package: Path, edit_type: Optional[str], source_metadata: Optional[Dict[str, Any]],
-) -> tuple[V3Blueprint, Dict[str, Any], Path]:
-    config = V3Config(target_seconds=float(target_seconds), platform=platform, audience=audience, bpm=int(bpm))
-    blueprint = create_v3_blueprint(topic, context=context, config=config, edit_type=edit_type)
-    validate_blueprint(blueprint)
-    blueprint_path = package / "v3_blueprint.json"
-    payload = blueprint.to_dict()
-    if source_metadata:
-        payload["source_metadata"] = dict(source_metadata)
-    _atomic_json_write(blueprint_path, payload)
-    persisted = V3Blueprint.from_dict(json.loads(blueprint_path.read_text(encoding="utf-8")))
-    persisted_payload = persisted.to_dict()
-    if source_metadata:
-        persisted_payload["source_metadata"] = dict(source_metadata)
-    return persisted, persisted_payload, blueprint_path
-
-
-def _build_baseline_request(
-    *, input_video: str, topic: str, package_dir: str, target_seconds: float, platform: str,
-    blueprint: V3Blueprint, blueprint_payload: Dict[str, Any], footage_evidence: Dict[str, Any], model_key: Optional[str],
-    skip_qc: bool, music_path: Optional[str], enable_ocr: bool, enable_object_detection: bool,
-    enable_diarization: bool, diarization_token: Optional[str],
-) -> V3RenderRequest:
-    baseline_payload = dict(blueprint_payload)
-    baseline_payload["retention_map"] = []
-    summary = _research_summary_from_blueprint(baseline_payload, footage_evidence)
-    return V3RenderRequest(
+def run_v3_pipeline(
+    input_video: str,
+    topic: str,
+    package_dir: str,
+    *,
+    context: str = "",
+    target_seconds: float = 30.0,
+    platform: str = "youtube_shorts",
+    audience: str = "general short-form viewers",
+    bpm: int = 120,
+    edit_type: Optional[str] = None,
+    model_key: Optional[str] = None,
+    skip_qc: bool = False,
+    music_path: Optional[str] = None,
+    enable_ocr: bool = False,
+    enable_object_detection: bool = True,
+    enable_diarization: bool = False,
+    diarization_token: Optional[str] = None,
+    source_metadata: Optional[Dict[str, Any]] = None,
+) -> ProductionResult:
+    """Run the public V3 API through the stage-oriented production runner."""
+    request = V3Request(
         input_video=input_video,
         topic=topic,
         package_dir=package_dir,
+        context=context,
         target_seconds=target_seconds,
-        research_summary=summary,
+        platform=platform,
+        audience=audience,
+        bpm=bpm,
+        edit_type=edit_type,
         model_key=model_key,
-        render_plan=V3RenderPlan.from_blueprint(blueprint, include_retention=False),
         skip_qc=skip_qc,
         music_path=music_path,
         enable_ocr=enable_ocr,
         enable_object_detection=enable_object_detection,
         enable_diarization=enable_diarization,
         diarization_token=diarization_token,
-        platform=platform,
     )
-
-
-def _finalize_v3_media(
-    result: ProductionResult, package: Path, payload: Dict[str, Any], target_seconds: float,
-) -> tuple[str, Path, Dict[str, Any]]:
-    _validate_timeline_contract(package, payload, target_seconds)
-    if not result.final_video:
-        raise RenderContractError("renderer returned no final video")
-    baseline_path = package / "v3_baseline.mp4"
-    retention_path = package / "final.v3.retention.mp4"
-    normalized_path = package / ".final.v3.normalized.mp4"
-    canonical_final = package / payload.get("packaging", {}).get("final_video_name", "final.v3.mp4")
     try:
-        shutil.copyfile(result.final_video, baseline_path)
-        enforce_retention_events(result.final_video, str(retention_path), payload.get("retention_map", []))
-        normalize_duration(str(retention_path), str(normalized_path), target_seconds)
-        profile = payload["platform_variants"][payload["platform"]]
-        report = strict_render_check(
-            str(normalized_path),
-            target_seconds=target_seconds,
-            platform_profile=profile,
-            retention_events=payload.get("retention_map", []),
-            retention_baseline=str(baseline_path),
-            require_independent_retention=True,
-        )
-        if not report["ok"]:
-            raise RenderContractError("; ".join(str(error) for error in report.get("errors", [])) or "V3 render QC failed")
-        os.replace(normalized_path, canonical_final)
-        result.final_video = str(canonical_final)
-        return str(canonical_final), baseline_path, report
-    except Exception:
-        retention_path.unlink(missing_ok=True)
-        normalized_path.unlink(missing_ok=True)
+        return V3PipelineRunner(
+            request,
+            source_metadata=source_metadata,
+        ).run()
+    except V3PipelineError:
         raise
 
-
-def _package_v3_assets(
-    *, result: ProductionResult, package: Path, topic: str, platform: str, source_video: str, baseline_summary: Dict[str, Any],
-) -> None:
-    try:
-        from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical, select_best_thumbnail_variant
-        thumb_dir = package / "thumbnails"
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-        thumbnail_work_dir = tempfile.mkdtemp(prefix="aivf-v3-thumb-", dir=str(package))
-        try:
-            frame_path = extract_best_video_frame(source_video, thumbnail_work_dir)
-            thumbnail_subject = str(baseline_summary.get("hook") or baseline_summary.get("thumbnail") or topic).strip()
-            variants = make_thumbnail_variants(
-                thumbnail_subject, str(thumb_dir), count=3, topic=topic, background_path=frame_path
-            )
-            if not variants:
-                raise RuntimeError("thumbnail generation returned no variants")
-            selected_variant = select_best_thumbnail_variant(variants)
-            thumbnail_path = package / "thumbnail.png"
-            shutil.copyfile(variants[selected_variant - 1], thumbnail_path)
-            make_thumbnail_vertical(
-                thumbnail_subject, str(package / "thumbnail_vertical.png"),
-                size=(1080, 1920), background_path=frame_path,
-            )
-            baseline_summary["thumbnail"] = str(thumbnail_path)
-            result.artifacts["thumbnail"] = str(thumbnail_path)
-            result.artifacts["thumbnail_variants"] = str(thumb_dir)
-        finally:
-            shutil.rmtree(thumbnail_work_dir, ignore_errors=True)
-        from .upload_package import finalize_upload_package
-        finalize_upload_package(
-            str(package),
-            topic=topic,
-            summary=baseline_summary,
-            script=str(baseline_summary.get("script", "")),
-            platform=platform,
-            final_video=result.final_video,
-            thumbnail=str(baseline_summary.get("thumbnail") or "") or None,
-            caption_path=str(package / "captions.ass") if (package / "captions.ass").exists() else None,
-        )
-        result.artifacts["upload_package_manifest"] = str(package / "upload_package.json")
-    except Exception as exc:
-        result.errors.append(f"V3 upload package finalization failed: {exc}")
-
-
-def _persist_v3_reports(
-    package: Path, result: ProductionResult, render_report: Dict[str, Any],
-    semantic_report: Dict[str, Any], readiness: Any,
-) -> None:
-    _atomic_json_write(package / "v3_render_qc.json", render_report)
-    _atomic_json_write(package / "v3_semantic_qc.json", semantic_report)
-    _atomic_json_write(package / "v3_readiness.json", readiness.to_dict())
-    metadata_path = package / "metadata.json"
-    if metadata_path.exists():
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        metadata.update({
-            "v3_render_qc": render_report,
-            "v3_semantic_qc": semantic_report,
-            "v3_readiness": readiness.to_dict(),
-            "v3_timeline_contract": "passed",
-            "warnings": result.warnings,
-            "errors": result.errors,
-        })
-        _atomic_json_write(metadata_path, metadata)
-
-
-def run_v3_pipeline(input_video: str, topic: str, package_dir: str, *, context: str = "", target_seconds: float = 30.0,
-                    platform: str = "youtube_shorts", audience: str = "general short-form viewers", bpm: int = 120,
-                    edit_type: Optional[str] = None, model_key: Optional[str] = None, skip_qc: bool = False,
-                    music_path: Optional[str] = None, enable_ocr: bool = False, enable_object_detection: bool = True,
-                    enable_diarization: bool = False, diarization_token: Optional[str] = None,
-                    source_metadata: Optional[Dict[str, Any]] = None) -> ProductionResult:
-    validate_capabilities()
-    _validate_v3_inputs(input_video, topic, target_seconds, platform, audience, bpm)
-    package = Path(package_dir)
-    package.mkdir(parents=True, exist_ok=True)
-    try:
-        minimum_free_mb = int(os.environ.get("AIVF_MIN_FREE_DISK_MB", "512"))
-    except ValueError as exc:
-        raise ValueError("AIVF_MIN_FREE_DISK_MB must be an integer") from exc
-    if minimum_free_mb < 0:
-        raise ValueError("AIVF_MIN_FREE_DISK_MB cannot be negative")
-    require_free_disk(package, minimum_free_mb * 1024 * 1024)
-    _cleanup_v3_transients(package)
-    blueprint, payload, blueprint_path = _prepare_blueprint(
-        topic, context, target_seconds, platform, audience, bpm, package, edit_type, source_metadata
-    )
-    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
-    qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
-    if skip_qc and (environment not in {"development", "test"} or not qc_override):
-        raise ValueError("skip_qc is disabled for production; use development/test with AIVF_ALLOW_SKIP_QC=1")
-    semantic_qc_disabled = os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0"
-    if semantic_qc_disabled and (environment not in {"development", "test"} or not qc_override):
-        raise ValueError("AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1")
-    try:
-        try:
-            source_max_seconds = float(os.environ.get("AIVF_MAX_SOURCE_DURATION_SECONDS", "86400"))
-        except ValueError as exc:
-            raise ValueError("AIVF_MAX_SOURCE_DURATION_SECONDS must be numeric") from exc
-        if not math.isfinite(source_max_seconds) or source_max_seconds < 1800:
-            raise ValueError("AIVF_MAX_SOURCE_DURATION_SECONDS must be finite and >= 1800")
-        source_health = analyze_media(input_video, deep=False, max_duration=source_max_seconds)
-        _atomic_json_write(package / "source_media_health.json", source_health)
-        try:
-            source_media_metadata = extract_media_metadata(input_video)
-        except (OSError, RuntimeError, ValueError) as exc:
-            source_media_metadata = {"ok": False, "error": str(exc)}
-        _atomic_json_write(package / "source_media_metadata.json", source_media_metadata)
-        footage_evidence = _build_footage_evidence(input_video, enable_ocr, min_scenes=len(blueprint.clip_plan))
-    except Exception as exc:
-        raise RenderContractError(f"pre-script footage analysis failed: {exc}") from exc
-    baseline_request = _build_baseline_request(
-        input_video=input_video, topic=topic, package_dir=package_dir, target_seconds=target_seconds,
-        platform=platform, blueprint=blueprint, blueprint_payload=payload, footage_evidence=footage_evidence, model_key=model_key,
-        skip_qc=skip_qc, music_path=music_path, enable_ocr=enable_ocr,
-        enable_object_detection=enable_object_detection, enable_diarization=enable_diarization,
-        diarization_token=diarization_token,
-    )
-    result = render_v3(baseline_request)
-    result.artifacts = getattr(result, "artifacts", {}) or {}
-    if result.final_video and not result.errors:
-        try:
-            baseline_summary = _research_summary_from_blueprint(
-                {**payload, "retention_map": []}, footage_evidence
-            )
-            final_video, baseline_path, render_report = _finalize_v3_media(
-                result, package, payload, target_seconds
-            )
-            final_video = _normalize_final_audio(package, final_video)
-            try:
-                final_video = stamp_media_metadata(
-                    final_video,
-                    version=os.environ.get("AIVF_VERSION", "3.0.0"),
-                )
-            except (OSError, RuntimeError, ValueError) as exc:
-                result.warnings.append(f"Final metadata stamping skipped: {exc}")
-            result.final_video = final_video
-            try:
-                final_health = analyze_media(
-                    final_video,
-                    deep=os.environ.get("AIVF_DEEP_FINAL_MEDIA_QC", "1").strip() != "0",
-                )
-            except (MediaHealthError, GuardrailError, OSError, ValueError) as exc:
-                final_health = {"ok": False, "errors": [str(exc)], "warnings": [], "defects": [str(exc)]}
-            _atomic_json_write(package / "final_media_health.json", final_health)
-            try:
-                final_media_metadata = extract_media_metadata(final_video)
-            except (OSError, RuntimeError, ValueError) as exc:
-                final_media_metadata = {"ok": False, "error": str(exc)}
-            _atomic_json_write(package / "final_media_metadata.json", final_media_metadata)
-            if not final_health.get("ok", False):
-                defects = list(final_health.get("defects") or final_health.get("errors") or [])
-                if not defects:
-                    defects = ["technical media health check failed"]
-                result.errors.extend(f"V3 final media health: {defect}" for defect in defects)
-            semantic_report: Dict[str, Any] = {"ok": True, "mode": "disabled"}
-            if not semantic_qc_disabled:
-                semantic_report = analyze_render_semantics(final_video)
-                if not semantic_report["ok"]:
-                    result.errors.extend("V3 semantic QC: " + e for e in semantic_report["errors"])
-                result.warnings.extend("V3 semantic QC: " + w for w in semantic_report["warnings"])
-            source_meta = source_metadata or {}
-            _package_v3_assets(result=result, package=package, topic=topic, platform=platform, source_video=input_video, baseline_summary=baseline_summary)
-            metadata_report = build_upload_metadata(
-                topic,
-                summary=baseline_summary,
-                hook=str(baseline_summary.get("hook") or ""),
-                attribution=str(source_meta.get("attribution") or ""),
-            )
-            _atomic_json_write(package / "metadata_guardrails.json", metadata_report)
-            metadata_ok = bool(metadata_report["quality"]["ok"]) and not bool(
-                (metadata_report.get("factuality") or {}).get("publish_blocked")
-            )
-            if not metadata_ok:
-                result.errors.extend(
-                    f"Metadata guardrail: {error}"
-                    for error in metadata_report["quality"]["errors"]
-                )
-
-            readiness = evaluate_artifact(
-                final_video, target_seconds=target_seconds,
-                platform_profile=payload["platform_variants"][platform],
-                package_dir=package_dir, upload_package_required=True, publish_required=False,
-                metadata_guardrails_ok=metadata_ok,
-            )
-            if not render_report["ok"]:
-                result.errors.extend("V3 render QC: " + e for e in render_report["errors"])
-            result.warnings.extend("V3 render QC: " + w for w in render_report["warnings"])
-            _apply_readiness_contract(result, readiness)
-
-            source_meta = source_metadata or {}
-            source_rights = str(
-                source_meta.get("rights_status")
-                or source_meta.get("rights_basis")
-                or "review_required"
-            )
-            source_record = build_asset_record(
-                input_video,
-                asset_id="source_video",
-                source="user_upload",
-                source_url=str(source_meta.get("source_url") or ""),
-                rights_status=source_rights,
-                license_name=str(source_meta.get("license_name") or ""),
-                license_url=str(source_meta.get("license_url") or ""),
-                attribution=str(source_meta.get("attribution") or ""),
-            )
-            provenance = provenance_manifest(
-                package,
-                final_video=final_video,
-                assets=[source_record],
-                pipeline_version="3.0.0",
-                run_context={
-                    "blueprint_sha256": sha256_file(blueprint_path),
-                    "platform": platform,
-                    "target_seconds": round(float(target_seconds), 6),
-                    "edit_type": payload.get("edit_type"),
-                },
-            )
-            write_provenance(package / "provenance.json", provenance)
-            if manifest_needs_rights_review(provenance):
-                result.warnings.append("Media provenance contains assets requiring rights review")
-
-            diagnostics = diagnostics_report(directories=[package])
-            write_diagnostics(package / "diagnostics.json", diagnostics)
-            if not diagnostics["ok"]:
-                result.warnings.append("Environment diagnostics reported one or more failed checks")
-
-            environment_fingerprint = build_environment_fingerprint(
-                pipeline_version="3.0.0",
-                platform_name=platform,
-                target_seconds=target_seconds,
-                platform_profile=payload["platform_variants"][platform],
-            )
-            _atomic_json_write(package / "environment_fingerprint.json", environment_fingerprint)
-
-            if readiness.state == "UPLOAD_PACKAGE_VALID":
-                result.warnings.append("V3 artifact readiness: upload package validated; publish readiness is intentionally not claimed")
-
-            _persist_v3_reports(package, result, render_report, semantic_report, readiness)
-
-            # Integrity is evaluated after report persistence so recorded hashes cover
-            # the final metadata/report content, not a pre-finalization snapshot.
-            provenance = load_provenance(package / "provenance.json") if (package / "provenance.json").is_file() else provenance
-            artifact_manifest = build_artifact_manifest(
-                package,
-                required_files=(
-                    "final.v3.mp4",
-                    "v3_blueprint.json",
-                    "timeline.json",
-                    "v3_render_qc.json",
-                    "v3_readiness.json",
-                    "upload_package.json",
-                    "provenance.json",
-                    "metadata_guardrails.json",
-                    "diagnostics.json",
-                    "environment_fingerprint.json",
-                ),
-            )
-            _atomic_json_write(package / "artifact_manifest.json", artifact_manifest)
-            release_evidence = build_release_evidence(
-                package_dir=package,
-                readiness=readiness.to_dict(),
-                media_health=final_health,
-                provenance=provenance,
-                environment={**diagnostics, **environment_fingerprint},
-            )
-            _atomic_json_write(package / "release_evidence.json", release_evidence)
-            if not release_evidence["release_candidate"]:
-                result.warnings.append("Automated release evidence is incomplete; human review remains required")
-        except (RenderContractError, MediaHealthError, GuardrailError, OSError, ValueError) as exc:
-            result.errors.append(f"V3 render contract failed: {exc}")
-    result.artifacts.update({
-        "v3_blueprint": str(blueprint_path),
-        "v3_render_qc": str(package / "v3_render_qc.json"),
-        "v3_semantic_qc": str(package / "v3_semantic_qc.json"),
-        "v3_readiness": str(package / "v3_readiness.json"),
-        "v3_baseline": str(package / "v3_baseline.mp4"),
-        "source_media_health": str(package / "source_media_health.json"),
-        "source_media_metadata": str(package / "source_media_metadata.json"),
-        "final_media_health": str(package / "final_media_health.json"),
-        "final_media_metadata": str(package / "final_media_metadata.json"),
-        "provenance": str(package / "provenance.json"),
-        "metadata_guardrails": str(package / "metadata_guardrails.json"),
-        "diagnostics": str(package / "diagnostics.json"),
-        "environment_fingerprint": str(package / "environment_fingerprint.json"),
-        "artifact_manifest": str(package / "artifact_manifest.json"),
-        "release_evidence": str(package / "release_evidence.json"),
-        "v3_renderer_bridge": "ai_video_factory.v3_renderer_bridge",
-        "v3_acceptance_matrix": "00-INFO/24-POINT-ACCEPTANCE.md",
-    })
-    _cleanup_v3_transients(package)
-    return result
