@@ -1,5 +1,6 @@
 """Strict post-render quality and contract verification for Edit Factory v3."""
 from __future__ import annotations
+from .v3_exceptions import V3ValidationError
 
 import json
 import math
@@ -12,7 +13,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 from .ffmpeg_budget import run_ffmpeg_subprocess
 
 
-class RenderContractError(RuntimeError):
+class RenderContractError(V3ValidationError):
     """Raised when a rendered artifact violates the requested production contract."""
 
 
