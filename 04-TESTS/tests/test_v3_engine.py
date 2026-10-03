@@ -137,7 +137,7 @@ def test_v3_blueprint_round_trip_is_strict_and_immutable():
     payload = blueprint.to_dict()
     restored = blueprint.from_dict(payload)
 
-    assert restored.schema_version == "3.0.0"
+    assert restored.schema_version == "3.0.1"
     assert restored.platform == "youtube_shorts"
     assert restored.duration == blueprint.duration
     assert isinstance(restored.hooks, tuple)
