@@ -269,6 +269,7 @@ class V3Blueprint:
         )
     )
     editorial_decisions: Sequence[EditorialDecision] = field(default_factory=tuple)
+    migration_history: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hooks", tuple(self.hooks))
@@ -278,6 +279,11 @@ class V3Blueprint:
         object.__setattr__(self, "hashtags", tuple(self.hashtags))
         object.__setattr__(self, "capabilities", tuple(self.capabilities))
         object.__setattr__(self, "editorial_decisions", tuple(self.editorial_decisions))
+        object.__setattr__(
+            self,
+            "migration_history",
+            tuple(dict(item) for item in self.migration_history),
+        )
         object.__setattr__(self, "platform_variants", _freeze_mapping(self.platform_variants))
         object.__setattr__(self, "metrics", MappingProxyType({str(k): float(v) for k, v in dict(self.metrics).items()}))
         platform_value = self.platform.value if isinstance(self.platform, Platform) else str(self.platform).strip().lower()
@@ -316,6 +322,7 @@ class V3Blueprint:
             "score_bundle": self.score_bundle.to_dict(),
             "editorial_decisions": [item.to_dict() for item in self.editorial_decisions],
             "editorial_evidence_summary": summarize_editorial_evidence(self.editorial_decisions),
+            "migration_history": [dict(item) for item in self.migration_history],
             "core_idea": asdict(self.core_idea),
             "edit_type": self.edit_type,
             "hooks": [asdict(item) for item in self.hooks],
@@ -438,6 +445,10 @@ class V3Blueprint:
                 metric_metadata=metric_metadata,
                 score_bundle=score_bundle,
                 editorial_decisions=editorial_decisions,
+                migration_history=tuple(
+                    dict(item) for item in payload.get("migration_history", ())
+                    if isinstance(item, Mapping)
+                ),
             )
             validate_blueprint(restored)
             return restored
