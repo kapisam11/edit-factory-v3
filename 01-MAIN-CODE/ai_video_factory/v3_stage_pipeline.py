@@ -1067,6 +1067,11 @@ class V3PipelineRunner:
             "v3_failure",
             "v3_stage_cache",
             "editorial_decisions",
+            "source_manifest",
+            "creative_provenance",
+            "job_identity",
+            "final_content_manifest",
+            "clip_source_evidence",
         )
         context.result.artifacts.update(
             {
