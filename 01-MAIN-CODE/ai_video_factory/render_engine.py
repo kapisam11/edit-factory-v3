@@ -225,8 +225,9 @@ def _run_ffmpeg_streaming(
                 process.wait(timeout=3)
             reader.join(timeout=2)
             detail = "".join(stderr_tail).strip()
+            detail_suffix = f": {detail[-2000:]}" if detail else ""
             raise FFmpegExecutionError(
-                f"FFmpeg timed out after {timeout}s; diagnostics={diagnostic_path}",
+                f"FFmpeg timed out after {timeout}s{detail_suffix}; diagnostics={diagnostic_path}",
                 command_id=command_id,
                 command=cmd,
                 exit_code=None,
