@@ -270,7 +270,11 @@ _WORKSPACE_MARKERS = frozenset({
 })
 
 
-def _guard_workspace_isolation(request: V3Request) -> None:
+def _guard_workspace_isolation(
+    request: V3Request,
+    *,
+    source_metadata: Mapping[str, Any] | None = None,
+) -> None:
     package = Path(request.package_dir)
     if not package.exists():
         return
@@ -1071,10 +1075,10 @@ class V3PipelineRunner:
                     return reused
                 return self._run_locked()
         except WorkspaceBusyError as exc:
+            # The workspace belongs to another active job. Never mutate its artifacts
+            # or readiness state from the losing caller.
             result = ProductionResult(package_dir=str(self.request.package_dir))
             result.errors.append(str(exc))
-            package = Path(self.request.package_dir)
-            _write_failed_evidence(package, result.errors)
             return result
 
     def _run_locked(self) -> ProductionResult:
@@ -1084,7 +1088,7 @@ class V3PipelineRunner:
             package=Path(self.request.package_dir),
         )
         try:
-            _guard_workspace_isolation(self.request)
+            _guard_workspace_isolation(self.request, source_metadata=self.source_metadata)
             _reset_v3_package(
                 context.package,
                 input_video=self.request.input_video,
