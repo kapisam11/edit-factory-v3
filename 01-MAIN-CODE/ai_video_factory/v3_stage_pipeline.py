@@ -58,6 +58,7 @@ from .v3.source_manifest import build_source_manifest
 from .v3.workspace import WorkspaceBusyError, WorkspaceLock
 from .v3.job_identity import job_identity, configuration_hash
 from .v3.creative_provenance import build_creative_provenance
+from .v3.final_content_manifest import build_final_content_manifest
 
 
 @dataclass
@@ -709,10 +710,21 @@ class ComplianceStage:
             return
 
         source_meta = context.source_metadata or {}
+        content_manifest = build_final_content_manifest(
+            topic=context.request.topic,
+            blueprint=context.payload,
+            footage_evidence=context.footage_evidence,
+            final_media_metadata=context.final_media_metadata,
+            source_manifest=context.source_manifest,
+        )
+        atomic_write_json(context.package / "final_content_manifest.json", content_manifest)
+        summary = dict(context.baseline_summary)
+        summary["content_manifest"] = content_manifest
+        summary["source_manifest"] = context.source_manifest
         context.metadata_report = build_upload_metadata(
             context.request.topic,
-            summary=context.baseline_summary,
-            hook=str(context.baseline_summary.get("hook") or ""),
+            summary=summary,
+            hook=str(content_manifest.get("hook") or ""),
             attribution=str(source_meta.get("attribution") or ""),
         )
         atomic_write_json(context.package / "metadata_guardrails.json", context.metadata_report)
