@@ -314,25 +314,64 @@ def _reuse_existing_job(
     identity_path = package / "job_identity.json"
     final_path = package / "final.v3.mp4"
     readiness_path = package / "v3_readiness.json"
-    if not identity_path.is_file() or not final_path.is_file() or not readiness_path.is_file():
+    manifest_path = package / "artifact_manifest.json"
+    if not all(path.is_file() for path in (identity_path, final_path, readiness_path, manifest_path)):
         return None
     try:
         stored = json.loads(identity_path.read_text(encoding="utf-8"))
-        expected = _expected_job_identity(request)
+        expected = _expected_job_identity(request, source_metadata=source_metadata)
         readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
-    required_equal = (
+
+    expected_job = job_identity(
+        source_hash=expected["source_hash"],
+        blueprint_hash=str(stored.get("blueprint_hash") or ""),
+        config_hash=expected["configuration_hash"],
+        renderer_version=expected["renderer_version"],
+        platform_policy_version=expected["platform_policy_version"],
+    )
+    comparable = (
         stored.get("request_hash") == expected["request_hash"]
         and stored.get("source_hash") == expected["source_hash"]
         and stored.get("configuration_hash") == expected["configuration_hash"]
         and stored.get("renderer_version") == expected["renderer_version"]
         and stored.get("platform_policy_version") == expected["platform_policy_version"]
+        and stored.get("job_id") == expected_job
+        and bool(stored.get("blueprint_hash"))
     )
-    if not required_equal or not stored.get("job_id") or not stored.get("blueprint_hash"):
+    if not comparable or readiness.get("state") not in {"UPLOAD_PACKAGE_VALID", "PUBLISH_READY"}:
         return None
-    if readiness.get("state") not in {"UPLOAD_PACKAGE_VALID", "PUBLISH_READY"}:
+
+    from .production_assurance import verify_artifact_manifest
+    integrity = verify_artifact_manifest(package, manifest, verify_hashes=True)
+    if not integrity.get("ok"):
         return None
+    final_entries = [
+        item for item in (manifest.get("files") or [])
+        if isinstance(item, Mapping) and item.get("path") == "final.v3.mp4"
+    ]
+    if len(final_entries) != 1:
+        return None
+    recorded_hash = str(final_entries[0].get("sha256") or "")
+    try:
+        if not recorded_hash or file_hash(final_path) != recorded_hash:
+            return None
+        from .v3_quality import probe_media
+        media = probe_media(str(final_path))
+    except (OSError, ValueError, RenderContractError):
+        return None
+
+    policy = get_platform_policy(request.platform)
+    if (
+        abs(float(media["duration"]) - float(request.target_seconds)) > 0.08
+        or int(media["width"]) != int(policy.width)
+        or int(media["height"]) != int(policy.height)
+        or not os.path.getsize(final_path) > 0
+    ):
+        return None
+
     result = ProductionResult(package_dir=str(package))
     result.final_video = str(final_path)
     result.artifacts = {
@@ -341,8 +380,11 @@ def _reuse_existing_job(
         if file_path.is_file()
     }
     result.artifacts["final_video"] = str(final_path)
-    result.warnings.append("Reused existing valid V3 job artifact via content-addressed job identity")
+    result.warnings.append(
+        "Reused existing verified V3 job artifact via content-addressed job identity"
+    )
     return result
+
 
 def _write_failed_evidence(
     package: Path,
