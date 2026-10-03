@@ -106,7 +106,7 @@ class V3Stage(Protocol):
         ...
 
 
-def _audience_profile(audience: str) -> Dict[str, Any]:
+def _audience_profile(audience: str) -> dict[str, Any]:
     return parse_audience(audience).to_dict()
 
 
