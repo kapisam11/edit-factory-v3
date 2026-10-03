@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import re
 from typing import Sequence
 
 from .. import v3_engine as engine
 from ..v3_retention import evaluate_retention_editorial_fit
+
+
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9\']+", str(text).lower())
 
 
 def automated_editorial_checks(core: engine.CoreIdea, edit_type: engine.EditType, hooks: Sequence[engine.HookPack], clips: Sequence[engine.ClipBeat], retention: Sequence[engine.RetentionEvent], config: engine.V3Config) -> engine.QualityReport:
