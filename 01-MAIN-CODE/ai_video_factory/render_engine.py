@@ -1,10 +1,12 @@
 """Safe FFmpeg execution, media validation, concat, subtitles, and encoding."""
 import json
+import hashlib
 import logging
 import os
 import shutil
 import subprocess
 import sys
+import time
 import threading
 from collections import deque
 from pathlib import Path
@@ -16,6 +18,41 @@ from .production_guardrails import terminate_process_tree
 from .runtime_config import runtime_config
 
 logger = logging.getLogger(__name__)
+
+
+
+class FFmpegExecutionError(RuntimeError):
+    """Structured FFmpeg failure with a durable diagnostic reference."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        command_id: str,
+        command: List[str],
+        exit_code: int | None,
+        duration_seconds: float,
+        stderr_tail: str,
+        stderr_path: str | None,
+    ) -> None:
+        super().__init__(message)
+        self.command_id = command_id
+        self.command = tuple(command)
+        self.exit_code = exit_code
+        self.duration_seconds = round(duration_seconds, 3)
+        self.stderr_tail = stderr_tail
+        self.stderr_path = stderr_path
+
+    def to_dict(self) -> dict:
+        return {
+            "type": type(self).__name__,
+            "command_id": self.command_id,
+            "command": list(self.command),
+            "exit_code": self.exit_code,
+            "duration_seconds": self.duration_seconds,
+            "stderr_tail": self.stderr_tail,
+            "stderr_path": self.stderr_path,
+        }
 
 
 def _ensure_dir(p: str) -> None:
@@ -119,62 +156,109 @@ def validate_media_output(path: str, require_video: bool = True, require_audio: 
     return data
 
 
-def _run_ffmpeg_streaming(cmd: List[str], timeout: int) -> subprocess.CompletedProcess:
-    """Run FFmpeg while streaming stderr and retaining only a bounded failure tail."""
+def _run_ffmpeg_streaming(
+    cmd: List[str],
+    timeout: int,
+    diagnostics_dir: str | Path | None = None,
+) -> subprocess.CompletedProcess:
+    """Run FFmpeg while retaining a full stderr log and bounded tail."""
+    started = time.perf_counter()
+    command_id = hashlib.sha256(
+        (repr(cmd) + str(time.time_ns())).encode("utf-8")
+    ).hexdigest()[:16]
+    diagnostic_path: Path | None = None
+    if diagnostics_dir is not None:
+        diagnostic_root = Path(diagnostics_dir)
+    else:
+        candidate = Path(str(cmd[-1])) if cmd else Path(".")
+        diagnostic_root = candidate.parent if candidate.name and not str(candidate).startswith("pipe:") else Path(".")
+    stderr_tail = deque(maxlen=200)
     process = subprocess.Popen(
         cmd,
         stdout=None,
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-        **({"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)} if os.name == "nt" else {"start_new_session": True}),
+        **(
+            {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        ),
     )
-    stderr_tail = deque(maxlen=200)
 
-    def pump_stderr() -> None:
-        stream = process.stderr
-        if stream is None:
-            return
-        try:
-            for line in stream:
-                stderr_tail.append(line)
-                sys.stderr.write(line)
-                sys.stderr.flush()
-        finally:
-            stream.close()
-
-    reader = threading.Thread(
-        target=pump_stderr,
-        name="aivf-ffmpeg-stderr",
-        daemon=True,
-    )
-    reader.start()
-
+    diagnostic_handle = None
     try:
-        returncode = process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        terminate_process_tree(process, grace_seconds=2.0)
+        diagnostic_root.mkdir(parents=True, exist_ok=True)
+        diagnostic_path = diagnostic_root / "diagnostics" / f"ffmpeg-{command_id}.stderr.log"
+        diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
+        diagnostic_handle = diagnostic_path.open("w", encoding="utf-8", errors="replace")
+
+        def pump_stderr() -> None:
+            stream = process.stderr
+            if stream is None:
+                return
+            try:
+                for line in stream:
+                    stderr_tail.append(line)
+                    if diagnostic_handle is not None:
+                        diagnostic_handle.write(line)
+                        diagnostic_handle.flush()
+                    sys.stderr.write(line)
+                    sys.stderr.flush()
+            finally:
+                stream.close()
+
+        reader = threading.Thread(
+            target=pump_stderr,
+            name="aivf-ffmpeg-stderr",
+            daemon=True,
+        )
+        reader.start()
         try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=3)
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            terminate_process_tree(process, grace_seconds=2.0)
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+            reader.join(timeout=2)
+            detail = "".join(stderr_tail).strip()
+            raise FFmpegExecutionError(
+                f"FFmpeg timed out after {timeout}s; diagnostics={diagnostic_path}",
+                command_id=command_id,
+                command=cmd,
+                exit_code=None,
+                duration_seconds=time.perf_counter() - started,
+                stderr_tail=detail[-2000:],
+                stderr_path=str(diagnostic_path) if diagnostic_path else None,
+            ) from exc
+
         reader.join(timeout=2)
-        raise RuntimeError(f"FFmpeg timed out after {timeout}s") from exc
+        detail = "".join(stderr_tail).strip()
+        if returncode != 0:
+            raise FFmpegExecutionError(
+                f"FFmpeg failed with exit code {returncode}; diagnostics={diagnostic_path}",
+                command_id=command_id,
+                command=cmd,
+                exit_code=returncode,
+                duration_seconds=time.perf_counter() - started,
+                stderr_tail=detail[-2000:],
+                stderr_path=str(diagnostic_path) if diagnostic_path else None,
+            )
+        return subprocess.CompletedProcess(cmd, returncode, stdout=None, stderr=detail)
+    finally:
+        if diagnostic_handle is not None:
+            diagnostic_handle.close()
 
-    reader.join(timeout=2)
-    detail = "".join(stderr_tail)
-    if returncode != 0:
-        detail = detail.strip()
-        if len(detail) > 2000:
-            detail = detail[-2000:]
-        suffix = f": {detail}" if detail else ""
-        raise RuntimeError(f"FFmpeg failed with exit code {returncode}{suffix}")
 
-    return subprocess.CompletedProcess(cmd, returncode, stdout=None, stderr=detail)
-
-
-def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bool = False) -> subprocess.CompletedProcess:
+def run_ffmpeg(
+    cmd: List[str],
+    timeout: Optional[int] = None,
+    capture_output: bool = False,
+    diagnostics_dir: str | Path | None = None,
+) -> subprocess.CompletedProcess:
     cmd = _validate_tool_argv(cmd, "ffmpeg")
     cmd[0] = _ffmpeg_binary()
     timeout = timeout if timeout is not None else _bounded_timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600)
@@ -188,7 +272,9 @@ def run_ffmpeg(cmd: List[str], timeout: Optional[int] = None, capture_output: bo
                     capture_output=True,
                     text=True,
                 )
-            return _run_ffmpeg_streaming(cmd, timeout)
+            return _run_ffmpeg_streaming(cmd, timeout, diagnostics_dir)
+    except FFmpegExecutionError:
+        raise
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         if len(detail) > 2000:
