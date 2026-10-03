@@ -101,6 +101,7 @@ requires-dist = [
     { name = "librosa", marker = "extra == 'full'", specifier = ">=0.10.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=1.23.0" },
+    { name = "pydantic", specifier = ">=2.7.0" },
     { name = "opencv-python-headless", marker = "extra == 'full'", specifier = ">=4.8.0" },
     { name = "opencv-python-headless", marker = "extra == 'ocr'", specifier = ">=4.8.0" },
     { name = "opencv-python-headless", marker = "extra == 'vision'", specifier = ">=4.8.0" },
