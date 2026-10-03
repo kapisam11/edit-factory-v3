@@ -89,6 +89,19 @@ def build_upload_metadata(
     text = " ".join([topic, hook, str(data.get("strongest_angle", ""))])
     hashtags = hashtags_from_text(text)
     quality = validate_metadata(title, description, hashtags)
+    content_manifest = data.get("content_manifest") or {}
+    manifest_text = " ".join(
+        [
+            str(content_manifest.get("topic", "")),
+            str(content_manifest.get("hook", "")),
+            " ".join(str(item) for item in content_manifest.get("overlays", []) or []),
+            " ".join(str(item) for item in content_manifest.get("clip_purposes", []) or []),
+            " ".join(str(item) for item in content_manifest.get("search_terms", []) or []),
+        ]
+    ).strip()
+    if manifest_text:
+        text = " ".join([topic, hook, manifest_text]).strip()
+        hashtags = hashtags_from_text(text)
     evidence = data.get("factual_evidence") or data.get("research_evidence") or []
     factuality = metadata_fact_gate(
         title,
