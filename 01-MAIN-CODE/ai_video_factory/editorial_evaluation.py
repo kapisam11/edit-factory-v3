@@ -1,16 +1,10 @@
-"""Evidence-aware editorial evaluation and decision provenance for V3.
-
-This module deliberately separates deterministic facts, heuristics, model-derived
-signals, external evidence, and human judgments. Scores are evaluation signals,
-not claims about audience performance.
-"""
+"""Evidence-aware editorial evaluation, provenance and human feedback primitives for V3."""
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
@@ -45,6 +39,34 @@ class Evidence:
 
 
 @dataclass(frozen=True)
+class Assessment:
+    """A quality/value estimate with uncertainty kept separate from the value."""
+    value: float
+    confidence: float
+    evidence: tuple[Evidence, ...] = ()
+    method: str = "heuristic"
+    method_version: str = "1.0.0"
+
+    def __post_init__(self) -> None:
+        value = float(self.value)
+        confidence = float(self.confidence)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("assessment value must be between 0 and 1")
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError("assessment confidence must be between 0 and 1")
+        if not str(self.method).strip() or not str(self.method_version).strip():
+            raise ValueError("assessment method and method_version are required")
+        object.__setattr__(self, "value", round(value, 3))
+        object.__setattr__(self, "confidence", round(confidence, 3))
+        object.__setattr__(self, "evidence", tuple(self.evidence))
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["evidence"] = [item.to_dict() for item in self.evidence]
+        return payload
+
+
+@dataclass(frozen=True)
 class EditorialDecision:
     operation: str
     timestamp: float
@@ -53,6 +75,10 @@ class EditorialDecision:
     evidence: tuple[Evidence, ...] = ()
     source: str = "v3"
     decision_version: str = "1.0.0"
+    policy_version: str = "1.0.0"
+    config_hash: str = ""
+    source_hash: str = ""
+    planner_version: str = "3.0.0"
 
     def __post_init__(self) -> None:
         confidence = float(self.confidence)
@@ -86,8 +112,7 @@ class EditorialEvaluation:
     case_id: str = ""
 
     def __post_init__(self) -> None:
-        values = ("hook", "pacing", "coherence", "payoff", "caption_quality", "overall")
-        for name in values:
+        for name in ("hook", "pacing", "coherence", "payoff", "caption_quality", "overall"):
             value = float(getattr(self, name))
             if not 1.0 <= value <= 5.0:
                 raise ValueError(f"{name} must be between 1 and 5")
@@ -142,12 +167,12 @@ def build_retention_decisions(
     *,
     clip_purposes: Mapping[float, str] | None = None,
     version: str = "1.0.0",
+    policy_version: str = "1.0.0",
+    config_hash: str = "",
+    source_hash: str = "",
+    planner_version: str = "3.0.0",
 ) -> tuple[EditorialDecision, ...]:
-    """Convert retention events into explainable editorial decisions.
-
-    The evidence is intentionally heuristic: these decisions do not claim to be
-    learned audience predictions. Low-confidence events become DO_NOTHING.
-    """
+    """Convert semantic retention events into auditable editorial decisions."""
     reasons = {
         "beat drop": ("BEAT_DROP", 0.90),
         "clip": ("SCENE_CHANGE", 0.88),
@@ -164,18 +189,21 @@ def build_retention_decisions(
             continue
         timestamp = float(raw.get("time", 0.0))
         kind = str(raw.get("kind", "")).strip().lower()
-        reason, confidence = reasons.get(kind, ("ATTENTION_RISK", 0.55))
+        reason = str(raw.get("reason", "")).strip().upper() or reasons.get(kind, ("ATTENTION_RISK", 0.55))[0]
+        default_confidence = reasons.get(kind, ("ATTENTION_RISK", 0.55))[1]
+        confidence = float(raw.get("confidence", default_confidence))
+        importance = float(raw.get("semantic_importance", 0.5))
         purpose = purposes.get(round(timestamp, 3), "")
+        operation = "DO_NOTHING" if confidence < 0.60 or kind == "do_nothing" else kind.upper()
         evidence = (
             Evidence(
                 EvidenceKind.HEURISTIC,
-                method="v3 retention policy",
+                method="v3 semantic retention policy",
                 confidence=confidence,
                 version=version,
-                details={"kind": kind, "purpose": purpose},
+                details={"kind": kind, "purpose": purpose, "semantic_importance": round(importance, 3)},
             ),
         )
-        operation = kind.upper() if confidence >= 0.60 else "DO_NOTHING"
         decisions.append(
             EditorialDecision(
                 operation=operation,
@@ -184,6 +212,10 @@ def build_retention_decisions(
                 confidence=confidence,
                 evidence=evidence,
                 decision_version=version,
+                policy_version=policy_version,
+                config_hash=config_hash,
+                source_hash=source_hash,
+                planner_version=planner_version,
             )
         )
     return tuple(decisions)
@@ -191,7 +223,7 @@ def build_retention_decisions(
 
 def summarize_editorial_evidence(decisions: Sequence[EditorialDecision]) -> dict[str, Any]:
     if not decisions:
-        return {"count": 0, "average_confidence": 0.0, "low_confidence": 0, "operations": {}}
+        return {"count": 0, "average_confidence": 0.0, "low_confidence": 0, "operations": {}, "do_nothing_rate": 0.0}
     operations: dict[str, int] = {}
     for decision in decisions:
         operations[decision.operation] = operations.get(decision.operation, 0) + 1
@@ -200,10 +232,12 @@ def summarize_editorial_evidence(decisions: Sequence[EditorialDecision]) -> dict
         "average_confidence": round(sum(d.confidence for d in decisions) / len(decisions), 3),
         "low_confidence": sum(d.confidence < 0.60 for d in decisions),
         "operations": operations,
+        "do_nothing_rate": round(operations.get("DO_NOTHING", 0) / len(decisions), 3),
     }
 
 
 __all__ = [
+    "Assessment",
     "EditorialDecision",
     "EditorialEvaluation",
     "EvaluationCase",
