@@ -11,6 +11,7 @@ from statistics import median
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .ffmpeg_budget import run_ffmpeg_subprocess
+from .v3.visual_qc import verify_visual_effect
 
 
 class RenderContractError(V3ValidationError):
@@ -194,6 +195,55 @@ def _sample_visual_changes(path: str, sample_hz: float = 10.0) -> Dict[str, Any]
     return {"frames": frame_count, "sample_hz": sample_hz, "sample_duration": sample_duration, "threshold": round(threshold, 3), "change_events": change_events, "max_gap": max_gap}
 
 
+
+
+def _fps_value(raw_fps: object) -> float:
+    text = str(raw_fps or "0/0")
+    if "/" in text:
+        numerator, denominator = text.split("/", 1)
+        try:
+            value = float(numerator) / float(denominator)
+        except (ValueError, ZeroDivisionError):
+            return 30.0
+    else:
+        try:
+            value = float(text)
+        except ValueError:
+            return 30.0
+    return value if math.isfinite(value) and value > 0 else 30.0
+
+
+def _sample_gray_frames(path: str, timestamps: Sequence[float]) -> dict[float, bytes]:
+    requested = [round(float(value), 3) for value in timestamps]
+    if not requested:
+        return {}
+    info = probe_media(path)
+    fps = _fps_value(info.get("fps"))
+    frame_numbers = sorted({max(0, int(round(timestamp * fps))) for timestamp in requested})
+    selector = "+".join(f"eq(n,{frame})" for frame in frame_numbers)
+    result = _run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", path,
+            "-vf", f"select='{selector}',scale=160:90,format=gray",
+            "-vsync", "0",
+            "-f", "rawvideo", "pipe:1",
+        ],
+        timeout=_timeout("AIVF_FFPROBE_TIMEOUT_SECONDS", 60),
+        capture_output=True,
+        text=False,
+    )
+    raw = result.stdout if isinstance(result.stdout, (bytes, bytearray)) else b""
+    frame_size = 160 * 90
+    frames = [bytes(raw[index:index + frame_size]) for index in range(0, len(raw), frame_size)]
+    frames = [frame for frame in frames if len(frame) == frame_size]
+    by_frame = dict(zip(frame_numbers, frames))
+    return {
+        timestamp: by_frame.get(max(0, int(round(timestamp * fps))), b"")
+        for timestamp in requested
+    }
+
+
 def _sample_gray_frame(path: str, timestamp: float) -> bytes:
     result = _run(
         [
@@ -224,7 +274,7 @@ def verify_retention_against_baseline(
     rendered_path: str,
     retention_events: Sequence[Mapping[str, Any]],
 ) -> Dict[str, Any]:
-    """Verify retention effects against a no-retention baseline render."""
+    """Verify retention effects using batched frame extraction and multiple visual signals."""
     baseline = probe_media(baseline_path)
     rendered = probe_media(rendered_path)
     if baseline["width"] != rendered["width"] or baseline["height"] != rendered["height"]:
@@ -232,43 +282,76 @@ def verify_retention_against_baseline(
     if abs(baseline["duration"] - rendered["duration"]) > 0.08:
         raise RenderContractError("baseline and rendered durations differ")
     events = _validated_retention_events(retention_events, rendered["duration"])
-    checks: list[dict[str, Any]] = []
-    for index, (timestamp, kind) in enumerate(events):
-        active_times = [timestamp + offset for offset in (0.02, 0.08, 0.14)
-                        if timestamp + offset < rendered["duration"] - 0.02]
-        event_deltas = [
-            _frame_delta(_sample_gray_frame(baseline_path, t), _sample_gray_frame(rendered_path, t))
-            for t in active_times
+
+    sample_times: set[float] = set()
+    event_windows: dict[float, list[float]] = {}
+    control_windows: dict[float, list[float]] = {}
+    for index, (timestamp, _kind) in enumerate(events):
+        active = [
+            round(timestamp + offset, 3)
+            for offset in (0.02, 0.08, 0.14)
+            if timestamp + offset < rendered["duration"] - 0.02
         ]
         next_time = events[index + 1][0] if index + 1 < len(events) else rendered["duration"]
         candidates = [timestamp + 0.55, timestamp + max(0.35, (next_time - timestamp) * 0.50)]
-        control_times = [min(t, rendered["duration"] - 0.05) for t in candidates
-                         if t < next_time - 0.18 and t < rendered["duration"] - 0.05]
-        if not control_times:
-            control_times = [max(0.05, timestamp - 0.45)] if timestamp >= 0.45 else [0.30]
-        control_deltas = [
-            _frame_delta(_sample_gray_frame(baseline_path, t), _sample_gray_frame(rendered_path, t))
-            for t in control_times
+        controls = [
+            round(min(t, rendered["duration"] - 0.05), 3)
+            for t in candidates
+            if t < next_time - 0.18 and t < rendered["duration"] - 0.05
         ]
-        event_delta = median(event_deltas) if event_deltas else 0.0
+        if not controls:
+            controls = [round(max(0.05, timestamp - 0.45), 3)] if timestamp >= 0.45 else [0.30]
+        event_windows[timestamp] = active
+        control_windows[timestamp] = controls
+        sample_times.update(active)
+        sample_times.update(controls)
+
+    baseline_frames = _sample_gray_frames(baseline_path, sorted(sample_times))
+    rendered_frames = _sample_gray_frames(rendered_path, sorted(sample_times))
+    checks: list[dict[str, Any]] = []
+    for timestamp, kind in events:
+        active_times = event_windows[timestamp]
+        control_times = control_windows[timestamp]
+        active_metrics = [
+            verify_visual_effect(
+                baseline_frames[t],
+                rendered_frames[t],
+                effect_kind=kind,
+            )
+            for t in active_times
+            if baseline_frames.get(t) and rendered_frames.get(t)
+        ]
+        control_deltas = [
+            _frame_delta(baseline_frames[t], rendered_frames[t])
+            for t in control_times
+            if baseline_frames.get(t) and rendered_frames.get(t)
+        ]
+        strongest = max(active_metrics, key=lambda item: item.pixel_delta, default=None)
+        event_delta = median([item.pixel_delta for item in active_metrics]) if active_metrics else 0.0
         control_delta = median(control_deltas) if control_deltas else 0.0
         threshold = max(2.5, control_delta * 1.70 + 0.35)
+        semantic_pass = bool(strongest and strongest.passed)
+        pixel_pass = event_delta >= threshold
+        passed = semantic_pass and pixel_pass
         checks.append({
-            "time": timestamp, "kind": kind,
+            "time": timestamp,
+            "kind": kind,
             "event_delta": round(event_delta, 3),
             "control_delta": round(control_delta, 3),
             "threshold": round(threshold, 3),
-            "passed": event_delta >= threshold,
+            "semantic_verification": strongest.to_dict() if strongest else None,
+            "passed": passed,
         })
-    missing = [check for check in checks if not check["passed"]]
+
+    missing = [item for item in checks if not item["passed"]]
     return {
         "ok": not missing,
-        "method": "baseline-vs-rendered-local-pixel-delta",
+        "method": "batched-baseline-compare-with-multi-signal-semantic-verification",
         "baseline": os.path.abspath(baseline_path),
         "rendered": os.path.abspath(rendered_path),
         "events": checks,
         "errors": [
-            f"retention event at {item['time']:.2f}s did not exceed independent baseline threshold"
+            f"retention event at {item['time']:.2f}s failed semantic or baseline-delta verification"
             for item in missing
         ],
     }
