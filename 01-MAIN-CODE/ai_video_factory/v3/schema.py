@@ -1,8 +1,11 @@
-"""Central V3 blueprint schema boundary."""
+"""Central V3 blueprint schema boundary with explicit artifact evolution."""
 from __future__ import annotations
+
 from typing import Any, Mapping
 
-CURRENT_SCHEMA_VERSION = "3.0.0"
+CURRENT_SCHEMA_VERSION = "3.0.1"
+LEGACY_SCHEMA_VERSIONS = frozenset({"3.0.0"})
+CURRENT_BLUEPRINT_CONTRACT = "3.0.0"
 
 REQUIRED_TOP_LEVEL = frozenset({
     "version","core_idea","edit_type","hooks","clip_plan","music","retention_map",
@@ -14,20 +17,34 @@ OPTIONAL_TOP_LEVEL = frozenset({
     "metric_metadata","score_bundle","editorial_decisions","editorial_evidence_summary",
 })
 
+
 def validate_blueprint_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("V3 blueprint payload must be an object")
-    keys=set(payload)
-    missing=sorted(REQUIRED_TOP_LEVEL-keys)
+    keys = set(payload)
+    missing = sorted(REQUIRED_TOP_LEVEL - keys)
     if missing:
-        raise ValueError("V3 blueprint is missing required fields: "+", ".join(missing))
-    unknown=sorted(keys-(REQUIRED_TOP_LEVEL|OPTIONAL_TOP_LEVEL))
+        raise ValueError("V3 blueprint is missing required fields: " + ", ".join(missing))
+    unknown = sorted(keys - (REQUIRED_TOP_LEVEL | OPTIONAL_TOP_LEVEL))
     if unknown:
-        raise ValueError("V3 blueprint contains unknown fields: "+", ".join(unknown))
-    version=str(payload.get("version",""))
-    schema_version=str(payload.get("schema_version",version or CURRENT_SCHEMA_VERSION))
-    if version != CURRENT_SCHEMA_VERSION or schema_version != CURRENT_SCHEMA_VERSION:
-        raise ValueError(f"unsupported V3 blueprint schema version: {version}/{schema_version}")
+        raise ValueError("V3 blueprint contains unknown fields: " + ", ".join(unknown))
+    version = str(payload.get("version", ""))
+    schema_version = str(payload.get("schema_version", version or CURRENT_SCHEMA_VERSION))
+    if version != CURRENT_BLUEPRINT_CONTRACT:
+        raise ValueError(f"unsupported V3 blueprint contract version: {version}")
+    if schema_version not in {CURRENT_SCHEMA_VERSION, *LEGACY_SCHEMA_VERSIONS}:
+        raise ValueError(
+            f"unsupported V3 blueprint schema version: {schema_version}; "
+            f"current={CURRENT_SCHEMA_VERSION}"
+        )
     return dict(payload)
 
-__all__=["CURRENT_SCHEMA_VERSION","OPTIONAL_TOP_LEVEL","REQUIRED_TOP_LEVEL","validate_blueprint_payload"]
+
+__all__ = [
+    "CURRENT_BLUEPRINT_CONTRACT",
+    "CURRENT_SCHEMA_VERSION",
+    "LEGACY_SCHEMA_VERSIONS",
+    "OPTIONAL_TOP_LEVEL",
+    "REQUIRED_TOP_LEVEL",
+    "validate_blueprint_payload",
+]
