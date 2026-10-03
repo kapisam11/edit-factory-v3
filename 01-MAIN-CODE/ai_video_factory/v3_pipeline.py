@@ -70,7 +70,11 @@ def _audience_profile(audience: str) -> Dict[str, Any]:
     return parse_audience(audience).to_dict()
 
 
-def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _research_summary_from_blueprint(
+    payload: Dict[str, Any],
+    footage_evidence: Optional[Dict[str, Any]] = None,
+    source_manifest: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     core = payload["core_idea"]
     best_hook = payload["hooks"][0] if payload.get("hooks") else {}
     clip_plan = payload.get("clip_plan", [])
@@ -214,18 +218,21 @@ def _prepare_blueprint(
     blueprint_path = package / "v3_blueprint.json"
     payload = blueprint.to_dict()
     _atomic_json_write(blueprint_path, payload)
-    source_manifest = build_source_manifest(
-        str(Path(blueprint_path).parent.parent / Path(source_metadata.get("source_path", "")))
-        if source_metadata and source_metadata.get("source_path")
-        else "",
-        source_metadata or {},
-    ) if source_metadata and source_metadata.get("source_path") else None
-    if source_manifest is not None:
-        _atomic_json_write(
-            package / "source_manifest.json",
-            source_manifest.to_dict(),
-        )
-    persisted = V3Blueprint.from_dict(json.loads(blueprint_path.read_text(encoding="utf-8")))
+    if source_metadata:
+        source_path_value = str(
+            source_metadata.get("source_path")
+            or source_metadata.get("input_video")
+            or ""
+        ).strip()
+        if source_path_value:
+            source_manifest = build_source_manifest(source_path_value, source_metadata)
+            _atomic_json_write(
+                package / "source_manifest.json",
+                source_manifest.to_dict(),
+            )
+    persisted = V3Blueprint.from_dict(
+        json.loads(blueprint_path.read_text(encoding="utf-8"))
+    )
     return persisted, persisted.to_dict(), blueprint_path
 
 
