@@ -730,10 +730,17 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
 
     def add_event(time_value: float, kind: str, reason: str, confidence: float) -> None:
         timestamp = round(max(0.0, min(float(time_value), config.target_seconds - 0.01)), 3)
-        if events and abs(events[-1].time - timestamp) < 0.35:
-            if confidence <= events[-1].confidence:
+        close_indexes = [
+            index
+            for index, existing in enumerate(events)
+            if abs(existing.time - timestamp) < 0.35
+        ]
+        if close_indexes:
+            strongest_index = max(close_indexes, key=lambda index: events[index].confidence)
+            if confidence <= events[strongest_index].confidence:
                 return
-            events.pop()
+            for index in reversed(close_indexes):
+                events.pop(index)
         events.append(
             RetentionEvent(
                 timestamp,
