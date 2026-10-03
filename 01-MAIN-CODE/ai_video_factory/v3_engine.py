@@ -16,6 +16,11 @@ from .editorial_evaluation import EditorialDecision, Evidence, build_retention_d
 from .idempotency import stable_hash
 from .v3_semantics import combined_scores
 from .v3_scoring import heuristic_metrics
+from .v3.platform_policy import POLICIES
+from .v3.production_spec import ProductionSpec
+from .v3.hook_eval import evaluate_hook_candidates, generate_hook_candidates
+from .v3.schema import validate_blueprint_payload
+from .v3.migrations import migrate_to_current
 
 
 class Platform(str, Enum):
@@ -59,17 +64,29 @@ class V3Config:
     min_clip_seconds: float = 0.8
     max_clip_seconds: float = 4.0
     language: str = "en"
+    seed: int = 0
 
     def validate(self) -> None:
-        try:
-            target = float(self.target_seconds)
-            bpm = int(self.bpm)
-            retention = float(self.retention_interval)
-            max_words = int(self.max_overlay_words)
-            minimum = float(self.min_clip_seconds)
-            maximum = float(self.max_clip_seconds)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("V3Config contains invalid numeric values") from exc
+        numeric = (
+            ("target_seconds", self.target_seconds, (int, float)),
+            ("bpm", self.bpm, (int,)),
+            ("retention_interval", self.retention_interval, (int, float)),
+            ("max_overlay_words", self.max_overlay_words, (int,)),
+            ("min_clip_seconds", self.min_clip_seconds, (int, float)),
+            ("max_clip_seconds", self.max_clip_seconds, (int, float)),
+            ("seed", self.seed, (int,)),
+        )
+        for name, value, allowed in numeric:
+            if isinstance(value, bool) or not isinstance(value, allowed):
+                raise TypeError(f"{name} has the wrong type")
+        target = float(self.target_seconds)
+        bpm = int(self.bpm)
+        retention = float(self.retention_interval)
+        max_words = int(self.max_overlay_words)
+        minimum = float(self.min_clip_seconds)
+        maximum = float(self.max_clip_seconds)
+        if self.language.strip().lower() not in {"en"}:
+            raise ValueError("unsupported planning language; only en is implemented")
         if not math.isfinite(target) or not 8.0 <= target <= 180.0:
             raise ValueError("target_seconds must be between 8 and 180")
         platform_value = self.platform.value if isinstance(self.platform, Platform) else str(self.platform)
@@ -87,6 +104,7 @@ class V3Config:
             raise ValueError("max_overlay_words must be between 2 and 8")
         if minimum <= 0 or maximum < minimum or maximum > target:
             raise ValueError("invalid clip duration bounds")
+        ProductionSpec.from_values(target, platform_value)
 
 
 @dataclass(frozen=True)
@@ -106,6 +124,27 @@ class HookPack:
     text: str
     emotional: str
     score: float
+    evaluation: Mapping[str, Any] = field(default_factory=dict)
+    score_semantics: str = "editorial_heuristic_score"
+
+
+@dataclass(frozen=True)
+@dataclass(frozen=True)
+class ClipEvidence:
+    source_asset: str = ""
+    source_start: float = 0.0
+    source_end: float = 0.0
+    semantic_tags: Sequence[str] = field(default_factory=tuple)
+    evidence_score: float = 0.0
+    evidence_status: str = "planned"
+
+    def __post_init__(self) -> None:
+        score = float(self.evidence_score)
+        if not 0.0 <= score <= 1.0:
+            raise ValueError("clip evidence score must be between 0 and 1")
+        if self.source_end < self.source_start:
+            raise ValueError("clip evidence boundaries are invalid")
+        object.__setattr__(self, "semantic_tags", tuple(str(x) for x in self.semantic_tags))
 
 
 @dataclass(frozen=True)
@@ -119,6 +158,7 @@ class ClipBeat:
     text_overlay: str
     camera_motion: str
     transition: str
+    evidence: ClipEvidence = field(default_factory=ClipEvidence)
 
 
 @dataclass(frozen=True)
@@ -151,6 +191,7 @@ class PlatformProfile:
     max_seconds: float | None
     safe_bottom: int
     cta: str
+    policy_version: str = "2026-10-contract-1"
 
 
 @dataclass(frozen=True)
@@ -222,7 +263,7 @@ class V3Blueprint:
     metric_metadata: MetricMetadata = field(default_factory=MetricMetadata)
     score_bundle: V3ScoreBundle = field(
         default_factory=lambda: V3ScoreBundle(
-            technical_validity=100.0,
+            technical_validity=None,
             creative_quality=0.0,
             performance_heuristic=0.0,
         )
@@ -294,20 +335,7 @@ class V3Blueprint:
     def from_dict(cls, payload: Mapping[str, Any]) -> "V3Blueprint":
         if not isinstance(payload, Mapping):
             raise ValueError("V3 blueprint payload must be an object")
-        required = {
-            "version", "core_idea", "edit_type", "hooks", "clip_plan", "music",
-            "retention_map", "thumbnail_concept", "title_options", "hashtags",
-            "description", "platform_variants", "quality", "metrics", "capabilities",
-        }
-        allowed = required | {"schema_version", "platform", "audience", "platform_profile", "qc", "packaging", "metric_metadata", "source_metadata", "score_bundle", "editorial_decisions", "editorial_evidence_summary"}
-        unknown = sorted(set(payload) - allowed)
-        if unknown:
-            raise ValueError(f"V3 blueprint contains unknown fields: {', '.join(unknown)}")
-        missing = sorted(required - set(payload))
-        if missing:
-            raise ValueError(f"V3 blueprint is missing required fields: {', '.join(missing)}")
-        if payload.get("version") != "3.0.0" or payload.get("schema_version", "3.0.0") != "3.0.0":
-            raise ValueError("unsupported V3 blueprint schema version")
+        # Top-level validation is centralized in the V3 schema boundary.
         if not isinstance(payload["hooks"], (list, tuple)) or not isinstance(payload["clip_plan"], (list, tuple)):
             raise ValueError("V3 blueprint hooks and clip_plan must be arrays")
         if not isinstance(payload["retention_map"], (list, tuple)) or not isinstance(payload["capabilities"], (list, tuple)):
@@ -318,8 +346,32 @@ class V3Blueprint:
             raise ValueError("V3 blueprint metrics and platform_variants must be objects")
         try:
             core = CoreIdea(**dict(payload["core_idea"]))
-            hooks = tuple(HookPack(**dict(item)) for item in payload["hooks"])
-            clips = tuple(ClipBeat(**dict(item)) for item in payload["clip_plan"])
+            hooks = tuple(
+                HookPack(
+                    visual=str(item["visual"]),
+                    text=str(item["text"]),
+                    emotional=str(item["emotional"]),
+                    score=float(item["score"]),
+                    evaluation=dict(item.get("evaluation") or {}),
+                    score_semantics=str(item.get("score_semantics", "editorial_heuristic_score")),
+                )
+                for item in payload["hooks"]
+            )
+            clips = tuple(
+                ClipBeat(
+                    index=int(item["index"]),
+                    start=float(item["start"]),
+                    end=float(item["end"]),
+                    purpose=str(item["purpose"]),
+                    emotion=str(item["emotion"]),
+                    visual_style=str(item["visual_style"]),
+                    text_overlay=str(item["text_overlay"]),
+                    camera_motion=str(item["camera_motion"]),
+                    transition=str(item["transition"]),
+                    evidence=ClipEvidence(**dict(item.get("evidence") or {})),
+                )
+                for item in payload["clip_plan"]
+            )
             music_data = dict(payload["music"])
             music_data["sync_points"] = tuple(float(x) for x in music_data["sync_points"])
             music = MusicPlan(**music_data)
@@ -340,7 +392,7 @@ class V3Blueprint:
                 score_bundle = V3ScoreBundle(**dict(raw_score_bundle))
             else:
                 score_bundle = V3ScoreBundle.from_blueprint(
-                    technical_validity=100.0,
+                    technical_validity=None,
                     creative_quality=float(quality.score),
                     metrics=dict(payload["metrics"]),
                 )
@@ -406,11 +458,15 @@ def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 PLATFORM_PROFILES: Mapping[str, Dict[str, Any]] = {
-    "youtube_shorts": {"width": 1080, "height": 1920, "max_seconds": 60, "safe_bottom": 300, "cta": "comment"},
-    "tiktok": {"width": 1080, "height": 1920, "max_seconds": 180, "safe_bottom": 320, "cta": "follow"},
-    "instagram_reels": {"width": 1080, "height": 1920, "max_seconds": 90, "safe_bottom": 330, "cta": "share"},
-    "square": {"width": 1080, "height": 1080, "max_seconds": 90, "safe_bottom": 170, "cta": "share"},
-    "youtube": {"width": 1920, "height": 1080, "max_seconds": None, "safe_bottom": 120, "cta": "subscribe"},
+    key: {
+        "width": policy.width,
+        "height": policy.height,
+        "max_seconds": policy.max_seconds,
+        "safe_bottom": policy.safe_bottom,
+        "cta": policy.cta,
+        "policy_version": policy.version,
+    }
+    for key, policy in POLICIES.items()
 }
 
 EDIT_BY_EMOTION: Mapping[str, EditType] = {
@@ -522,37 +578,30 @@ def choose_edit_type(core: CoreIdea, requested: str | None = None) -> EditType:
     return EDIT_BY_EMOTION.get(core.target_emotion, EditType.STORYTELLING)
 
 def generate_hooks(core: CoreIdea, edit_type: EditType) -> List[HookPack]:
-    strategy = EDIT_STRATEGIES[edit_type]
-    topic = _compact(core.topic, 7)
-    hooks = [
-        HookPack(
-            strategy["visual_styles"][0],
-            _compact(f"The moment {topic} changed"),
+    evaluated = evaluate_hook_candidates(
+        generate_hook_candidates(
+            core.topic,
             core.stakes,
-            0.94,
-        ),
-        HookPack(
-            f"Open on {strategy['visual_styles'][2]} before context.",
-            _compact(f"This changed {topic}"),
             core.emotional_angle,
-            0.90,
-        ),
-        HookPack(
-            f"Use a contrast built around {strategy['purposes'][2].lower()}.",
-            _compact(f"What they missed about {topic}"),
             core.watch_to_end_reason,
-            0.87,
+            edit_type.value,
         ),
+        core.topic,
+        core.stakes,
+        core.emotional_angle,
+        core.watch_to_end_reason,
+    )
+    return [
+        HookPack(
+            candidate.visual,
+            candidate.text,
+            candidate.emotional_reason,
+            evaluation.score,
+            evaluation=evaluation.to_dict(),
+            score_semantics="editorial_heuristic_score",
+        )
+        for candidate, evaluation in evaluated
     ]
-    if edit_type == EditType.FUNNY:
-        hooks[0] = HookPack("Cold-open on the reaction before the result.", "This got worse", "Anticipation before the punchline.", 0.97)
-    elif edit_type in {EditType.NOSTALGIC, EditType.TRIBUTE}:
-        hooks[0] = HookPack("Open on the most recognizable human frame.", "You remember this", "Recognition before explanation.", 0.96)
-    elif edit_type == EditType.DOCUMENTARY:
-        hooks[0] = HookPack("Open on the strongest evidence before context.", "Here is what happened", "Curiosity before explanation.", 0.95)
-    elif edit_type == EditType.CHARACTER_ANALYSIS:
-        hooks[0] = HookPack("Open on defining behavior before naming the trait.", "This says everything", "Recognition before analysis.", 0.95)
-    return sorted(hooks, key=lambda item: item.score, reverse=True)
 
 def _purpose_sequence(count: int, strategy: Mapping[str, Any]) -> List[str]:
     values = list(strategy["purposes"])
@@ -801,7 +850,7 @@ def platform_variants(config: V3Config) -> Dict[str, Dict[str, Any]]:
     config.validate()
     return {key: dict(value) for key, value in PLATFORM_PROFILES.items()}
 
-def _human_editor_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[HookPack], clips: Sequence[ClipBeat], retention: Sequence[RetentionEvent], config: V3Config) -> QualityReport:
+def automated_editorial_checks(core: CoreIdea, edit_type: EditType, hooks: Sequence[HookPack], clips: Sequence[ClipBeat], retention: Sequence[RetentionEvent], config: V3Config) -> QualityReport:
     durations = [clip.end - clip.start for clip in clips]
     overlays = [clip.text_overlay.lower() for clip in clips]
     checks = {
@@ -908,7 +957,7 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
     music = analyze_music(core, cfg, clips)
     retention = build_retention_map(cfg, clips, music)
     thumbnail, titles, tags, description = _metadata(core)
-    quality = _human_editor_checks(core, selected, hooks, clips, retention, cfg)
+    quality = automated_editorial_checks(core, selected, hooks, clips, retention, cfg)
     metrics = _heuristic_metrics(core, hooks, clips, quality)
     clip_purposes = {round(clip.start, 3): clip.purpose for clip in clips}
     config_hash = stable_hash(asdict(cfg))
@@ -954,8 +1003,16 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         raise ValueError("expected a V3Blueprint instance")
     if blueprint.version != "3.0.0":
         raise ValueError("unexpected blueprint version")
-    if len(blueprint.capabilities) != 40 or len(set(blueprint.capabilities)) != 40:
-        raise ValueError("v3 blueprint must expose exactly 40 unique tracked capabilities")
+    from .v3_capabilities import REQUIRED_CAPABILITIES
+    available = set(blueprint.capabilities)
+    missing_capabilities = sorted(REQUIRED_CAPABILITIES - available)
+    if missing_capabilities:
+        raise ValueError(
+            "v3 blueprint is missing required capabilities: "
+            + ", ".join(missing_capabilities)
+        )
+    if len(available) != len(blueprint.capabilities):
+        raise ValueError("v3 blueprint capabilities must be unique")
     if blueprint.platform not in PLATFORM_PROFILES:
         raise ValueError(f"unsupported blueprint platform: {blueprint.platform}")
     expected_profile = PLATFORM_PROFILES[blueprint.platform]
@@ -972,6 +1029,10 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         ("creative_quality", blueprint.score_bundle.creative_quality),
         ("performance_heuristic", blueprint.score_bundle.performance_heuristic),
     ):
+        if score_value is None:
+            if score_name != "technical_validity":
+                raise ValueError(f"blueprint {score_name} cannot be null")
+            continue
         if not math.isfinite(float(score_value)) or not 0.0 <= float(score_value) <= 100.0:
             raise ValueError(f"blueprint {score_name} is invalid")
 
@@ -1070,6 +1131,12 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         raise ValueError("packaging artifact names must be simple filenames")
     if not isinstance(blueprint.qc.require_video, bool) or not isinstance(blueprint.qc.require_audio, bool) or not isinstance(blueprint.qc.require_independent_retention, bool):
         raise ValueError("blueprint QC flags must be booleans")
+    for hook in blueprint.hooks:
+        if hook.score_semantics != "editorial_heuristic_score":
+            raise ValueError("hook score semantics are invalid")
+        if not hook.evaluation or not hook.evaluation.get("evaluator"):
+            raise ValueError("hook evaluation evidence is missing")
+
     if not blueprint.quality.passed:
         failed_checks = [
             name
