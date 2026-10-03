@@ -431,6 +431,7 @@ class PlanningStage:
             context=context.request.context,
             config=config,
             edit_type=context.request.edit_type,
+            footage_evidence=context.footage_evidence,
         )
         validate_blueprint(blueprint)
         path = context.package / "v3_blueprint.json"
@@ -485,6 +486,23 @@ class PlanningStage:
             platform_policy_version=blueprint.platform_constraints.policy_version,
         )
         context.creative_provenance = provenance.to_dict()
+        clip_evidence = build_clip_evidence(
+            [dict(item) for item in context.payload.get("clip_plan", [])],
+            context.footage_evidence,
+            source_asset=str(context.request.input_video),
+        )
+        atomic_write_json(context.package / "clip_source_evidence.json", clip_evidence)
+        unsupported_critical = [
+            item for item in clip_evidence
+            if item.get("purpose") in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}
+            and item.get("status") == "unsupported"
+        ]
+        if unsupported_critical:
+            raise V3ValidationError(
+                "critical editorial beats have no supporting source evidence: "
+                + ", ".join(str(item.get("clip_index")) for item in unsupported_critical)
+            )
+
         atomic_write_json(context.package / "creative_provenance.json", context.creative_provenance)
 
         atomic_write_json(
@@ -557,23 +575,6 @@ class SourceAnalysisStage:
                 for scene in ranked[:12]
             ],
         }
-        if context.blueprint is not None:
-            clip_evidence = build_clip_evidence(
-                [dict(item) for item in context.payload.get("clip_plan", [])],
-                context.footage_evidence,
-                source_asset=str(context.request.input_video),
-            )
-            atomic_write_json(context.package / "clip_source_evidence.json", clip_evidence)
-            critical = [
-                item for item in clip_evidence
-                if item.get("purpose") in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}
-                and item.get("status") == "unsupported"
-            ]
-            if critical:
-                raise V3ValidationError(
-                    "critical editorial beats have no supporting source evidence: "
-                    + ", ".join(str(item.get("clip_index")) for item in critical)
-                )
 
 
 class RenderStage:
@@ -947,8 +948,8 @@ class V3PipelineRunner:
         self.source_metadata = dict(source_metadata or {}) or None
         self.stages = tuple(stages or (
             InputValidationStage(),
-            PlanningStage(),
             SourceAnalysisStage(),
+            PlanningStage(),
             RenderStage(),
             MediaValidationStage(),
             PackagingStage(),
