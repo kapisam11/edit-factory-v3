@@ -1,4 +1,4 @@
-"""Semantic editorial effects IR and deterministic FFmpeg graph compiler."""
+"""Semantic editorial effects IR and a renderer-neutral FFmpeg graph compiler."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -45,7 +45,7 @@ class RenderIR:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "version": "1.1.0",
+            "version": "1.2.0",
             "video_segments": [dict(item) for item in self.video_segments],
             "overlays": [dict(item) for item in self.overlays],
             "effects": [item.to_dict() for item in self.effects],
@@ -67,6 +67,19 @@ class CompiledRenderGraph:
         }
 
 
+def _escape_drawtext(text: str) -> str:
+    return (
+        str(text or "Key detail")
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace(":", "\\:")
+        .replace("%", "\\%")
+        .replace(",", "\\,")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+    )
+
+
 class EffectCompiler:
     """Translate semantic editorial events into renderer-neutral effects and FFmpeg graph fragments."""
 
@@ -84,7 +97,6 @@ class EffectCompiler:
         confidence = float(event.get("confidence", 0.0))
         reason = str(event.get("reason", "")).strip()
         if kind == "clip":
-            # Structural shot changes belong to the timeline/compiler, not a retention filter.
             return Effect(
                 EffectKind.DO_NOTHING,
                 timestamp,
@@ -93,20 +105,44 @@ class EffectCompiler:
                 confidence=confidence,
             )
         if kind == "do_nothing" or confidence < 0.60:
-            return Effect(EffectKind.DO_NOTHING, timestamp, 0.0, reason=reason, confidence=confidence)
+            return Effect(
+                EffectKind.DO_NOTHING,
+                timestamp,
+                0.0,
+                reason=reason,
+                confidence=confidence,
+            )
         effect_kind = self._MAP.get(kind, EffectKind.DO_NOTHING)
         if effect_kind is EffectKind.DO_NOTHING:
-            return Effect(EffectKind.DO_NOTHING, timestamp, 0.0, reason="UNSUPPORTED_EFFECT", confidence=0.0)
+            return Effect(
+                EffectKind.DO_NOTHING,
+                timestamp,
+                0.0,
+                reason="UNSUPPORTED_EFFECT",
+                confidence=0.0,
+            )
+
         parameters: dict[str, float | str] = {}
         if effect_kind is EffectKind.ZOOM:
-            parameters = {"scale_start": 1.00, "scale_end": 1.08}
+            parameters = {"scale": 1.08, "implementation": "crop_then_scale"}
         elif effect_kind is EffectKind.CROP:
-            parameters = {"reframe_fraction": 0.08}
+            parameters = {"reframe_fraction": 0.08, "implementation": "crop_then_scale"}
         elif effect_kind is EffectKind.CAPTION:
-            parameters = {"readability": "high"}
+            parameters = {
+                "text": str(event.get("text") or event.get("caption") or reason.replace("_", " ").title())[:48],
+                "implementation": "drawtext",
+            }
         elif effect_kind is EffectKind.TRANSITION:
-            parameters = {"style": "restrained"}
-        return Effect(effect_kind, timestamp, 0.22, parameters=parameters, reason=reason, confidence=confidence)
+            parameters = {"implementation": "fade_flash", "color": "black"}
+
+        return Effect(
+            effect_kind,
+            timestamp,
+            0.22,
+            parameters=parameters,
+            reason=reason,
+            confidence=confidence,
+        )
 
     def compile(self, events: Sequence[Mapping[str, Any]]) -> RenderIR:
         return RenderIR(
@@ -117,26 +153,56 @@ class EffectCompiler:
             )
         )
 
-    def compile_ffmpeg_graph(self, render_ir: RenderIR) -> CompiledRenderGraph:
+    def compile_ffmpeg_graph(
+        self,
+        render_ir: RenderIR,
+        *,
+        output_width: int,
+        output_height: int,
+    ) -> CompiledRenderGraph:
+        if output_width <= 0 or output_height <= 0:
+            raise ValueError("output dimensions must be positive")
+
         filters: list[str] = []
         passthrough: list[Effect] = []
-        settings = {
-            EffectKind.ZOOM: (1.10, 0.060),
-            EffectKind.CROP: (1.12, 0.070),
-            EffectKind.CAPTION: (1.08, 0.045),
-            EffectKind.TRANSITION: (1.20, 0.060),
-        }
         for effect in render_ir.effects:
             if effect.kind is EffectKind.DO_NOTHING:
                 passthrough.append(effect)
                 continue
-            contrast, brightness = settings.get(effect.kind, (1.04, 0.030))
+
             start = max(0.0, effect.start - 0.04)
-            end = effect.start + max(0.20, effect.duration)
-            filters.append(
-                f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:"
-                f"enable='between(t,{start:.3f},{end:.3f})'"
-            )
+            duration = max(0.08, effect.duration)
+            end = start + duration
+
+            if effect.kind is EffectKind.ZOOM:
+                filters.append(
+                    "crop=w='floor(iw/1.08/2)*2':"
+                    "h='floor(ih/1.08/2)*2':"
+                    "x='(iw-ow)/2':y='(ih-oh)/2':"
+                    f"enable='between(t,{start:.3f},{end:.3f})',"
+                    f"scale={int(output_width)}:{int(output_height)}:flags=lanczos"
+                )
+            elif effect.kind is EffectKind.CROP:
+                filters.append(
+                    "crop=w='floor(iw/1.08/2)*2':"
+                    "h='floor(ih/1.08/2)*2':"
+                    "x='(iw-ow)*0.62':y='(ih-oh)*0.38':"
+                    f"enable='between(t,{start:.3f},{end:.3f})',"
+                    f"scale={int(output_width)}:{int(output_height)}:flags=lanczos"
+                )
+            elif effect.kind is EffectKind.CAPTION:
+                text = _escape_drawtext(str(effect.parameters.get("text") or "Key detail"))
+                filters.append(
+                    f"drawtext=text='{text}':x=(w-text_w)/2:y=h-text_h-80:"
+                    f"fontsize=48:fontcolor=white:borderw=3:bordercolor=black:"
+                    f"enable='between(t,{start:.3f},{end:.3f})'"
+                )
+            elif effect.kind is EffectKind.TRANSITION:
+                filters.append(
+                    f"fade=t=out:st={start:.3f}:d={duration / 2:.3f}:color=black,"
+                    f"fade=t=in:st={start + duration / 2:.3f}:d={duration / 2:.3f}:color=black"
+                )
+
         return CompiledRenderGraph(tuple(filters), (), tuple(passthrough))
 
 
