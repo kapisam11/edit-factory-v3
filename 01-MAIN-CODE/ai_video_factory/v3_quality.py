@@ -164,28 +164,17 @@ def enforce_retention_events(
     info = probe_media(input_path)
     events = _validated_retention_events(retention_events, info["duration"])
     compiler = EffectCompiler()
-    effects = [compiler.compile_retention({
-        "time": timestamp,
-        "kind": kind,
-        "confidence": 1.0,
-        "reason": "retention_event",
-    }) for timestamp, kind in events]
-    effects = [effect for effect in effects if effect.kind is not EffectKind.DO_NOTHING]
-    filters: list[str] = []
-    kind_settings = {
-        EffectKind.ZOOM: (1.10, 0.060),
-        EffectKind.CROP: (1.12, 0.070),
-        EffectKind.CAPTION: (1.08, 0.045),
-        EffectKind.CUT: (1.16, 0.090),
-        EffectKind.TRANSITION: (1.20, 0.060),
-    }
-    for effect in effects:
-        contrast, brightness = kind_settings.get(effect.kind, (1.04, 0.030))
-        start_time = max(0.0, effect.start - 0.04)
-        end_time = min(info["duration"], effect.start + max(0.20, effect.duration))
-        filters.append(
-            f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:enable='between(t,{start_time:.3f},{end_time:.3f})'"
-        )
+    render_ir = compiler.compile([
+        {
+            "time": timestamp,
+            "kind": kind,
+            "confidence": 1.0,
+            "reason": "retention_event",
+        }
+        for timestamp, kind in events
+    ])
+    graph = compiler.compile_ffmpeg_graph(render_ir)
+    filters = list(graph.video_filters)
 
     target = None if target_seconds is None else float(target_seconds)
     if target is not None:
