@@ -197,3 +197,97 @@ def test_human_feedback_actions_are_structured_and_stored(tmp_path):
     summary = store.editorial_summary()
     assert summary["human_feedback"]["samples"] == 1
     assert summary["human_feedback"]["actions"]["REJECT"] == 1
+
+
+def test_legacy_schema_migrates_to_current_version():
+    blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=8))
+    payload = blueprint.to_dict()
+    payload["schema_version"] = "3.0.0"
+    migrated = migrate_to_current(payload)
+    assert migrated["schema_version"] == "3.0.1"
+    assert migrated["migration_history"][-1]["from"] == "3.0.0"
+
+
+def test_strict_schema_model_rejects_wrong_nested_types():
+    blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=8))
+    payload = blueprint.to_dict()
+    payload["quality"]["passed"] = "yes"
+    with pytest.raises(ValueError):
+        V3Blueprint.from_dict(payload)
+
+
+def test_effect_compiler_owns_ffmpeg_graph_compilation():
+    compiler = EffectCompiler()
+    ir = compiler.compile([{"time": 1.0, "kind": "zoom", "confidence": 1.0}])
+    graph = compiler.compile_ffmpeg_graph(ir)
+    assert graph.video_filters
+    assert graph.to_dict()["video_filters"] == list(graph.video_filters)
+
+
+def test_structural_clip_event_compiles_to_noop():
+    effect = EffectCompiler().compile_retention(
+        {"time": 1.0, "kind": "clip", "confidence": 1.0}
+    )
+    assert effect.kind is EffectKind.DO_NOTHING
+    assert effect.reason == "STRUCTURAL_CUT_HANDLED_BY_TIMELINE"
+
+
+def test_zoom_qc_requires_spatial_evidence_not_only_global_pixel_delta():
+    baseline = bytes([100]) * (160 * 90)
+    rendered = bytes([120]) * (160 * 90)
+    result = verify_visual_effect(
+        baseline,
+        rendered,
+        effect_kind="zoom",
+        expected_change=1.0,
+    )
+    assert result.passed is False
+    assert result.semantic_signals["spatial_scale_change"] is False
+
+
+def test_final_metadata_is_generated_from_manifest():
+    from ai_video_factory.v3.metadata import generate_final_metadata
+    result = generate_final_metadata(
+        {
+            "topic": "Minecraft clutch",
+            "hook": "The final escape",
+            "overlays": ["One detail mattered"],
+            "clip_purposes": ["Hook", "Payoff"],
+            "source_scenes": [{"description": "player escapes lava", "importance_score": 0.9}],
+            "search_terms": ["minecraft"],
+            "source_sha256": "a" * 64,
+        }
+    )
+    assert result["source"] == "final_content_manifest"
+    assert result["selected_title"]
+    assert "minecraft" in " ".join(result["hashtags"]).lower()
+
+
+def test_empirical_corpus_waits_for_real_samples(tmp_path):
+    from ai_video_factory.editorial_corpus import CorpusCase, EditorialCorpus
+    corpus = EditorialCorpus(tmp_path / "corpus.sqlite")
+    corpus.add_case(CorpusCase("case-1", "video-1", "3.0.0", "3.0.0", {}))
+    report = corpus.correlation_report()
+    assert report["samples"] == 0
+    assert all(
+        item["status"] == "insufficient_samples"
+        for item in report["dimensions"].values()
+    )
+
+
+def test_workspace_guard_rejects_foreign_generated_directory(tmp_path):
+    from ai_video_factory import v3_stage_pipeline
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    (tmp_path / "v3_blueprint.json").write_text("{}", encoding="utf-8")
+    request = v3_stage_pipeline.V3Request(
+        input_video=str(source),
+        topic="different",
+        package_dir=str(tmp_path),
+        target_seconds=8.0,
+        platform="youtube_shorts",
+        audience="general short-form viewers",
+        bpm=120,
+    )
+    with pytest.raises(v3_stage_pipeline.V3InputError, match="dedicated jobs"):
+        v3_stage_pipeline._guard_workspace_isolation(request)
