@@ -15,7 +15,7 @@ from .artifact_readiness import evaluate_artifact
 from .audio_normalization import AudioNormalizationError, normalize_loudness
 from .media_health import MediaHealthError, analyze_media
 from .media_metadata import extract_media_metadata
-from .metadata_guardrails import build_upload_metadata
+from .metadata_guardrails import build_upload_metadata, validate_metadata
 from .production_assurance import (
     build_artifact_manifest,
     build_environment_fingerprint,
@@ -742,6 +742,7 @@ class ComplianceStage:
         summary["content_manifest"] = content_manifest
         summary["final_metadata"] = final_metadata
         summary["source_manifest"] = context.source_manifest
+        context.baseline_summary = summary
         context.metadata_report = build_upload_metadata(
             context.request.topic,
             summary=summary,
@@ -752,6 +753,18 @@ class ComplianceStage:
         context.metadata_report["title"] = str(final_metadata.get("selected_title") or context.metadata_report["title"])
         context.metadata_report["description"] = str(final_metadata.get("description") or context.metadata_report["description"])
         context.metadata_report["hashtags"] = list(final_metadata.get("hashtags") or context.metadata_report["hashtags"])
+        validated = validate_metadata(
+            context.metadata_report["title"],
+            context.metadata_report["description"],
+            context.metadata_report["hashtags"],
+        )
+        context.metadata_report["quality"] = {
+            **dict(context.metadata_report.get("quality") or {}),
+            "ok": bool(validated["ok"]),
+            "errors": list(validated["errors"]),
+            "score": validated["score"],
+            "duplicate_phrase_score": validated["duplicate_phrase_score"],
+        }
         atomic_write_json(context.package / "metadata_guardrails.json", context.metadata_report)
         metadata_ok = bool(context.metadata_report.get("quality", {}).get("ok")) and not bool(
             (context.metadata_report.get("factuality") or {}).get("publish_blocked")
@@ -964,8 +977,8 @@ class V3PipelineRunner:
             PlanningStage(),
             RenderStage(),
             MediaValidationStage(),
-            PackagingStage(),
             ComplianceStage(),
+            PackagingStage(),
             StageIdentityStage(),
             ReleaseEvidenceStage(),
         ))
