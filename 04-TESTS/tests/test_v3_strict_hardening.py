@@ -157,7 +157,9 @@ def test_render_contract_normalizes_enforces_and_validates_duration(tmp_path):
     source = tmp_path / "source.mp4"; retained = tmp_path / "retained.mp4"; final = tmp_path / "final.mp4"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=1080x1920:rate=30", "-t", "3", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "3", "-shortest", "-c:v", "libx264", "-c:a", "aac", str(source)], check=True)
     enforce_retention_events(str(source), str(retained), [{"time": 0.0, "kind": "zoom"}, {"time": 2.0, "kind": "motion"}])
-    normalize_duration(str(retained), str(final), 5.0)
+    with pytest.raises(RenderContractError, match="exceeds controlled correction limit"):
+        normalize_duration(str(retained), str(final), 5.0)
+    normalize_duration(str(retained), str(final), 5.0, allow_large_repair=True)
     report = strict_render_check(str(final), target_seconds=5.0, platform_profile={"width": 1080, "height": 1920, "max_seconds": 60}, retention_events=[{"time": 0.0}, {"time": 2.0}])
     assert report["ok"] is True
     assert abs(report["media"]["duration"] - 5.0) <= 0.08
@@ -235,7 +237,7 @@ def test_short_v3_retention_plan_avoids_three_identical_events(monkeypatch):
 def test_v3_blueprint_populates_nonzero_score_bundle(monkeypatch):
     monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
     blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=12))
-    assert blueprint.score_bundle.technical_validity == 100.0
+    assert blueprint.score_bundle.technical_validity is None
     assert blueprint.score_bundle.creative_quality == float(blueprint.quality.score)
     assert blueprint.score_bundle.performance_heuristic > 0.0
 
@@ -308,3 +310,25 @@ def test_legacy_v3_blueprint_fields_remain_deserializable():
     restored = blueprint.from_dict(payload)
     assert restored.schema_version == "3.0.0"
     assert restored.platform_profile.width == 1080
+
+
+
+def test_duration_repair_policy_is_explicit():
+    from ai_video_factory.v3_quality import duration_delta_policy
+    assert duration_delta_policy(0.02) == "accept"
+    assert duration_delta_policy(0.12) == "controlled_correction"
+    assert duration_delta_policy(0.40) == "renderer_failure"
+
+
+def test_v3_config_rejects_silent_type_coercion():
+    with pytest.raises(TypeError):
+        V3Config(target_seconds="30").validate()
+    with pytest.raises(TypeError):
+        V3Config(bpm=120.0).validate()
+
+
+def test_v3_blueprint_has_no_pre_render_technical_certificate(monkeypatch):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=8))
+    assert blueprint.score_bundle.technical_validity is None
+    assert blueprint.score_bundle.performance_heuristic >= 0.0
