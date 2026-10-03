@@ -16,7 +16,7 @@ def _bounded(value: float) -> float:
 
 @dataclass(frozen=True)
 class V3ScoreBundle:
-    technical_validity: float
+    technical_validity: float | None
     creative_quality: float
     performance_heuristic: float
     creative_quality_confidence: float = 0.50
@@ -29,7 +29,8 @@ class V3ScoreBundle:
     creative_scope: str = "editorial heuristic"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "technical_validity", _bounded(self.technical_validity))
+        if self.technical_validity is not None:
+            object.__setattr__(self, "technical_validity", _bounded(self.technical_validity))
         object.__setattr__(self, "creative_quality", _bounded(self.creative_quality))
         object.__setattr__(self, "performance_heuristic", _bounded(self.performance_heuristic))
         for name in ("creative_quality_confidence", "performance_confidence"):
@@ -49,7 +50,7 @@ class V3ScoreBundle:
     def from_blueprint(
         cls,
         *,
-        technical_validity: float,
+        technical_validity: float | None,
         creative_quality: float,
         metrics: Mapping[str, float],
     ) -> "V3ScoreBundle":
