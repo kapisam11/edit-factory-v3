@@ -118,6 +118,7 @@ class BlueprintPayloadModel(StrictModel):
     score_bundle: ScoreBundleModel | None = None
     editorial_decisions: tuple[dict[str, Any], ...] = ()
     editorial_evidence_summary: dict[str, Any] | None = None
+    migration_history: tuple[dict[str, Any], ...] = ()
 
 
 def validate_blueprint_model(payload: dict[str, Any]) -> dict[str, Any]:
