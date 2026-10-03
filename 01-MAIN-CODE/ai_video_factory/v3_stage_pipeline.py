@@ -60,6 +60,7 @@ from .v3.job_identity import job_identity, configuration_hash
 from .v3.creative_provenance import build_creative_provenance
 from .v3.final_content_manifest import build_final_content_manifest
 from .v3.clip_evidence import build_clip_evidence
+from .v3.audience import parse_audience
 
 
 @dataclass
@@ -105,19 +106,8 @@ class V3Stage(Protocol):
         ...
 
 
-def _audience_profile(audience: str) -> dict[str, Any]:
-    text = str(audience or "general short-form viewers").lower()
-    profiles = [
-        (("comedy", "funny", "humor", "meme"), {"tone": "playful", "pacing": "fast", "hook": "reaction_or_surprise", "caption_style": "punchy"}),
-        (("anime", "manga", "otaku"), {"tone": "dramatic", "pacing": "fast", "hook": "character_or_reveal", "caption_style": "punchy"}),
-        (("gaming", "gamer", "minecraft", "fortnite"), {"tone": "energetic", "pacing": "fast", "hook": "moment_or_payoff", "caption_style": "high_contrast"}),
-        (("history", "documentary", "facts", "science", "education"), {"tone": "informative", "pacing": "measured", "hook": "evidence_or_question", "caption_style": "clear"}),
-        (("business", "finance", "entrepreneur", "marketing"), {"tone": "direct", "pacing": "tight", "hook": "claim_or_result", "caption_style": "minimal"}),
-    ]
-    for markers, profile in profiles:
-        if any(marker in text for marker in markers):
-            return {"label": audience, **profile}
-    return {"label": audience, "tone": "accessible", "pacing": "balanced", "hook": "curiosity_or_emotion", "caption_style": "readable"}
+def _audience_profile(audience: str) -> Dict[str, Any]:
+    return parse_audience(audience).to_dict()
 
 
 def _research_summary(payload: dict[str, Any], footage_evidence: dict[str, Any]) -> dict[str, Any]:
