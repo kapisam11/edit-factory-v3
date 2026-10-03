@@ -784,53 +784,9 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
     elif abs(music.drop_time - config.target_seconds * 0.72) <= 1.0:
         add_event(music.drop_time, "beat drop", "MUSICAL_TRANSITION", 0.72)
 
-    # Long narrative gaps get one low-intensity support event at a meaningful
-    # midpoint. This is a fallback, not the primary planning mechanism.
-    # Preserve the existing safety ceiling for downstream consumers, but only fill
-    # genuine narrative gaps; this is not a periodic retention grid.
-    max_semantic_gap = 3.0
-    ordered = sorted(events, key=lambda event: event.time)
-    filled: list[RetentionEvent] = []
-    for event in ordered:
-        while filled and event.time - filled[-1].time > max_semantic_gap:
-            midpoint = round((filled[-1].time + event.time) / 2.0, 3)
-            filled.append(
-                RetentionEvent(
-                    midpoint,
-                    "motion",
-                    "Visual continuity: consider no effect unless the narrative beat needs support.",
-                    "VISUAL_CONTINUITY",
-                    0.25,
-                    0.25,
-                )
-            )
-        filled.append(event)
-
-    # Final compatibility pass: keep semantic anchors, but never leave a gap
-    # above the established three-second safety ceiling. Fill only real gaps.
-    result: list[RetentionEvent] = []
-    for event in sorted(filled, key=lambda item: item.time):
-        if result and abs(event.time - result[-1].time) < 0.35:
-            continue
-        while result and event.time - result[-1].time > max_semantic_gap:
-            filler_kind = "motion"
-            if len(result) >= 2 and result[-1].kind == result[-2].kind == filler_kind:
-                filler_kind = "text"
-            midpoint = round((result[-1].time + event.time) / 2.0, 3)
-            result.append(
-                RetentionEvent(
-                    midpoint,
-                    filler_kind,
-                    "Visual continuity: consider no effect unless the narrative gap needs support.",
-                    "VISUAL_CONTINUITY",
-                    0.25,
-                    0.25,
-                )
-            )
-        if len(result) >= 2 and result[-1].kind == result[-2].kind == event.kind:
-            continue
-        result.append(event)
-
+    # Attention-gap handling is deliberately diagnostic, not generative.
+    # A long gap does not create an artificial editorial effect. The renderer receives
+    # only evidence-backed semantic anchors; QC reports long stale intervals separately.
     # A final impact is useful when the clip plan explicitly contains one.
     final_clip = clips[-1]
     if final_clip.purpose in {"Final impact", "Payoff", "Reaction"} and not any(
