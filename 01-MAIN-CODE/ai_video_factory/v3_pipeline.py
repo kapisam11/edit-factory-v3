@@ -96,11 +96,14 @@ def _research_summary_from_blueprint(
         "v3_retention_heuristic": payload["metrics"].get("retention_heuristic", payload["metrics"].get("retention_score", 0.0)),
         "thumbnail": payload.get("thumbnail_concept", ""), "platform": payload.get("platform", "youtube_shorts"),
         "audience": audience, "audience_profile": audience_profile, "platform_profile": profile,
+        "source_manifest": source_manifest or {},
         "footage_evidence": footage_evidence or {},
         "v3_directives": {
             "edit_type": payload["edit_type"], "clip_plan": clip_plan, "retention_map": payload.get("retention_map", []),
             "hooks": payload.get("hooks", []), "platform": payload.get("platform", "youtube_shorts"), "platform_profile": profile,
-            "audience": audience, "audience_profile": audience_profile, "min_scene_match_score": 0.15,
+            "audience": audience, "audience_profile": audience_profile,
+            "source_manifest": source_manifest or {},
+            "min_scene_match_score": 0.15,
             "disable_templates": True, "blueprint_contract": "3.0.0",
         },
     }
