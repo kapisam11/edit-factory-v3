@@ -415,7 +415,7 @@ class V3Blueprint:
                 )
                 for item in payload.get("editorial_decisions", ())
             )
-            return cls(
+            restored = cls(
                 version=str(payload["version"]),
                 core_idea=core,
                 edit_type=str(payload["edit_type"]),
@@ -440,6 +440,8 @@ class V3Blueprint:
                 score_bundle=score_bundle,
                 editorial_decisions=editorial_decisions,
             )
+            validate_blueprint(restored)
+            return restored
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError(f"invalid V3 blueprint payload: {exc}") from exc
 
@@ -724,6 +726,17 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
         "Payoff": ("beat drop", "PAYOFF_ALIGNMENT", 0.96),
         "Punchline": ("beat drop", "PAYOFF_ALIGNMENT", 0.94),
         "Reaction": ("angle", "REACTION_EMPHASIS", 0.78),
+        "Context": ("motion", "CONTEXT_SUPPORT", 0.65),
+        "Question": ("text", "COMPREHENSION_SUPPORT", 0.70),
+        "Claim": ("text", "CLAIM_EMPHASIS", 0.70),
+        "Curiosity": ("text", "COMPREHENSION_SUPPORT", 0.70),
+        "Threat": ("zoom", "THREAT_EMPHASIS", 0.75),
+        "Escalation": ("motion", "ESCALATION", 0.80),
+        "Evidence": ("text", "EVIDENCE_SUPPORT", 0.75),
+        "Proof": ("text", "EVIDENCE_SUPPORT", 0.75),
+        "Memory": ("motion", "MEMORY_EMPHASIS", 0.68),
+        "Contrast": ("angle", "CONTRAST_EMPHASIS", 0.72),
+        "Trait": ("angle", "TRAIT_EMPHASIS", 0.72),
         "Final impact": ("text", "FINAL_IMPACT", 0.86),
     }
     events: list[RetentionEvent] = []
