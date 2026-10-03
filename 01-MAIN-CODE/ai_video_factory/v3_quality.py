@@ -81,10 +81,33 @@ def probe_media(path: str) -> Dict[str, Any]:
             "format_name": payload.get("format", {}).get("format_name")}
 
 
-def normalize_duration(input_path: str, target_path: str, target_seconds: float) -> str:
+def duration_delta_policy(delta_seconds: float) -> str:
+    delta = abs(float(delta_seconds))
+    if delta <= 0.05:
+        return "accept"
+    if delta <= 0.25:
+        return "controlled_correction"
+    return "renderer_failure"
+
+
+def normalize_duration(
+    input_path: str,
+    target_path: str,
+    target_seconds: float,
+    *,
+    allow_large_repair: bool = False,
+) -> str:
     if not math.isfinite(float(target_seconds)) or not 0.25 <= float(target_seconds) <= 180.0: raise RenderContractError("target duration must be between 0.25 and 180 seconds")
-    info = probe_media(input_path); current = float(info["duration"]); delta = float(target_seconds) - current
-    if abs(delta) <= 0.05: return _atomic_copy(input_path, target_path) if os.path.abspath(input_path) != os.path.abspath(target_path) else target_path
+    info = probe_media(input_path)
+    current = float(info["duration"])
+    delta = float(target_seconds) - current
+    policy = duration_delta_policy(delta)
+    if policy == "accept":
+        return _atomic_copy(input_path, target_path) if os.path.abspath(input_path) != os.path.abspath(target_path) else target_path
+    if policy == "renderer_failure" and not allow_large_repair:
+        raise RenderContractError(
+            f"duration drift {abs(delta):.3f}s exceeds controlled correction limit of 0.250s"
+        )
     os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True); fd, temp_path = tempfile.mkstemp(suffix=".mp4", dir=os.path.dirname(target_path) or "."); os.close(fd)
     try:
         command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", input_path]
