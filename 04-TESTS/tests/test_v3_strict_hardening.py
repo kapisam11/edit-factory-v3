@@ -308,7 +308,7 @@ def test_legacy_v3_blueprint_fields_remain_deserializable():
         payload.pop(field, None)
 
     restored = blueprint.from_dict(payload)
-    assert restored.schema_version == "3.0.0"
+    assert restored.schema_version == "3.0.1"
     assert restored.platform_profile.width == 1080
 
 
