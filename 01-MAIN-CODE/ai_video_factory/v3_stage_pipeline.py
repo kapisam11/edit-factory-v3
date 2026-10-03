@@ -606,6 +606,7 @@ class SourceAnalysisStage:
             reverse=True,
         )
         context.footage_evidence = {
+            "source_asset": str(context.request.input_video),
             "scene_count": len(scenes),
             "top_scenes": [
                 {
