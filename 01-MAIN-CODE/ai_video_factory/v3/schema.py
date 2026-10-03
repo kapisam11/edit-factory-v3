@@ -14,7 +14,7 @@ REQUIRED_TOP_LEVEL = frozenset({
 })
 OPTIONAL_TOP_LEVEL = frozenset({
     "schema_version","platform","audience","platform_profile","qc","packaging",
-    "metric_metadata","score_bundle","editorial_decisions","editorial_evidence_summary",
+    "metric_metadata","score_bundle","editorial_decisions","editorial_evidence_summary","migration_history",
 })
 
 
