@@ -61,7 +61,8 @@ from .v3.creative_provenance import build_creative_provenance
 from .v3.final_content_manifest import build_final_content_manifest
 from .v3.metadata import generate_final_metadata
 from .v3.clip_evidence import build_clip_evidence
-from .v3.audience import parse_audience\nfrom .v3.platform_policy import get_platform_policy
+from .v3.audience import parse_audience
+from .v3.platform_policy import get_platform_policy
 
 
 @dataclass
