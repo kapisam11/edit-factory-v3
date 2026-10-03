@@ -154,11 +154,18 @@ class FeedbackStore:
             rows = conn.execute("SELECT scores FROM editorial_evaluations").fetchall()
             overrides = conn.execute("SELECT original_operation,final_operation FROM editorial_overrides").fetchall()
             feedback = conn.execute("SELECT action,reason_code,severity FROM editorial_decision_feedback").fetchall()
+        feedback_actions: dict[str, int] = {}
+        for action, _reason, _severity in feedback:
+            feedback_actions[str(action)] = feedback_actions.get(str(action), 0) + 1
         if not rows:
             return {
                 "samples": 0,
                 "means": {},
                 "overrides": {"samples": len(overrides)},
+                "human_feedback": {
+                    "samples": len(feedback),
+                    "actions": feedback_actions,
+                },
             }
         buckets = [json.loads(raw) for (raw,) in rows]
         keys = sorted(set().union(*(item.keys() for item in buckets)))
@@ -167,9 +174,6 @@ class FeedbackStore:
             for key in keys
         }
         changed = sum(original != final for original, final in overrides)
-        feedback_actions: dict[str, int] = {}
-        for action, _reason, _severity in feedback:
-            feedback_actions[str(action)] = feedback_actions.get(str(action), 0) + 1
         return {
             "samples": len(buckets),
             "means": means,
