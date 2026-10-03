@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, validate_default=True)
 
 
 class CoreIdeaModel(StrictModel):
@@ -38,7 +38,7 @@ class ClipEvidenceModel(StrictModel):
     source_asset: str = ""
     source_start: float = 0.0
     source_end: float = 0.0
-    semantic_tags: tuple[str, ...] = ()
+    semantic_tags: list[str] = []
     evidence_score: float = 0.0
     evidence_status: str = "planned"
 
@@ -62,7 +62,7 @@ class MusicModel(StrictModel):
     emotional_tone: str
     beat_seconds: float
     drop_time: float
-    sync_points: tuple[float, ...]
+    sync_points: list[float]
 
 
 class RetentionModel(StrictModel):
@@ -78,7 +78,7 @@ class QualityModel(StrictModel):
     passed: bool
     score: int
     checks: dict[str, bool] = {}
-    warnings: tuple[str, ...] = ()
+    warnings: list[str] = []
 
 
 class ScoreBundleModel(StrictModel):
@@ -87,7 +87,10 @@ class ScoreBundleModel(StrictModel):
     performance_heuristic: float = 0.0
     creative_quality_confidence: float = 0.0
     performance_confidence: float = 0.0
-    calibration_status: str = "uncalibrated"
+    creative_method_version: str = "3.0.0-heuristic"
+    performance_method_version: str = "3.0.0-heuristic"
+    performance_method: str = "weighted heuristic index"
+    performance_calibration: str = "uncalibrated"
     technical_scope: str = "blueprint contract"
     creative_scope: str = "editorial heuristic"
 
@@ -97,18 +100,18 @@ class BlueprintPayloadModel(StrictModel):
     schema_version: str
     core_idea: CoreIdeaModel
     edit_type: str
-    hooks: tuple[HookModel, ...]
-    clip_plan: tuple[ClipModel, ...]
+    hooks: list[HookModel]
+    clip_plan: list[ClipModel]
     music: MusicModel
-    retention_map: tuple[RetentionModel, ...]
+    retention_map: list[RetentionModel]
     thumbnail_concept: str
-    title_options: tuple[str, ...]
-    hashtags: tuple[str, ...]
+    title_options: list[str]
+    hashtags: list[str]
     description: str
     platform_variants: dict[str, dict[str, Any]]
     quality: QualityModel
     metrics: dict[str, float]
-    capabilities: tuple[str, ...]
+    capabilities: list[str]
     platform: str = "youtube_shorts"
     audience: str = "general short-form viewers"
     platform_profile: dict[str, Any] | None = None
@@ -116,9 +119,9 @@ class BlueprintPayloadModel(StrictModel):
     packaging: dict[str, Any] = {}
     metric_metadata: dict[str, Any] = {}
     score_bundle: ScoreBundleModel | None = None
-    editorial_decisions: tuple[dict[str, Any], ...] = ()
+    editorial_decisions: list[dict[str, Any]] = []
     editorial_evidence_summary: dict[str, Any] | None = None
-    migration_history: tuple[dict[str, Any], ...] = ()
+    migration_history: list[dict[str, Any]] = []
 
 
 def validate_blueprint_model(payload: dict[str, Any]) -> dict[str, Any]:
