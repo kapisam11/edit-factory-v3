@@ -375,50 +375,37 @@ def run_v3_pipeline(
     diarization_token: Optional[str] = None,
     source_metadata: Optional[Dict[str, Any]] = None,
 ) -> ProductionResult:
-    """Run V3 through the explicit production stages.
+    """Run V3 through the explicit production stages without pre-resetting the workspace.
 
-    The legacy function signature remains stable for CLI/dashboard callers.
+    Reuse and locking happen inside V3PipelineRunner before any package mutation.
     """
-    package = Path(package_dir)
-    try:
-        # Invalidate stale package evidence before any public preflight can fail.
-        _reset_v3_package(package, input_video=input_video)
-        request = V3Request(
-            input_video=input_video,
-            topic=topic,
-            package_dir=package_dir,
-            context=context,
-            target_seconds=target_seconds,
-            platform=platform,
-            audience=audience,
-            bpm=bpm,
-            edit_type=edit_type,
-            model_key=model_key,
-            skip_qc=skip_qc,
-            music_path=music_path,
-            enable_ocr=enable_ocr,
-            enable_object_detection=enable_object_detection,
-            enable_diarization=enable_diarization,
-            diarization_token=diarization_token,
+    request = V3Request(
+        input_video=input_video,
+        topic=topic,
+        package_dir=package_dir,
+        context=context,
+        target_seconds=target_seconds,
+        platform=platform,
+        audience=audience,
+        bpm=bpm,
+        edit_type=edit_type,
+        model_key=model_key,
+        skip_qc=skip_qc,
+        music_path=music_path,
+        enable_ocr=enable_ocr,
+        enable_object_detection=enable_object_detection,
+        enable_diarization=enable_diarization,
+        diarization_token=diarization_token,
+    )
+    request.validate()
+    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+    qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
+    if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0" and (
+        environment not in {"development", "test"} or not qc_override
+    ):
+        raise V3InputError(
+            "AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with "
+            "AIVF_ALLOW_SKIP_QC=1"
         )
-
-        # Public callers historically received input-contract failures immediately.
-        # Keep that behavior while the stage runner handles later operational failures
-        # as structured ProductionResult errors.
-        request.validate()
-        environment = os.environ.get("AIVF_ENV", "production").strip().lower()
-        qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
-        if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0" and (
-            environment not in {"development", "test"} or not qc_override
-        ):
-            raise V3InputError(
-                "AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1"
-            )
-    except V3PipelineError as exc:
-        _write_failed_evidence(
-            package,
-            [f"[preflight] {exc}"],
-        )
-        raise
     return V3PipelineRunner(request, source_metadata=source_metadata).run()
-
+\n
