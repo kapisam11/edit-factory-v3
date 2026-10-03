@@ -240,6 +240,43 @@ def _expected_job_identity(request: V3Request) -> dict[str, Any]:
     }
 
 
+_WORKSPACE_MARKERS = frozenset({
+    "v3_blueprint.json", "final.v3.mp4", "job_identity.json", "v3_readiness.json",
+    "artifact_manifest.json", "upload_package.json", "final_content_manifest.json",
+})
+
+
+def _guard_workspace_isolation(request: V3Request) -> None:
+    package = Path(request.package_dir)
+    if not package.exists():
+        return
+    markers = [package / name for name in _WORKSPACE_MARKERS if (package / name).exists()]
+    if not markers:
+        return
+    identity = package / "job_identity.json"
+    expected = _expected_job_identity(request)
+    if not identity.is_file():
+        raise V3InputError(
+            "package directory already contains generated artifacts without a job identity; "
+            "use a dedicated jobs/<job_id> workspace"
+        )
+    try:
+        stored = json.loads(identity.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise V3InputError("package directory has an unreadable job identity; refusing destructive reuse") from exc
+    comparable = (
+        stored.get("request_hash") == expected["request_hash"]
+        and stored.get("source_hash") == expected["source_hash"]
+        and stored.get("configuration_hash") == expected["configuration_hash"]
+        and stored.get("renderer_version") == expected["renderer_version"]
+        and stored.get("platform_policy_version") == expected["platform_policy_version"]
+    )
+    if not comparable:
+        raise V3InputError(
+            "package directory belongs to a different V3 job; refusing to mix artifacts"
+        )
+
+
 def _reuse_existing_job(request: V3Request) -> ProductionResult | None:
     package = Path(request.package_dir)
     identity_path = package / "job_identity.json"
@@ -1015,6 +1052,7 @@ class V3PipelineRunner:
             package=Path(self.request.package_dir),
         )
         try:
+            _guard_workspace_isolation(self.request)
             _reset_v3_package(
                 context.package,
                 input_video=self.request.input_video,
