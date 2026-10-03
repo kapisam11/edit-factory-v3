@@ -59,6 +59,7 @@ from .v3.workspace import WorkspaceBusyError, WorkspaceLock
 from .v3.job_identity import job_identity, configuration_hash
 from .v3.creative_provenance import build_creative_provenance
 from .v3.final_content_manifest import build_final_content_manifest
+from .v3.metadata import generate_final_metadata
 from .v3.clip_evidence import build_clip_evidence
 from .v3.audience import parse_audience
 
@@ -732,15 +733,25 @@ class ComplianceStage:
             source_manifest=context.source_manifest,
         )
         atomic_write_json(context.package / "final_content_manifest.json", content_manifest)
+        final_metadata = generate_final_metadata(
+            content_manifest,
+            source_manifest=context.source_manifest,
+        )
+        atomic_write_json(context.package / "final_metadata.json", final_metadata)
         summary = dict(context.baseline_summary)
         summary["content_manifest"] = content_manifest
+        summary["final_metadata"] = final_metadata
         summary["source_manifest"] = context.source_manifest
         context.metadata_report = build_upload_metadata(
             context.request.topic,
             summary=summary,
-            hook=str(content_manifest.get("hook") or ""),
+            hook=str(final_metadata.get("selected_title") or content_manifest.get("hook") or ""),
             attribution=str(source_meta.get("attribution") or ""),
         )
+        # Final metadata is authoritative; guardrails validate exactly what will be published.
+        context.metadata_report["title"] = str(final_metadata.get("selected_title") or context.metadata_report["title"])
+        context.metadata_report["description"] = str(final_metadata.get("description") or context.metadata_report["description"])
+        context.metadata_report["hashtags"] = list(final_metadata.get("hashtags") or context.metadata_report["hashtags"])
         atomic_write_json(context.package / "metadata_guardrails.json", context.metadata_report)
         metadata_ok = bool(context.metadata_report.get("quality", {}).get("ok")) and not bool(
             (context.metadata_report.get("factuality") or {}).get("publish_blocked")
@@ -883,6 +894,7 @@ class ReleaseEvidenceStage:
                 "creative_provenance.json",
                 "job_identity.json",
                 "final_content_manifest.json",
+                "final_metadata.json",
                 "clip_source_evidence.json",
             ),
         )
@@ -1072,6 +1084,7 @@ class V3PipelineRunner:
             "creative_provenance",
             "job_identity",
             "final_content_manifest",
+            "final_metadata",
             "clip_source_evidence",
         )
         context.result.artifacts.update(
