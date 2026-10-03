@@ -5,9 +5,12 @@ from typing import Any,Mapping,Callable
 Migration=Callable[[dict[str,Any]],dict[str,Any]]
 CURRENT_VERSION="3.0.0"
 
-def _identity(payload:dict[str,Any])->dict[str,Any]:
-    result=dict(payload)
-    result.setdefault("schema_version",result.get("version",CURRENT_VERSION))
+def _identity(payload: dict[str, Any]) -> dict[str, Any]:
+    result = dict(payload)
+    result.setdefault("schema_version", result.get("version", CURRENT_VERSION))
+    # source_metadata was historically embedded in V3 blueprints. It is now
+    # externalized into source_manifest.json while old blueprints remain readable.
+    result.pop("source_metadata", None)
     return result
 
 MIGRATIONS: Mapping[tuple[str,str],Migration]={
