@@ -177,3 +177,23 @@ def test_round_trip_preserves_clip_and_hook_evidence():
     restored = V3Blueprint.from_dict(json.loads(json.dumps(blueprint.to_dict())))
     assert restored.hooks == blueprint.hooks
     assert restored.clip_plan == blueprint.clip_plan
+
+
+def test_human_feedback_actions_are_structured_and_stored(tmp_path):
+    from ai_video_factory.editorial_evaluation import HumanDecisionFeedback
+    from ai_video_factory.feedback_store import FeedbackStore
+
+    store = FeedbackStore(tmp_path / "feedback.sqlite")
+    feedback = HumanDecisionFeedback(
+        decision_id="decision-1",
+        action="REJECT",
+        reason_code="VISUALLY_UNMOTIVATED",
+        severity=2,
+        actor="editor",
+        timestamp="2026-10-03T09:00:00Z",
+        pipeline_version="3.0.0",
+    )
+    store.record_human_feedback(feedback)
+    summary = store.editorial_summary()
+    assert summary["human_feedback"]["samples"] == 1
+    assert summary["human_feedback"]["actions"]["REJECT"] == 1
