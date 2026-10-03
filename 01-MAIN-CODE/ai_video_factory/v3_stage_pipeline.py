@@ -618,7 +618,7 @@ class PlanningStage:
         unsupported_critical = [
             item for item in clip_evidence
             if item.get("purpose") in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}
-            and item.get("status") == "unsupported"
+            and item.get("status") != "supported"
         ]
         if unsupported_critical:
             raise V3ValidationError(
