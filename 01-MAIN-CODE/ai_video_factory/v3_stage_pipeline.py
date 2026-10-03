@@ -208,7 +208,23 @@ _V3_TRANSIENT_FILE_NAMES = (
 
 
 
-def _request_identity(request: V3Request) -> str:
+def _request_identity(
+    request: V3Request,
+    *,
+    source_metadata: Mapping[str, Any] | None = None,
+) -> str:
+    music_path = request.music_path
+    music_fingerprint: str | None = None
+    if music_path:
+        try:
+            music_fingerprint = file_hash(music_path)
+        except (OSError, ValueError):
+            music_fingerprint = str(music_path)
+    diarization_token_hash = (
+        configuration_hash({"diarization_token": request.diarization_token})
+        if request.diarization_token
+        else ""
+    )
     return configuration_hash({
         "topic": request.topic,
         "context": request.context,
@@ -218,20 +234,28 @@ def _request_identity(request: V3Request) -> str:
         "bpm": request.bpm,
         "edit_type": request.edit_type,
         "model_key": request.model_key,
+        "skip_qc": request.skip_qc,
+        "music_fingerprint": music_fingerprint,
         "enable_ocr": request.enable_ocr,
         "enable_object_detection": request.enable_object_detection,
         "enable_diarization": request.enable_diarization,
+        "diarization_token_hash": diarization_token_hash,
+        "source_metadata": dict(source_metadata or {}),
     })
 
 
-def _expected_job_identity(request: V3Request) -> dict[str, Any]:
+def _expected_job_identity(
+    request: V3Request,
+    *,
+    source_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     source_hash = file_hash(request.input_video)
     config = request.config()
     config_hash = configuration_hash(asdict(config))
     platform_policy_version = get_platform_policy(request.platform).version
     return {
         "job_id": "",
-        "request_hash": _request_identity(request),
+        "request_hash": _request_identity(request, source_metadata=source_metadata),
         "source_hash": source_hash,
         "blueprint_hash": "",
         "configuration_hash": config_hash,
@@ -254,7 +278,7 @@ def _guard_workspace_isolation(request: V3Request) -> None:
     if not markers:
         return
     identity = package / "job_identity.json"
-    expected = _expected_job_identity(request)
+    expected = _expected_job_identity(request, source_metadata=source_metadata)
     if not identity.is_file():
         raise V3InputError(
             "package directory already contains generated artifacts without a job identity; "
@@ -277,7 +301,11 @@ def _guard_workspace_isolation(request: V3Request) -> None:
         )
 
 
-def _reuse_existing_job(request: V3Request) -> ProductionResult | None:
+def _reuse_existing_job(
+    request: V3Request,
+    *,
+    source_metadata: Mapping[str, Any] | None = None,
+) -> ProductionResult | None:
     package = Path(request.package_dir)
     identity_path = package / "job_identity.json"
     final_path = package / "final.v3.mp4"
@@ -512,7 +540,7 @@ class PlanningStage:
             context.package / "job_identity.json",
             {
                 "job_id": context.job_id,
-                "request_hash": _request_identity(context.request),
+                "request_hash": _request_identity(context.request, source_metadata=self.source_metadata),
                 "source_hash": source_hash,
                 "blueprint_hash": bp_hash,
                 "configuration_hash": cfg_hash,
@@ -1035,7 +1063,10 @@ class V3PipelineRunner:
     def run(self) -> ProductionResult:
         try:
             with WorkspaceLock(self.request.package_dir):
-                reused = _reuse_existing_job(self.request)
+                reused = _reuse_existing_job(
+                    self.request,
+                    source_metadata=self.source_metadata,
+                )
                 if reused is not None:
                     return reused
                 return self._run_locked()
