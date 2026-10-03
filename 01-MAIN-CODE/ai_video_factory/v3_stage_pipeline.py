@@ -61,7 +61,7 @@ from .v3.creative_provenance import build_creative_provenance
 from .v3.final_content_manifest import build_final_content_manifest
 from .v3.metadata import generate_final_metadata
 from .v3.clip_evidence import build_clip_evidence
-from .v3.audience import parse_audience
+from .v3.audience import parse_audience\nfrom .v3.platform_policy import get_platform_policy
 
 
 @dataclass
@@ -208,29 +208,32 @@ _V3_TRANSIENT_FILE_NAMES = (
 
 
 
+def _request_identity(request: V3Request) -> str:
+    return configuration_hash({
+        "topic": request.topic,
+        "context": request.context,
+        "target_seconds": request.target_seconds,
+        "platform": request.platform,
+        "audience": request.audience,
+        "bpm": request.bpm,
+        "edit_type": request.edit_type,
+        "model_key": request.model_key,
+        "enable_ocr": request.enable_ocr,
+        "enable_object_detection": request.enable_object_detection,
+        "enable_diarization": request.enable_diarization,
+    })
+
+
 def _expected_job_identity(request: V3Request) -> dict[str, Any]:
     source_hash = file_hash(request.input_video)
     config = request.config()
-    blueprint = create_v3_blueprint(
-        request.topic,
-        context=request.context,
-        config=config,
-        edit_type=request.edit_type,
-    )
-    blueprint_payload = blueprint.to_dict()
     config_hash = configuration_hash(asdict(config))
-    blueprint_hash = configuration_hash(blueprint_payload)
-    platform_policy_version = blueprint.platform_constraints.policy_version
+    platform_policy_version = get_platform_policy(request.platform).version
     return {
-        "job_id": job_identity(
-            source_hash=source_hash,
-            blueprint_hash=blueprint_hash,
-            config_hash=config_hash,
-            renderer_version="3.0.0",
-            platform_policy_version=platform_policy_version,
-        ),
+        "job_id": "",
+        "request_hash": _request_identity(request),
         "source_hash": source_hash,
-        "blueprint_hash": blueprint_hash,
+        "blueprint_hash": "",
         "configuration_hash": config_hash,
         "renderer_version": "3.0.0",
         "platform_policy_version": platform_policy_version,
@@ -250,7 +253,14 @@ def _reuse_existing_job(request: V3Request) -> ProductionResult | None:
         readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return None
-    if stored.get("job_id") != expected["job_id"]:
+    required_equal = (
+        stored.get("request_hash") == expected["request_hash"]
+        and stored.get("source_hash") == expected["source_hash"]
+        and stored.get("configuration_hash") == expected["configuration_hash"]
+        and stored.get("renderer_version") == expected["renderer_version"]
+        and stored.get("platform_policy_version") == expected["platform_policy_version"]
+    )
+    if not required_equal or not stored.get("job_id") or not stored.get("blueprint_hash"):
         return None
     if readiness.get("state") not in {"UPLOAD_PACKAGE_VALID", "PUBLISH_READY"}:
         return None
@@ -465,6 +475,7 @@ class PlanningStage:
             context.package / "job_identity.json",
             {
                 "job_id": context.job_id,
+                "request_hash": _request_identity(context.request),
                 "source_hash": source_hash,
                 "blueprint_hash": bp_hash,
                 "configuration_hash": cfg_hash,
