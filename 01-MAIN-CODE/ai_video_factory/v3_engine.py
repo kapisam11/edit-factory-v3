@@ -21,6 +21,7 @@ from .v3.production_spec import ProductionSpec
 from .v3.hook_eval import evaluate_hook_candidates, generate_hook_candidates
 from .v3.schema import validate_blueprint_payload
 from .v3.migrations import migrate_to_current
+from .v3.audience import parse_audience
 
 
 class Platform(str, Enum):
@@ -128,7 +129,6 @@ class HookPack:
     score_semantics: str = "editorial_heuristic_score"
 
 
-@dataclass(frozen=True)
 @dataclass(frozen=True)
 class ClipEvidence:
     source_asset: str = ""
@@ -521,11 +521,14 @@ def analyze_core_idea(topic: str, context: str = "", audience: str = "general sh
     if not topic:
         raise ValueError("topic is required")
     scores = combined_scores(topic, context)
-    audience_tokens = set(_tokens(audience))
-    if {"comedy", "funny", "humor"} & audience_tokens:
+    audience_profile = parse_audience(audience)
+    interest_tokens = set(audience_profile.interests)
+    if {"comedy"} & interest_tokens:
         scores["funny"] += 0.05
-    if {"history", "documentary", "facts"} & audience_tokens:
+    if {"history", "science", "education"} & interest_tokens:
         scores["curious"] += 0.05
+    if {"gaming", "minecraft", "fortnite"} & interest_tokens:
+        scores["dramatic"] += 0.02
     emotion = max(scores, key=scores.get) if any(scores.values()) else "curious"
     angles = {
         "trust": (
@@ -663,18 +666,18 @@ def _overlay_for_purpose(purpose: str, core: CoreIdea, max_words: int, edit_type
     base, alternate = choice
     if edit_type == EditType.DOCUMENTARY and purpose in {"Evidence", "Payoff"}:
         base = alternate
-    return _compact(base, max_words)
+    return compact_overlay_text(base, max_words)
 
 def _unique_overlay(purpose: str, core: CoreIdea, max_words: int, index: int, used: set[str], edit_type: EditType) -> str:
     candidate = _overlay_for_purpose(purpose, core, max_words, edit_type)
     if candidate.lower() in used:
         for suffix in ("Here is the key", "Notice this", "One detail matters", "This is the moment"):
-            trial = _compact(suffix, max_words)
+            trial = compact_overlay_text(suffix, max_words)
             if trial.lower() not in used:
                 candidate = trial
                 break
         else:
-            candidate = _compact(f"Beat {index} {core.topic}", max_words)
+            candidate = compact_overlay_text(f"Beat {index} {core.topic}", max_words)
     used.add(candidate.lower())
     return candidate
 
@@ -968,7 +971,7 @@ def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | Non
         planner_version="3.0.0",
     )
     score_bundle = V3ScoreBundle.from_blueprint(
-        technical_validity=100.0,
+        technical_validity=None,
         creative_quality=float(quality.score),
         metrics=metrics,
     )
