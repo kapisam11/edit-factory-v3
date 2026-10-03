@@ -1,4 +1,4 @@
-name: Editorial regression
+name: V3 editorial regression
 
 on:
   pull_request:
@@ -12,8 +12,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Install test dependencies
+          python-version: "3.12"
+      - name: Install dependencies
         run: python -m pip install -e ".[dev]"
-      - name: Deterministic replay and editorial regression tests
-        run: pytest -q 04-TESTS/tests/test_deterministic_replay.py 04-TESTS/tests/test_editorial_regression.py 04-TESTS/tests/test_editorial_benchmark.py 04-TESTS/tests/test_editorial_decision_provenance.py
+      - name: Compile sources
+        run: python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
+      - name: Run V3 editorial hardening tests
+        env:
+          PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+        run: >-
+          pytest -q
+          04-TESTS/tests/test_v3_unbreakable_hardening.py
+          04-TESTS/tests/test_deterministic_replay.py
+          04-TESTS/tests/test_editorial_regression.py
+          04-TESTS/tests/test_editorial_benchmark.py
+          04-TESTS/tests/test_editorial_decision_provenance.py
