@@ -157,8 +157,8 @@ class EffectCompiler:
         self,
         render_ir: RenderIR,
         *,
-        output_width: int,
-        output_height: int,
+        output_width: int = 1080,
+        output_height: int = 1920,
     ) -> CompiledRenderGraph:
         if output_width <= 0 or output_height <= 0:
             raise ValueError("output dimensions must be positive")
