@@ -13,6 +13,8 @@ from typing import Any, Mapping
 
 from .editorial_benchmark import DIMENSIONS, spearman_rho
 
+PERFORMANCE_DIMENSIONS = ("retention_heuristic", "completion_heuristic", "rewatch_heuristic", "shareability_heuristic")
+
 
 @dataclass(frozen=True)
 class CorpusCase:
@@ -79,8 +81,8 @@ class EditorialCorpus:
             )
 
     def add_prediction(self, case_id: str, dimension: str, value: float, confidence: float) -> None:
-        if dimension not in DIMENSIONS:
-            raise ValueError(f"unsupported editorial dimension: {dimension}")
+        if dimension not in DIMENSIONS and dimension not in PERFORMANCE_DIMENSIONS:
+            raise ValueError(f"unsupported evaluation dimension: {dimension}")
         if not 0.0 <= float(value) <= 1.0:
             raise ValueError("prediction value must be 0..1")
         if not 0.0 <= float(confidence) <= 1.0:
@@ -153,10 +155,10 @@ class EditorialCorpus:
 
     def performance_report(self) -> dict[str, Any]:
         mapping = {
-            "retention": "retention",
-            "completion": "completion",
-            "rewatches": "rewatches",
-            "shares": "shares",
+            "retention_heuristic": "retention",
+            "completion_heuristic": "completion",
+            "rewatch_heuristic": "rewatches",
+            "shareability_heuristic": "shares",
         }
         report: dict[str, Any] = {"schema_version": "1.0.0", "metrics": {}}
         with self._connect() as conn:
@@ -190,4 +192,4 @@ class EditorialCorpus:
         )
 
 
-__all__ = ["CorpusCase", "EditorialCorpus", "PerformanceOutcome"]
+__all__ = ["CorpusCase", "EditorialCorpus", "PerformanceOutcome", "PERFORMANCE_DIMENSIONS"]
