@@ -59,6 +59,7 @@ from .v3.workspace import WorkspaceBusyError, WorkspaceLock
 from .v3.job_identity import job_identity, configuration_hash
 from .v3.creative_provenance import build_creative_provenance
 from .v3.final_content_manifest import build_final_content_manifest
+from .v3.clip_evidence import build_clip_evidence
 
 
 @dataclass
@@ -561,6 +562,23 @@ class SourceAnalysisStage:
                 for scene in ranked[:12]
             ],
         }
+        if context.blueprint is not None:
+            clip_evidence = build_clip_evidence(
+                [dict(item) for item in context.payload.get("clip_plan", [])],
+                context.footage_evidence,
+                source_asset=str(context.request.input_video),
+            )
+            atomic_write_json(context.package / "clip_source_evidence.json", clip_evidence)
+            critical = [
+                item for item in clip_evidence
+                if item.get("purpose") in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}
+                and item.get("status") == "unsupported"
+            ]
+            if critical:
+                raise V3ValidationError(
+                    "critical editorial beats have no supporting source evidence: "
+                    + ", ".join(str(item.get("clip_index")) for item in critical)
+                )
 
 
 class RenderStage:
