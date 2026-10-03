@@ -35,6 +35,7 @@ from .system_diagnostics import diagnostics_report, write_diagnostics
 from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk, sha256_file
 from .v3_exceptions import V3InputError
 from .v3.source_manifest import build_source_manifest
+from .v3.audience import parse_audience
 from .production_assurance import (
     build_artifact_manifest,
     build_environment_fingerprint,
