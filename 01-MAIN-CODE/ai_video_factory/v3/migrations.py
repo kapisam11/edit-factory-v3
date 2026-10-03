@@ -40,7 +40,7 @@ def migrate_to_current(payload:Mapping[str,Any])->dict[str,Any]:
     if source==CURRENT_VERSION:
         return _identity(data)
     raise ValueError(
-        f"no migration is registered from blueprint schema {source} to {CURRENT_VERSION}"
+        f"unsupported schema version {source}: no migration is registered to {CURRENT_VERSION}"
     )
 
 __all__=["CURRENT_VERSION","MIGRATIONS","migrate_to_current"]
