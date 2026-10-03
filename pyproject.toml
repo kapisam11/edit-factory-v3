@@ -115,6 +115,8 @@ files = [
   "01-MAIN-CODE/ai_video_factory/v3/planner.py",
   "01-MAIN-CODE/ai_video_factory/v3/planning.py",
   "01-MAIN-CODE/ai_video_factory/v3/validators.py",
+  "01-MAIN-CODE/ai_video_factory/v3/validation.py",
+  "01-MAIN-CODE/ai_video_factory/v3/assessment.py",
   "01-MAIN-CODE/ai_video_factory/v3/models.py",
   "01-MAIN-CODE/ai_video_factory/v3/audience.py",
   "01-MAIN-CODE/ai_video_factory/v3/creative_provenance.py",
