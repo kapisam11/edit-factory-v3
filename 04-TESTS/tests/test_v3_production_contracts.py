@@ -102,7 +102,8 @@ def test_v3_audience_profile_and_research_summary_cover_editorial_metadata(monke
     assert summary["audience_profile"]["tone"] == "energetic"
     assert summary["target_total_seconds"] == blueprint.duration
     assert summary["cuts_per_minute"] > 0
-    assert summary["source_metadata"]["rights_status"] == "owned"
+    assert summary["source_manifest"] == {}
+
     assert summary["v3_directives"]["disable_templates"] is True
     assert summary["v3_directives"]["blueprint_contract"] == "3.0.0"
 
@@ -220,7 +221,9 @@ def test_v3_cleanup_removes_only_known_transients(tmp_path):
 
 def test_v3_prepare_blueprint_persists_source_metadata(monkeypatch, tmp_path):
     monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
-    source_metadata = {"rights_status": "owned", "declared_by": "tester"}
+    source = Path(tmp_path) / "source.mp4"
+    source.write_bytes(b"source")
+    source_metadata = {"source_path": str(source), "rights_status": "owned", "declared_by": "tester"}
 
     blueprint, payload, blueprint_path = v3_pipeline._prepare_blueprint(
         "A subject",
@@ -236,8 +239,11 @@ def test_v3_prepare_blueprint_persists_source_metadata(monkeypatch, tmp_path):
 
     stored = json.loads(blueprint_path.read_text(encoding="utf-8"))
     assert blueprint.duration == 8.0
-    assert payload["source_metadata"] == source_metadata
-    assert stored["source_metadata"] == source_metadata
+    assert "source_metadata" not in payload
+    assert "source_metadata" not in stored
+    manifest = json.loads((Path(tmp_path) / "source_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["rights_status"] == "owned"
+    assert manifest["source_sha256"]
 
 
 def test_v3_baseline_request_is_contract_derived(monkeypatch, tmp_path):
