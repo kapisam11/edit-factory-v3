@@ -122,6 +122,10 @@ CAPABILITIES: Mapping[str, CapabilitySpec] = {
     for key, (implementation, validator, tests) in _EVIDENCE.items()
 }
 
+# These are the capabilities V3 currently promises. Additional capabilities may be added
+# without becoming a schema-breaking change.
+REQUIRED_CAPABILITIES = frozenset(CAPABILITIES)
+
 
 def _resolve_symbol(path: str):
     module_name, symbol_path = path.split(".", 1)
@@ -133,14 +137,11 @@ def _resolve_symbol(path: str):
 
 
 def validate_capabilities() -> None:
-    if len(CAPABILITIES) != 40:
-        raise ValueError(f"V3 capability registry must contain 40 capabilities, found {len(CAPABILITIES)}")
     from .v3_engine import V3_CAPABILITIES
 
-    if set(CAPABILITIES) != set(V3_CAPABILITIES):
-        missing = sorted(set(V3_CAPABILITIES) - set(CAPABILITIES))
-        extra = sorted(set(CAPABILITIES) - set(V3_CAPABILITIES))
-        raise ValueError(f"V3 capability registry drift: missing={missing}, extra={extra}")
+    missing = sorted(REQUIRED_CAPABILITIES - set(V3_CAPABILITIES))
+    if missing:
+        raise ValueError(f"V3 capability registry is missing required capabilities: {missing}")
 
     for spec in CAPABILITIES.values():
         if not spec.implementation or not spec.validator or not spec.tests:
