@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any,Mapping
-from .idempotency import stable_hash
+from ..idempotency import stable_hash
 
 @dataclass(frozen=True)
 class CreativeProvenance:
