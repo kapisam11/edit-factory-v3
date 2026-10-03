@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import os
 import time
+from typing import BinaryIO
 
 
 class WorkspaceBusyError(RuntimeError):
@@ -16,7 +17,7 @@ class WorkspaceLock(AbstractContextManager["WorkspaceLock"]):
     def __init__(self, workspace: str | Path) -> None:
         self.workspace = Path(workspace)
         self.path = self.workspace / ".lock"
-        self._handle = None
+        self._handle: BinaryIO | None = None
 
     def acquire(self) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -28,7 +29,9 @@ class WorkspaceLock(AbstractContextManager["WorkspaceLock"]):
             if os.name == "nt":
                 import msvcrt
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                locking = getattr(msvcrt, "locking")
+                mode = getattr(msvcrt, "LK_NBLCK")
+                locking(handle.fileno(), mode, 1)
             else:
                 import fcntl
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -57,7 +60,9 @@ class WorkspaceLock(AbstractContextManager["WorkspaceLock"]):
             if os.name == "nt":
                 import msvcrt
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                locking = getattr(msvcrt, "locking")
+                mode = getattr(msvcrt, "LK_UNLCK")
+                locking(handle.fileno(), mode, 1)
             else:
                 import fcntl
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
