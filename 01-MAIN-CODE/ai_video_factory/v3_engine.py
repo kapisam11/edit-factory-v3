@@ -20,8 +20,6 @@ from .v3.hook_eval import evaluate_hook_candidates, generate_hook_candidates
 from .v3.schema import validate_blueprint_payload
 from .v3.migrations import migrate_to_current
 from .v3.audience import parse_audience
-from .v3_semantics import combined_scores
-from .v3_scoring import heuristic_metrics
 
 
 class Platform(str, Enum):
@@ -517,284 +515,94 @@ def _normalize_sentence(text: str) -> str:
     return value + "." if value else ""
 
 def analyze_core_idea(topic: str, context: str = "", audience: str = "general short-form viewers") -> CoreIdea:
-    topic = str(topic).strip()
-    context = str(context).strip()
-    if not topic:
-        raise ValueError("topic is required")
-    scores = combined_scores(topic, context)
-    audience_profile = parse_audience(audience)
-    interests = set(audience_profile.interests)
-    if "comedy" in interests:
-        scores["funny"] += 0.05
-    if {"history", "science", "education"} & interests:
-        scores["curious"] += 0.05
-    if {"gaming", "minecraft", "fortnite"} & interests:
-        scores["dramatic"] += 0.02
-    emotion = max(scores, key=scores.get) if any(scores.values()) else "curious"
-    angles = {
-        "trust": (
-            f"Why {topic} became impossible to ignore",
-            "Loyalty under pressure creates immediate human stakes.",
-            "Trust can be earned quickly and lost in one decision.",
-            f"The final proof that changes how viewers read {topic}.",
-        ),
-        "dramatic": (
-            f"The decision that changed everything in {topic}",
-            "Conflict and consequences create an immediate information gap.",
-            "Something valuable can be lost before the viewer understands why.",
-            "Reveal the consequence viewers were waiting to understand.",
-        ),
-        "inspiring": (
-            f"How {topic} kept going when quitting was easier",
-            "Effort matters when failure feels possible and progress is visible.",
-            "The attempt only matters if the outcome is uncertain.",
-            "Show the result that makes the struggle worth it.",
-        ),
-        "nostalgic": (
-            f"Why {topic} still feels unforgettable",
-            "Recognition and shared memory create instant emotional pull.",
-            "The memory only works when the details feel specific.",
-            "Return to the moment viewers wanted to remember.",
-        ),
-        "funny": (
-            f"The moment {topic} went completely off the rails",
-            "Fast setup plus escalation makes the reversal worth waiting for.",
-            "The joke dies when setup overwhelms the punchline.",
-            "Deliver the cleanest reaction or reversal last.",
-        ),
-        "curious": (
-            f"The part of {topic} most people miss",
-            "A knowledge gap gives the viewer a reason to stay.",
-            "The answer must be more valuable than the setup.",
-            "Resolve the question with one clear memorable insight.",
-        ),
-    }
-    angle, care, stakes, payoff = angles[emotion]
-    return CoreIdea(topic, care, angle, emotion, f"The viewer needs the final proof behind: {angle}.", payoff, stakes)
+    from .v3.planning import analyze_core_idea as _impl
+    return _impl(topic, context, audience)
+
 
 def choose_edit_type(core: CoreIdea, requested: str | None = None) -> EditType:
-    if requested:
-        for item in EditType:
-            if item.value.lower() == str(requested).strip().lower():
-                return item
-        raise ValueError(f"unknown edit type: {requested}")
-    return EDIT_BY_EMOTION.get(core.target_emotion, EditType.STORYTELLING)
+    from .v3.planning import choose_edit_type as _impl
+    return _impl(core, requested)
+
 
 def generate_hooks(core: CoreIdea, edit_type: EditType, *, source_evidence: Mapping[str, Any] | None = None) -> list[HookPack]:
-    evaluated = evaluate_hook_candidates(
-        generate_hook_candidates(
-            core.topic,
-            core.stakes,
-            core.emotional_angle,
-            core.watch_to_end_reason,
-            edit_type.value,
-        ),
-        core.topic,
-        core.stakes,
-        core.emotional_angle,
-        core.watch_to_end_reason,
-        source_evidence=source_evidence,
-    )
-    return [
-        HookPack(
-            candidate.visual,
-            candidate.text,
-            candidate.emotional_reason,
-            evaluation.score,
-            evaluation=evaluation.to_dict(),
-            score_semantics="editorial_heuristic_score",
-        )
-        for candidate, evaluation in evaluated
-    ]
-def _purpose_sequence(count: int, strategy: Mapping[str, Any]) -> List[str]:
+    from .v3.planning import generate_hooks as _impl
+    return _impl(core, edit_type, source_evidence=source_evidence)
+
+
+def _purpose_sequence(count: int, strategy: Mapping[str, Any]) -> list[str]:
     values = list(strategy["purposes"])
     while len(values) < count:
-        insert_at = max(3, len(values) - 2)
-        values.insert(insert_at, "Escalation")
+        values.insert(max(3, len(values) - 2), "Escalation")
     return values[:count]
 
-def _allocate_durations(count: int, total: float, minimum: float, maximum: float) -> List[float]:
-    if count <= 0 or total < minimum * count or total > maximum * count:
-        raise ValueError("clip count cannot satisfy duration bounds")
-    weights = [1.0] * count
-    weights[0] = 0.72
-    if count > 1:
-        weights[-1] = 1.20
-    if count > 3:
-        weights[-2] = 1.10
-    durations = [min(maximum, max(minimum, total * w / sum(weights))) for w in weights]
-    for _ in range(200):
-        delta = total - sum(durations)
-        if abs(delta) < 0.00025:
-            break
-        candidates = [i for i, d in enumerate(durations) if (delta > 0 and d < maximum - 1e-4) or (delta < 0 and d > minimum + 1e-4)]
-        if not candidates:
-            break
-        step = delta / len(candidates)
-        for i in candidates:
-            durations[i] = min(maximum, max(minimum, durations[i] + step))
-    rounded = [round(d, 3) for d in durations]
-    rounded[-1] = round(rounded[-1] + total - sum(rounded), 3)
-    if abs(sum(rounded) - total) > 0.01 or not minimum <= rounded[-1] <= maximum:
-        raise ValueError("duration allocation could not satisfy exact target")
-    return rounded
+
+def _allocate_durations(count: int, total: float, minimum: float, maximum: float) -> list[float]:
+    from .v3.planning import allocate_durations as _impl
+    return _impl(count, total, minimum, maximum)
+
 
 def _overlay_for_purpose(purpose: str, core: CoreIdea, max_words: int, edit_type: EditType) -> str:
-    choices = {
-        "Hook": ("Not what you expected", f"Nobody saw {core.topic} coming"),
-        "Context": (f"It started with {core.topic}", "Here is the setup"),
-        "Setup": ("Watch what happens", "This is where it starts"),
-        "Curiosity": ("But one detail mattered", "There was one problem"),
-        "Question": ("Something was missing", "The real question was this"),
-        "Claim": ("There is a reason", "This tells us something"),
-        "Memory": ("You remember this", "That moment still hits"),
-        "Contrast": ("Then everything changed", "Before vs after"),
-        "Trait": ("Notice what he does", "That is the pattern"),
-        "Evidence": ("Look at this detail", "The evidence is here"),
-        "Importance": ("This raised the stakes", "Now it matters"),
-        "Threat": ("Then it got dangerous", "The risk was real"),
-        "Escalation": ("The pressure kept rising", "Everything accelerated"),
-        "Climax": ("This was the moment", "Now it all lands"),
-        "Payoff": ("This was the proof", "Here is the answer"),
-        "Punchline": ("And then this happened", "That was the joke"),
-        "Reaction": ("Watch the reaction", "That face says it all"),
-        "Proof": ("Here is the proof", "This confirms it"),
-        "Final impact": (core.payoff, "That is why it mattered"),
-    }
-    choice = choices.get(purpose)
-    if choice is None:
-        choice = (purpose, purpose)
-    base, alternate = choice
-    if edit_type == EditType.DOCUMENTARY and purpose in {"Evidence", "Payoff"}:
-        base = alternate
-    return _compact(base, max_words)
+    from .v3.planning import overlay_for_purpose as _impl
+    return _impl(purpose, core, max_words, edit_type)
+
 
 def _unique_overlay(purpose: str, core: CoreIdea, max_words: int, index: int, used: set[str], edit_type: EditType) -> str:
-    candidate = _overlay_for_purpose(purpose, core, max_words, edit_type)
-    if candidate.lower() in used:
-        for suffix in ("Here is the key", "Notice this", "One detail matters", "This is the moment"):
-            trial = _compact(suffix, max_words)
-            if trial.lower() not in used:
-                candidate = trial
-                break
-        else:
-            candidate = _compact(f"Beat {index} {core.topic}", max_words)
-    used.add(candidate.lower())
-    return candidate
+    from .v3.planning import unique_overlay as _impl
+    return _impl(purpose, core, max_words, index, used, edit_type)
 
-def build_clip_plan(core: CoreIdea, edit_type: EditType, config: V3Config) -> List[ClipBeat]:
-    config.validate()
-    strategy = EDIT_STRATEGIES[edit_type]
-    minimum_count = max(len(strategy["purposes"]), math.ceil(config.target_seconds / config.max_clip_seconds))
-    preferred_count = max(len(strategy["purposes"]), round(config.target_seconds / 2.7))
-    count = min(max(minimum_count, preferred_count), int(config.target_seconds // config.min_clip_seconds))
-    durations = _allocate_durations(count, config.target_seconds, config.min_clip_seconds, config.max_clip_seconds)
-    purposes = _purpose_sequence(count, strategy)
-    motions = list(strategy["motions"])
-    transitions = list(strategy["transitions"])
-    styles = list(strategy["visual_styles"])
-    beats: List[ClipBeat] = []
-    cursor = 0.0
-    used: set[str] = set()
-    for zero_index, (purpose, duration) in enumerate(zip(purposes, durations)):
-        end = round(cursor + duration, 3)
-        beats.append(ClipBeat(zero_index + 1, round(cursor, 3), end, purpose, core.target_emotion, styles[zero_index % len(styles)], _unique_overlay(purpose, core, config.max_overlay_words, zero_index + 1, used, edit_type), motions[zero_index % len(motions)], transitions[zero_index % len(transitions)]))
-        cursor = end
-    return beats
+
+def build_clip_plan(core: CoreIdea, edit_type: EditType, config: V3Config) -> list[ClipBeat]:
+    from .v3.planning import build_clip_plan as _impl
+    return _impl(core, edit_type, config)
+
 
 def analyze_music(core: CoreIdea, config: V3Config, clips: Sequence[ClipBeat]) -> MusicPlan:
-    beat_seconds = round(60.0 / config.bpm, 4)
-    payoff_start = clips[-2].start if len(clips) >= 2 else config.target_seconds * 0.7
-    drop = min(config.target_seconds * 0.72, max(2.0, payoff_start))
-    sync = []
-    t = 0.0
-    while t < config.target_seconds - 1e-6:
-        sync.append(round(t, 3))
-        t += beat_seconds * 2
-    sync.append(round(config.target_seconds, 3))
-    return MusicPlan(config.bpm, "high" if core.target_emotion in {"dramatic","inspiring","funny"} else "medium", core.target_emotion, beat_seconds, round(drop, 3), sync)
+    from .v3.planning import analyze_music as _impl
+    return _impl(core, config, clips)
 
-def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: MusicPlan) -> List[RetentionEvent]:
-    """Create only evidence-backed semantic retention enhancements."""
-    config.validate()
-    if not clips:
-        return []
-    purpose_kind = {
-        "Hook": ("zoom", "HOOK_ESTABLISHMENT", 0.80),
-        "Setup": ("motion", "STORY_SETUP", 0.70),
-        "Build": ("motion", "ESCALATION", 0.80),
-        "Conflict": ("motion", "CONFLICT_EMPHASIS", 0.82),
-        "Climax": ("beat drop", "PAYOFF_ALIGNMENT", 0.94),
-        "Payoff": ("beat drop", "PAYOFF_ALIGNMENT", 0.96),
-        "Punchline": ("beat drop", "PAYOFF_ALIGNMENT", 0.94),
-        "Reaction": ("angle", "REACTION_EMPHASIS", 0.78),
-        "Context": ("motion", "CONTEXT_SUPPORT", 0.65),
-        "Question": ("text", "COMPREHENSION_SUPPORT", 0.70),
-        "Claim": ("text", "CLAIM_EMPHASIS", 0.70),
-        "Curiosity": ("text", "COMPREHENSION_SUPPORT", 0.70),
-        "Threat": ("zoom", "THREAT_EMPHASIS", 0.75),
-        "Escalation": ("motion", "ESCALATION", 0.80),
-        "Evidence": ("text", "EVIDENCE_SUPPORT", 0.75),
-        "Proof": ("text", "EVIDENCE_SUPPORT", 0.75),
-        "Memory": ("motion", "MEMORY_EMPHASIS", 0.68),
-        "Contrast": ("angle", "CONTRAST_EMPHASIS", 0.72),
-        "Trait": ("angle", "TRAIT_EMPHASIS", 0.72),
-        "Final impact": ("text", "FINAL_IMPACT", 0.86),
-    }
-    events: list[RetentionEvent] = []
 
-    def add_event(time_value: float, kind: str, reason: str, confidence: float) -> None:
-        timestamp = round(max(0.0, min(float(time_value), config.target_seconds - 0.01)), 3)
-        close_indexes = [
-            index
-            for index, existing in enumerate(events)
-            if abs(existing.time - timestamp) < 0.35
-        ]
-        if close_indexes:
-            strongest_index = max(close_indexes, key=lambda index: events[index].confidence)
-            if confidence <= events[strongest_index].confidence:
-                return
-            for index in reversed(close_indexes):
-                events.pop(index)
-        events.append(
-            RetentionEvent(
-                timestamp,
-                kind,
-                f"{reason.replace('_', ' ').capitalize()}: apply a restrained visual treatment while preserving story continuity.",
-                reason,
-                min(1.0, confidence),
-                min(1.0, confidence),
-            )
-        )
+def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: MusicPlan) -> list[RetentionEvent]:
+    from .v3.planning import build_retention_map as _impl
+    return _impl(config, clips, music)
 
-    first = clips[0]
-    kind, reason, confidence = purpose_kind.get(first.purpose, ("zoom", "HOOK_ESTABLISHMENT", 0.76))
-    add_event(first.start, kind, reason, confidence)
 
-    for clip in clips[1:]:
-        mapped = purpose_kind.get(clip.purpose)
-        if mapped is None:
-            continue
-        kind, reason, confidence = mapped
-        add_event(clip.start, kind, reason, confidence)
+def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequence[ClipBeat], quality: QualityReport) -> dict[str, float]:
+    from .v3.planning import heuristic_metrics_for_plan as _impl
+    return _impl(core, hooks, clips, quality)
 
-    payoff_candidates = [
-        clip.start
-        for clip in clips
-        if clip.purpose in {"Climax", "Payoff", "Punchline", "Final impact"}
-    ]
-    if payoff_candidates:
-        nearest = min(payoff_candidates, key=lambda value: abs(value - music.drop_time))
-        if abs(nearest - music.drop_time) <= max(0.75, config.retention_interval * 0.5):
-            add_event(nearest, "beat drop", "PAYOFF_ALIGNMENT", 0.96)
 
-    final_clip = clips[-1]
-    if final_clip.purpose in {"Final impact", "Payoff", "Reaction"} and not any(
-        abs(event.time - final_clip.start) < 0.35 for event in events
-    ):
-        add_event(final_clip.start, "text", "FINAL_IMPACT", 0.86)
+def _planned_metadata(core: CoreIdea, audience_profile: Any | None = None) -> tuple[str, list[str], list[str], str]:
+    from .v3.planning import _planned_metadata as _impl
+    return _impl(core, audience_profile)
 
-    return sorted(events, key=lambda event: event.time)
+
+# Backward-compatible aliases; semantic use of this helper is intentionally avoided.
+def _compact(text: str, max_words: int = 6) -> str:
+    from .v3.planning import compact_overlay_text
+    return compact_overlay_text(text, max_words)
+
+
+def _metadata(core: CoreIdea) -> tuple[str, list[str], list[str], str]:
+    return _planned_metadata(core)
+
+
+def create_v3_blueprint(
+    topic: str,
+    *,
+    context: str = "",
+    config: V3Config | None = None,
+    edit_type: str | None = None,
+    footage_evidence: Mapping[str, Any] | None = None,
+) -> V3Blueprint:
+    from .v3.planning import create_blueprint
+    return create_blueprint(
+        topic,
+        context=context,
+        config=config,
+        edit_type=edit_type,
+        footage_evidence=footage_evidence,
+    )
+
 def platform_variants(config: V3Config) -> dict[str, dict[str, Any]]:
     config.validate()
     return {key: dict(value) for key, value in PLATFORM_PROFILES.items()}
