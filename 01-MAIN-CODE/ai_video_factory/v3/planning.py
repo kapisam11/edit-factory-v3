@@ -12,13 +12,13 @@ from typing import Any, Mapping, Sequence
 
 from .audience import parse_audience
 from .hook_eval import evaluate_hook_candidates, generate_hook_candidates
-from .idempotency import stable_hash
-from .v3.platform_policy import POLICIES
-from .v3.scoring import heuristic_metrics
+from ..idempotency import stable_hash
+from .platform_policy import POLICIES
+from ..v3_scoring import heuristic_metrics
 
 
 def analyze_core_idea(topic: str, context: str = "", audience: str = "general short-form viewers") -> Any:
-    from .v3_engine import CoreIdea
+    from ..v3_engine import CoreIdea
     topic = str(topic).strip()
     context = str(context).strip()
     if not topic:
@@ -78,7 +78,7 @@ def analyze_core_idea(topic: str, context: str = "", audience: str = "general sh
 
 
 def choose_edit_type(core: Any, requested: str | None = None) -> Any:
-    from .v3_engine import EditType, EDIT_BY_EMOTION
+    from ..v3_engine import EditType, EDIT_BY_EMOTION
     if requested:
         for item in EditType:
             if item.value.lower() == str(requested).strip().lower():
@@ -88,7 +88,7 @@ def choose_edit_type(core: Any, requested: str | None = None) -> Any:
 
 
 def generate_hooks(core: Any, edit_type: Any, *, source_evidence: Mapping[str, Any] | None = None) -> list[Any]:
-    from .v3_engine import HookPack
+    from ..v3_engine import HookPack
     evaluated = evaluate_hook_candidates(
         generate_hook_candidates(
             core.topic, core.stakes, core.emotional_angle,
@@ -146,7 +146,7 @@ def allocate_durations(count: int, total: float, minimum: float, maximum: float)
 
 
 def overlay_for_purpose(purpose: str, core: Any, max_words: int, edit_type: Any) -> str:
-    from .v3_engine import EditType
+    from ..v3_engine import EditType
     choices = {
         "Hook": ("Not what you expected", f"Nobody saw {core.topic} coming"),
         "Context": (f"It started with {core.topic}", "Here is the setup"),
@@ -190,7 +190,7 @@ def unique_overlay(purpose: str, core: Any, max_words: int, index: int, used: se
 
 
 def build_clip_plan(core: Any, edit_type: Any, config: Any) -> list[Any]:
-    from .v3_engine import ClipBeat, EDIT_STRATEGIES
+    from ..v3_engine import ClipBeat, EDIT_STRATEGIES
     config.validate()
     strategy = EDIT_STRATEGIES[edit_type]
     minimum_count = max(len(strategy["purposes"]), math.ceil(config.target_seconds / config.max_clip_seconds))
@@ -224,7 +224,7 @@ def build_clip_plan(core: Any, edit_type: Any, config: Any) -> list[Any]:
 
 
 def analyze_music(core: Any, config: Any, clips: Sequence[Any]) -> Any:
-    from .v3_engine import MusicPlan
+    from ..v3_engine import MusicPlan
     beat_seconds = round(60.0 / config.bpm, 4)
     payoff_start = clips[-2].start if len(clips) >= 2 else config.target_seconds * 0.7
     drop = min(config.target_seconds * 0.72, max(2.0, payoff_start))
@@ -245,7 +245,7 @@ def analyze_music(core: Any, config: Any, clips: Sequence[Any]) -> Any:
 
 
 def build_retention_map(config: Any, clips: Sequence[Any], music: Any) -> list[Any]:
-    from .v3_engine import RetentionEvent
+    from ..v3_engine import RetentionEvent
     config.validate()
     if not clips:
         return []
@@ -333,7 +333,7 @@ def create_blueprint(
     edit_type: str | None = None,
     footage_evidence: Mapping[str, Any] | None = None,
 ) -> Any:
-    from .v3_engine import (
+    from ..v3_engine import (
         V3Config, V3Blueprint, ClipBeat, ClipEvidence, V3_CAPABILITIES,
         automated_editorial_checks, validate_blueprint,
     )
