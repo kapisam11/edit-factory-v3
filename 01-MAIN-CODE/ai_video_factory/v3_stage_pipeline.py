@@ -601,15 +601,16 @@ class MediaValidationStage:
         canonical = context.package / "final.v3.mp4"
 
         shutil.copyfile(context.result.final_video, baseline)
+        profile = context.payload["platform_variants"][context.request.platform]
         enforce_retention_events(
             context.result.final_video,
             str(retention),
             context.payload.get("retention_map", []),
+            target_seconds=context.request.target_seconds,
+            normalize_audio=os.environ.get("AIVF_EBU_R128", "1").strip() != "0",
         )
-        normalize_duration(str(retention), str(normalized), context.request.target_seconds)
-        profile = context.payload["platform_variants"][context.request.platform]
         report = strict_render_check(
-            str(normalized),
+            str(retention),
             target_seconds=context.request.target_seconds,
             platform_profile=profile,
             retention_events=context.payload.get("retention_map", []),
@@ -620,22 +621,10 @@ class MediaValidationStage:
             raise RenderContractError(
                 "; ".join(str(error) for error in report.get("errors", [])) or "V3 render QC failed"
             )
-        os.replace(normalized, canonical)
+        os.replace(retention, canonical)
         context.result.final_video = str(canonical)
         context.baseline_path = baseline
         context.render_report = report
-
-        source = Path(context.result.final_video)
-        if os.environ.get("AIVF_EBU_R128", "1").strip() != "0":
-            normalized_audio = context.package / ".final.v3.audio-normalized.mp4"
-            try:
-                media = analyze_media(source, deep=False, max_duration=3600.0)
-                if media["summary"].get("has_audio"):
-                    normalize_loudness(source, normalized_audio)
-                    os.replace(normalized_audio, source)
-            except (AudioNormalizationError, MediaHealthError, OSError, ValueError) as exc:
-                normalized_audio.unlink(missing_ok=True)
-                raise RenderContractError(f"EBU R128 final audio normalization failed: {exc}") from exc
 
         try:
             context.result.final_video = stamp_media_metadata(
