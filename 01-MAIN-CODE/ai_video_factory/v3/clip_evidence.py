@@ -1,4 +1,8 @@
-"""Match planned clip purposes to actual source-scene evidence."""
+"""Match planned clip purposes to relevant source-scene evidence.
+
+Importance is never allowed to masquerade as semantic relevance. A scene must
+share meaningful evidence with the requested purpose before it can support it.
+"""
 from __future__ import annotations
 
 import re
@@ -27,6 +31,19 @@ def _tokens(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9']+", str(text).lower()))
 
 
+def _clip_relevance(
+    purpose: str,
+    visual: str,
+    scene_tokens: set[str],
+) -> tuple[float, float, float]:
+    clip_tokens = _tokens(f"{purpose} {visual}")
+    desired = _PURPOSE_TERMS.get(purpose, _tokens(purpose))
+    lexical = len(clip_tokens & scene_tokens) / max(1, len(clip_tokens))
+    semantic = len(desired & scene_tokens) / max(1, len(desired))
+    relevance = 0.55 * lexical + 0.45 * semantic
+    return lexical, semantic, relevance
+
+
 def build_clip_evidence(
     clip_plan: Sequence[Mapping[str, Any]],
     footage_evidence: Mapping[str, Any],
@@ -41,10 +58,9 @@ def build_clip_evidence(
     for index, clip in enumerate(clip_plan, start=1):
         purpose = str(clip.get("purpose", "")).strip().lower()
         visual = str(clip.get("visual_style", "")).strip()
-        desired = _PURPOSE_TERMS.get(purpose, _tokens(purpose))
-        best = None
+        best: Mapping[str, Any] | None = None
         best_score = 0.0
-        clip_tokens = _tokens(f"{purpose} {visual}")
+        best_relevance = 0.0
         for scene in scenes:
             scene_tokens = _tokens(
                 " ".join(
@@ -52,22 +68,36 @@ def build_clip_evidence(
                     for key in ("description", "transcript", "objects", "text")
                 )
             )
-            overlap = len(clip_tokens & scene_tokens) / max(1, len(clip_tokens))
-            semantic = len(desired & scene_tokens) / max(1, len(desired))
-            score = 0.55 * overlap + 0.45 * semantic
-            score += 0.20 * float(scene.get("importance_score", 0.0))
-            if score > best_score:
-                best_score = score
+            lexical, semantic, relevance = _clip_relevance(purpose, visual, scene_tokens)
+            importance = min(1.0, max(0.0, float(scene.get("importance_score", 0.0))))
+            # Importance can break ties, but can never create relevance by itself.
+            total = 0.80 * relevance + 0.20 * importance
+            if relevance > best_relevance or (
+                abs(relevance - best_relevance) <= 1e-9 and total > best_score
+            ):
+                best_score = total
+                best_relevance = relevance
                 best = scene
+
         if best is None:
             results.append({
                 "clip_index": index,
                 "source_asset": source_asset,
                 "status": "unsupported",
                 "evidence_score": 0.0,
+                "relevance_score": 0.0,
                 "reason": "no analyzed source scene available",
+                "purpose": clip.get("purpose", ""),
             })
             continue
+
+        status = (
+            "supported"
+            if best_relevance >= 0.25 and best_score >= 0.30
+            else "weak"
+            if best_relevance >= 0.10
+            else "unsupported"
+        )
         results.append({
             "clip_index": index,
             "source_asset": source_asset,
@@ -81,8 +111,15 @@ def build_clip_evidence(
                 )
             ))[:16],
             "evidence_score": round(min(1.0, best_score), 3),
-            "status": "supported" if best_score >= 0.15 else "weak",
+            "relevance_score": round(min(1.0, best_relevance), 3),
+            "importance_score": round(min(1.0, max(0.0, float(best.get("importance_score", 0.0)))), 3),
+            "status": status,
             "purpose": clip.get("purpose", ""),
+            "reason": (
+                "semantic purpose/style relevance with importance as secondary context"
+                if status != "unsupported"
+                else "no meaningful semantic overlap with any analyzed source scene"
+            ),
         })
     return results
 
