@@ -6,12 +6,14 @@ compatibility seam that remains intentionally versioned and testable.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Optional
 
 from .production_models import ProductionResult
 from .production_pipeline import run_production_pipeline
 from .v3_engine import V3Blueprint
+from .v3.effects import EffectCompiler
+from .v3.production_spec import ProductionSpec
 
 
 @dataclass(frozen=True)
@@ -24,18 +26,25 @@ class V3RenderPlan:
     hooks: tuple[Mapping[str, Any], ...]
     retention_map: tuple[Mapping[str, Any], ...]
     platform_profile: Mapping[str, Any]
+    production_spec: Mapping[str, Any] = field(default_factory=dict)
+    render_ir: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_blueprint(cls, blueprint: V3Blueprint, *, include_retention: bool = True) -> "V3RenderPlan":
         payload = blueprint.to_dict()
+        retention = tuple(dict(item) for item in payload["retention_map"]) if include_retention else tuple()
+        render_ir = EffectCompiler().compile(retention)
+        spec = ProductionSpec.from_values(blueprint.duration, blueprint.platform)
         return cls(
-            target_seconds=blueprint.duration,
+            target_seconds=spec.duration,
             platform=blueprint.platform,
             edit_type=blueprint.edit_type,
             clip_plan=tuple(dict(item) for item in payload["clip_plan"]),
             hooks=tuple(dict(item) for item in payload["hooks"]),
-            retention_map=tuple(dict(item) for item in payload["retention_map"]) if include_retention else tuple(),
+            retention_map=retention,
             platform_profile=asdict(blueprint.platform_constraints),
+            production_spec=spec.to_dict(),
+            render_ir=render_ir.to_dict(),
         )
 
     def to_directives(self) -> dict[str, Any]:
@@ -46,6 +55,8 @@ class V3RenderPlan:
             "retention_map": [dict(item) for item in self.retention_map],
             "platform": self.platform,
             "platform_profile": dict(self.platform_profile),
+            "production_spec": dict(self.production_spec),
+            "render_ir": dict(self.render_ir),
             "blueprint_contract": "3.0.0",
         }
 
