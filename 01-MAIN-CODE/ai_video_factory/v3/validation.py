@@ -166,7 +166,7 @@ def validate_blueprint(blueprint: "engine.V3Blueprint") -> None:
         if clip.evidence.evidence_status in {"supported", "weak"}:
             if not clip.evidence.source_asset or clip.evidence.source_end <= clip.evidence.source_start:
                 raise ValueError(f"clip {clip.index} source evidence boundaries are invalid")
-        if clip.evidence.evidence_status == "unsupported" and clip.purpose in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}:
+        if clip.evidence.evidence_status != "supported" and clip.purpose in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}:
             raise ValueError(f"critical clip {clip.index} has no supporting source evidence")
 
     if not blueprint.quality.passed:
