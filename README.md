@@ -30,11 +30,11 @@ Topic + context + optional raw video
      upload-ready package
 ```
 
-The goal is a result that feels intentionally edited by a human: no AI slideshow pacing, no filler clips, no repeated overlays, no random effects, and no dead sections.
+The goal is a result that feels intentionally edited by a human. The creative layer is AI-assisted planning plus deterministic editorial rules and automated QC; it is not presented as learned human taste or a guarantee of audience performance.
 
 ## v3 highlights
 
-The v3 planner adds an explicit 40-capability creative/retention contract on top of the existing production stack. It includes emotion-first story analysis, exact edit-type locking, hook A/B ranking, adaptive clip planning, concise overlays, beat/drop synchronization, a 1–3 second retention map, human-editor rejection checks, platform-safe layouts, heuristic retention/completion/rewatch/share scores, thumbnail concepts, title options, descriptions, and hashtag packs.
+The v3 planner exposes a required capability registry on top of the existing production stack. It includes emotion-first story analysis, exact edit-type locking, evidence-aware hook candidate evaluation, adaptive clip planning, concise overlays, beat/drop synchronization, semantic retention anchors, automated editorial checks, platform-safe layouts, clearly labeled performance heuristics, thumbnail concepts, title options, descriptions, and hashtag packs.
 
 The repository also retains the previously implemented production features: scene intelligence, captions/subtitles, music intelligence and mixing, thumbnail tooling, upload packaging, channel/style learning, checkpoint/retry hardening, YouTube publishing support, dashboard/job handling, FFmpeg validation, Docker deployment, and CI.
 
@@ -57,7 +57,7 @@ aivf-v3 "The friend everyone could trust" \
   --output output/v3_blueprint.json
 ```
 
-The generated JSON contains the emotional angle, selected edit type, ranked hooks, complete clip plan, overlay text, music timing, retention map, platform profiles, quality report, titles, hashtags, description, and thumbnail concept.
+The generated JSON contains the emotional angle, selected edit type, ranked hook candidates with heuristic evaluation evidence, the clip plan, overlay text, music timing, semantic retention map, platform policy metadata, quality report, titles, hashtags, description, and thumbnail concept. Pre-render technical validity remains null until a rendered artifact is validated.
 
 Existing CLIs remain available:
 
@@ -174,7 +174,7 @@ Edit Factory v3 preserves working architecture instead of rewriting it for the v
 
 The production architecture, database indexes, optional Redis caching, security scans, E2E checks, container publishing/deployment, coverage policy, and scaling strategy are documented in **[00-INFO/11-ENGINEERING-AND-OPERATIONS.md](00-INFO/11-ENGINEERING-AND-OPERATIONS.md)**.
 
-The dashboard now has a reusable SQLite storage boundary, short-lived metadata caching with optional Redis backing, completed-job video preview, and retry support for failed/interrupted jobs. CI also enforces an 80% minimum coverage gate for the selected high-value V3/runtime modules.
+The dashboard now has a reusable SQLite storage boundary, short-lived metadata caching with optional Redis backing, completed-job video preview, and retry support for failed/interrupted jobs. V3 also persists source manifests, creative provenance, content manifests, content-addressed job identity, and machine-readable editorial decisions. CI enforces the repository's existing coverage policy plus deterministic/editorial regression tests.
 
 ## License and distribution
 

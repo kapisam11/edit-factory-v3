@@ -101,7 +101,7 @@ def _source_records(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             if isinstance(raw, Mapping):
                 add(raw)
 
-    source_meta = summary.get("source_metadata")
+    source_meta = summary.get("source_manifest") or summary.get("source_metadata")
     if isinstance(source_meta, Mapping):
         add(source_meta, default_source="user_provided")
 

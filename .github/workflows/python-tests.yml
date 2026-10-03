@@ -97,7 +97,7 @@ jobs:
     - name: Verify reproducible wheel build
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
-      run: uv run python -c "from ai_video_factory.reproducible_build import build_twice; result=build_twice('.'); assert result['byte_identical'], result"
+      run: uv run --with setuptools python -c "from ai_video_factory.reproducible_build import build_twice; result=build_twice('.'); assert result['byte_identical'], result"
 
     - name: Run full test suite with explicit coverage accounting
       env:

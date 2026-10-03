@@ -31,8 +31,8 @@ _EVIDENCE = {
     "purpose-driven clip plan": ("v3_engine.build_clip_plan", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
     "adaptive clip count": ("v3_engine.build_clip_plan", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
     "exact duration allocation": ("v3_engine._allocate_durations", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
-    "2-6 word overlays": ("v3_engine._overlay_for_purpose", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
-    "overlay de-duplication": ("v3_engine._unique_overlay", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "2-6 word overlays": ("v3_engine._overlay_for_purpose", "v3_engine.automated_editorial_checks", (_TEST_STRICT,)),
+    "overlay de-duplication": ("v3_engine._unique_overlay", "v3_engine.automated_editorial_checks", (_TEST_STRICT,)),
     "music energy plan": ("v3_engine.analyze_music", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
     "beat-grid sync": ("v3_engine.analyze_music", "v3_engine.validate_blueprint", (_TEST_STRICT,)),
     "drop-aware payoff": ("v3_engine.analyze_music", "v3_engine.build_retention_map", (_TEST_STRICT,)),
@@ -42,10 +42,10 @@ _EVIDENCE = {
     "transition restraint": ("edit_planner._adaptive_motion_transition", "effects_engine.build_cinematic_filter", (_TEST_EFFECTS,)),
     "human-editor reject pass": ("edit_planner.choose_scene", "edit_planner.choose_scene", (_TEST_STRICT,)),
     "dead-moment detection": ("v3_quality.strict_render_check", "v3_quality.strict_render_check", (_TEST_STRICT,)),
-    "repetition detection": ("v3_engine._human_editor_checks", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "repetition detection": ("v3_engine.automated_editorial_checks", "v3_engine.automated_editorial_checks", (_TEST_STRICT,)),
     "AI-slideshow guard": ("v3_quality.strict_render_check", "v3_quality.strict_render_check", (_TEST_STRICT,)),
-    "payoff validation": ("v3_engine._human_editor_checks", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
-    "hook-payoff continuity": ("v3_engine._human_editor_checks", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "payoff validation": ("v3_engine.automated_editorial_checks", "v3_engine.automated_editorial_checks", (_TEST_STRICT,)),
+    "hook-payoff continuity": ("v3_engine.automated_editorial_checks", "v3_engine.automated_editorial_checks", (_TEST_STRICT,)),
     "platform-safe variants": ("v3_engine.platform_variants", "v3_engine.platform_variants", (_TEST_STRICT,)),
     "9:16 Shorts profile": ("v3_engine.PLATFORM_PROFILES", "v3_engine.platform_variants", (_TEST_STRICT,)),
     "9:16 TikTok profile": ("v3_engine.PLATFORM_PROFILES", "v3_engine.platform_variants", (_TEST_STRICT,)),
@@ -56,7 +56,7 @@ _EVIDENCE = {
     "title laboratory": ("v3_engine._metadata", "v3_engine._metadata", (_TEST_STRICT,)),
     "description generator": ("v3_engine._metadata", "v3_engine._metadata", (_TEST_STRICT,)),
     "hashtag pack": ("v3_engine._metadata", "v3_engine._metadata", (_TEST_STRICT,)),
-    "silent-viewing readability": ("v3_engine._overlay_for_purpose", "v3_engine._human_editor_checks", (_TEST_STRICT,)),
+    "silent-viewing readability": ("v3_engine._overlay_for_purpose", "v3_engine.automated_editorial_checks", (_TEST_STRICT,)),
     "safe-area awareness": ("v3_engine.PLATFORM_PROFILES", "v3_engine.platform_variants", (_TEST_STRICT,)),
     "retention heuristic score": ("v3_engine._heuristic_metrics", "v3_engine._heuristic_metrics", (_TEST_STRICT,)),
     "completion heuristic score": ("v3_engine._heuristic_metrics", "v3_engine._heuristic_metrics", (_TEST_STRICT,)),
@@ -122,6 +122,10 @@ CAPABILITIES: Mapping[str, CapabilitySpec] = {
     for key, (implementation, validator, tests) in _EVIDENCE.items()
 }
 
+# These are the capabilities V3 currently promises. Additional capabilities may be added
+# without becoming a schema-breaking change.
+REQUIRED_CAPABILITIES = frozenset(CAPABILITIES)
+
 
 def _resolve_symbol(path: str):
     module_name, symbol_path = path.split(".", 1)
@@ -133,14 +137,11 @@ def _resolve_symbol(path: str):
 
 
 def validate_capabilities() -> None:
-    if len(CAPABILITIES) != 40:
-        raise ValueError(f"V3 capability registry must contain 40 capabilities, found {len(CAPABILITIES)}")
     from .v3_engine import V3_CAPABILITIES
 
-    if set(CAPABILITIES) != set(V3_CAPABILITIES):
-        missing = sorted(set(V3_CAPABILITIES) - set(CAPABILITIES))
-        extra = sorted(set(CAPABILITIES) - set(V3_CAPABILITIES))
-        raise ValueError(f"V3 capability registry drift: missing={missing}, extra={extra}")
+    missing = sorted(REQUIRED_CAPABILITIES - set(V3_CAPABILITIES))
+    if missing:
+        raise ValueError(f"V3 capability registry is missing required capabilities: {missing}")
 
     for spec in CAPABILITIES.values():
         if not spec.implementation or not spec.validator or not spec.tests:

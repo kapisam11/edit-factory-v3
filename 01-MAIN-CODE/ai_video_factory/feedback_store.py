@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .editorial_evaluation import EditorialEvaluation, HumanOverride
+from .editorial_evaluation import EditorialEvaluation, HumanDecisionFeedback, HumanOverride
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,12 @@ class FeedbackStore:
                 "CREATE TABLE IF NOT EXISTS editorial_evaluations "
                 "(case_id TEXT PRIMARY KEY, evaluated_at TEXT NOT NULL, reviewer TEXT NOT NULL, "
                 "scores TEXT NOT NULL, notes TEXT NOT NULL, metadata TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS editorial_decision_feedback "
+                "(decision_id TEXT NOT NULL, action TEXT NOT NULL, reason_code TEXT NOT NULL, "
+                "severity INTEGER NOT NULL, actor TEXT NOT NULL, timestamp TEXT NOT NULL, "
+                "pipeline_version TEXT NOT NULL, PRIMARY KEY(decision_id, action, reason_code, timestamp))"
             )
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS editorial_overrides "
@@ -108,6 +114,23 @@ class FeedbackStore:
                 ),
             )
 
+    def record_human_feedback(self, feedback: HumanDecisionFeedback) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO editorial_decision_feedback("
+                "decision_id,action,reason_code,severity,actor,timestamp,pipeline_version"
+                ") VALUES(?,?,?,?,?,?,?)",
+                (
+                    feedback.decision_id,
+                    feedback.action,
+                    feedback.reason_code,
+                    feedback.severity,
+                    feedback.actor,
+                    feedback.timestamp,
+                    feedback.pipeline_version,
+                ),
+            )
+
     def record_override(self, override: HumanOverride) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -130,11 +153,19 @@ class FeedbackStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT scores FROM editorial_evaluations").fetchall()
             overrides = conn.execute("SELECT original_operation,final_operation FROM editorial_overrides").fetchall()
+            feedback = conn.execute("SELECT action,reason_code,severity FROM editorial_decision_feedback").fetchall()
+        feedback_actions: dict[str, int] = {}
+        for action, _reason, _severity in feedback:
+            feedback_actions[str(action)] = feedback_actions.get(str(action), 0) + 1
         if not rows:
             return {
                 "samples": 0,
                 "means": {},
                 "overrides": {"samples": len(overrides)},
+                "human_feedback": {
+                    "samples": len(feedback),
+                    "actions": feedback_actions,
+                },
             }
         buckets = [json.loads(raw) for (raw,) in rows]
         keys = sorted(set().union(*(item.keys() for item in buckets)))
@@ -150,6 +181,10 @@ class FeedbackStore:
                 "samples": len(overrides),
                 "changed": changed,
                 "change_rate": round(changed / len(overrides), 3) if overrides else 0.0,
+            },
+            "human_feedback": {
+                "samples": len(feedback),
+                "actions": feedback_actions,
             },
         }
 

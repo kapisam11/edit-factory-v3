@@ -7,7 +7,7 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
@@ -54,6 +54,13 @@ from .editorial_evaluation import summarize_editorial_evidence
 from .idempotency import file_hash, stage_cache_key, cache_record
 from .v3_semantic_qc import analyze_render_semantics
 from .render_engine import stamp_media_metadata
+from .v3.source_manifest import build_source_manifest
+from .v3.workspace import WorkspaceBusyError, WorkspaceLock
+from .v3.job_identity import job_identity, configuration_hash
+from .v3.creative_provenance import build_creative_provenance
+from .v3.final_content_manifest import build_final_content_manifest
+from .v3.clip_evidence import build_clip_evidence
+from .v3.audience import parse_audience
 
 
 @dataclass
@@ -81,6 +88,9 @@ class V3ExecutionContext:
     artifact_integrity: dict[str, Any] = field(default_factory=dict)
     release_evidence: dict[str, Any] = field(default_factory=dict)
     stage_timings_ms: dict[str, float] = field(default_factory=dict)
+    job_id: str = ""
+    source_manifest: dict[str, Any] = field(default_factory=dict)
+    creative_provenance: dict[str, Any] = field(default_factory=dict)
     baseline_path: Path | None = None
     score_bundle: V3ScoreBundle | None = None
     stage_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -97,18 +107,7 @@ class V3Stage(Protocol):
 
 
 def _audience_profile(audience: str) -> dict[str, Any]:
-    text = str(audience or "general short-form viewers").lower()
-    profiles = [
-        (("comedy", "funny", "humor", "meme"), {"tone": "playful", "pacing": "fast", "hook": "reaction_or_surprise", "caption_style": "punchy"}),
-        (("anime", "manga", "otaku"), {"tone": "dramatic", "pacing": "fast", "hook": "character_or_reveal", "caption_style": "punchy"}),
-        (("gaming", "gamer", "minecraft", "fortnite"), {"tone": "energetic", "pacing": "fast", "hook": "moment_or_payoff", "caption_style": "high_contrast"}),
-        (("history", "documentary", "facts", "science", "education"), {"tone": "informative", "pacing": "measured", "hook": "evidence_or_question", "caption_style": "clear"}),
-        (("business", "finance", "entrepreneur", "marketing"), {"tone": "direct", "pacing": "tight", "hook": "claim_or_result", "caption_style": "minimal"}),
-    ]
-    for markers, profile in profiles:
-        if any(marker in text for marker in markers):
-            return {"label": audience, **profile}
-    return {"label": audience, "tone": "accessible", "pacing": "balanced", "hook": "curiosity_or_emotion", "caption_style": "readable"}
+    return parse_audience(audience).to_dict()
 
 
 def _research_summary(payload: dict[str, Any], footage_evidence: dict[str, Any]) -> dict[str, Any]:
@@ -137,14 +136,14 @@ def _research_summary(payload: dict[str, Any], footage_evidence: dict[str, Any])
         "music_style": payload["music"]["emotional_tone"],
         "v3_edit_type": payload["edit_type"],
         "v3_quality_score": payload["quality"]["score"],
-        "v3_retention_score": payload["metrics"]["retention_score"],
+        "v3_retention_heuristic": payload["metrics"].get("retention_heuristic", payload["metrics"].get("retention_score", 0.0)),
         "thumbnail": payload.get("thumbnail_concept", ""),
         "platform": platform,
         "audience": audience,
         "audience_profile": _audience_profile(audience),
         "platform_profile": payload.get("platform_variants", {}).get(platform, {}),
         "footage_evidence": footage_evidence,
-        "source_metadata": payload.get("source_metadata") or {},
+
         "v3_scores": payload.get("score_bundle") or {},
         "v3_directives": {
             "edit_type": payload["edit_type"],
@@ -188,14 +187,82 @@ _V3_GENERATED_FILES = frozenset({
     "v3_failure.json",
     "v3_stage_cache.json",
     "editorial_decisions.json",
+    "source_manifest.json",
+    "creative_provenance.json",
+    "job_identity.json",
     "v3_cumulative_metrics.json",
     "v3_performance.json",
+    "source_manifest.json",
+    "creative_provenance.json",
+    "job_identity.json",
+    "final_content_manifest.json",
+    "clip_source_evidence.json",
 })
 _V3_TRANSIENT_FILE_NAMES = (
     "final.v3.retention.mp4",
     ".final.v3.normalized.mp4",
     ".final.v3.audio-normalized.mp4",
 )
+
+
+
+
+def _expected_job_identity(request: V3Request) -> dict[str, Any]:
+    source_hash = file_hash(request.input_video)
+    config = request.config()
+    blueprint = create_v3_blueprint(
+        request.topic,
+        context=request.context,
+        config=config,
+        edit_type=request.edit_type,
+    )
+    blueprint_payload = blueprint.to_dict()
+    config_hash = configuration_hash(asdict(config))
+    blueprint_hash = configuration_hash(blueprint_payload)
+    platform_policy_version = blueprint.platform_constraints.policy_version
+    return {
+        "job_id": job_identity(
+            source_hash=source_hash,
+            blueprint_hash=blueprint_hash,
+            config_hash=config_hash,
+            renderer_version="3.0.0",
+            platform_policy_version=platform_policy_version,
+        ),
+        "source_hash": source_hash,
+        "blueprint_hash": blueprint_hash,
+        "configuration_hash": config_hash,
+        "renderer_version": "3.0.0",
+        "platform_policy_version": platform_policy_version,
+    }
+
+
+def _reuse_existing_job(request: V3Request) -> ProductionResult | None:
+    package = Path(request.package_dir)
+    identity_path = package / "job_identity.json"
+    final_path = package / "final.v3.mp4"
+    readiness_path = package / "v3_readiness.json"
+    if not identity_path.is_file() or not final_path.is_file() or not readiness_path.is_file():
+        return None
+    try:
+        stored = json.loads(identity_path.read_text(encoding="utf-8"))
+        expected = _expected_job_identity(request)
+        readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if stored.get("job_id") != expected["job_id"]:
+        return None
+    if readiness.get("state") not in {"UPLOAD_PACKAGE_VALID", "PUBLISH_READY"}:
+        return None
+    result = ProductionResult(package_dir=str(package))
+    result.final_video = str(final_path)
+    result.artifacts = {
+        file_path.stem: str(file_path)
+        for file_path in package.glob("*.json")
+        if file_path.is_file()
+    }
+    result.artifacts["final_video"] = str(final_path)
+    result.warnings.append("Reused existing valid V3 job artifact via content-addressed job identity")
+    return result
 
 def _write_failed_evidence(
     package: Path,
@@ -270,7 +337,9 @@ def _reset_v3_package(
         (package / name).unlink(missing_ok=True)
     _cleanup_transients(package)
 
-def _cleanup_transients(package: Path) -> None:
+def _cleanup_transients(package: Path, *, preserve: bool = False) -> None:
+    if preserve:
+        return
     for name in (
         "final.v3.retention.mp4",
         ".final.v3.normalized.mp4",
@@ -366,18 +435,66 @@ class PlanningStage:
         validate_blueprint(blueprint)
         path = context.package / "v3_blueprint.json"
         payload = blueprint.to_dict()
-        if context.source_metadata:
-            payload["source_metadata"] = dict(context.source_metadata)
         atomic_write_json(path, payload)
         context.blueprint = V3Blueprint.from_dict(json.loads(path.read_text(encoding="utf-8")))
         context.blueprint_path = path
         context.payload = dict(context.blueprint.to_dict())
-        if context.source_metadata:
-            context.payload["source_metadata"] = dict(context.source_metadata)
-        # Replacing the loaded blueprint's serialized score metadata is intentional:
-        # the score contract is part of the V3 artifact and remains backward compatible.
         context.payload["score_bundle"] = context.blueprint.score_bundle.to_dict()
-        atomic_write_json(context.package / "editorial_decisions.json", {"version": "1.0.0", "decisions": [item.to_dict() for item in context.blueprint.editorial_decisions], "summary": summarize_editorial_evidence(context.blueprint.editorial_decisions)})
+
+        source_manifest = build_source_manifest(
+            context.request.input_video,
+            context.source_metadata or {},
+        )
+        context.source_manifest = source_manifest.to_dict()
+        atomic_write_json(context.package / "source_manifest.json", context.source_manifest)
+
+        source_hash = source_manifest.source_sha256
+        config_payload = asdict(config)
+        cfg_hash = configuration_hash(config_payload)
+        bp_hash = configuration_hash(context.payload)
+        context.job_id = job_identity(
+            source_hash=source_hash,
+            blueprint_hash=bp_hash,
+            config_hash=cfg_hash,
+            renderer_version="3.0.0",
+            platform_policy_version=blueprint.platform_constraints.policy_version,
+        )
+        atomic_write_json(
+            context.package / "job_identity.json",
+            {
+                "job_id": context.job_id,
+                "source_hash": source_hash,
+                "blueprint_hash": bp_hash,
+                "configuration_hash": cfg_hash,
+                "renderer_version": "3.0.0",
+                "platform_policy_version": blueprint.platform_constraints.policy_version,
+            },
+        )
+        provenance = build_creative_provenance(
+            pipeline_version="3.0.0",
+            planner_version="3.0.0",
+            retention_policy_version="2.0.0-semantic",
+            caption_policy_version="3.0.0",
+            scoring_version="3.0.0",
+            prompt_template_version="3.0.0",
+            model_version=context.request.model_key or "deterministic",
+            configuration=config_payload,
+            source_hash=source_hash,
+            blueprint_payload=context.payload,
+            renderer_version="3.0.0",
+            platform_policy_version=blueprint.platform_constraints.policy_version,
+        )
+        context.creative_provenance = provenance.to_dict()
+        atomic_write_json(context.package / "creative_provenance.json", context.creative_provenance)
+
+        atomic_write_json(
+            context.package / "editorial_decisions.json",
+            {
+                "version": "2.0.0",
+                "decisions": [item.to_dict() for item in context.blueprint.editorial_decisions],
+                "summary": summarize_editorial_evidence(context.blueprint.editorial_decisions),
+            },
+        )
 
 
 class SourceAnalysisStage:
@@ -440,6 +557,23 @@ class SourceAnalysisStage:
                 for scene in ranked[:12]
             ],
         }
+        if context.blueprint is not None:
+            clip_evidence = build_clip_evidence(
+                [dict(item) for item in context.payload.get("clip_plan", [])],
+                context.footage_evidence,
+                source_asset=str(context.request.input_video),
+            )
+            atomic_write_json(context.package / "clip_source_evidence.json", clip_evidence)
+            critical = [
+                item for item in clip_evidence
+                if item.get("purpose") in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}
+                and item.get("status") == "unsupported"
+            ]
+            if critical:
+                raise V3ValidationError(
+                    "critical editorial beats have no supporting source evidence: "
+                    + ", ".join(str(item.get("clip_index")) for item in critical)
+                )
 
 
 class RenderStage:
@@ -481,15 +615,16 @@ class MediaValidationStage:
         canonical = context.package / "final.v3.mp4"
 
         shutil.copyfile(context.result.final_video, baseline)
+        profile = context.payload["platform_variants"][context.request.platform]
         enforce_retention_events(
             context.result.final_video,
             str(retention),
             context.payload.get("retention_map", []),
+            target_seconds=context.request.target_seconds,
+            normalize_audio=os.environ.get("AIVF_EBU_R128", "1").strip() != "0",
         )
-        normalize_duration(str(retention), str(normalized), context.request.target_seconds)
-        profile = context.payload["platform_variants"][context.request.platform]
         report = strict_render_check(
-            str(normalized),
+            str(retention),
             target_seconds=context.request.target_seconds,
             platform_profile=profile,
             retention_events=context.payload.get("retention_map", []),
@@ -500,22 +635,10 @@ class MediaValidationStage:
             raise RenderContractError(
                 "; ".join(str(error) for error in report.get("errors", [])) or "V3 render QC failed"
             )
-        os.replace(normalized, canonical)
+        os.replace(retention, canonical)
         context.result.final_video = str(canonical)
         context.baseline_path = baseline
         context.render_report = report
-
-        source = Path(context.result.final_video)
-        if os.environ.get("AIVF_EBU_R128", "1").strip() != "0":
-            normalized_audio = context.package / ".final.v3.audio-normalized.mp4"
-            try:
-                media = analyze_media(source, deep=False, max_duration=3600.0)
-                if media["summary"].get("has_audio"):
-                    normalize_loudness(source, normalized_audio)
-                    os.replace(normalized_audio, source)
-            except (AudioNormalizationError, MediaHealthError, OSError, ValueError) as exc:
-                normalized_audio.unlink(missing_ok=True)
-                raise RenderContractError(f"EBU R128 final audio normalization failed: {exc}") from exc
 
         try:
             context.result.final_video = stamp_media_metadata(
@@ -600,10 +723,21 @@ class ComplianceStage:
             return
 
         source_meta = context.source_metadata or {}
+        content_manifest = build_final_content_manifest(
+            topic=context.request.topic,
+            blueprint=context.payload,
+            footage_evidence=context.footage_evidence,
+            final_media_metadata=context.final_media_metadata,
+            source_manifest=context.source_manifest,
+        )
+        atomic_write_json(context.package / "final_content_manifest.json", content_manifest)
+        summary = dict(context.baseline_summary)
+        summary["content_manifest"] = content_manifest
+        summary["source_manifest"] = context.source_manifest
         context.metadata_report = build_upload_metadata(
             context.request.topic,
-            summary=context.baseline_summary,
-            hook=str(context.baseline_summary.get("hook") or ""),
+            summary=summary,
+            hook=str(content_manifest.get("hook") or ""),
             attribution=str(source_meta.get("attribution") or ""),
         )
         atomic_write_json(context.package / "metadata_guardrails.json", context.metadata_report)
@@ -744,6 +878,11 @@ class ReleaseEvidenceStage:
                 "diagnostics.json",
                 "environment_fingerprint.json",
                 "editorial_decisions.json",
+                "source_manifest.json",
+                "creative_provenance.json",
+                "job_identity.json",
+                "final_content_manifest.json",
+                "clip_source_evidence.json",
             ),
         )
         atomic_write_json(context.package / "artifact_manifest.json", manifest)
@@ -819,6 +958,20 @@ class V3PipelineRunner:
         ))
 
     def run(self) -> ProductionResult:
+        try:
+            with WorkspaceLock(self.request.package_dir):
+                reused = _reuse_existing_job(self.request)
+                if reused is not None:
+                    return reused
+                return self._run_locked()
+        except WorkspaceBusyError as exc:
+            result = ProductionResult(package_dir=str(self.request.package_dir))
+            result.errors.append(str(exc))
+            package = Path(self.request.package_dir)
+            _write_failed_evidence(package, result.errors)
+            return result
+
+    def _run_locked(self) -> ProductionResult:
         context = V3ExecutionContext(
             request=self.request,
             source_metadata=self.source_metadata,
@@ -914,6 +1067,11 @@ class V3PipelineRunner:
             "v3_failure",
             "v3_stage_cache",
             "editorial_decisions",
+            "source_manifest",
+            "creative_provenance",
+            "job_identity",
+            "final_content_manifest",
+            "clip_source_evidence",
         )
         context.result.artifacts.update(
             {
@@ -926,7 +1084,7 @@ class V3PipelineRunner:
                 )).is_file()
             }
         )
-        _cleanup_transients(context.package)
+        _cleanup_transients(context.package, preserve=bool(context.result.errors) or os.environ.get("AIVF_DEBUG_ARTIFACTS", "0") == "1")
         return context.result
 
 

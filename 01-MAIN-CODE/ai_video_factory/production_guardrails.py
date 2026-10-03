@@ -55,7 +55,7 @@ def atomic_write_bytes(path: str | Path, payload: bytes) -> str:
         raise
     return str(target)
 
-def atomic_write_json(path: str | Path, payload: Mapping[str, Any]) -> str:
+def atomic_write_json(path: str | Path, payload: Any) -> str:
     data = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True).encode("utf-8") + b"\n"
     return atomic_write_bytes(path, data)
 

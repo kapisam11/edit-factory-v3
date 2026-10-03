@@ -135,6 +135,32 @@ class EvaluationCase:
 
 
 @dataclass(frozen=True)
+class HumanDecisionFeedback:
+    decision_id: str
+    action: str
+    reason_code: str
+    severity: int
+    actor: str
+    timestamp: str
+    pipeline_version: str
+
+    def __post_init__(self) -> None:
+        allowed = {"KEEP", "REJECT", "MOVE", "WEAK", "STRONG", "WRONG_REASON"}
+        action = str(self.action).strip().upper()
+        if action not in allowed:
+            raise ValueError(f"unsupported human feedback action: {self.action}")
+        if not 0 <= int(self.severity) <= 3:
+            raise ValueError("human feedback severity must be between 0 and 3")
+        if not str(self.reason_code).strip():
+            raise ValueError("human feedback reason_code is required")
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "severity", int(self.severity))
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class HumanOverride:
     decision_id: str
     original_operation: str
@@ -243,6 +269,7 @@ __all__ = [
     "EvaluationCase",
     "Evidence",
     "EvidenceKind",
+    "HumanDecisionFeedback",
     "HumanOverride",
     "build_retention_decisions",
     "confidence_action",
