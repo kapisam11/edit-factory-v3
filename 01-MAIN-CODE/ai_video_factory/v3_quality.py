@@ -12,7 +12,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .ffmpeg_budget import run_ffmpeg_subprocess
 from .v3.visual_qc import verify_visual_effect
-from .v3.effects import EffectCompiler, EffectKind
+from .v3.effects import EffectCompiler
 
 
 class RenderContractError(V3ValidationError):
@@ -173,7 +173,7 @@ def enforce_retention_events(
         }
         for timestamp, kind in events
     ])
-    graph = compiler.compile_ffmpeg_graph(render_ir)
+    graph = compiler.compile_ffmpeg_graph(render_ir, output_width=int(info['width']), output_height=int(info['height']))
     filters = list(graph.video_filters)
 
     target = None if target_seconds is None else float(target_seconds)
