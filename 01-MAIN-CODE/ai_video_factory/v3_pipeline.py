@@ -34,6 +34,7 @@ from .rights_policy import rights_gate
 from .system_diagnostics import diagnostics_report, write_diagnostics
 from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk, sha256_file
 from .v3_exceptions import V3InputError
+from .v3.source_manifest import build_source_manifest
 from .production_assurance import (
     build_artifact_manifest,
     build_environment_fingerprint,
@@ -86,11 +87,11 @@ def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: 
         "avg_shot_duration": avg_shot, "cuts_per_minute": round(60.0 / max(avg_shot, 0.1), 2),
         "music_energy": 0.8 if payload["music"]["energy"] == "high" else 0.55,
         "music_style": payload["music"]["emotional_tone"], "v3_edit_type": payload["edit_type"],
-        "v3_quality_score": payload["quality"]["score"], "v3_retention_score": payload["metrics"]["retention_score"],
+        "v3_quality_score": payload["quality"]["score"],
+        "v3_retention_heuristic": payload["metrics"].get("retention_heuristic", payload["metrics"].get("retention_score", 0.0)),
         "thumbnail": payload.get("thumbnail_concept", ""), "platform": payload.get("platform", "youtube_shorts"),
         "audience": audience, "audience_profile": audience_profile, "platform_profile": profile,
         "footage_evidence": footage_evidence or {},
-        "source_metadata": payload.get("source_metadata") or {},
         "v3_directives": {
             "edit_type": payload["edit_type"], "clip_plan": clip_plan, "retention_map": payload.get("retention_map", []),
             "hooks": payload.get("hooks", []), "platform": payload.get("platform", "youtube_shorts"), "platform_profile": profile,
@@ -190,8 +191,10 @@ def _normalize_final_audio(package: Path, final_video: str) -> str:
         raise RenderContractError(f"EBU R128 final audio normalization failed: {exc}") from exc
 
 
-def _cleanup_v3_transients(package: Path) -> None:
-    """Remove only known V3 temporary artifacts; preserve canonical outputs for inspection."""
+def _cleanup_v3_transients(package: Path, *, preserve: bool = False) -> None:
+    """Remove known V3 temporary artifacts; retain them on failure/debug for diagnostics."""
+    if preserve:
+        return
     for name in ("final.v3.retention.mp4", ".final.v3.normalized.mp4", ".final.v3.audio-normalized.mp4"):
         (package / name).unlink(missing_ok=True)
     for child in package.glob(".aivf-*.partial"):
@@ -210,14 +213,20 @@ def _prepare_blueprint(
     validate_blueprint(blueprint)
     blueprint_path = package / "v3_blueprint.json"
     payload = blueprint.to_dict()
-    if source_metadata:
-        payload["source_metadata"] = dict(source_metadata)
     _atomic_json_write(blueprint_path, payload)
+    source_manifest = build_source_manifest(
+        str(Path(blueprint_path).parent.parent / Path(source_metadata.get("source_path", "")))
+        if source_metadata and source_metadata.get("source_path")
+        else "",
+        source_metadata or {},
+    ) if source_metadata and source_metadata.get("source_path") else None
+    if source_manifest is not None:
+        _atomic_json_write(
+            package / "source_manifest.json",
+            source_manifest.to_dict(),
+        )
     persisted = V3Blueprint.from_dict(json.loads(blueprint_path.read_text(encoding="utf-8")))
-    persisted_payload = persisted.to_dict()
-    if source_metadata:
-        persisted_payload["source_metadata"] = dict(source_metadata)
-    return persisted, persisted_payload, blueprint_path
+    return persisted, persisted.to_dict(), blueprint_path
 
 
 def _build_baseline_request(
@@ -259,11 +268,16 @@ def _finalize_v3_media(
     canonical_final = package / payload.get("packaging", {}).get("final_video_name", "final.v3.mp4")
     try:
         shutil.copyfile(result.final_video, baseline_path)
-        enforce_retention_events(result.final_video, str(retention_path), payload.get("retention_map", []))
-        normalize_duration(str(retention_path), str(normalized_path), target_seconds)
         profile = payload["platform_variants"][payload["platform"]]
+        enforce_retention_events(
+            result.final_video,
+            str(retention_path),
+            payload.get("retention_map", []),
+            target_seconds=target_seconds,
+            normalize_audio=os.environ.get("AIVF_EBU_R128", "1").strip() != "0",
+        )
         report = strict_render_check(
-            str(normalized_path),
+            str(retention_path),
             target_seconds=target_seconds,
             platform_profile=profile,
             retention_events=payload.get("retention_map", []),
@@ -272,10 +286,16 @@ def _finalize_v3_media(
         )
         if not report["ok"]:
             raise RenderContractError("; ".join(str(error) for error in report.get("errors", [])) or "V3 render QC failed")
-        os.replace(normalized_path, canonical_final)
+        os.replace(retention_path, canonical_final)
         result.final_video = str(canonical_final)
         return str(canonical_final), baseline_path, report
-    except Exception:
+    except (
+        RenderContractError,
+        MediaHealthError,
+        AudioNormalizationError,
+        OSError,
+        ValueError,
+    ):
         retention_path.unlink(missing_ok=True)
         normalized_path.unlink(missing_ok=True)
         raise
