@@ -161,37 +161,62 @@ def _run_ffmpeg_streaming(
     timeout: int,
     diagnostics_dir: str | Path | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run FFmpeg while retaining a full stderr log and bounded tail."""
+    """Run FFmpeg while retaining a durable stderr log and bounded tail.
+
+    Diagnostics are prepared before the child process starts. If runtime
+    diagnostics fail after spawn, the child is still terminated and reaped.
+    """
     started = time.perf_counter()
     command_id = hashlib.sha256(
         (repr(cmd) + str(time.time_ns())).encode("utf-8")
     ).hexdigest()[:16]
-    diagnostic_path: Path | None = None
+
     if diagnostics_dir is not None:
         diagnostic_root = Path(diagnostics_dir)
     else:
         candidate = Path(str(cmd[-1])) if cmd else Path(".")
-        diagnostic_root = candidate.parent if candidate.name and not str(candidate).startswith("pipe:") else Path(".")
-    stderr_tail = deque(maxlen=200)
-    process = subprocess.Popen(
-        cmd,
-        stdout=None,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-        **(
-            {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
-            if os.name == "nt"
-            else {"start_new_session": True}
-        ),
-    )
+        diagnostic_root = (
+            candidate.parent
+            if candidate.name and not str(candidate).startswith("pipe:")
+            else Path(".")
+        )
 
+    diagnostic_path = diagnostic_root / "diagnostics" / f"ffmpeg-{command_id}.stderr.log"
     diagnostic_handle = None
     try:
-        diagnostic_root.mkdir(parents=True, exist_ok=True)
-        diagnostic_path = diagnostic_root / "diagnostics" / f"ffmpeg-{command_id}.stderr.log"
         diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
-        diagnostic_handle = diagnostic_path.open("w", encoding="utf-8", errors="replace")
+        diagnostic_handle = diagnostic_path.open(
+            "w", encoding="utf-8", errors="replace"
+        )
+    except OSError as exc:
+        # No child has been spawned yet, so diagnostics setup failure is safe.
+        raise FFmpegExecutionError(
+            f"could not prepare FFmpeg diagnostics: {exc}",
+            command_id=command_id,
+            command=cmd,
+            exit_code=None,
+            duration_seconds=time.perf_counter() - started,
+            stderr_tail="",
+            stderr_path=str(diagnostic_path),
+        ) from exc
+
+    stderr_tail = deque(maxlen=200)
+    process: subprocess.Popen[str] | None = None
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=None,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            **(
+                {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+                if os.name == "nt"
+                else {"start_new_session": True}
+            ),
+        )
+
+        reader_error: list[str] = []
 
         def pump_stderr() -> None:
             stream = process.stderr
@@ -200,9 +225,11 @@ def _run_ffmpeg_streaming(
             try:
                 for line in stream:
                     stderr_tail.append(line)
-                    if diagnostic_handle is not None:
+                    try:
                         diagnostic_handle.write(line)
                         diagnostic_handle.flush()
+                    except OSError as exc:
+                        reader_error.append(str(exc))
                     sys.stderr.write(line)
                     sys.stderr.flush()
             finally:
@@ -233,13 +260,15 @@ def _run_ffmpeg_streaming(
                 exit_code=None,
                 duration_seconds=time.perf_counter() - started,
                 stderr_tail=detail[-2000:],
-                stderr_path=str(diagnostic_path) if diagnostic_path else None,
+                stderr_path=str(diagnostic_path),
             ) from exc
 
         reader.join(timeout=2)
         detail = "".join(stderr_tail).strip()
         if returncode != 0:
             detail_suffix = f": {detail[-2000:]}" if detail else ""
+            if reader_error:
+                detail_suffix += f"; diagnostic_write_error={reader_error[-1]}"
             raise FFmpegExecutionError(
                 f"FFmpeg failed with exit code {returncode}{detail_suffix}; diagnostics={diagnostic_path}",
                 command_id=command_id,
@@ -247,9 +276,30 @@ def _run_ffmpeg_streaming(
                 exit_code=returncode,
                 duration_seconds=time.perf_counter() - started,
                 stderr_tail=detail[-2000:],
-                stderr_path=str(diagnostic_path) if diagnostic_path else None,
+                stderr_path=str(diagnostic_path),
+            )
+        if reader_error:
+            raise FFmpegExecutionError(
+                f"FFmpeg diagnostics write failed: {reader_error[-1]}; diagnostics={diagnostic_path}",
+                command_id=command_id,
+                command=cmd,
+                exit_code=returncode,
+                duration_seconds=time.perf_counter() - started,
+                stderr_tail=detail[-2000:],
+                stderr_path=str(diagnostic_path),
             )
         return subprocess.CompletedProcess(cmd, returncode, stdout=None, stderr=detail)
+    except FFmpegExecutionError:
+        raise
+    except BaseException:
+        if process is not None and process.poll() is None:
+            terminate_process_tree(process, grace_seconds=1.0)
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+        raise
     finally:
         if diagnostic_handle is not None:
             diagnostic_handle.close()
