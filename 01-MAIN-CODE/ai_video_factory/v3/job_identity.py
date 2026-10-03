@@ -1,11 +1,11 @@
 """Content-addressed V3 job identity and configuration fingerprints."""
 from __future__ import annotations
 from typing import Any, Mapping
-from . import _safe_hash
+from ..idempotency import stable_hash
 
 
 def configuration_hash(configuration: Mapping[str, Any]) -> str:
-    return _safe_hash(dict(configuration))
+    return stable_hash(dict(configuration))
 
 
 def job_identity(
@@ -16,7 +16,7 @@ def job_identity(
     renderer_version: str,
     platform_policy_version: str,
 ) -> str:
-    digest = _safe_hash({
+    digest = stable_hash({
         "source_hash": source_hash,
         "blueprint_hash": blueprint_hash,
         "config_hash": config_hash,
