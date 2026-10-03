@@ -37,7 +37,8 @@ def validate_blueprint_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             f"unsupported V3 blueprint schema version: {schema_version}; "
             f"current={CURRENT_SCHEMA_VERSION}"
         )
-    return dict(payload)
+    from .schema_models import validate_blueprint_model
+    return validate_blueprint_model(dict(payload))
 
 
 __all__ = [
