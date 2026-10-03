@@ -726,8 +726,10 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
         return []
 
     purpose_kind = {
-        "Hook": ("clip", "HOOK_ESTABLISHMENT", 0.92),
-        "Setup": ("clip", "STORY_SETUP", 0.82),
+        # Cuts belong to the clip/timeline plan. Retention should represent an
+        # additional supported enhancement, not duplicate the structural cut.
+        "Hook": ("zoom", "HOOK_ESTABLISHMENT", 0.80),
+        "Setup": ("motion", "STORY_SETUP", 0.70),
         "Build": ("motion", "ESCALATION", 0.80),
         "Conflict": ("motion", "CONFLICT_EMPHASIS", 0.82),
         "Climax": ("beat drop", "PAYOFF_ALIGNMENT", 0.94),
@@ -759,14 +761,14 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
 
     # The opening is an editorial anchor, not merely the first grid tick.
     first = clips[0]
-    kind, reason, confidence = purpose_kind.get(first.purpose, ("clip", "HOOK_ESTABLISHMENT", 0.86))
+    kind, reason, confidence = purpose_kind.get(first.purpose, ("zoom", "HOOK_ESTABLISHMENT", 0.76))
     add_event(first.start, kind, reason, confidence)
 
     # Scene/beat boundaries carry meaning from the clip plan.
     for clip in clips[1:]:
         kind, reason, confidence = purpose_kind.get(
             clip.purpose,
-            ("clip", "SCENE_CHANGE", 0.84),
+            ("motion", "SCENE_CHANGE_ENHANCEMENT", 0.70),
         )
         add_event(clip.start, kind, reason, confidence)
 
