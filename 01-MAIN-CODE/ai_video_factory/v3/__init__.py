@@ -12,7 +12,8 @@ from .architecture import (
     ProductionContract,
     V3JobArtifact,
 )
-from .effects import Effect, EffectCompiler, EffectKind, RenderIR
+from .effects import CompiledRenderGraph, Effect, EffectCompiler, EffectKind, RenderIR
+from .metadata import generate_final_metadata
 from .hook_eval import HookCandidate, HookEvaluation
 from .platform_policy import POLICIES, PlatformId, PlatformPolicy, get_platform_policy
 from .production_spec import ProductionSpec
@@ -20,6 +21,7 @@ from .production_spec import ProductionSpec
 __all__ = [
     "CreativeBlueprint",
     "EditorialAssessment",
+    "CompiledRenderGraph",
     "Effect",
     "EffectCompiler",
     "EffectKind",
@@ -35,4 +37,5 @@ __all__ = [
     "RenderIR",
     "V3JobArtifact",
     "get_platform_policy",
+    "generate_final_metadata",
 ]
