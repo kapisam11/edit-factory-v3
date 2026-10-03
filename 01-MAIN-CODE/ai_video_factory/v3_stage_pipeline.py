@@ -587,7 +587,7 @@ class PlanningStage:
             context.package / "job_identity.json",
             {
                 "job_id": context.job_id,
-                "request_hash": _request_identity(context.request, source_metadata=self.source_metadata),
+                "request_hash": _request_identity(context.request, source_metadata=context.source_metadata),
                 "source_hash": source_hash,
                 "blueprint_hash": bp_hash,
                 "configuration_hash": cfg_hash,
