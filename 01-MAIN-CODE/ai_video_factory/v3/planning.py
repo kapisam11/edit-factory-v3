@@ -93,6 +93,7 @@ def generate_hooks(core: Any, edit_type: Any, *, source_evidence: Mapping[str, A
         generate_hook_candidates(
             core.topic, core.stakes, core.emotional_angle,
             core.watch_to_end_reason, edit_type.value,
+            source_evidence=source_evidence,
         ),
         core.topic, core.stakes, core.emotional_angle, core.watch_to_end_reason,
         source_evidence=source_evidence,
