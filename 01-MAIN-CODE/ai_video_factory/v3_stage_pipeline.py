@@ -136,14 +136,14 @@ def _research_summary(payload: dict[str, Any], footage_evidence: dict[str, Any])
         "music_style": payload["music"]["emotional_tone"],
         "v3_edit_type": payload["edit_type"],
         "v3_quality_score": payload["quality"]["score"],
-        "v3_retention_score": payload["metrics"]["retention_score"],
+        "v3_retention_heuristic": payload["metrics"].get("retention_heuristic", payload["metrics"].get("retention_score", 0.0)),
         "thumbnail": payload.get("thumbnail_concept", ""),
         "platform": platform,
         "audience": audience,
         "audience_profile": _audience_profile(audience),
         "platform_profile": payload.get("platform_variants", {}).get(platform, {}),
         "footage_evidence": footage_evidence,
-        "source_metadata": payload.get("source_metadata") or {},
+
         "v3_scores": payload.get("score_bundle") or {},
         "v3_directives": {
             "edit_type": payload["edit_type"],
@@ -192,6 +192,11 @@ _V3_GENERATED_FILES = frozenset({
     "job_identity.json",
     "v3_cumulative_metrics.json",
     "v3_performance.json",
+    "source_manifest.json",
+    "creative_provenance.json",
+    "job_identity.json",
+    "final_content_manifest.json",
+    "clip_source_evidence.json",
 })
 _V3_TRANSIENT_FILE_NAMES = (
     "final.v3.retention.mp4",
@@ -873,6 +878,11 @@ class ReleaseEvidenceStage:
                 "diagnostics.json",
                 "environment_fingerprint.json",
                 "editorial_decisions.json",
+                "source_manifest.json",
+                "creative_provenance.json",
+                "job_identity.json",
+                "final_content_manifest.json",
+                "clip_source_evidence.json",
             ),
         )
         atomic_write_json(context.package / "artifact_manifest.json", manifest)
