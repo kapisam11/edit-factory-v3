@@ -54,7 +54,11 @@ class V3ScoreBundle:
         creative_quality: float,
         metrics: Mapping[str, float],
     ) -> "V3ScoreBundle":
-        values = [float(value) for key, value in metrics.items() if key.endswith("_score")]
+        values = [
+            float(value)
+            for key, value in metrics.items()
+            if key.endswith("_score") or key.endswith("_heuristic")
+        ]
         performance = sum(values) / len(values) if values else 0.0
         return cls(
             technical_validity=technical_validity,
