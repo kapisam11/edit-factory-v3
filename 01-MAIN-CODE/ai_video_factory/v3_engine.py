@@ -303,7 +303,7 @@ class V3Blueprint:
     def duration(self) -> float:
         return float(self.clip_plan[-1].end) if self.clip_plan else 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
             "schema_version": self.schema_version,
@@ -455,7 +455,7 @@ def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType(frozen)
 
 
-PLATFORM_PROFILES: Mapping[str, Dict[str, Any]] = {
+PLATFORM_PROFILES: Mapping[str, dict[str, Any]] = {
     key: {
         "width": policy.width,
         "height": policy.height,
@@ -476,7 +476,7 @@ EDIT_BY_EMOTION: Mapping[str, EditType] = {
     "curious": EditType.STORYTELLING,
 }
 
-EDIT_STRATEGIES: Mapping[EditType, Dict[str, Any]] = {
+EDIT_STRATEGIES: Mapping[EditType, dict[str, Any]] = {
     EditType.EMOTIONAL: {"purposes": ("Hook","Context","Curiosity","Escalation","Payoff","Final impact"), "motions": ("micro-zoom","reframe","subtle-parallax","tracking"), "transitions": ("hard cut","match cut","hard cut","J-cut","hard cut"), "visual_styles": ("emotion-first close-up","context continuity","reaction/detail insert","rising intensity","emotional proof","strong emotional hold")},
     EditType.MOTIVATIONAL: {"purposes": ("Hook","Context","Curiosity","Escalation","Payoff","Final impact"), "motions": ("punch-in","tracking","micro-zoom","reframe"), "transitions": ("hard cut","match cut","hard cut","speed ramp","hard cut"), "visual_styles": ("result-before-context","setup/obstacle","effort detail","momentum action","achievement reveal","confident final hold")},
     EditType.NOSTALGIC: {"purposes": ("Hook","Context","Memory","Contrast","Payoff","Final impact"), "motions": ("subtle-parallax","slow push","reframe","micro-zoom"), "transitions": ("dissolve","match cut","dissolve","match cut","hard cut"), "visual_styles": ("recognizable memory","wide memory context","past detail","before-after contrast","familiar payoff","nostalgic hold")},
@@ -503,7 +503,7 @@ V3_CAPABILITIES = [
     "shareability heuristic score",
 ]
 
-def _tokens(text: str) -> List[str]:
+def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9']+", str(text).lower())
 
 def _compact(text: str, max_words: int = 6) -> str:
