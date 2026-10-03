@@ -303,8 +303,9 @@ def _finalize_v3_media(
         OSError,
         ValueError,
     ):
-        retention_path.unlink(missing_ok=True)
-        normalized_path.unlink(missing_ok=True)
+        if os.environ.get("AIVF_DEBUG_ARTIFACTS", "0").strip() != "1":
+            retention_path.unlink(missing_ok=True)
+            normalized_path.unlink(missing_ok=True)
         raise
 
 
