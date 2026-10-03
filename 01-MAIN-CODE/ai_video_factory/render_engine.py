@@ -238,8 +238,9 @@ def _run_ffmpeg_streaming(
         reader.join(timeout=2)
         detail = "".join(stderr_tail).strip()
         if returncode != 0:
+            detail_suffix = f": {detail[-2000:]}" if detail else ""
             raise FFmpegExecutionError(
-                f"FFmpeg failed with exit code {returncode}; diagnostics={diagnostic_path}",
+                f"FFmpeg failed with exit code {returncode}{detail_suffix}; diagnostics={diagnostic_path}",
                 command_id=command_id,
                 command=cmd,
                 exit_code=returncode,
