@@ -53,7 +53,8 @@ def _clip_relevance(
         temporal_role = max(0.0, (normalized - 0.55) / 0.45)
     elif purpose in {"escalation", "conflict", "threat"}:
         temporal_role = min(1.0, 0.5 + abs(normalized - 0.5))
-    role_support = 0.20 * temporal_role
+    role_weight = 0.50 if purpose in {"hook", "payoff", "punchline", "climax", "final impact"} else 0.20
+    role_support = role_weight * temporal_role
     relevance = 0.50 * lexical + 0.30 * semantic + role_support
     return lexical, semantic, relevance
 
@@ -147,7 +148,7 @@ def build_clip_evidence(
             "reason": (
                 "semantic purpose/style relevance with importance as secondary context"
                 if status != "unsupported"
-                else "no meaningful semantic overlap with any analyzed source scene"
+                else "no meaningful semantic or temporal-role evidence matched any analyzed source scene"
             ),
         })
     return results
