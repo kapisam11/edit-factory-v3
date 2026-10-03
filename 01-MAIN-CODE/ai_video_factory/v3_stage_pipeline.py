@@ -9,7 +9,7 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, Mapping, Protocol
 
 from .artifact_readiness import evaluate_artifact
 from .audio_normalization import AudioNormalizationError, normalize_loudness
