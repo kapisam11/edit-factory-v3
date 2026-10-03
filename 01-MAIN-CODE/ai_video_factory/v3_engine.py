@@ -443,6 +443,17 @@ class V3Blueprint:
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError(f"invalid V3 blueprint payload: {exc}") from exc
 
+def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("platform_variants must be an object")
+    frozen: dict[str, Mapping[str, Any]] = {}
+    for key, item in value.items():
+        if not isinstance(item, Mapping):
+            raise ValueError("platform variant must be an object")
+        frozen[str(key)] = MappingProxyType(dict(item))
+    return MappingProxyType(frozen)
+
+
 PLATFORM_PROFILES: Mapping[str, Dict[str, Any]] = {
     key: {
         "width": policy.width,
