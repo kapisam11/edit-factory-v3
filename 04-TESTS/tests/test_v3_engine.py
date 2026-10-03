@@ -174,7 +174,8 @@ def test_v3_blueprint_exposes_contract_platform_and_duration():
     )
     assert blueprint.platform == "tiktok"
     assert blueprint.duration == 12.0
-    assert blueprint.schema_version == blueprint.version == "3.0.0"
+    assert blueprint.version == "3.0.0"
+    assert blueprint.schema_version == "3.0.1"
 
 
 
