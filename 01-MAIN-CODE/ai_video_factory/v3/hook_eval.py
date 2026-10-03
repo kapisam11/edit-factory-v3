@@ -81,10 +81,40 @@ def generate_hook_candidates(
     angle: str,
     watch_to_end_reason: str,
     edit_type: str,
+    *,
+    source_evidence: Mapping[str, Any] | None = None,
 ) -> tuple[HookCandidate, ...]:
     topic_text = " ".join(str(topic).split()[:7])
     style = str(edit_type).lower()
-    return (
+    scenes = [
+        item for item in (source_evidence or {}).get("top_scenes", [])
+        if isinstance(item, Mapping)
+    ]
+    source_phrase = ""
+    source_transcript = ""
+    if scenes:
+        strongest = scenes[0]
+        source_phrase = " ".join(str(strongest.get("description") or "").split()[:8])
+        source_transcript = " ".join(str(strongest.get("transcript") or "").split()[:8])
+    evidence_candidates = (
+        (
+            HookCandidate(
+                "Open directly on the most important analyzed source scene.",
+                f"The moment {source_phrase or topic_text} became clear",
+                "source_scene_importance",
+                "source_evidence_candidate",
+            ),
+            HookCandidate(
+                "Open on the strongest analyzed spoken detail before context.",
+                f"What the footage shows about {source_transcript or topic_text}",
+                "source_transcript",
+                "source_evidence_candidate",
+            ),
+        )
+        if scenes
+        else ()
+    )
+    return evidence_candidates + (
         HookCandidate(
             f"Open on the strongest {style} frame before context.",
             f"The moment {topic_text} changed",
