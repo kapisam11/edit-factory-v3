@@ -124,8 +124,21 @@ class BlueprintPayloadModel(StrictModel):
     migration_history: list[dict[str, Any]] = []
 
 
+def _json_boundary(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return [_json_boundary(item) for item in value]
+    if isinstance(value, list):
+        return [_json_boundary(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_boundary(item) for key, item in value.items()}
+    return value
+
+
 def validate_blueprint_model(payload: dict[str, Any]) -> dict[str, Any]:
-    model = BlueprintPayloadModel.model_validate(payload)
+    # Dataclass serialization can still contain tuples internally. Normalize
+    # only JSON container shapes here; scalar coercion remains strict.
+    normalized = _json_boundary(payload)
+    model = BlueprintPayloadModel.model_validate(normalized)
     return model.model_dump(mode="python")
 
 
