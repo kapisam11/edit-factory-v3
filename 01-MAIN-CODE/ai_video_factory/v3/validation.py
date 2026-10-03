@@ -19,12 +19,12 @@ def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9']+", str(text).lower())
 
 
-def validate_blueprint(blueprint: "engine.engine.V3Blueprint") -> None:
+def validate_blueprint(blueprint: "engine.V3Blueprint") -> None:
     if not isinstance(blueprint, engine.V3Blueprint):
         raise ValueError("expected a engine.V3Blueprint instance")
     if blueprint.version != "3.0.0":
         raise ValueError("unexpected blueprint version")
-    from .v3_capabilities import REQUIRED_CAPABILITIES
+    from ..v3_capabilities import REQUIRED_CAPABILITIES
     available_capabilities = set(blueprint.capabilities)
     missing_capabilities = sorted(REQUIRED_CAPABILITIES - available_capabilities)
     if missing_capabilities:
