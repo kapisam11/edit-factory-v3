@@ -42,7 +42,7 @@ def parse_audience(audience: str) -> AudienceProfile:
     if age_match:
         age_range = (int(age_match.group(1)), int(age_match.group(2)))
 
-    interests = []
+    interests: list[str] = []
     markers = (
         "gaming", "minecraft", "fortnite", "football", "anime", "manga",
         "comedy", "history", "science", "education", "business", "finance",
