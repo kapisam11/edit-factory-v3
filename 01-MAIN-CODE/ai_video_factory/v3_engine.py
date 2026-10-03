@@ -1131,7 +1131,7 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
     if not isinstance(blueprint.qc.require_video, bool) or not isinstance(blueprint.qc.require_audio, bool) or not isinstance(blueprint.qc.require_independent_retention, bool):
         raise ValueError("blueprint QC flags must be booleans")
     for hook in blueprint.hooks:
-        if hook.score_semantics != "editorial_heuristic_score":
+        if hook.score_semantics not in {"editorial_heuristic_score", "legacy_template_priority"}:
             raise ValueError("hook score semantics are invalid")
         if not hook.evaluation or not hook.evaluation.get("evaluator"):
             raise ValueError("hook evaluation evidence is missing")
