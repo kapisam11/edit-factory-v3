@@ -930,9 +930,18 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
             raise ValueError("hook score semantics are invalid")
         if not hook.evaluation or not hook.evaluation.get("evaluator"):
             raise ValueError("hook evaluation evidence is missing")
+        source_evidence = float(hook.evaluation.get("source_evidence", 0.0))
+        evaluated_score = float(hook.evaluation.get("score", hook.score))
+        if not math.isfinite(source_evidence) or not 0.0 <= source_evidence <= 1.0:
+            raise ValueError("hook source-evidence score is invalid")
+        if abs(evaluated_score - float(hook.score)) > 0.001:
+            raise ValueError("hook score does not match its evaluation")
     for clip in blueprint.clip_plan:
         if clip.evidence.evidence_status not in {"planned", "supported", "weak", "unsupported"}:
             raise ValueError(f"clip {clip.index} has invalid evidence status")
+        if clip.evidence.evidence_status in {"supported", "weak"}:
+            if not clip.evidence.source_asset or clip.evidence.source_end <= clip.evidence.source_start:
+                raise ValueError(f"clip {clip.index} source evidence boundaries are invalid")
         if clip.evidence.evidence_status == "unsupported" and clip.purpose in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}:
             raise ValueError(f"critical clip {clip.index} has no supporting source evidence")
 
