@@ -7,7 +7,7 @@ from enum import Enum
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 from types import MappingProxyType
 
 from .v3_retention import evaluate_retention_editorial_fit
@@ -298,7 +298,8 @@ class V3Blueprint:
         return profile
     @property
     def schema_version(self) -> str:
-        return self.version
+        from .v3.schema import CURRENT_SCHEMA_VERSION
+        return CURRENT_SCHEMA_VERSION
 
     @property
     def duration(self) -> float:
@@ -579,7 +580,7 @@ def choose_edit_type(core: CoreIdea, requested: str | None = None) -> EditType:
         raise ValueError(f"unknown edit type: {requested}")
     return EDIT_BY_EMOTION.get(core.target_emotion, EditType.STORYTELLING)
 
-def generate_hooks(core: CoreIdea, edit_type: EditType) -> List[HookPack]:
+def generate_hooks(core: CoreIdea, edit_type: EditType, *, source_evidence: Mapping[str, Any] | None = None) -> list[HookPack]:
     evaluated = evaluate_hook_candidates(
         generate_hook_candidates(
             core.topic,
@@ -592,6 +593,7 @@ def generate_hooks(core: CoreIdea, edit_type: EditType) -> List[HookPack]:
         core.stakes,
         core.emotional_angle,
         core.watch_to_end_reason,
+        source_evidence=source_evidence,
     )
     return [
         HookPack(
@@ -793,7 +795,7 @@ def build_retention_map(config: V3Config, clips: Sequence[ClipBeat], music: Musi
         add_event(final_clip.start, "text", "FINAL_IMPACT", 0.86)
 
     return sorted(events, key=lambda event: event.time)
-def platform_variants(config: V3Config) -> Dict[str, Dict[str, Any]]:
+def platform_variants(config: V3Config) -> dict[str, dict[str, Any]]:
     config.validate()
     return {key: dict(value) for key, value in PLATFORM_PROFILES.items()}
 
@@ -848,7 +850,7 @@ def automated_editorial_checks(core: CoreIdea, edit_type: EditType, hooks: Seque
         warnings,
     )
 
-def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequence[ClipBeat], quality: QualityReport) -> Dict[str, float]:
+def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequence[ClipBeat], quality: QualityReport) -> dict[str, float]:
     hook = hooks[0].score if hooks else 0.0
     avg = clips[-1].end / len(clips) if clips else 0.0
     pace = min(1.0, 2.8 / max(avg, 0.1))
@@ -857,8 +859,8 @@ def _heuristic_metrics(core: CoreIdea, hooks: Sequence[HookPack], clips: Sequenc
     return heuristic_metrics(hook=hook, pace=pace, quality=q, emotion=emotion)
 
 
-def _metadata(core: CoreIdea) -> tuple[str, List[str], List[str], str]:
-    """Build compact, topic-specific metadata for every V3 downstream consumer."""
+def _planned_metadata(core: CoreIdea, audience_profile: Any | None = None) -> tuple[str, list[str], list[str], str]:
+    """Build provisional blueprint metadata; final upload metadata is manifest-derived."""
     topic = _compact(core.topic, 8)
     angle = _compact(core.emotional_angle, 10)
     payoff = _compact(core.payoff, 12)
@@ -894,16 +896,45 @@ def _metadata(core: CoreIdea) -> tuple[str, List[str], List[str], str]:
     )
     return thumbnail, titles[:10], tags[:12], description
 
-def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | None = None, edit_type: str | None = None) -> V3Blueprint:
+def create_v3_blueprint(topic: str, *, context: str = "", config: V3Config | None = None, edit_type: str | None = None, footage_evidence: Mapping[str, Any] | None = None) -> V3Blueprint:
     cfg = config or V3Config()
     cfg.validate()
     core = analyze_core_idea(topic, context, cfg.audience)
     selected = choose_edit_type(core, edit_type)
-    hooks = generate_hooks(core, selected)
+    evidence_context = dict(footage_evidence or {})
+    evidence_context["audience"] = parse_audience(cfg.audience).to_dict()
+    hooks = generate_hooks(core, selected, source_evidence=evidence_context)
     clips = build_clip_plan(core, selected, cfg)
+    if footage_evidence:
+        from .v3.clip_evidence import build_clip_evidence
+        evidence_rows = build_clip_evidence(
+            [asdict(item) for item in clips],
+            dict(footage_evidence),
+            source_asset=str(dict(footage_evidence).get("source_asset", "")),
+        )
+        clip_by_index = {int(row.get("clip_index", 0)): row for row in evidence_rows}
+        enriched: list[ClipBeat] = []
+        for clip in clips:
+            row = clip_by_index.get(clip.index, {})
+            enriched.append(
+                ClipBeat(
+                    clip.index, clip.start, clip.end, clip.purpose, clip.emotion,
+                    clip.visual_style, clip.text_overlay, clip.camera_motion,
+                    clip.transition,
+                    ClipEvidence(
+                        source_asset=str(row.get("source_asset", "")),
+                        source_start=float(row.get("source_start", 0.0)),
+                        source_end=float(row.get("source_end", 0.0)),
+                        semantic_tags=tuple(str(x) for x in row.get("semantic_tags", ())),
+                        evidence_score=float(row.get("evidence_score", 0.0)),
+                        evidence_status=str(row.get("status", "unsupported")),
+                    ),
+                )
+            )
+        clips = enriched
     music = analyze_music(core, cfg, clips)
     retention = build_retention_map(cfg, clips, music)
-    thumbnail, titles, tags, description = _metadata(core)
+    thumbnail, titles, tags, description = _planned_metadata(core, parse_audience(cfg.audience))
     quality = automated_editorial_checks(core, selected, hooks, clips, retention, cfg)
     metrics = _heuristic_metrics(core, hooks, clips, quality)
     clip_purposes = {round(clip.start, 3): clip.purpose for clip in clips}
@@ -1081,8 +1112,10 @@ def validate_blueprint(blueprint: V3Blueprint) -> None:
         if not hook.evaluation or not hook.evaluation.get("evaluator"):
             raise ValueError("hook evaluation evidence is missing")
     for clip in blueprint.clip_plan:
-        if clip.evidence.evidence_status not in {"planned", "supported", "weak"}:
+        if clip.evidence.evidence_status not in {"planned", "supported", "weak", "unsupported"}:
             raise ValueError(f"clip {clip.index} has invalid evidence status")
+        if clip.evidence.evidence_status == "unsupported" and clip.purpose in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}:
+            raise ValueError(f"critical clip {clip.index} has no supporting source evidence")
 
     if not blueprint.quality.passed:
         failed_checks = [
