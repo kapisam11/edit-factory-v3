@@ -18,6 +18,7 @@ from .v3.platform_policy import POLICIES
 from .v3.production_spec import ProductionSpec
 from .v3.hook_eval import evaluate_hook_candidates, generate_hook_candidates
 from .v3.schema import validate_blueprint_payload
+from .v3_scoring import heuristic_metrics
 from .v3.migrations import migrate_to_current
 from .v3.audience import parse_audience
 
