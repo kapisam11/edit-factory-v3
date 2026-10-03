@@ -76,6 +76,8 @@ def evaluate_retention_editorial_fit(
         "starts_early": times[0] <= 0.35,
         "positive_gaps": all(gap > 0 for gap in gaps),
         "not_overcrowded": min_gap >= max(0.35, float(target_interval) * 0.20),
+        # Attention-gap duration is diagnostic; it never creates a synthetic effect
+        # and is not itself a release-blocking validation check.
         "no_long_gaps": max_gap <= max(3.5, float(duration) * 0.25),
         "effect_diversity": (
             unique_kinds >= min(2, len(kinds))
