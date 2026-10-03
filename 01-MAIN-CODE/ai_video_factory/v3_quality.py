@@ -12,6 +12,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .ffmpeg_budget import run_ffmpeg_subprocess
 from .v3.visual_qc import verify_visual_effect
+from .v3.effects import EffectCompiler, EffectKind
 
 
 class RenderContractError(V3ValidationError):
@@ -151,31 +152,107 @@ def _validated_retention_events(
     return events
 
 
-def enforce_retention_events(input_path: str, output_path: str, retention_events: Sequence[Mapping[str, Any]]) -> str:
+def enforce_retention_events(
+    input_path: str,
+    output_path: str,
+    retention_events: Sequence[Mapping[str, Any]],
+    *,
+    target_seconds: float | None = None,
+    normalize_audio: bool = False,
+) -> str:
+    """Compile semantic retention events into one FFmpeg render pass."""
     info = probe_media(input_path)
     events = _validated_retention_events(retention_events, info["duration"])
-    # Effects must be visibly measurable after rendering, not merely serialized into the plan.
-    # Keep them restrained enough for editorial use but large enough for independent QC to detect.
+    compiler = EffectCompiler()
+    effects = [compiler.compile_retention({
+        "time": timestamp,
+        "kind": kind,
+        "confidence": 1.0,
+        "reason": "retention_event",
+    }) for timestamp, kind in events]
+    effects = [effect for effect in effects if effect.kind is not EffectKind.DO_NOTHING]
+    filters: list[str] = []
     kind_settings = {
-        "zoom": (1.12, 0.080),
-        "text": (1.10, 0.080),
-        "motion": (1.13, 0.085),
-        "angle": (1.15, 0.080),
-        "clip": (1.18, 0.100),
-        "beat drop": (1.25, 0.070),
+        EffectKind.ZOOM: (1.10, 0.060),
+        EffectKind.CROP: (1.12, 0.070),
+        EffectKind.CAPTION: (1.08, 0.045),
+        EffectKind.CUT: (1.16, 0.090),
+        EffectKind.TRANSITION: (1.20, 0.060),
     }
-    filters = []
-    for timestamp, kind in events:
-        if timestamp >= info["duration"] - 0.02: raise RenderContractError(f"retention event at {timestamp:.3f}s is outside rendered duration")
-        contrast, brightness = kind_settings.get(kind, (1.04, 0.030)); start = max(0.0, timestamp - 0.04); end = min(info["duration"], timestamp + 0.20)
-        filters.append(f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:enable='between(t,{start:.3f},{end:.3f})'")
-    fd, temp_path = tempfile.mkstemp(suffix=".mp4", dir=os.path.dirname(output_path) or "."); os.close(fd)
+    for effect in effects:
+        contrast, brightness = kind_settings.get(effect.kind, (1.04, 0.030))
+        start_time = max(0.0, effect.start - 0.04)
+        end_time = min(info["duration"], effect.start + max(0.20, effect.duration))
+        filters.append(
+            f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:enable='between(t,{start_time:.3f},{end_time:.3f})'"
+        )
+
+    target = None if target_seconds is None else float(target_seconds)
+    if target is not None:
+        if not math.isfinite(target) or not 0.25 <= target <= 180.0:
+            raise RenderContractError("target duration must be between 0.25 and 180 seconds")
+        delta = target - float(info["duration"])
+        policy = duration_delta_policy(delta)
+        if policy == "renderer_failure":
+            raise RenderContractError(
+                f"duration drift {abs(delta):.3f}s exceeds controlled correction limit of 0.250s"
+            )
+        if abs(delta) > 0.05:
+            if delta > 0:
+                filters.append(f"tpad=stop_mode=clone:stop_duration={delta:.3f}")
+            duration_arg = f"{target:.3f}"
+        else:
+            duration_arg = f"{target:.3f}"
+    else:
+        duration_arg = None
+
+    fd, temp_path = tempfile.mkstemp(
+        suffix=".mp4",
+        dir=os.path.dirname(output_path) or ".",
+    )
+    os.close(fd)
     try:
-        _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", input_path, "-vf", ",".join(filters), "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-c:a", "aac", "-movflags", "+faststart", temp_path], timeout=_timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600)); probe_media(temp_path); os.replace(temp_path, output_path); return output_path
+        command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", input_path,
+        ]
+        if filters:
+            command += ["-vf", ",".join(filters)]
+        command += ["-map", "0:v:0", "-map", "0:a:0?"]
+        if info.get("has_audio") and normalize_audio:
+            audio_filter = "loudnorm=I=-16:TP=-1.5:LRA=11"
+            if target is not None and target > float(info["duration"]):
+                audio_filter = "apad," + audio_filter
+            command += ["-af", audio_filter]
+        elif info.get("has_audio") and target is not None and target > float(info["duration"]):
+            command += ["-af", "apad"]
+        command += [
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "18",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
+        ]
+        if duration_arg is not None:
+            command += ["-t", duration_arg]
+        command.append(temp_path)
+        _run(command, timeout=_timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600))
+        probe_media(temp_path)
+        if target is not None:
+            normalized = probe_media(temp_path)
+            if abs(normalized["duration"] - target) > 0.08:
+                raise RenderContractError(
+                    f"combined retention render duration is {normalized['duration']:.3f}s, expected {target:.3f}s"
+                )
+        os.replace(temp_path, output_path)
+        return output_path
     except BaseException as exc:
-        try: os.unlink(temp_path)
-        except OSError: pass
-        if isinstance(exc, RenderContractError): raise
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        if isinstance(exc, RenderContractError):
+            raise
         raise RenderContractError(f"could not enforce retention events: {exc}") from exc
 
 
