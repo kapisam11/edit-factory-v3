@@ -333,9 +333,8 @@ class V3Blueprint:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "V3Blueprint":
-        if not isinstance(payload, Mapping):
-            raise ValueError("V3 blueprint payload must be an object")
-        # Top-level validation is centralized in the V3 schema boundary.
+        payload = migrate_to_current(payload)
+        payload = validate_blueprint_payload(payload)
         if not isinstance(payload["hooks"], (list, tuple)) or not isinstance(payload["clip_plan"], (list, tuple)):
             raise ValueError("V3 blueprint hooks and clip_plan must be arrays")
         if not isinstance(payload["retention_map"], (list, tuple)) or not isinstance(payload["capabilities"], (list, tuple)):
