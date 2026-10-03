@@ -54,6 +54,10 @@ from .editorial_evaluation import summarize_editorial_evidence
 from .idempotency import file_hash, stage_cache_key, cache_record
 from .v3_semantic_qc import analyze_render_semantics
 from .render_engine import stamp_media_metadata
+from .v3.source_manifest import build_source_manifest
+from .v3.workspace import WorkspaceBusyError, WorkspaceLock
+from .v3.job_identity import job_identity, configuration_hash
+from .v3.creative_provenance import build_creative_provenance
 
 
 @dataclass
@@ -81,6 +85,9 @@ class V3ExecutionContext:
     artifact_integrity: dict[str, Any] = field(default_factory=dict)
     release_evidence: dict[str, Any] = field(default_factory=dict)
     stage_timings_ms: dict[str, float] = field(default_factory=dict)
+    job_id: str = ""
+    source_manifest: dict[str, Any] = field(default_factory=dict)
+    creative_provenance: dict[str, Any] = field(default_factory=dict)
     baseline_path: Path | None = None
     score_bundle: V3ScoreBundle | None = None
     stage_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -188,6 +195,9 @@ _V3_GENERATED_FILES = frozenset({
     "v3_failure.json",
     "v3_stage_cache.json",
     "editorial_decisions.json",
+    "source_manifest.json",
+    "creative_provenance.json",
+    "job_identity.json",
     "v3_cumulative_metrics.json",
     "v3_performance.json",
 })
@@ -270,7 +280,9 @@ def _reset_v3_package(
         (package / name).unlink(missing_ok=True)
     _cleanup_transients(package)
 
-def _cleanup_transients(package: Path) -> None:
+def _cleanup_transients(package: Path, *, preserve: bool = False) -> None:
+    if preserve:
+        return
     for name in (
         "final.v3.retention.mp4",
         ".final.v3.normalized.mp4",
@@ -366,18 +378,66 @@ class PlanningStage:
         validate_blueprint(blueprint)
         path = context.package / "v3_blueprint.json"
         payload = blueprint.to_dict()
-        if context.source_metadata:
-            payload["source_metadata"] = dict(context.source_metadata)
         atomic_write_json(path, payload)
         context.blueprint = V3Blueprint.from_dict(json.loads(path.read_text(encoding="utf-8")))
         context.blueprint_path = path
         context.payload = dict(context.blueprint.to_dict())
-        if context.source_metadata:
-            context.payload["source_metadata"] = dict(context.source_metadata)
-        # Replacing the loaded blueprint's serialized score metadata is intentional:
-        # the score contract is part of the V3 artifact and remains backward compatible.
         context.payload["score_bundle"] = context.blueprint.score_bundle.to_dict()
-        atomic_write_json(context.package / "editorial_decisions.json", {"version": "1.0.0", "decisions": [item.to_dict() for item in context.blueprint.editorial_decisions], "summary": summarize_editorial_evidence(context.blueprint.editorial_decisions)})
+
+        source_manifest = build_source_manifest(
+            context.request.input_video,
+            context.source_metadata or {},
+        )
+        context.source_manifest = source_manifest.to_dict()
+        atomic_write_json(context.package / "source_manifest.json", context.source_manifest)
+
+        source_hash = source_manifest.source_sha256
+        config_payload = asdict(config)
+        cfg_hash = configuration_hash(config_payload)
+        bp_hash = configuration_hash(context.payload)
+        context.job_id = job_identity(
+            source_hash=source_hash,
+            blueprint_hash=bp_hash,
+            config_hash=cfg_hash,
+            renderer_version="3.0.0",
+            platform_policy_version=blueprint.platform_constraints.policy_version,
+        )
+        atomic_write_json(
+            context.package / "job_identity.json",
+            {
+                "job_id": context.job_id,
+                "source_hash": source_hash,
+                "blueprint_hash": bp_hash,
+                "configuration_hash": cfg_hash,
+                "renderer_version": "3.0.0",
+                "platform_policy_version": blueprint.platform_constraints.policy_version,
+            },
+        )
+        provenance = build_creative_provenance(
+            pipeline_version="3.0.0",
+            planner_version="3.0.0",
+            retention_policy_version="2.0.0-semantic",
+            caption_policy_version="3.0.0",
+            scoring_version="3.0.0",
+            prompt_template_version="3.0.0",
+            model_version=context.request.model_key or "deterministic",
+            configuration=config_payload,
+            source_hash=source_hash,
+            blueprint_payload=context.payload,
+            renderer_version="3.0.0",
+            platform_policy_version=blueprint.platform_constraints.policy_version,
+        )
+        context.creative_provenance = provenance.to_dict()
+        atomic_write_json(context.package / "creative_provenance.json", context.creative_provenance)
+
+        atomic_write_json(
+            context.package / "editorial_decisions.json",
+            {
+                "version": "2.0.0",
+                "decisions": [item.to_dict() for item in context.blueprint.editorial_decisions],
+                "summary": summarize_editorial_evidence(context.blueprint.editorial_decisions),
+            },
+        )
 
 
 class SourceAnalysisStage:
@@ -819,6 +879,17 @@ class V3PipelineRunner:
         ))
 
     def run(self) -> ProductionResult:
+        try:
+            with WorkspaceLock(self.request.package_dir):
+                return self._run_locked()
+        except WorkspaceBusyError as exc:
+            result = ProductionResult(package_dir=str(self.request.package_dir))
+            result.errors.append(str(exc))
+            package = Path(self.request.package_dir)
+            _write_failed_evidence(package, result.errors)
+            return result
+
+    def _run_locked(self) -> ProductionResult:
         context = V3ExecutionContext(
             request=self.request,
             source_metadata=self.source_metadata,
@@ -926,7 +997,7 @@ class V3PipelineRunner:
                 )).is_file()
             }
         )
-        _cleanup_transients(context.package)
+        _cleanup_transients(context.package, preserve=bool(context.result.errors) or os.environ.get("AIVF_DEBUG_ARTIFACTS", "0") == "1")
         return context.result
 
 
