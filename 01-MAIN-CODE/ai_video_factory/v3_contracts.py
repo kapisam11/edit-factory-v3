@@ -26,13 +26,16 @@ class V3Request:
     enable_object_detection: bool = True
     enable_diarization: bool = False
     diarization_token: str | None = None
+    seed: int = 0
 
     def config(self) -> V3Config:
         return V3Config(
             target_seconds=float(self.target_seconds),
             platform=self.platform,
             audience=self.audience,
-            bpm=int(self.bpm),
+            bpm=self.bpm,
+            language="en",
+            seed=self.seed,
         )
 
     def validate(self, *, require_source_file: bool = True) -> None:
