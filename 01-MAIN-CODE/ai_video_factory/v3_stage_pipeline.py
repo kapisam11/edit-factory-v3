@@ -7,7 +7,7 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
@@ -206,6 +206,66 @@ _V3_TRANSIENT_FILE_NAMES = (
     ".final.v3.normalized.mp4",
     ".final.v3.audio-normalized.mp4",
 )
+
+
+
+
+def _expected_job_identity(request: V3Request) -> dict[str, Any]:
+    source_hash = file_hash(request.input_video)
+    config = request.config()
+    blueprint = create_v3_blueprint(
+        request.topic,
+        context=request.context,
+        config=config,
+        edit_type=request.edit_type,
+    )
+    blueprint_payload = blueprint.to_dict()
+    config_hash = configuration_hash(asdict(config))
+    blueprint_hash = configuration_hash(blueprint_payload)
+    platform_policy_version = blueprint.platform_constraints.policy_version
+    return {
+        "job_id": job_identity(
+            source_hash=source_hash,
+            blueprint_hash=blueprint_hash,
+            config_hash=config_hash,
+            renderer_version="3.0.0",
+            platform_policy_version=platform_policy_version,
+        ),
+        "source_hash": source_hash,
+        "blueprint_hash": blueprint_hash,
+        "configuration_hash": config_hash,
+        "renderer_version": "3.0.0",
+        "platform_policy_version": platform_policy_version,
+    }
+
+
+def _reuse_existing_job(request: V3Request) -> ProductionResult | None:
+    package = Path(request.package_dir)
+    identity_path = package / "job_identity.json"
+    final_path = package / "final.v3.mp4"
+    readiness_path = package / "v3_readiness.json"
+    if not identity_path.is_file() or not final_path.is_file() or not readiness_path.is_file():
+        return None
+    try:
+        stored = json.loads(identity_path.read_text(encoding="utf-8"))
+        expected = _expected_job_identity(request)
+        readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if stored.get("job_id") != expected["job_id"]:
+        return None
+    if readiness.get("state") not in {"UPLOAD_PACKAGE_VALID", "PUBLISH_READY"}:
+        return None
+    result = ProductionResult(package_dir=str(package))
+    result.final_video = str(final_path)
+    result.artifacts = {
+        file_path.stem: str(file_path)
+        for file_path in package.glob("*.json")
+        if file_path.is_file()
+    }
+    result.artifacts["final_video"] = str(final_path)
+    result.warnings.append("Reused existing valid V3 job artifact via content-addressed job identity")
+    return result
 
 def _write_failed_evidence(
     package: Path,
@@ -881,6 +941,9 @@ class V3PipelineRunner:
     def run(self) -> ProductionResult:
         try:
             with WorkspaceLock(self.request.package_dir):
+                reused = _reuse_existing_job(self.request)
+                if reused is not None:
+                    return reused
                 return self._run_locked()
         except WorkspaceBusyError as exc:
             result = ProductionResult(package_dir=str(self.request.package_dir))
