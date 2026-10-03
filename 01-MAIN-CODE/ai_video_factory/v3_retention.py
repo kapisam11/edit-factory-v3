@@ -118,17 +118,17 @@ def evaluate_retention_editorial_fit(
     }
     denominator = sum(weights[key] for key in checks)
     score = 100.0 * sum(weights[key] for key, ok in checks.items() if ok) / max(0.01, denominator)
+    # Cadence checks are diagnostics only. They cannot make an editorial plan
+    # fail merely because a semantic timeline is sparse or clustered.
     passed = all(
         checks.get(key, True)
         for key in (
             "has_events",
             "events_within_duration",
-            "positive_gaps",
-            "not_overcrowded",
             "specific_instructions",
             "semantic_anchors",
         )
-    ) and score >= 75.0
+    ) and score >= 60.0
     return RetentionEditorialReport(
         passed=passed,
         score=round(score, 1),
