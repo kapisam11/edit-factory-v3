@@ -35,12 +35,26 @@ def _clip_relevance(
     purpose: str,
     visual: str,
     scene_tokens: set[str],
+    *,
+    scene_start: float,
+    scene_end: float,
+    source_duration: float,
 ) -> tuple[float, float, float]:
     clip_tokens = _tokens(f"{purpose} {visual}")
     desired = _PURPOSE_TERMS.get(purpose, _tokens(purpose))
     lexical = len(clip_tokens & scene_tokens) / max(1, len(clip_tokens))
     semantic = len(desired & scene_tokens) / max(1, len(desired))
-    relevance = 0.55 * lexical + 0.45 * semantic
+    middle = max(0.0, (scene_start + scene_end) / 2.0)
+    normalized = middle / max(0.001, source_duration)
+    temporal_role = 0.0
+    if purpose == "hook":
+        temporal_role = max(0.0, 1.0 - normalized * 4.0)
+    elif purpose in {"payoff", "punchline", "climax", "final impact"}:
+        temporal_role = max(0.0, (normalized - 0.55) / 0.45)
+    elif purpose in {"escalation", "conflict", "threat"}:
+        temporal_role = min(1.0, 0.5 + abs(normalized - 0.5))
+    role_support = 0.20 * temporal_role
+    relevance = 0.50 * lexical + 0.30 * semantic + role_support
     return lexical, semantic, relevance
 
 
@@ -54,6 +68,14 @@ def build_clip_evidence(
         item for item in (footage_evidence.get("top_scenes") or [])
         if isinstance(item, Mapping)
     ]
+    try:
+        source_duration = max(
+            float(item.get("end", 0.0))
+            for item in scenes
+            if float(item.get("end", 0.0)) > 0
+        )
+    except ValueError:
+        source_duration = 1.0
     results: list[dict[str, Any]] = []
     for index, clip in enumerate(clip_plan, start=1):
         purpose = str(clip.get("purpose", "")).strip().lower()
@@ -68,7 +90,14 @@ def build_clip_evidence(
                     for key in ("description", "transcript", "objects", "text")
                 )
             )
-            lexical, semantic, relevance = _clip_relevance(purpose, visual, scene_tokens)
+            lexical, semantic, relevance = _clip_relevance(
+                purpose,
+                visual,
+                scene_tokens,
+                scene_start=float(scene.get("start", 0.0)),
+                scene_end=float(scene.get("end", 0.0)),
+                source_duration=source_duration,
+            )
             importance = min(1.0, max(0.0, float(scene.get("importance_score", 0.0))))
             # Importance can break ties, but can never create relevance by itself.
             total = 0.80 * relevance + 0.20 * importance
