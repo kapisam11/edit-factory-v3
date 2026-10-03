@@ -518,10 +518,6 @@ V3_CAPABILITIES = [
 def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9']+", str(text).lower())
 
-def _compact(text: str, max_words: int = 6) -> str:
-    return " ".join(str(text).strip().split()[:max_words])
-
-
 def _normalize_sentence(text: str) -> str:
     value = re.sub(r"\s+", " ", str(text or "").strip()).strip(" .,-")
     return value + "." if value else ""
