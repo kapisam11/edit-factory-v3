@@ -80,6 +80,23 @@ class EditorialCorpus:
                 ),
             )
 
+    def add_blueprint_predictions(
+        self,
+        case_id: str,
+        metrics: Mapping[str, float],
+        *,
+        confidence: float,
+    ) -> None:
+        """Capture existing heuristic metrics without fabricating human labels."""
+        for dimension in PERFORMANCE_DIMENSIONS:
+            if dimension in metrics:
+                self.add_prediction(
+                    case_id,
+                    dimension,
+                    float(metrics[dimension]) / 100.0,
+                    confidence,
+                )
+
     def add_prediction(self, case_id: str, dimension: str, value: float, confidence: float) -> None:
         if dimension not in DIMENSIONS and dimension not in PERFORMANCE_DIMENSIONS:
             raise ValueError(f"unsupported evaluation dimension: {dimension}")
