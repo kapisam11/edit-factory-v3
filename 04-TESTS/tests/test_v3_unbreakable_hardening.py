@@ -469,3 +469,40 @@ def test_editorial_corpus_separates_performance_predictions(tmp_path):
     report = corpus.correlation_report()
     assert report["dimensions"]["hook"]["samples"] == 0
     assert corpus.performance_report()["metrics"]["retention_heuristic"]["samples"] == 0
+
+def test_large_duration_drift_is_a_renderer_failure(tmp_path):
+    from ai_video_factory.v3_quality import RenderContractError, duration_delta_policy, normalize_duration
+    assert duration_delta_policy(0.25) == "controlled_correction"
+    assert duration_delta_policy(0.251) == "renderer_failure"
+    source = tmp_path / "source.mp4"
+    target = tmp_path / "target.mp4"
+    source.write_bytes(b"not-a-real-media-file")
+    with pytest.raises(RenderContractError):
+        normalize_duration(str(source), str(target), 20.0)
+
+
+def test_forward_migration_requires_an_explicit_registered_step():
+    from ai_video_factory.v3.migrations import migrate_to_version
+    blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=8))
+    with pytest.raises(ValueError, match="no explicit migration"):
+        migrate_to_version(blueprint.to_dict(), "9.9.9")
+
+
+def test_critical_clip_without_scene_evidence_is_rejected():
+    from ai_video_factory.v3.clip_evidence import build_clip_evidence
+    evidence = build_clip_evidence(
+        [{"purpose": "Payoff", "visual_style": "emotional proof"}],
+        {"top_scenes": []},
+        source_asset="source.mp4",
+    )
+    assert evidence[0]["status"] == "unsupported"
+
+
+def test_empirical_performance_report_needs_real_outcomes(tmp_path):
+    from ai_video_factory.editorial_corpus import CorpusCase, EditorialCorpus
+    corpus = EditorialCorpus(tmp_path / "corpus.sqlite")
+    corpus.add_case(CorpusCase("case-1", "video-1", "3.0.1", "3.0.0", {}))
+    corpus.add_prediction("case-1", "retention_heuristic", 0.75, 0.35)
+    report = corpus.performance_report()
+    assert report["metrics"]["retention_heuristic"]["samples"] == 0
+    assert report["metrics"]["retention_heuristic"]["status"] == "insufficient_samples"
