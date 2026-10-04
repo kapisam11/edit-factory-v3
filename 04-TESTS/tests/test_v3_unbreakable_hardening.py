@@ -291,3 +291,87 @@ def test_workspace_guard_rejects_foreign_generated_directory(tmp_path):
     )
     with pytest.raises(v3_stage_pipeline.V3InputError, match="dedicated jobs"):
         v3_stage_pipeline._guard_workspace_isolation(request)
+
+def test_pydantic_schema_boundary_rejects_nested_unknown_field():
+    blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=8))
+    payload = json.loads(json.dumps(blueprint.to_dict()))
+    payload["core_idea"]["unexpected"] = True
+    from ai_video_factory.v3.schema_models import validate_blueprint_model
+    with pytest.raises(ValueError):
+        validate_blueprint_model(payload)
+
+
+def test_explicit_forward_schema_migration_is_registered():
+    blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=8))
+    from ai_video_factory.v3.migrations import migrate_to_version
+    migrated = migrate_to_version(blueprint.to_dict(), "3.1.0")
+    assert migrated["schema_version"] == "3.1.0"
+    assert migrated["migration_history"][-1]["from"] == "3.0.0"
+    assert migrated["migration_history"][-1]["to"] == "3.1.0"
+
+
+def test_request_config_does_not_coerce_numeric_strings():
+    from ai_video_factory.v3_contracts import V3Request
+    request = V3Request(
+        input_video="input.mp4",
+        topic="topic",
+        package_dir="package",
+        target_seconds="8",  # type: ignore[arg-type]
+    )
+    with pytest.raises(TypeError):
+        request.config().validate()
+
+
+def test_audience_pacing_changes_clip_density():
+    fast = create_v3_blueprint(
+        "A subject",
+        config=V3Config(target_seconds=30, audience="fast gaming viewers"),
+    )
+    measured = create_v3_blueprint(
+        "A subject",
+        config=V3Config(target_seconds=30, audience="documentary history viewers"),
+    )
+    assert len(fast.clip_plan) >= len(measured.clip_plan)
+
+
+def test_render_ir_compiler_handles_clip_as_structural_noop():
+    from ai_video_factory.v3.effects import EffectCompiler, EffectKind, RenderIR
+    ir = EffectCompiler().compile([{
+        "time": 1.0,
+        "kind": "clip",
+        "confidence": 1.0,
+        "reason": "STRUCTURAL_CUT",
+    }])
+    assert ir.effects[0].kind is EffectKind.DO_NOTHING
+    graph = EffectCompiler().compile_ffmpeg_graph(RenderIR(effects=ir.effects))
+    assert graph.video_filters == ()
+
+
+def test_visual_qc_requires_effect_specific_signal():
+    from ai_video_factory.v3.visual_qc import verify_visual_effect
+    baseline = bytes([80] * (160 * 90))
+    rendered = bytes([120] * (160 * 90))
+    result = verify_visual_effect(
+        baseline,
+        rendered,
+        effect_kind="caption",
+        expected_change=1.0,
+    )
+    assert result.passed is False
+    assert result.semantic_signal == result.lower_band_change
+
+
+def test_corrupt_media_is_rejected_by_render_contract():
+    from ai_video_factory.v3_quality import RenderContractError, probe_media
+    broken = Path("broken.mp4")
+    broken.write_bytes(b"not-a-real-mp4")
+    with pytest.raises(RenderContractError):
+        probe_media(str(broken))
+
+
+def test_empirical_corpus_never_fabricates_labels(tmp_path):
+    from ai_video_factory.editorial_corpus import CorpusCase, EditorialCorpus
+    corpus = EditorialCorpus(tmp_path / "corpus.sqlite")
+    corpus.add_case(CorpusCase("case-1", "video-1", "3.0.0", "3.0.0", {}))
+    corpus.add_prediction("case-1", "retention_heuristic", 0.8, 0.35)
+    assert corpus.performance_report()["metrics"]["retention_heuristic"]["status"] == "insufficient_samples"
