@@ -157,6 +157,24 @@ class EffectCompiler:
             )
         )
 
+    def compile_ffmpeg_filter_complex(
+        self,
+        render_ir: RenderIR,
+        *,
+        output_width: int = 1080,
+        output_height: int = 1920,
+        input_width: int | None = None,
+        input_height: int | None = None,
+    ) -> CompiledRenderGraph:
+        return _compile_ffmpeg_filter_complex(
+            self,
+            render_ir,
+            output_width=output_width,
+            output_height=output_height,
+            input_width=input_width,
+            input_height=input_height,
+        )
+
     def compile_ffmpeg_graph(
         self,
         render_ir: RenderIR,
@@ -324,8 +342,6 @@ def _compile_ffmpeg_filter_complex(
         video_output_label=current,
     )
 
-
-EffectCompiler.compile_ffmpeg_filter_complex = _compile_ffmpeg_filter_complex
 
 
 __all__ = [
