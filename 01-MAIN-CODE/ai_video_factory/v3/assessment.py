@@ -54,11 +54,24 @@ def automated_editorial_checks(core: engine.CoreIdea, edit_type: engine.EditType
     checks["retention_editorial_fit"] = retention_report.passed
     warnings.extend(f"retention: {warning}" for warning in retention_report.warnings)
     score = round(100 * sum(checks.values()) / len(checks)) if checks else 0
+    blocking_checks = (
+        "emotion_defined",
+        "single_edit_type_strategy",
+        "hook_context_gap",
+        "every_clip_has_purpose",
+        "overlay_word_limit",
+        "no_duplicate_overlays",
+        "duration_bounds",
+        "exact_duration",
+        "retention_semantic_coverage",
+        "has_payoff",
+        "has_final_impact",
+        "hook_payoff_continuity",
+        "retention_editorial_fit",
+    )
+    passed = bool(checks) and all(checks[name] for name in blocking_checks)
     return engine.QualityReport(
-        score >= 95 and all(
-            checks[k]
-            for k in ("emotion_defined", "single_edit_type_strategy", "duration_bounds", "exact_duration", "has_payoff")
-        ),
+        passed,
         score,
         checks,
         warnings,
