@@ -905,15 +905,40 @@ class EvaluationCaptureStage:
                     "content_manifest", {}
                 ),
                 "final_metadata": context.baseline_summary.get("final_metadata", {}),
+                "editorial_prediction_method": "deterministic blueprint QC heuristics",
+                "editorial_prediction_dimensions": [
+                    "hook", "pacing", "coherence", "caption_quality", "payoff", "overall"
+                ],
             },
         )
         corpus = EditorialCorpus(corpus_path)
         corpus.add_case(case)
+        quality_checks = context.payload.get("quality", {}).get("checks", {})
+        def check_score(*names: str) -> float:
+            values = [1.0 if bool(quality_checks.get(name)) else 0.0 for name in names if name in quality_checks]
+            return round(sum(values) / len(values), 4) if values else 0.0
+
+        # These are deterministic editorial predictions derived from the blueprint's
+        # own QC evidence. They are explicitly predictions, never human labels.
+        editorial_predictions = {
+            "hook": check_score("hook_under_two_seconds", "hook_context_gap"),
+            "pacing": check_score("duration_bounds", "exact_duration", "retention_semantic_coverage"),
+            "coherence": check_score("single_edit_type_strategy", "every_clip_has_purpose", "hook_context_gap"),
+            "caption_quality": check_score("overlay_word_limit", "no_duplicate_overlays"),
+            "payoff": check_score("has_payoff", "has_final_impact"),
+        }
+        editorial_predictions["overall"] = round(
+            sum(editorial_predictions.values()) / len(editorial_predictions), 4
+        )
+        prediction_metrics = {
+            **dict(context.payload.get("metrics", {})),
+            **{name: value * 100.0 for name, value in editorial_predictions.items()},
+        }
         corpus.add_blueprint_predictions(
             context.job_id,
-            context.payload.get("metrics", {}),
+            prediction_metrics,
             confidence=float(
-                context.blueprint.score_bundle.performance_confidence
+                context.blueprint.score_bundle.creative_quality_confidence
                 if context.blueprint is not None
                 else 0.0
             ),
