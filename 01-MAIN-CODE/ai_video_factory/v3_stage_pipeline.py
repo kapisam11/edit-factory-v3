@@ -716,11 +716,14 @@ class SourceAnalysisStage:
             )
         except SceneAnalysisError:
             raise
-        save_scene_index(
-            scenes,
-            str(context.package / "scenes.json"),
-            source_video=str(context.request.input_video),
-        )
+        try:
+            save_scene_index(
+                scenes,
+                str(context.package / "scenes.json"),
+                source_video=str(context.request.input_video),
+            )
+        except (OSError, IOError, RuntimeError, ValueError) as exc:
+            raise V3PipelineError(f"scene index persistence failed: {exc}") from exc
         ranked = sorted(
             scenes,
             key=lambda scene: (scene.importance_score, scene.motion_score, scene.audio_energy),
