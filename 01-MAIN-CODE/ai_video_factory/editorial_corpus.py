@@ -130,7 +130,14 @@ class EditorialCorpus:
             name: ([], []) for name in DIMENSIONS
         }
         for case_id, dimension, value, raw_scores in rows:
+            # Performance predictions share the same storage table but do not
+            # have 1..5 human editorial ratings. Keep them for performance_report
+            # and exclude them from the editorial correlation calculation.
+            if dimension not in DIMENSIONS:
+                continue
             scores = json.loads(raw_scores)
+            if dimension not in scores:
+                continue
             by_dimension[dimension][0].append(float(value))
             by_dimension[dimension][1].append(float(scores[dimension]) / 5.0)
         dimensions: dict[str, Any] = {}
