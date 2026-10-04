@@ -36,9 +36,11 @@ def test_blueprint_rejects_missing_required_field():
 def test_legacy_source_metadata_is_migrated_out():
     blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=8))
     payload = blueprint.to_dict()
+    payload["schema_version"] = "3.0.0"
     payload["source_metadata"] = {"rights_status": "owned"}
     migrated = migrate_to_current(payload)
     assert "source_metadata" not in migrated
+    assert migrated["schema_version"] == "3.0.1"
     assert V3Blueprint.from_dict(migrated).version == "3.0.0"
 
 
