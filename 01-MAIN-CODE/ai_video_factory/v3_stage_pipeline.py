@@ -1105,6 +1105,7 @@ class ReleaseEvidenceStage:
                 "final_content_manifest.json",
                 "final_metadata.json",
                 "clip_source_evidence.json",
+                "v3_evaluation_report.json",
             ),
         )
         atomic_write_json(context.package / "artifact_manifest.json", manifest)
