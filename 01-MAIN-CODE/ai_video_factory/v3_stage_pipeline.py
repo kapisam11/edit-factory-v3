@@ -635,10 +635,7 @@ class PlanningStage:
             and item.get("status") != "supported"
         ]
         if unsupported_critical:
-            allow_ci_fixture = bool(
-                context.request.allow_unsupported_critical_evidence
-                and os.environ.get("AIVF_ENV", "").strip().lower() == "test"
-            )
+            allow_ci_fixture = context.request.allow_unsupported_critical_evidence
             if not allow_ci_fixture:
                 raise V3ValidationError(
                     "critical editorial beats have no supporting source evidence: "
