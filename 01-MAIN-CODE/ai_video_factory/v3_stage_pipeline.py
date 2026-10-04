@@ -825,6 +825,61 @@ class MediaValidationStage:
             )
 
 
+class EvaluationCaptureStage:
+    """Capture the produced job in the empirical corpus without fabricating labels."""
+
+    name = "evaluation_capture"
+
+    def run(self, context: V3ExecutionContext) -> None:
+        if context.result.errors or not context.result.final_video:
+            return
+        from .editorial_corpus import CorpusCase, EditorialCorpus
+
+        corpus_path = Path(
+            os.environ.get(
+                "AIVF_EDITORIAL_CORPUS_PATH",
+                str(context.package / "editorial_corpus.sqlite"),
+            )
+        )
+        case = CorpusCase(
+            case_id=context.job_id,
+            video_id=context.job_id,
+            blueprint_version=str(context.payload.get("version", "3.0.0")),
+            renderer_version=str(
+                context.creative_provenance.get("renderer_version", "3.0.0")
+            ),
+            metadata={
+                "final_video": str(context.result.final_video),
+                "edit_type": context.payload.get("edit_type", ""),
+                "platform": context.request.platform,
+                "final_content_manifest": context.baseline_summary.get(
+                    "content_manifest", {}
+                ),
+                "final_metadata": context.baseline_summary.get("final_metadata", {}),
+            },
+        )
+        corpus = EditorialCorpus(corpus_path)
+        corpus.add_case(case)
+        corpus.add_blueprint_predictions(
+            context.job_id,
+            context.payload.get("metrics", {}),
+            confidence=float(
+                context.blueprint.score_bundle.performance_confidence
+                if context.blueprint is not None
+                else 0.0
+            ),
+        )
+        report = corpus.performance_report()
+        report["correlation"] = corpus.correlation_report()
+        report["case_id"] = context.job_id
+        report["labels_present"] = False
+        report["label_policy"] = (
+            "Human annotations and platform outcomes must be supplied explicitly; "
+            "the pipeline never invents them."
+        )
+        atomic_write_json(context.package / "v3_evaluation_report.json", report)
+
+
 class PackagingStage:
     name = "packaging"
 
@@ -1103,6 +1158,7 @@ class V3PipelineRunner:
             MediaValidationStage(),
             ComplianceStage(),
             PackagingStage(),
+            EvaluationCaptureStage(),
             StageIdentityStage(),
             ReleaseEvidenceStage(),
         ))
@@ -1227,6 +1283,7 @@ class V3PipelineRunner:
             "final_content_manifest",
             "final_metadata",
             "clip_source_evidence",
+            "v3_evaluation_report",
         )
         context.result.artifacts.update(
             {
@@ -1248,6 +1305,7 @@ __all__ = [
     "InputValidationStage",
     "MediaValidationStage",
     "PackagingStage",
+    "EvaluationCaptureStage",
     "PlanningStage",
     "ReleaseEvidenceStage",
     "RenderStage",
