@@ -562,12 +562,17 @@ class PlanningStage:
 
     def run(self, context: V3ExecutionContext) -> None:
         config = context.request.config()
+        planning_footage_evidence = (
+            None
+            if context.request.allow_unsupported_critical_evidence
+            else context.footage_evidence
+        )
         blueprint = create_v3_blueprint(
             context.request.topic,
             context=context.request.context,
             config=config,
             edit_type=context.request.edit_type,
-            footage_evidence=context.footage_evidence,
+            footage_evidence=planning_footage_evidence,
         )
         validate_blueprint(blueprint)
         path = context.package / "v3_blueprint.json"
