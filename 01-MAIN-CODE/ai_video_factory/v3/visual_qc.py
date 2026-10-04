@@ -146,7 +146,37 @@ def _center_edge_contrast(frame: bytes) -> float:
 def _spatial_scale_signal(first: bytes, second: bytes) -> float:
     center_change = abs(_center_edge_contrast(first) - _center_edge_contrast(second))
     edge_change = abs(_edge_energy(first) - _edge_energy(second))
-    return max(0.0, min(1.0, 0.65 * min(1.0, center_change * 4.0) + 0.35 * min(1.0, edge_change * 6.0)))
+    center_band = _region_delta(
+        first,
+        second,
+        y0=int(_FRAME_HEIGHT * 0.25),
+        y1=int(_FRAME_HEIGHT * 0.75),
+    ) / 255.0
+    outer_band = (
+        _region_delta(
+            first,
+            second,
+            y0=0,
+            y1=int(_FRAME_HEIGHT * 0.25),
+        )
+        + _region_delta(
+            first,
+            second,
+            y0=int(_FRAME_HEIGHT * 0.75),
+            y1=_FRAME_HEIGHT,
+        )
+    ) / (2.0 * 255.0)
+    spatial_distribution_change = abs(center_band - outer_band)
+    distribution_signal = min(1.0, spatial_distribution_change * 3.0)
+    return max(
+        0.0,
+        min(
+            1.0,
+            0.50 * min(1.0, center_change * 4.0)
+            + 0.25 * min(1.0, edge_change * 6.0)
+            + 0.25 * distribution_signal,
+        ),
+    )
 
 
 def verify_visual_effect(
