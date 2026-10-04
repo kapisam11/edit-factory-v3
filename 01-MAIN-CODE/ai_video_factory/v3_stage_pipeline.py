@@ -1011,7 +1011,7 @@ class ComplianceStage:
             target_seconds=context.request.target_seconds,
             platform_profile=context.payload["platform_variants"][context.request.platform],
             package_dir=str(context.package),
-            upload_package_required=True,
+            upload_package_required=False,
             publish_required=False,
             metadata_guardrails_ok=metadata_ok,
         )
@@ -1212,8 +1212,8 @@ class V3PipelineRunner:
             PlanningStage(),
             RenderStage(),
             MediaValidationStage(),
-            PackagingStage(),
             ComplianceStage(),
+            PackagingStage(),
             EvaluationCaptureStage(),
             StageIdentityStage(),
             ReleaseEvidenceStage(),
