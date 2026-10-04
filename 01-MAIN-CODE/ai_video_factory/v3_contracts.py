@@ -27,6 +27,7 @@ class V3Request:
     enable_diarization: bool = False
     diarization_token: str | None = None
     seed: int = 0
+    allow_unsupported_critical_evidence: bool = False
 
     def config(self) -> V3Config:
         return V3Config(
