@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 from .v3_engine import V3Config
@@ -64,6 +65,11 @@ class V3Request:
 
         if self.context and len(str(self.context)) > 2000:
             raise V3InputError("context must be <= 2000 characters")
+
+        if self.allow_unsupported_critical_evidence and os.environ.get("AIVF_ENV", "").strip().lower() != "test":
+            raise V3InputError(
+                "allow_unsupported_critical_evidence is restricted to test environments"
+            )
 
 
 __all__ = ["V3Request"]
