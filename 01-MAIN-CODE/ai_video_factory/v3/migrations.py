@@ -93,7 +93,9 @@ def migrate_to_current(payload: Mapping[str, Any]) -> dict[str, Any]:
     data = dict(payload)
     source = str(data.get("schema_version") or data.get("version") or LEGACY_VERSION)
     if source == CURRENT_VERSION:
-        return _normalize_legacy(data)
+        result = _normalize_legacy(data)
+        result.setdefault("schema_version", CURRENT_VERSION)
+        return result
     if source == LEGACY_VERSION:
         return migrate_3_0_0_to_3_0_1(data)
     raise ValueError(
