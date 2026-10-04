@@ -374,6 +374,7 @@ def run_v3_pipeline(
     enable_diarization: bool = False,
     diarization_token: Optional[str] = None,
     source_metadata: Optional[Dict[str, Any]] = None,
+    allow_unsupported_critical_evidence: bool = False,
 ) -> ProductionResult:
     """Run V3 through the explicit production stages without pre-resetting the workspace.
 
@@ -396,6 +397,7 @@ def run_v3_pipeline(
         enable_object_detection=enable_object_detection,
         enable_diarization=enable_diarization,
         diarization_token=diarization_token,
+        allow_unsupported_critical_evidence=allow_unsupported_critical_evidence,
     )
     request.validate()
     environment = os.environ.get("AIVF_ENV", "production").strip().lower()
