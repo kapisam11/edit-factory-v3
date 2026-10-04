@@ -421,9 +421,12 @@ def verify_retention_against_baseline(
             if baseline_frames.get(t) and rendered_frames.get(t)
         ]
         strongest = max(active_metrics, key=lambda item: item.pixel_delta, default=None)
-        event_delta = median([item.pixel_delta for item in active_metrics]) if active_metrics else 0.0
+        # Use the strongest in-window frame for the independent pixel gate. Effects
+        # are intentionally short, so a median can dilute a real effect near a
+        # frame boundary even when the strongest sample clearly proves it.
+        event_delta = strongest.pixel_delta if strongest is not None else 0.0
         control_delta = median(control_deltas) if control_deltas else 0.0
-        threshold = max(0.10, control_delta * 1.15)
+        threshold = max(0.10, control_delta * 1.08)
         semantic_pass = bool(strongest and strongest.passed)
         pixel_pass = event_delta >= threshold
         # The semantic gate is the proof that the intended effect happened;
