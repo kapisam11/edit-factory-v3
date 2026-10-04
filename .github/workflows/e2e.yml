@@ -133,7 +133,7 @@ jobs:
           test -f "$PACKAGE_DIR/artifact_manifest.json"
           test -f "$PACKAGE_DIR/release_evidence.json"
           test -f "$PACKAGE_DIR/environment_fingerprint.json"
-          uv run python - "$PACKAGE_DIR" <<'PY'
+          PYTHONPATH="01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE" .venv/bin/python - "$PACKAGE_DIR" <<'PY'
           from PIL import Image
           from pathlib import Path
           import sys
@@ -143,7 +143,7 @@ jobs:
           with Image.open(package / 'thumbnail_vertical.png') as thumbnail:
               assert thumbnail.size == (1080, 1920)
           PY
-          uv run python - "$PACKAGE_DIR" <<'PY'
+          PYTHONPATH="01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE" .venv/bin/python - "$PACKAGE_DIR" <<'PY'
           import json
           import sys
           from pathlib import Path
