@@ -702,11 +702,16 @@ class SourceAnalysisStage:
             metadata = {"ok": False, "error": str(exc)}
         atomic_write_json(context.package / "source_media_metadata.json", metadata)
 
+        config = context.request.config()
+        requested_scene_count = max(
+            6,
+            min(24, int(math.ceil(config.target_seconds / 2.7))),
+        )
         try:
             scenes = analyze_video(
                 context.request.input_video,
                 sample_seconds=2.5,
-                min_scenes=len(context.blueprint.clip_plan) if context.blueprint else 0,
+                min_scenes=requested_scene_count,
                 enable_ocr=context.request.enable_ocr,
             )
         except SceneAnalysisError:
