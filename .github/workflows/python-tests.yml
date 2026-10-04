@@ -161,12 +161,12 @@ jobs:
       run: >-
         uv run pytest -q
         04-TESTS/tests
-        --ignore=04-TESTS/tests/test_v3_*.py
-        --ignore=04-TESTS/tests/test_dashboard_*.py
+        --ignore-glob=04-TESTS/tests/test_v3_*.py
+        --ignore-glob=04-TESTS/tests/test_dashboard_*.py
         --ignore=04-TESTS/tests/test_job_service.py
         --ignore=04-TESTS/tests/test_config_roundtrip.py
-        --ignore=04-TESTS/tests/test_media_*.py
-        --ignore=04-TESTS/tests/test_render_engine*.py
+        --ignore-glob=04-TESTS/tests/test_media_*.py
+        --ignore-glob=04-TESTS/tests/test_render_engine*.py
         --ignore=04-TESTS/tests/test_real_media_health.py
         --ignore=04-TESTS/tests/test_real_render_integration.py
         --ignore=04-TESTS/tests/test_quality_control_v3.py
