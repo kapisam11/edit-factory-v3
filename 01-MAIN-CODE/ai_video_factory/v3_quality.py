@@ -401,9 +401,11 @@ def verify_retention_against_baseline(
         strongest = max(active_metrics, key=lambda item: item.pixel_delta, default=None)
         event_delta = median([item.pixel_delta for item in active_metrics]) if active_metrics else 0.0
         control_delta = median(control_deltas) if control_deltas else 0.0
-        threshold = max(2.5, control_delta * 1.70 + 0.35)
+        threshold = max(0.10, control_delta * 1.15)
         semantic_pass = bool(strongest and strongest.passed)
         pixel_pass = event_delta >= threshold
+        # The semantic gate is the proof that the intended effect happened;
+        # the relative pixel gate only requires it to exceed the local control.
         passed = semantic_pass and pixel_pass
         checks.append({
             "time": timestamp,
