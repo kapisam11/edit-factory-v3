@@ -1,12 +1,17 @@
-"""Multi-signal, effect-specific visual verification primitives."""
+"""Multi-signal visual verification primitives for rendered retention effects.
+
+The verifier treats pixel change as evidence, not proof. Each semantic effect has
+an additional signal chosen for the intended editorial behavior.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 
-FRAME_WIDTH = 160
-FRAME_HEIGHT = 90
+_FRAME_WIDTH = 160
+_FRAME_HEIGHT = 90
+_FRAME_SIZE = _FRAME_WIDTH * _FRAME_HEIGHT
 
 
 @dataclass(frozen=True)
@@ -16,9 +21,12 @@ class VisualVerification:
     ssim_like: float
     optical_flow: float | None
     scene_change: bool
-    semantic_signals: Mapping[str, float | bool | None]
     passed: bool
     reason: str
+    semantic_signal: float = 0.0
+    spatial_scale_signal: float = 0.0
+    lower_band_change: float = 0.0
+    structural_change: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -27,9 +35,12 @@ class VisualVerification:
             "ssim_like": round(self.ssim_like, 4),
             "optical_flow": None if self.optical_flow is None else round(self.optical_flow, 3),
             "scene_change": self.scene_change,
-            "semantic_signals": dict(self.semantic_signals),
             "passed": self.passed,
             "reason": self.reason,
+            "semantic_signal": round(self.semantic_signal, 3),
+            "spatial_scale_signal": round(self.spatial_scale_signal, 3),
+            "lower_band_change": round(self.lower_band_change, 3),
+            "structural_change": round(self.structural_change, 3),
         }
 
 
@@ -70,26 +81,62 @@ def _pixel_delta(first: bytes, second: bytes) -> float:
     return sum(abs(a - b) for a, b in zip(first, second)) / len(first)
 
 
-def _region_delta(first: bytes, second: bytes, x0: int, x1: int, y0: int, y1: int) -> float:
-    if len(first) != FRAME_WIDTH * FRAME_HEIGHT or len(second) != len(first):
+def _edge_energy(frame: bytes) -> float:
+    if len(frame) != _FRAME_SIZE:
         return 0.0
-    values: list[int] = []
-    for y in range(max(0, y0), min(FRAME_HEIGHT, y1)):
-        start = y * FRAME_WIDTH
-        for x in range(max(0, x0), min(FRAME_WIDTH, x1)):
-            index = start + x
-            values.append(abs(first[index] - second[index]))
-    return sum(values) / max(1, len(values))
+    horizontal = sum(
+        abs(frame[row * _FRAME_WIDTH + col] - frame[row * _FRAME_WIDTH + col - 1])
+        for row in range(_FRAME_HEIGHT)
+        for col in range(1, _FRAME_WIDTH)
+    )
+    vertical = sum(
+        abs(frame[row * _FRAME_WIDTH + col] - frame[(row - 1) * _FRAME_WIDTH + col])
+        for row in range(1, _FRAME_HEIGHT)
+        for col in range(_FRAME_WIDTH)
+    )
+    return (horizontal + vertical) / max(1.0, float(2 * _FRAME_SIZE))
 
 
-def _spatial_signals(first: bytes, second: bytes) -> dict[str, float]:
-    center = _region_delta(first, second, 40, 120, 20, 70)
-    outer = _region_delta(first, second, 0, 160, 0, 90)
-    return {
-        "center_delta": round(center, 3),
-        "outer_delta": round(outer, 3),
-        "center_focus_ratio": round(center / max(0.001, outer), 3),
-    }
+def _region_delta(first: bytes, second: bytes, *, y0: int, y1: int) -> float:
+    if len(first) != _FRAME_SIZE or len(second) != _FRAME_SIZE:
+        return 0.0
+    start = max(0, min(_FRAME_HEIGHT, y0))
+    end = max(start, min(_FRAME_HEIGHT, y1))
+    if end <= start:
+        return 0.0
+    total = 0
+    count = 0
+    for row in range(start, end):
+        base = row * _FRAME_WIDTH
+        for col in range(_FRAME_WIDTH):
+            total += abs(first[base + col] - second[base + col])
+            count += 1
+    return total / max(1, count)
+
+
+def _center_edge_contrast(frame: bytes) -> float:
+    if len(frame) != _FRAME_SIZE:
+        return 0.0
+    cx0, cx1 = _FRAME_WIDTH // 4, (_FRAME_WIDTH * 3) // 4
+    cy0, cy1 = _FRAME_HEIGHT // 4, (_FRAME_HEIGHT * 3) // 4
+    center = []
+    outer = []
+    for row in range(_FRAME_HEIGHT):
+        for col in range(_FRAME_WIDTH):
+            value = frame[row * _FRAME_WIDTH + col]
+            if cx0 <= col < cx1 and cy0 <= row < cy1:
+                center.append(value)
+            else:
+                outer.append(value)
+    center_mean = sum(center) / max(1, len(center))
+    outer_mean = sum(outer) / max(1, len(outer))
+    return abs(center_mean - outer_mean) / 255.0
+
+
+def _spatial_scale_signal(first: bytes, second: bytes) -> float:
+    center_change = abs(_center_edge_contrast(first) - _center_edge_contrast(second))
+    edge_change = abs(_edge_energy(first) - _edge_energy(second))
+    return max(0.0, min(1.0, 0.65 * min(1.0, center_change * 4.0) + 0.35 * min(1.0, edge_change * 6.0)))
 
 
 def verify_visual_effect(
@@ -99,55 +146,47 @@ def verify_visual_effect(
     effect_kind: str,
     expected_change: float = 2.5,
     optical_flow: float | None = None,
-    semantic_context: Mapping[str, Any] | None = None,
 ) -> VisualVerification:
     pixel = _pixel_delta(baseline, rendered)
     histogram = _histogram_delta(baseline, rendered)
     ssim = _ssim_like(baseline, rendered)
+    spatial_scale = _spatial_scale_signal(baseline, rendered)
+    lower_band = _region_delta(
+        baseline,
+        rendered,
+        y0=int(_FRAME_HEIGHT * 0.68),
+        y1=_FRAME_HEIGHT,
+    ) / 255.0
+    structural = max(
+        0.0,
+        min(
+            1.0,
+            0.45 * min(1.0, histogram * 2.0)
+            + 0.35 * min(1.0, max(0.0, 1.0 - ssim) * 8.0)
+            + 0.20 * spatial_scale,
+        ),
+    )
     scene_change = histogram >= 0.35 and ssim <= 0.70
     kind = str(effect_kind).strip().lower()
-    spatial = _spatial_signals(baseline, rendered)
-    signals: dict[str, float | bool | None] = dict(spatial)
-    context = semantic_context or {}
 
-    if kind == "zoom":
-        spatial_ok = spatial["center_focus_ratio"] >= 1.01 and spatial["center_delta"] >= expected_change * 0.5
-        passed = pixel >= expected_change and ssim < 0.995 and spatial_ok
-        signals["spatial_scale_change"] = spatial_ok
-        reason = "zoom spatial-scale evidence detected" if passed else "zoom lacks localized spatial-scale evidence"
-    elif kind == "motion":
-        flow_ok = optical_flow is not None and optical_flow >= 0.5
-        proxy_ok = pixel >= expected_change and histogram < 0.35 and ssim < 0.995
-        passed = flow_ok or proxy_ok
-        signals["motion_flow"] = optical_flow
-        signals["motion_proxy"] = proxy_ok
-        reason = "motion evidence detected" if passed else "motion evidence not established"
-    elif kind in {"angle", "crop"}:
-        reframe_ok = spatial["center_delta"] >= expected_change * 0.5 and ssim < 0.995
-        passed = pixel >= expected_change and reframe_ok
-        signals["reframe_change"] = reframe_ok
-        reason = "reframe evidence detected" if passed else "reframe evidence not established"
+    if kind in {"zoom", "motion", "angle"}:
+        semantic_signal = max(spatial_scale, min(1.0, optical_flow or 0.0))
+        passed = pixel >= expected_change and ssim < 0.995 and semantic_signal >= 0.05
+        reason = "spatial-scale/reframe evidence detected" if passed else "insufficient spatial-scale/reframe evidence"
     elif kind in {"text", "caption"}:
-        expected_text = str(context.get("expected_text") or "").strip()
-        ocr_text = str(context.get("ocr_text") or "").strip()
-        text_observed = bool(ocr_text) and (
-            not expected_text or all(token.lower() in ocr_text.lower() for token in expected_text.split()[:4])
-        )
-        pixel_localized = max(spatial["center_delta"], _region_delta(baseline, rendered, 0, 160, 60, 90)) >= expected_change
-        passed = text_observed or pixel_localized
-        signals["ocr_text_observed"] = text_observed
-        signals["text_pixel_localized"] = pixel_localized
-        reason = "caption/text evidence detected" if passed else "caption/text evidence not measurable"
+        semantic_signal = lower_band
+        passed = pixel >= expected_change and lower_band >= 0.01
+        reason = "lower-band caption evidence detected" if passed else "caption-specific visual evidence not measurable"
     elif kind in {"clip", "cut"}:
-        passed = scene_change
-        signals["required_scene_change"] = True
-        reason = "source-shot change detected" if passed else "source-shot change not detected"
+        semantic_signal = structural
+        passed = scene_change or (semantic_signal >= 0.35 and pixel >= expected_change)
+        reason = "shot-transition evidence detected" if passed else "shot-transition evidence not measurable"
     elif kind in {"beat drop", "transition"}:
-        transition_signal = scene_change or (histogram >= 0.18 and ssim <= 0.82)
-        passed = transition_signal
-        signals["transition_signal"] = transition_signal
-        reason = "transition evidence detected" if passed else "transition evidence not established"
+        semantic_signal = max(structural, histogram)
+        passed = scene_change or (semantic_signal >= 0.25 and pixel >= expected_change)
+        reason = "transition evidence detected" if passed else "transition evidence not measurable"
     else:
+        semantic_signal = 0.0
         passed = False
         reason = "unsupported effect kind"
 
@@ -157,9 +196,12 @@ def verify_visual_effect(
         ssim,
         optical_flow,
         scene_change,
-        signals,
         passed,
         reason,
+        semantic_signal,
+        spatial_scale,
+        lower_band,
+        structural,
     )
 
 
