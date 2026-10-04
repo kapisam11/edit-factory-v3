@@ -54,8 +54,12 @@ def _clip_relevance(
     elif purpose in {"escalation", "conflict", "threat"}:
         temporal_role = min(1.0, 0.5 + abs(normalized - 0.5))
     role_weight = 0.50 if purpose in {"hook", "payoff", "punchline", "climax", "final impact"} else 0.20
-    role_support = role_weight * temporal_role
-    relevance = 0.50 * lexical + 0.30 * semantic + role_support
+    semantic_base = 0.50 * lexical + 0.30 * semantic
+    # Source position is secondary context only. It is explicitly zeroed when
+    # no lexical/semantic evidence exists, so timing can never manufacture support.
+    role_gate = min(1.0, semantic_base * 2.0)
+    role_support = role_weight * temporal_role * role_gate
+    relevance = semantic_base + role_support
     return lexical, semantic, relevance
 
 
@@ -121,11 +125,14 @@ def build_clip_evidence(
             })
             continue
 
+        semantic_supported = best_relevance > 0.0 and (
+            best_score > 0.10 and best_relevance >= 0.25
+        )
         status = (
             "supported"
-            if best_relevance >= 0.25 and best_score >= 0.30
+            if semantic_supported and best_score >= 0.30
             else "weak"
-            if best_relevance >= 0.10
+            if best_relevance >= 0.10 and best_score >= 0.12
             else "unsupported"
         )
         results.append({
