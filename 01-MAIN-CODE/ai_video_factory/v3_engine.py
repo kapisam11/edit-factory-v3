@@ -344,8 +344,6 @@ class V3Blueprint:
     def from_dict(cls, payload: Mapping[str, Any]) -> "V3Blueprint":
         payload = migrate_to_current(payload)
         payload = validate_blueprint_payload(payload)
-        from .v3.schema_models import validate_blueprint_model
-        payload = validate_blueprint_model(payload)
         try:
             core = CoreIdea(**dict(payload["core_idea"]))
             hooks = tuple(
