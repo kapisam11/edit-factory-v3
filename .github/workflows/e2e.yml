@@ -158,7 +158,13 @@ jobs:
           grep -Eqi "HOOK|CONTEXT|ESCALATION|SGALATION|PAYOFF|PAYO|FINAL|IMPACT" "$PACKAGE_DIR/scenes.json"
           cp "$PACKAGE_DIR/v3_readiness.json" "$RESULTS_DIR/v3-readiness.json"
           cp "$PACKAGE_DIR/v3_render_qc.json" "$RESULTS_DIR/v3-render-qc.json"
-          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$PACKAGE_DIR/final.v3.mp4"
+          package_probe="$RESULTS_DIR/package-probe.txt"
+          if ! ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$PACKAGE_DIR/final.v3.mp4" >"$package_probe" 2>&1; then
+            echo "PACKAGE_FFPROBE_FAILED"
+            cat "$package_probe"
+            exit 1
+          fi
+          echo "PACKAGE_DURATION=$(cat "$package_probe")"
           echo "Testing live preview endpoint..."
           set +e
           curl --http1.1 --retry 2 --retry-all-errors --connect-timeout 5 --max-time 60             --silent --show-error             --cookie "$COOKIE_JAR"             --dump-header "$RESULTS_DIR/v3-preview.headers"             --output "$RESULTS_DIR/v3-preview.mp4"             --write-out '%{http_code}'             "$BASE_URL/api/jobs/$JOB_ID/preview" > "$RESULTS_DIR/v3-preview.code"
@@ -179,7 +185,14 @@ jobs:
             exit 21
           fi
           test -s "$RESULTS_DIR/v3-preview.mp4"
-          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4"
+          preview_probe="$RESULTS_DIR/preview-probe.txt"
+          if ! ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$RESULTS_DIR/v3-preview.mp4" >"$preview_probe" 2>&1; then
+            echo "PREVIEW_FFPROBE_FAILED"
+            cat "$preview_probe"
+            file "$RESULTS_DIR/v3-preview.mp4" || true
+            exit 1
+          fi
+          echo "PREVIEW_DURATION=$(cat "$preview_probe")"
           python - <<'PY'
           import json
           import os
