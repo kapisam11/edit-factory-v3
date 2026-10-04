@@ -240,6 +240,7 @@ def _request_identity(
         "enable_ocr": request.enable_ocr,
         "enable_object_detection": request.enable_object_detection,
         "enable_diarization": request.enable_diarization,
+        "allow_unsupported_critical_evidence": request.allow_unsupported_critical_evidence,
         "diarization_token_hash": diarization_token_hash,
         "source_metadata": dict(source_metadata or {}),
     })
@@ -634,10 +635,10 @@ class PlanningStage:
             and item.get("status") != "supported"
         ]
         if unsupported_critical:
-            allow_ci_fixture = os.environ.get(
-                "AIVF_V3_ALLOW_UNSUPPORTED_CRITICAL_EVIDENCE",
-                "0",
-            ).strip() == "1"
+            allow_ci_fixture = bool(
+                context.request.allow_unsupported_critical_evidence
+                and os.environ.get("AIVF_ENV", "").strip().lower() == "test"
+            )
             if not allow_ci_fixture:
                 raise V3ValidationError(
                     "critical editorial beats have no supporting source evidence: "
