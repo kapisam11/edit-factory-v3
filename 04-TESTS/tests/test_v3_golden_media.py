@@ -52,6 +52,7 @@ def test_v3_golden_media_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         audience="gaming viewers",
         bpm=120,
         enable_object_detection=False,
+        allow_unsupported_critical_evidence=True,
     )
 
     assert result.errors == []
