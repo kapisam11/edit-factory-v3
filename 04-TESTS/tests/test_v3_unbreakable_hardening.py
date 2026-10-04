@@ -350,7 +350,10 @@ def test_render_ir_compiler_handles_clip_as_structural_noop():
 def test_visual_qc_requires_effect_specific_signal():
     from ai_video_factory.v3.visual_qc import verify_visual_effect
     baseline = bytes([80] * (160 * 90))
-    rendered = bytes([120] * (160 * 90))
+    rendered = bytearray(baseline)
+    for index in range(160 * 30):
+        rendered[index] = 120
+    rendered = bytes(rendered)
     result = verify_visual_effect(
         baseline,
         rendered,
