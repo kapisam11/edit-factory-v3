@@ -30,7 +30,7 @@ class V3Request:
 
     def config(self) -> V3Config:
         return V3Config(
-            target_seconds=float(self.target_seconds),
+            target_seconds=self.target_seconds,
             platform=self.platform,
             audience=self.audience,
             bpm=self.bpm,
