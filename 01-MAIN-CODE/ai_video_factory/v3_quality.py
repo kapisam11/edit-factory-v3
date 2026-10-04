@@ -450,7 +450,13 @@ def verify_retention_against_baseline(
         "rendered": os.path.abspath(rendered_path),
         "events": checks,
         "errors": [
-            f"retention event at {item['time']:.2f}s failed semantic or baseline-delta verification"
+            (
+                f"retention event at {item['time']:.2f}s failed verification: "
+                f"semantic={item['semantic_verification'] and item['semantic_verification'].get('reason')!s}; "
+                f"event_delta={item['event_delta']:.3f}; "
+                f"control_delta={item['control_delta']:.3f}; "
+                f"threshold={item['threshold']:.3f}"
+            )
             for item in missing
         ],
     }
