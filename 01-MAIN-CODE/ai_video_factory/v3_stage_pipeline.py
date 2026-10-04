@@ -32,7 +32,7 @@ from .provenance import (
     write_provenance,
 )
 from .rights_policy import rights_gate
-from .scene_intelligence import analyze_video, SceneAnalysisError
+from .scene_intelligence import analyze_video, save_scene_index, SceneAnalysisError
 from .system_diagnostics import diagnostics_report, write_diagnostics
 from .v3_asset_packager import V3AssetPackager
 from .v3_contracts import V3Request
@@ -176,6 +176,7 @@ _V3_GENERATED_FILES = frozenset({
     "v3_baseline.mp4",
     "source_media_health.json",
     "source_media_metadata.json",
+    "scenes.json",
     "final_media_health.json",
     "final_media_metadata.json",
     "provenance.json",
@@ -710,6 +711,11 @@ class SourceAnalysisStage:
             )
         except SceneAnalysisError:
             raise
+        save_scene_index(
+            scenes,
+            str(context.package / "scenes.json"),
+            source_video=str(context.request.input_video),
+        )
         ranked = sorted(
             scenes,
             key=lambda scene: (scene.importance_score, scene.motion_score, scene.audio_energy),
@@ -1123,6 +1129,7 @@ class ReleaseEvidenceStage:
                 "environment_fingerprint.json",
                 "editorial_decisions.json",
                 "source_manifest.json",
+                "scenes.json",
                 "creative_provenance.json",
                 "job_identity.json",
                 "final_content_manifest.json",
@@ -1319,6 +1326,7 @@ class V3PipelineRunner:
             "v3_stage_cache",
             "editorial_decisions",
             "source_manifest",
+            "scenes",
             "creative_provenance",
             "job_identity",
             "final_content_manifest",
