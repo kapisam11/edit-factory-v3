@@ -874,6 +874,14 @@ class MediaValidationStage:
             )
 
 
+def _editorial_corpus_path(context: V3ExecutionContext) -> Path:
+    """Keep the mutable empirical corpus outside immutable release artifacts."""
+    configured = os.environ.get("AIVF_EDITORIAL_CORPUS_PATH")
+    if configured:
+        return Path(configured)
+    return context.package.parent / "editorial_corpus.sqlite"
+
+
 class EvaluationCaptureStage:
     """Capture the produced job in the empirical corpus without fabricating labels."""
 
@@ -884,12 +892,7 @@ class EvaluationCaptureStage:
             return
         from .editorial_corpus import CorpusCase, EditorialCorpus
 
-        corpus_path = Path(
-            os.environ.get(
-                "AIVF_EDITORIAL_CORPUS_PATH",
-                str(context.package / "editorial_corpus.sqlite"),
-            )
-        )
+        corpus_path = _editorial_corpus_path(context)
         case = CorpusCase(
             case_id=context.job_id,
             video_id=context.job_id,
