@@ -99,11 +99,11 @@ jobs:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
       run: uv run --with setuptools python -c "from ai_video_factory.reproducible_build import build_twice; result=build_twice('.'); assert result['byte_identical'], result"
 
-    - name: Run full test suite with explicit coverage accounting
+    - name: Run V3 test group with explicit coverage accounting
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
       run: >-
-        uv run pytest -q 04-TESTS/tests
+        uv run pytest -q 04-TESTS/tests/test_v3_*.py
         --cov=ai_video_factory.v3_engine
         --cov=ai_video_factory.v3_semantics
         --cov=ai_video_factory.v3_quality
@@ -121,6 +121,63 @@ jobs:
         --cov-report=term-missing
         --cov-report=xml
         --cov-fail-under=0
+
+    - name: Run dashboard and job-service test group
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: >-
+        uv run pytest -q
+        04-TESTS/tests/test_dashboard_*.py
+        04-TESTS/tests/test_job_service.py
+        04-TESTS/tests/test_config_roundtrip.py
+        --cov=ai_video_factory.v3_engine --cov=ai_video_factory.v3_semantics --cov=ai_video_factory.v3_quality
+        --cov=ai_video_factory.v3_capabilities --cov=ai_video_factory.v3_pipeline
+        --cov=ai_video_factory.edit_planner --cov=ai_video_factory.effects_engine --cov=ai_video_factory.render_engine
+        --cov=ai_video_factory.composer --cov=dashboard_auth --cov=dashboard_worker --cov=dashboard_compat
+        --cov=dashboard_optimizations --cov=resource_governor --cov-report=term-missing --cov-append --cov-fail-under=0
+
+    - name: Run media and rendering test group
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: >-
+        uv run pytest -q
+        04-TESTS/tests/test_media_*.py
+        04-TESTS/tests/test_render_engine*.py
+        04-TESTS/tests/test_real_media_health.py
+        04-TESTS/tests/test_real_render_integration.py
+        04-TESTS/tests/test_quality_control_v3.py
+        04-TESTS/tests/test_v3_golden_media.py
+        04-TESTS/tests/test_v3_retention_independence.py
+        04-TESTS/tests/test_v3_effect_mapping.py
+        --cov=ai_video_factory.v3_engine --cov=ai_video_factory.v3_semantics --cov=ai_video_factory.v3_quality
+        --cov=ai_video_factory.v3_capabilities --cov=ai_video_factory.v3_pipeline
+        --cov=ai_video_factory.edit_planner --cov=ai_video_factory.effects_engine --cov=ai_video_factory.render_engine
+        --cov=ai_video_factory.composer --cov=dashboard_auth --cov=dashboard_worker --cov=dashboard_compat
+        --cov=dashboard_optimizations --cov=resource_governor --cov-report=term-missing --cov-append --cov-fail-under=0
+
+    - name: Run remaining repository tests
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: >-
+        uv run pytest -q
+        04-TESTS/tests
+        --ignore=04-TESTS/tests/test_v3_*.py
+        --ignore=04-TESTS/tests/test_dashboard_*.py
+        --ignore=04-TESTS/tests/test_job_service.py
+        --ignore=04-TESTS/tests/test_config_roundtrip.py
+        --ignore=04-TESTS/tests/test_media_*.py
+        --ignore=04-TESTS/tests/test_render_engine*.py
+        --ignore=04-TESTS/tests/test_real_media_health.py
+        --ignore=04-TESTS/tests/test_real_render_integration.py
+        --ignore=04-TESTS/tests/test_quality_control_v3.py
+        --ignore=04-TESTS/tests/test_v3_golden_media.py
+        --ignore=04-TESTS/tests/test_v3_retention_independence.py
+        --ignore=04-TESTS/tests/test_v3_effect_mapping.py
+        --cov=ai_video_factory.v3_engine --cov=ai_video_factory.v3_semantics --cov=ai_video_factory.v3_quality
+        --cov=ai_video_factory.v3_capabilities --cov=ai_video_factory.v3_pipeline
+        --cov=ai_video_factory.edit_planner --cov=ai_video_factory.effects_engine --cov=ai_video_factory.render_engine
+        --cov=ai_video_factory.composer --cov=dashboard_auth --cov=dashboard_worker --cov=dashboard_compat
+        --cov=dashboard_optimizations --cov=resource_governor --cov-report=term-missing --cov-append --cov-fail-under=0
 
     - name: Enforce V3 core coverage gate
       run: >-
