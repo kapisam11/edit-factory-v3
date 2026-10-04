@@ -186,8 +186,7 @@ class EffectCompiler:
                 zoom_h = f"if({gate},ceil(ih*1.08/2)*2,ih)"
                 filters.append(
                     f"scale=w='{zoom_w}':h='{zoom_h}':eval=frame:flags=lanczos,"
-                    f"crop={source_width}:{source_height}:x=(iw-ow)/2:y=(ih-oh)/2,"
-                    f"scale={int(output_width)}:{int(output_height)}:flags=lanczos"
+                    f"crop={source_width}:{source_height}:x=(iw-ow)/2:y=(ih-oh)/2"
                 )
             elif effect.kind is EffectKind.CROP:
                 gate = f"between(t,{start:.3f},{end:.3f})"
@@ -196,9 +195,8 @@ class EffectCompiler:
                 crop_w = f"if({gate},iw,{source_width})"
                 crop_h = f"if({gate},ih,{source_height})"
                 filters.append(
-                    f"scale={source_width}:{source_height}:flags=lanczos,"
-                    f"crop={source_width}:{source_height}:x='{crop_x}':y='{crop_y}',"
-                    f"scale={int(output_width)}:{int(output_height)}:flags=lanczos"
+                    f"scale=w='{crop_w}':h='{crop_h}':eval=frame:flags=lanczos,"
+                    f"crop={source_width}:{source_height}:x='{crop_x}':y='{crop_y}'"
                 )
             elif effect.kind is EffectKind.CAPTION:
                 text = _escape_drawtext(str(effect.parameters.get("text") or "Key detail"))
