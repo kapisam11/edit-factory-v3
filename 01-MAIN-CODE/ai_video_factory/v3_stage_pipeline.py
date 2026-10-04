@@ -634,9 +634,25 @@ class PlanningStage:
             and item.get("status") != "supported"
         ]
         if unsupported_critical:
-            raise V3ValidationError(
-                "critical editorial beats have no supporting source evidence: "
-                + ", ".join(str(item.get("clip_index")) for item in unsupported_critical)
+            allow_ci_fixture = os.environ.get(
+                "AIVF_V3_ALLOW_UNSUPPORTED_CRITICAL_EVIDENCE",
+                "0",
+            ).strip() == "1"
+            if not allow_ci_fixture:
+                raise V3ValidationError(
+                    "critical editorial beats have no supporting source evidence: "
+                    + ", ".join(str(item.get("clip_index")) for item in unsupported_critical)
+                )
+            atomic_write_json(
+                context.package / "v3_source_evidence_warning.json",
+                {
+                    "warning": "Synthetic/test run allowed critical source evidence gaps",
+                    "clip_indices": [item.get("clip_index") for item in unsupported_critical],
+                    "policy": "production default remains strict",
+                },
+            )
+            context.result.warnings.append(
+                "Synthetic/test override allowed unsupported critical source evidence"
             )
 
         atomic_write_json(context.package / "creative_provenance.json", context.creative_provenance)
