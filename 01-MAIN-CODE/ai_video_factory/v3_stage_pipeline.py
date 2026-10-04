@@ -954,12 +954,43 @@ class EvaluationCaptureStage:
         atomic_write_json(context.package / "v3_evaluation_report.json", report)
 
 
+
+def _prepare_final_content_metadata(context: V3ExecutionContext) -> dict[str, Any]:
+    """Build authoritative content/metadata artifacts before upload packaging."""
+    content_manifest = build_final_content_manifest(
+        topic=context.request.topic,
+        blueprint=context.payload,
+        footage_evidence=context.footage_evidence,
+        final_media_metadata=context.final_media_metadata,
+        source_manifest=context.source_manifest,
+    )
+    final_metadata = generate_final_metadata(
+        content_manifest,
+        source_manifest=context.source_manifest,
+    )
+    atomic_write_json(context.package / "final_content_manifest.json", content_manifest)
+    atomic_write_json(context.package / "final_metadata.json", final_metadata)
+    summary = dict(context.baseline_summary)
+    summary.update(
+        {
+            "content_manifest": content_manifest,
+            "final_metadata": final_metadata,
+            "source_manifest": context.source_manifest,
+        }
+    )
+    context.baseline_summary = summary
+    return final_metadata
+
+
 class PackagingStage:
     name = "packaging"
 
     def run(self, context: V3ExecutionContext) -> None:
         if context.result.errors or not context.result.final_video:
             return
+        # Packaging deliberately precedes compliance, so author the final metadata
+        # before the upload package is assembled rather than packaging stale fallbacks.
+        _prepare_final_content_metadata(context)
         V3AssetPackager().package(
             result=context.result,
             package=context.package,
@@ -1237,8 +1268,8 @@ class V3PipelineRunner:
             PlanningStage(),
             RenderStage(),
             MediaValidationStage(),
-            ComplianceStage(),
             PackagingStage(),
+            ComplianceStage(),
             EvaluationCaptureStage(),
             StageIdentityStage(),
             ReleaseEvidenceStage(),
