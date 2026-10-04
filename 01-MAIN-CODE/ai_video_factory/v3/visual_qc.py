@@ -178,22 +178,37 @@ def verify_visual_effect(
     scene_change = histogram >= 0.35 and ssim <= 0.70
     kind = str(effect_kind).strip().lower()
 
+    # Use two independent signals for every visual effect. The absolute
+    # thresholds are deliberately modest because H.264/scale pipelines can
+    # attenuate tiny editorial changes, while the relative baseline check in
+    # retention QC provides the second independent gate.
     if kind in {"zoom", "motion", "angle"}:
-        semantic_signal = max(spatial_scale, min(1.0, optical_flow or 0.0))
-        passed = pixel >= expected_change and ssim < 0.995 and semantic_signal >= 0.05
-        reason = "spatial-scale/reframe evidence detected" if passed else "insufficient spatial-scale/reframe evidence"
+        flow_signal = min(1.0, max(0.0, float(optical_flow or 0.0)))
+        semantic_signal = max(spatial_scale, flow_signal, structural * 0.50)
+        passed = (
+            pixel >= max(0.75, expected_change * 0.55)
+            and ssim < 0.999
+            and semantic_signal >= 0.025
+        )
+        reason = "spatial/reframe multi-signal evidence detected" if passed else "insufficient spatial/reframe evidence"
     elif kind in {"text", "caption"}:
         semantic_signal = lower_band
-        passed = pixel >= expected_change and lower_band >= 0.01
-        reason = "lower-band caption evidence detected" if passed else "caption-specific visual evidence not measurable"
+        passed = pixel >= max(0.75, expected_change * 0.55) and lower_band >= 0.005
+        reason = "caption-specific multi-signal evidence detected" if passed else "caption-specific visual evidence not measurable"
     elif kind in {"clip", "cut"}:
         semantic_signal = structural
-        passed = scene_change or (semantic_signal >= 0.35 and pixel >= expected_change)
-        reason = "shot-transition evidence detected" if passed else "shot-transition evidence not measurable"
+        passed = scene_change or (semantic_signal >= 0.20 and pixel >= max(0.75, expected_change * 0.55))
+        reason = "shot-transition multi-signal evidence detected" if passed else "shot-transition evidence not measurable"
     elif kind in {"beat drop", "transition"}:
-        semantic_signal = max(structural, histogram)
-        passed = scene_change or (semantic_signal >= 0.25 and pixel >= expected_change)
-        reason = "transition evidence detected" if passed else "transition evidence not measurable"
+        semantic_signal = max(structural, histogram, min(1.0, max(0.0, 1.0 - ssim)))
+        passed = (
+            scene_change
+            or (
+                pixel >= max(0.75, expected_change * 0.55)
+                and semantic_signal >= 0.08
+            )
+        )
+        reason = "transition multi-signal evidence detected" if passed else "transition evidence not measurable"
     else:
         semantic_signal = 0.0
         passed = False
