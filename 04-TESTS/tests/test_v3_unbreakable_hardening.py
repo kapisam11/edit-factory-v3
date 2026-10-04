@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,29 @@ def test_legacy_source_metadata_is_migrated_out():
     assert "source_metadata" not in migrated
     assert migrated["schema_version"] == "3.0.1"
     assert V3Blueprint.from_dict(migrated).version == "3.0.0"
+
+
+def test_editorial_corpus_default_path_is_outside_package(tmp_path, monkeypatch):
+    from ai_video_factory.v3_stage_pipeline import _editorial_corpus_path
+
+    package = tmp_path / "job"
+    package.mkdir()
+    context = SimpleNamespace(package=package)
+    monkeypatch.delenv("AIVF_EDITORIAL_CORPUS_PATH", raising=False)
+
+    assert _editorial_corpus_path(context) == tmp_path / "editorial_corpus.sqlite"
+
+
+def test_editorial_corpus_env_override_is_preserved(tmp_path, monkeypatch):
+    from ai_video_factory.v3_stage_pipeline import _editorial_corpus_path
+
+    package = tmp_path / "job"
+    package.mkdir()
+    context = SimpleNamespace(package=package)
+    override = tmp_path / "shared.sqlite"
+    monkeypatch.setenv("AIVF_EDITORIAL_CORPUS_PATH", str(override))
+
+    assert _editorial_corpus_path(context) == override
 
 
 def test_technical_validity_is_unknown_before_render():
