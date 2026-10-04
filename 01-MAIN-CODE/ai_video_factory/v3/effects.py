@@ -159,9 +159,15 @@ class EffectCompiler:
         *,
         output_width: int = 1080,
         output_height: int = 1920,
+        input_width: int | None = None,
+        input_height: int | None = None,
     ) -> CompiledRenderGraph:
         if output_width <= 0 or output_height <= 0:
             raise ValueError("output dimensions must be positive")
+        source_width = int(input_width or output_width)
+        source_height = int(input_height or output_height)
+        if source_width <= 0 or source_height <= 0:
+            raise ValueError("input dimensions must be positive")
 
         filters: list[str] = []
         passthrough: list[Effect] = []
@@ -176,22 +182,22 @@ class EffectCompiler:
 
             if effect.kind is EffectKind.ZOOM:
                 gate = f"between(t,{start:.3f},{end:.3f})"
+                zoom_w = f"if({gate},ceil(iw*1.08/2)*2,iw)"
+                zoom_h = f"if({gate},ceil(ih*1.08/2)*2,ih)"
                 filters.append(
-                    "crop="
-                    f"w='if({gate},floor(iw/1.08/2)*2,iw)':"
-                    f"h='if({gate},floor(ih/1.08/2)*2,ih)':"
-                    f"x='if({gate},(iw-ow)/2,0)':"
-                    f"y='if({gate},(ih-oh)/2,0)',"
+                    f"scale=w='{zoom_w}':h='{zoom_h}':eval=frame:flags=lanczos,"
+                    f"crop={source_width}:{source_height}:x=(iw-ow)/2:y=(ih-oh)/2,"
                     f"scale={int(output_width)}:{int(output_height)}:flags=lanczos"
                 )
             elif effect.kind is EffectKind.CROP:
                 gate = f"between(t,{start:.3f},{end:.3f})"
+                crop_x = f"if({gate},(iw-ow)*0.62,0)"
+                crop_y = f"if({gate},(ih-oh)*0.38,0)"
+                crop_w = f"if({gate},iw,{source_width})"
+                crop_h = f"if({gate},ih,{source_height})"
                 filters.append(
-                    "crop="
-                    f"w='if({gate},floor(iw/1.08/2)*2,iw)':"
-                    f"h='if({gate},floor(ih/1.08/2)*2,ih)':"
-                    f"x='if({gate},(iw-ow)*0.62,0)':"
-                    f"y='if({gate},(ih-oh)*0.38,0)',"
+                    f"scale={source_width}:{source_height}:flags=lanczos,"
+                    f"crop={source_width}:{source_height}:x='{crop_x}':y='{crop_y}',"
                     f"scale={int(output_width)}:{int(output_height)}:flags=lanczos"
                 )
             elif effect.kind is EffectKind.CAPTION:
