@@ -125,14 +125,22 @@ def build_clip_evidence(
             })
             continue
 
+        motion = min(1.0, max(0.0, float(best.get("motion_score", 0.0))))
+        audio = min(1.0, max(0.0, float(best.get("audio_energy", 0.0))))
+        face_count = max(0, int(best.get("face_count", 0) or 0))
+        visual_evidence = min(1.0, 0.55 * motion + 0.35 * audio + (0.10 if face_count > 0 else 0.0))
         semantic_supported = best_relevance > 0.0 and (
             best_score > 0.10 and best_relevance >= 0.25
+        )
+        traceable_weak = (
+            best_score >= 0.12
+            or visual_evidence >= 0.15
         )
         status = (
             "supported"
             if semantic_supported and best_score >= 0.30
             else "weak"
-            if best_relevance >= 0.10 and best_score >= 0.12
+            if traceable_weak
             else "unsupported"
         )
         results.append({
