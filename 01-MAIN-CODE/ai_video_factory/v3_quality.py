@@ -164,17 +164,23 @@ def enforce_retention_events(
     info = probe_media(input_path)
     events = _validated_retention_events(retention_events, info["duration"])
     compiler = EffectCompiler()
-    render_ir = compiler.compile([
-        {
-            "time": timestamp,
-            "kind": kind,
-            "confidence": 1.0,
-            "reason": "retention_event",
-        }
-        for timestamp, kind in events
-    ])
-    graph = compiler.compile_ffmpeg_graph(render_ir, output_width=int(info['width']), output_height=int(info['height']))
-    filters = list(graph.video_filters)
+    render_ir = compiler.compile(
+        [
+            {
+                "time": timestamp,
+                "kind": kind,
+                "confidence": 1.0,
+                "reason": "retention_event",
+            }
+            for timestamp, kind in events
+        ]
+    )
+    compiled_graph = compiler.compile_ffmpeg_graph(
+        render_ir,
+        output_width=int(info["width"]),
+        output_height=int(info["height"]),
+    )
+    filters: list[str] = list(compiled_graph.video_filters)
 
     target = None if target_seconds is None else float(target_seconds)
     if target is not None:
