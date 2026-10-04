@@ -187,14 +187,26 @@ jobs:
           root = Path(os.environ["RESULTS_DIR"])
           readiness = json.loads((root / "v3-readiness.json").read_text())
           render_qc = json.loads((root / "v3-render-qc.json").read_text())
-          print("V3 READINESS:", json.dumps(readiness, indent=2))
-          print("V3 RENDER QC:", json.dumps(render_qc, indent=2))
-          if readiness["checks"].get("MEDIA_VALID") is not True: raise SystemExit(31)
-          if readiness["checks"].get("MEDIA_CONTRACT_VALID") is not True: raise SystemExit(32)
-          if readiness["checks"].get("UPLOAD_PACKAGE_VALID") is not True: raise SystemExit(33)
-          if readiness.get("state") != "UPLOAD_PACKAGE_VALID": raise SystemExit(34)
-          if render_qc.get("ok") is not True: raise SystemExit(35)
-          if (render_qc.get("retention_verification") or {}).get("ok") is not True: raise SystemExit(36)
+          checks = {
+              "MEDIA_VALID": readiness["checks"].get("MEDIA_VALID") is True,
+              "MEDIA_CONTRACT_VALID": readiness["checks"].get("MEDIA_CONTRACT_VALID") is True,
+              "UPLOAD_PACKAGE_VALID": readiness["checks"].get("UPLOAD_PACKAGE_VALID") is True,
+              "READINESS_STATE": readiness.get("state") == "UPLOAD_PACKAGE_VALID",
+              "RENDER_QC": render_qc.get("ok") is True,
+              "RETENTION_QC": (render_qc.get("retention_verification") or {}).get("ok") is True,
+          }
+          print("V3 FINAL CHECKS:", json.dumps(checks, sort_keys=True, separators=(",", ":")))
+          failure_codes = {
+              "MEDIA_VALID": 31,
+              "MEDIA_CONTRACT_VALID": 32,
+              "UPLOAD_PACKAGE_VALID": 33,
+              "READINESS_STATE": 34,
+              "RENDER_QC": 35,
+              "RETENTION_QC": 36,
+          }
+          for name, code in failure_codes.items():
+              if not checks[name]:
+                  raise SystemExit(code)
           PY
       - name: Verify cross-origin writes fail closed
         env:
