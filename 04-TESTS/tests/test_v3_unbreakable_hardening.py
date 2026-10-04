@@ -218,6 +218,15 @@ def test_strict_schema_model_rejects_wrong_nested_types():
         V3Blueprint.from_dict(payload)
 
 
+def test_effect_compiler_uses_expression_gated_crop_not_unsupported_timeline_enable():
+    compiler = EffectCompiler()
+    ir = compiler.compile([{"time": 1.0, "kind": "zoom", "confidence": 1.0}])
+    graph = compiler.compile_ffmpeg_graph(ir)
+    assert graph.video_filters
+    assert all(":enable=" not in value for value in graph.video_filters)
+    assert any("if(between(t," in value for value in graph.video_filters)
+
+
 def test_effect_compiler_owns_ffmpeg_graph_compilation():
     compiler = EffectCompiler()
     ir = compiler.compile([{"time": 1.0, "kind": "zoom", "confidence": 1.0}])
