@@ -380,3 +380,92 @@ def test_empirical_corpus_never_fabricates_labels(tmp_path):
     corpus.add_case(CorpusCase("case-1", "video-1", "3.0.0", "3.0.0", {}))
     corpus.add_prediction("case-1", "retention_heuristic", 0.8, 0.35)
     assert corpus.performance_report()["metrics"]["retention_heuristic"]["status"] == "insufficient_samples"
+
+def test_pipeline_packages_before_compliance():
+    from ai_video_factory.v3_stage_pipeline import V3PipelineRunner
+    from ai_video_factory.v3_contracts import V3Request
+    request = V3Request(
+        input_video="input.mp4",
+        topic="topic",
+        package_dir="package",
+    )
+    names = [stage.name for stage in V3PipelineRunner(request).stages]
+    assert names.index("packaging") < names.index("compliance")
+
+
+def test_final_metadata_has_only_single_token_hashtags():
+    from ai_video_factory.v3.metadata import generate_final_metadata
+    metadata = generate_final_metadata(
+        {
+            "topic": "minecraft clutch",
+            "hook": "The minecraft clutch",
+            "overlays": ["One impossible moment"],
+            "clip_purposes": ["Hook", "Payoff"],
+            "source_scenes": [],
+            "search_terms": ["minecraft clutch", "#minecraft", "player's clutch"],
+        }
+    )
+    assert metadata["hashtags"]
+    assert all(" " not in tag for tag in metadata["hashtags"])
+    assert all(tag.startswith("#") for tag in metadata["hashtags"])
+
+
+def test_clip_evidence_timing_alone_cannot_support_critical_beat():
+    from ai_video_factory.v3.clip_evidence import build_clip_evidence
+    evidence = build_clip_evidence(
+        [{"purpose": "Payoff", "visual_style": "emotional proof"}],
+        {
+            "top_scenes": [{
+                "id": "late-but-unrelated",
+                "start": 9.0,
+                "end": 10.0,
+                "description": "a completely unrelated kitchen scene",
+                "transcript": "",
+                "objects": "plate",
+                "text": "",
+                "importance_score": 1.0,
+                "motion_score": 0.8,
+                "audio_energy": 0.8,
+            }]
+        },
+        source_asset="source.mp4",
+    )
+    assert evidence[0]["status"] == "unsupported"
+
+
+def test_failed_partial_workspace_can_be_retried(tmp_path):
+    from ai_video_factory.v3_stage_pipeline import _guard_workspace_isolation
+    from ai_video_factory.v3_contracts import V3Request
+    package = tmp_path / "job"
+    package.mkdir()
+    (package / "v3_blueprint.json").write_text("partial", encoding="utf-8")
+    (package / "v3_failure.json").write_text("{}\n", encoding="utf-8")
+    request = V3Request(
+        input_video=str(tmp_path / "input.mp4"),
+        topic="topic",
+        package_dir=str(package),
+    )
+    (tmp_path / "input.mp4").write_bytes(b"x")
+    _guard_workspace_isolation(request)
+
+
+def test_editorial_corpus_separates_performance_predictions(tmp_path):
+    from ai_video_factory.editorial_corpus import CorpusCase, EditorialCorpus
+    from ai_video_factory.editorial_evaluation import EditorialEvaluation
+    corpus = EditorialCorpus(tmp_path / "corpus.sqlite")
+    corpus.add_case(CorpusCase("case-1", "video-1", "3.0.1", "3.0.0", {}))
+    corpus.add_prediction("case-1", "retention_heuristic", 0.8, 0.35)
+    corpus.add_human_annotation(
+        "case-1",
+        {
+            "hook": 4,
+            "pacing": 4,
+            "coherence": 4,
+            "caption_quality": 4,
+            "payoff": 4,
+            "overall": 4,
+        },
+    )
+    report = corpus.correlation_report()
+    assert report["dimensions"]["hook"]["samples"] == 0
+    assert corpus.performance_report()["metrics"]["retention_heuristic"]["samples"] == 0
