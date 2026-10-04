@@ -375,6 +375,22 @@ def test_visual_qc_requires_effect_specific_signal():
     assert result.semantic_signal == result.lower_band_change
 
 
+def test_small_localized_caption_passes_caption_qc():
+    baseline = bytes([80]) * (160 * 90)
+    rendered = bytearray(baseline)
+    for row in range(78, 80):
+        for col in range(50, 110):
+            rendered[row * 160 + col] = 200
+    result = verify_visual_effect(
+        baseline,
+        bytes(rendered),
+        effect_kind="caption",
+        expected_change=2.5,
+    )
+    assert result.passed is True
+    assert result.lower_band_change >= 0.002
+
+
 def test_corrupt_media_is_rejected_by_render_contract():
     from ai_video_factory.v3_quality import RenderContractError, probe_media
     broken = Path("broken.mp4")
