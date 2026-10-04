@@ -77,11 +77,17 @@ def generate_final_metadata(
         )
     description = _clean("\n\n".join(description_parts), 5000)
 
-    counts = Counter(
-        term.lower()
-        for term in [*search_terms, *_tokens(topic), *_tokens(" ".join(overlays))]
-        if term not in {"the", "and", "this", "that", "what", "with", "from"}
-    )
+    raw_terms = [
+        *_tokens(" ".join(search_terms)),
+        *_tokens(topic),
+        *_tokens(" ".join(overlays)),
+    ]
+    hashtag_tokens = [
+        token.replace("'", "").replace("_", "")
+        for token in raw_terms
+        if token not in {"the", "and", "this", "that", "what", "with", "from"}
+    ]
+    counts = Counter(token for token in hashtag_tokens if token)
     hashtags = [f"#{term}" for term, _ in counts.most_common(12)][:8]
 
     focal_scene = scenes[0] if scenes else {}
