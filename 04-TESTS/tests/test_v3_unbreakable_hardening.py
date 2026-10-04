@@ -515,3 +515,38 @@ def test_empirical_performance_report_needs_real_outcomes(tmp_path):
     report = corpus.performance_report()
     assert report["metrics"]["retention_heuristic"]["samples"] == 0
     assert report["metrics"]["retention_heuristic"]["status"] == "insufficient_samples"
+
+
+def test_editorial_corpus_records_all_editorial_prediction_dimensions(tmp_path):
+    from ai_video_factory.editorial_corpus import CorpusCase, EditorialCorpus
+
+    corpus = EditorialCorpus(tmp_path / "editorial.sqlite")
+    corpus.add_case(CorpusCase(
+        case_id="case-1",
+        video_id="video-1",
+        blueprint_version="3.0.0",
+        renderer_version="3.0.0",
+        metadata={"prediction_method": "deterministic blueprint QC heuristics"},
+    ))
+    corpus.add_blueprint_predictions(
+        "case-1",
+        {
+            "hook": 80.0,
+            "pacing": 70.0,
+            "coherence": 90.0,
+            "caption_quality": 100.0,
+            "payoff": 90.0,
+            "overall": 86.0,
+        },
+        confidence=0.5,
+    )
+
+    with corpus._connect() as conn:
+        dimensions = {
+            row[0]
+            for row in conn.execute(
+                "SELECT dimension FROM predictions WHERE case_id=?",
+                ("case-1",),
+            ).fetchall()
+        }
+    assert dimensions == {"hook", "pacing", "coherence", "caption_quality", "payoff", "overall"}
