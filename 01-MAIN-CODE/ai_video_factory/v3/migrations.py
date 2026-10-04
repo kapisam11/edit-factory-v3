@@ -1,16 +1,17 @@
-"""Explicit, auditable V3 artifact migrations."""
+"""Explicit, auditable V3 blueprint schema migrations."""
 from __future__ import annotations
 
 from typing import Any, Callable, Mapping
 
 Migration = Callable[[dict[str, Any]], dict[str, Any]]
-CURRENT_VERSION = "3.0.0"
-SUPPORTED_FUTURE_VERSION = "3.1.0"
+
+CURRENT_VERSION = "3.0.1"
+LEGACY_VERSION = "3.0.0"
+NEXT_VERSION = "3.1.0"
 
 
-def _identity(payload: dict[str, Any]) -> dict[str, Any]:
+def _normalize_legacy(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload)
-    result.setdefault("schema_version", result.get("version", CURRENT_VERSION))
     result.pop("source_metadata", None)
     for hook in result.get("hooks", []):
         if isinstance(hook, dict):
@@ -30,26 +31,43 @@ def _identity(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def migrate_3_0_0_to_3_1_0(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Upgrade an artifact payload to the next V3 schema without lossy guessing."""
-    result = _identity(dict(payload))
+def migrate_3_0_0_to_3_0_1(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Upgrade the persisted 3.0.0 blueprint to the current 3.0.1 schema."""
+    result = _normalize_legacy(dict(payload))
     history = list(result.get("migration_history") or [])
     history.append(
         {
-            "from": "3.0.0",
-            "to": SUPPORTED_FUTURE_VERSION,
+            "from": LEGACY_VERSION,
+            "to": CURRENT_VERSION,
+            "operation": "explicit_schema_migration",
+            "lossless": True,
+        }
+    )
+    result["schema_version"] = CURRENT_VERSION
+    result["migration_history"] = history
+    return result
+
+
+def migrate_3_0_1_to_3_1_0(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Explicit opt-in forward migration for the next V3 schema generation."""
+    result = dict(payload)
+    history = list(result.get("migration_history") or [])
+    history.append(
+        {
+            "from": CURRENT_VERSION,
+            "to": NEXT_VERSION,
             "operation": "explicit_forward_schema_migration",
             "lossless": True,
         }
     )
-    result["schema_version"] = SUPPORTED_FUTURE_VERSION
+    result["schema_version"] = NEXT_VERSION
     result["migration_history"] = history
     return result
 
 
 MIGRATIONS: Mapping[tuple[str, str], Migration] = {
-    ("3.0.0", "3.0.0"): _identity,
-    ("3.0.0", "3.1.0"): migrate_3_0_0_to_3_1_0,
+    (LEGACY_VERSION, CURRENT_VERSION): migrate_3_0_0_to_3_0_1,
+    (CURRENT_VERSION, NEXT_VERSION): migrate_3_0_1_to_3_1_0,
 }
 
 
@@ -58,7 +76,7 @@ def migrate_to_version(
     target_version: str,
 ) -> dict[str, Any]:
     data = dict(payload)
-    source = str(data.get("schema_version") or data.get("version") or CURRENT_VERSION)
+    source = str(data.get("schema_version") or data.get("version") or LEGACY_VERSION)
     target = str(target_version).strip()
     if source == target:
         return dict(data)
@@ -73,9 +91,11 @@ def migrate_to_version(
 
 def migrate_to_current(payload: Mapping[str, Any]) -> dict[str, Any]:
     data = dict(payload)
-    source = str(data.get("schema_version") or data.get("version") or CURRENT_VERSION)
+    source = str(data.get("schema_version") or data.get("version") or LEGACY_VERSION)
     if source == CURRENT_VERSION:
-        return _identity(data)
+        return _normalize_legacy(data)
+    if source == LEGACY_VERSION:
+        return migrate_3_0_0_to_3_0_1(data)
     raise ValueError(
         f"unsupported schema version {source}: no migration is registered to {CURRENT_VERSION}"
     )
@@ -83,9 +103,11 @@ def migrate_to_current(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "CURRENT_VERSION",
+    "LEGACY_VERSION",
     "MIGRATIONS",
-    "SUPPORTED_FUTURE_VERSION",
-    "migrate_3_0_0_to_3_1_0",
+    "NEXT_VERSION",
+    "migrate_3_0_0_to_3_0_1",
+    "migrate_3_0_1_to_3_1_0",
     "migrate_to_current",
     "migrate_to_version",
 ]
