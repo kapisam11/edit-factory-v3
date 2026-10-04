@@ -1240,7 +1240,7 @@ class V3PipelineRunner:
                 "v3_failure": str(context.package / "v3_failure.json"),
                 "v3_readiness": str(context.package / "v3_readiness.json"),
             })
-            return
+            return context.result
 
         try:
             source_hash = file_hash(self.request.input_video)
