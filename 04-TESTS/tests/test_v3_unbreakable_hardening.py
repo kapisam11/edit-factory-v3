@@ -308,7 +308,7 @@ def test_explicit_forward_schema_migration_is_registered():
     from ai_video_factory.v3.migrations import migrate_to_version
     migrated = migrate_to_version(blueprint.to_dict(), "3.1.0")
     assert migrated["schema_version"] == "3.1.0"
-    assert migrated["migration_history"][-1]["from"] == "3.0.0"
+    assert migrated["migration_history"][-1]["from"] == "3.0.1"
     assert migrated["migration_history"][-1]["to"] == "3.1.0"
 
 
