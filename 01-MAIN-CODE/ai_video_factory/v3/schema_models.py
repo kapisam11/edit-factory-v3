@@ -38,7 +38,7 @@ class ClipEvidenceModel(StrictModel):
     source_asset: str = ""
     source_start: float = 0.0
     source_end: float = 0.0
-    semantic_tags: list[str] = []
+    semantic_tags: list[str] = Field(default_factory=list)
     evidence_score: float = 0.0
     evidence_status: str = "planned"
 
@@ -77,8 +77,8 @@ class RetentionModel(StrictModel):
 class QualityModel(StrictModel):
     passed: bool
     score: int
-    checks: dict[str, bool] = {}
-    warnings: list[str] = []
+    checks: dict[str, bool] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ScoreBundleModel(StrictModel):
@@ -115,13 +115,13 @@ class BlueprintPayloadModel(StrictModel):
     platform: str = "youtube_shorts"
     audience: str = "general short-form viewers"
     platform_profile: dict[str, Any] | None = None
-    qc: dict[str, Any] = {}
-    packaging: dict[str, Any] = {}
-    metric_metadata: dict[str, Any] = {}
+    qc: dict[str, Any] = Field(default_factory=dict)
+    packaging: dict[str, Any] = Field(default_factory=dict)
+    metric_metadata: dict[str, Any] = Field(default_factory=dict)
     score_bundle: ScoreBundleModel | None = None
-    editorial_decisions: list[dict[str, Any]] = []
+    editorial_decisions: list[dict[str, Any]] = Field(default_factory=list)
     editorial_evidence_summary: dict[str, Any] | None = None
-    migration_history: list[dict[str, Any]] = []
+    migration_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _json_boundary(value: Any) -> Any:
