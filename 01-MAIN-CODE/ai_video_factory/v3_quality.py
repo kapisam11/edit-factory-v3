@@ -175,12 +175,16 @@ def enforce_retention_events(
             for timestamp, kind in events
         ]
     )
-    compiled_graph = compiler.compile_ffmpeg_graph(
+    compiled_graph = compiler.compile_ffmpeg_filter_complex(
         render_ir,
         output_width=int(info["width"]),
         output_height=int(info["height"]),
+        input_width=int(info["width"]),
+        input_height=int(info["height"]),
     )
     filters: list[str] = list(compiled_graph.video_filters)
+    filter_complex = compiled_graph.video_filter_complex
+    video_output_label = compiled_graph.video_output_label
 
     target = None if target_seconds is None else float(target_seconds)
     if target is not None:
@@ -194,7 +198,16 @@ def enforce_retention_events(
             )
         if abs(delta) > 0.05:
             if delta > 0:
-                filters.append(f"tpad=stop_mode=clone:stop_duration={delta:.3f}")
+                if filter_complex and video_output_label:
+                    duration_label = "v_duration"
+                    filter_complex += (
+                        f";[{video_output_label}]"
+                        f"tpad=stop_mode=clone:stop_duration={delta:.3f}"
+                        f"[{duration_label}]"
+                    )
+                    video_output_label = duration_label
+                else:
+                    filters.append(f"tpad=stop_mode=clone:stop_duration={delta:.3f}")
             duration_arg = f"{target:.3f}"
         else:
             duration_arg = f"{target:.3f}"
@@ -211,9 +224,18 @@ def enforce_retention_events(
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-i", input_path,
         ]
-        if filters:
-            command += ["-vf", ",".join(filters)]
-        command += ["-map", "0:v:0", "-map", "0:a:0?"]
+        if filter_complex and video_output_label:
+            command += [
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                f"[{video_output_label}]",
+            ]
+        elif filters:
+            command += ["-vf", ",".join(filters), "-map", "0:v:0"]
+        else:
+            command += ["-map", "0:v:0"]
+        command += ["-map", "0:a:0?"]
         if info.get("has_audio") and normalize_audio:
             audio_filter = "loudnorm=I=-16:TP=-1.5:LRA=11"
             if target is not None and target > float(info["duration"]):
