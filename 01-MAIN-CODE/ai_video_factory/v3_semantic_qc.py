@@ -81,13 +81,15 @@ def analyze_render_semantics(path: str) -> dict[str, Any]:
         dead_ratio >= 0.25
         or len(dead_moments) >= 2 and dead_ratio >= 0.12
     )
+    diagnostics = {
+        "scene_count": len(scenes),
+        "low_motion_ratio": round(low_motion_ratio, 3),
+        "audio_min": round(min((float(scene.audio_energy) for scene in scenes), default=0.0), 3),
+        "audio_max": round(max((float(scene.audio_energy) for scene in scenes), default=0.0), 3),
+    }
     if dead_gap_blocking:
-        errors.append(
-            "long low-motion/low-audio gaps detected "
-            f"(scenes={len(scenes)}, low_motion_ratio={low_motion_ratio:.3f}, "
-            f"audio_min={min((float(scene.audio_energy) for scene in scenes), default=0.0):.3f}, "
-            f"audio_max={max((float(scene.audio_energy) for scene in scenes), default=0.0):.3f})"
-        )
+        # Keep the public error string stable; detailed measurements live separately.
+        errors.append("long low-motion/low-audio gaps detected")
     elif dead_moments:
         warnings.append("isolated low-motion/low-audio section detected")
     if slideshow_like:
@@ -108,6 +110,7 @@ def analyze_render_semantics(path: str) -> dict[str, Any]:
         "dead_gap_blocking": dead_gap_blocking,
         "errors": errors,
         "warnings": warnings,
+        "diagnostics": diagnostics,
         "mode": "scene_intelligence",
     }
 
