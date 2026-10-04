@@ -932,6 +932,11 @@ class ComplianceStage:
         context.metadata_report["title"] = str(final_metadata.get("selected_title") or context.metadata_report["title"])
         context.metadata_report["description"] = str(final_metadata.get("description") or context.metadata_report["description"])
         context.metadata_report["hashtags"] = list(final_metadata.get("hashtags") or context.metadata_report["hashtags"])
+        context.metadata_report["thumbnail_concept"] = str(
+            final_metadata.get("thumbnail_concept")
+            or context.metadata_report.get("thumbnail_concept")
+            or ""
+        )
         validated = validate_metadata(
             context.metadata_report["title"],
             context.metadata_report["description"],
