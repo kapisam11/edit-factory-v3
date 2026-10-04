@@ -58,12 +58,16 @@ class CompiledRenderGraph:
     video_filters: tuple[str, ...] = ()
     audio_filters: tuple[str, ...] = ()
     passthrough_effects: tuple[Effect, ...] = ()
+    video_filter_complex: str | None = None
+    video_output_label: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "video_filters": list(self.video_filters),
             "audio_filters": list(self.audio_filters),
             "passthrough_effects": [item.to_dict() for item in self.passthrough_effects],
+            "video_filter_complex": self.video_filter_complex,
+            "video_output_label": self.video_output_label,
         }
 
 
@@ -212,6 +216,116 @@ class EffectCompiler:
                 )
 
         return CompiledRenderGraph(tuple(filters), (), tuple(passthrough))
+
+
+def _compile_ffmpeg_filter_complex(
+    self: EffectCompiler,
+    render_ir: RenderIR,
+    *,
+    output_width: int = 1080,
+    output_height: int = 1920,
+    input_width: int | None = None,
+    input_height: int | None = None,
+) -> CompiledRenderGraph:
+    """Compile effect windows over an untouched base stream."""
+    if output_width <= 0 or output_height <= 0:
+        raise ValueError("output dimensions must be positive")
+    source_width = int(input_width or output_width)
+    source_height = int(input_height or output_height)
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError("input dimensions must be positive")
+
+    effectful = [
+        effect
+        for effect in render_ir.effects
+        if effect.kind is not EffectKind.DO_NOTHING
+    ]
+    passthrough = tuple(
+        effect
+        for effect in render_ir.effects
+        if effect.kind is EffectKind.DO_NOTHING
+    )
+    if not effectful:
+        return CompiledRenderGraph(passthrough_effects=passthrough)
+
+    parts: list[str] = []
+    current = "v0"
+    if source_width != output_width or source_height != output_height:
+        parts.append(
+            "[0:v]scale=%d:%d:flags=lanczos[%s]"
+            % (int(output_width), int(output_height), current)
+        )
+        source_width = int(output_width)
+        source_height = int(output_height)
+    else:
+        parts.append("[0:v]null[%s]" % current)
+
+    for index, effect in enumerate(effectful, start=1):
+        start = max(0.0, effect.start - 0.04)
+        duration = max(0.08, effect.duration)
+        end = start + duration
+        base = "base%d" % index
+        fx = "fx%d" % index
+        effected = "effect%d" % index
+        next_label = "v%d" % index
+        parts.append("[%s]split=2[%s][%s]" % (current, base, fx))
+
+        if effect.kind is EffectKind.ZOOM:
+            parts.append(
+                "[%s]scale=ceil(iw*1.08/2)*2:ceil(ih*1.08/2)*2:eval=frame:flags=lanczos,"
+                "crop=%d:%d:x=(iw-ow)/2:y=(ih-oh)/2[%s]"
+                % (fx, source_width, source_height, effected)
+            )
+        elif effect.kind is EffectKind.CROP:
+            crop_width = max(2, int(source_width * 0.925))
+            crop_height = max(2, int(source_height * 0.925))
+            crop_width -= crop_width % 2
+            crop_height -= crop_height % 2
+            parts.append(
+                "[%s]crop=%d:%d:x=(iw-ow)*0.62:y=(ih-oh)*0.38,"
+                "scale=%d:%d:flags=lanczos[%s]"
+                % (
+                    fx,
+                    crop_width,
+                    crop_height,
+                    int(output_width),
+                    int(output_height),
+                    effected,
+                )
+            )
+        elif effect.kind is EffectKind.CAPTION:
+            text = _escape_drawtext(str(effect.parameters.get("text") or "Key detail"))
+            parts.append(
+                "[%s]drawtext=text='%s':x=(w-text_w)/2:y=h-text_h-80:"
+                "fontsize=48:fontcolor=white:borderw=3:bordercolor=black:"
+                "enable='between(t,%.3f,%.3f)'[%s]"
+                % (fx, text, start, end, effected)
+            )
+        elif effect.kind is EffectKind.TRANSITION:
+            midpoint = start + duration / 2.0
+            parts.append(
+                "[%s]fade=t=out:st=%.3f:d=%.3f:color=black,"
+                "fade=t=in:st=%.3f:d=%.3f:color=black[%s]"
+                % (fx, start, duration / 2.0, midpoint, duration / 2.0, effected)
+            )
+        else:
+            parts.append("[%s]null[%s]" % (fx, effected))
+
+        enable = "between(t,%.3f,%.3f)" % (start, end)
+        parts.append(
+            "[%s][%s]overlay=0:0:enable='%s':eof_action=pass:shortest=1[%s]"
+            % (base, effected, enable, next_label)
+        )
+        current = next_label
+
+    return CompiledRenderGraph(
+        passthrough_effects=passthrough,
+        video_filter_complex=";".join(parts),
+        video_output_label=current,
+    )
+
+
+EffectCompiler.compile_ffmpeg_filter_complex = _compile_ffmpeg_filter_complex
 
 
 __all__ = [
