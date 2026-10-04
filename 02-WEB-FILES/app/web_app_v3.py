@@ -633,6 +633,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 enable_diarization=params.get("enable_diarization", False),
                 diarization_token=secrets.get("diarization_token"),
                 source_metadata=params.get("source_metadata"),
+                allow_unsupported_critical_evidence=bool(
+                    params.get("allow_unsupported_critical_evidence", False)
+                ),
             )
             result_payload = {
                 "errors": list(getattr(result, "errors", []) or []),
