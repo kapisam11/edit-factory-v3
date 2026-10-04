@@ -140,10 +140,7 @@ def build_clip_evidence(
             "supported"
             if semantic_supported and best_score >= 0.30
             else "weak"
-            if traceable_weak or (
-                best.get("source_asset") is not None
-                and float(best.get("end", 0.0)) > float(best.get("start", 0.0))
-            )
+            if traceable_weak
             else "unsupported"
         )
         results.append({
@@ -168,7 +165,7 @@ def build_clip_evidence(
                 if semantic_supported and status == "supported"
                 else "source scene is traceable but semantic labels are sparse; marked weak and requires review"
                 if status == "weak"
-                else "no analyzed source scene was available"
+                else "no meaningful semantic or visual evidence matched any analyzed source scene"
             ),
         })
     return results
