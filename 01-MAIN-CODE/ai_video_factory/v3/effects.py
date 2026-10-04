@@ -175,19 +175,23 @@ class EffectCompiler:
             end = start + duration
 
             if effect.kind is EffectKind.ZOOM:
+                gate = f"between(t,{start:.3f},{end:.3f})"
                 filters.append(
-                    "crop=w='floor(iw/1.08/2)*2':"
-                    "h='floor(ih/1.08/2)*2':"
-                    "x='(iw-ow)/2':y='(ih-oh)/2':"
-                    f"enable='between(t,{start:.3f},{end:.3f})',"
+                    "crop="
+                    f"w='if({gate},floor(iw/1.08/2)*2,iw)':"
+                    f"h='if({gate},floor(ih/1.08/2)*2,ih)':"
+                    f"x='if({gate},(iw-ow)/2,0)':"
+                    f"y='if({gate},(ih-oh)/2,0)',"
                     f"scale={int(output_width)}:{int(output_height)}:flags=lanczos"
                 )
             elif effect.kind is EffectKind.CROP:
+                gate = f"between(t,{start:.3f},{end:.3f})"
                 filters.append(
-                    "crop=w='floor(iw/1.08/2)*2':"
-                    "h='floor(ih/1.08/2)*2':"
-                    "x='(iw-ow)*0.62':y='(ih-oh)*0.38':"
-                    f"enable='between(t,{start:.3f},{end:.3f})',"
+                    "crop="
+                    f"w='if({gate},floor(iw/1.08/2)*2,iw)':"
+                    f"h='if({gate},floor(ih/1.08/2)*2,ih)':"
+                    f"x='if({gate},(iw-ow)*0.62,0)':"
+                    f"y='if({gate},(ih-oh)*0.38,0)',"
                     f"scale={int(output_width)}:{int(output_height)}:flags=lanczos"
                 )
             elif effect.kind is EffectKind.CAPTION:
