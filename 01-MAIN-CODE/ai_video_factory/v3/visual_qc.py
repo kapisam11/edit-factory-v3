@@ -30,18 +30,10 @@ class VisualVerification:
 
     @property
     def semantic_signals(self) -> dict[str, bool]:
-        """Backward-compatible named semantic gates for diagnostics/tests."""
-        return {
-            "spatial_scale_change": self.spatial_scale_signal >= 0.05,
-            "lower_band_change": self.lower_band_change >= 0.01,
-            "structural_change": self.structural_change >= 0.25,
-        }
-
-    @property
-    def semantic_signals(self) -> dict[str, bool]:
         """Backward-compatible structured semantic verification flags."""
         return {
             "spatial_scale_change": self.spatial_scale_signal >= 0.05,
+            "lower_band_change": self.lower_band_change >= 0.01,
             "lower_band_caption_change": self.lower_band_change >= 0.01,
             "structural_change": self.structural_change >= 0.25,
         }
