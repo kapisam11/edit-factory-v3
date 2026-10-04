@@ -196,17 +196,10 @@ jobs:
               "RETENTION_QC": (render_qc.get("retention_verification") or {}).get("ok") is True,
           }
           print("V3 FINAL CHECKS:", json.dumps(checks, sort_keys=True, separators=(",", ":")))
-          failure_codes = {
-              "MEDIA_VALID": 31,
-              "MEDIA_CONTRACT_VALID": 32,
-              "UPLOAD_PACKAGE_VALID": 33,
-              "READINESS_STATE": 34,
-              "RENDER_QC": 35,
-              "RETENTION_QC": 36,
-          }
-          for name, code in failure_codes.items():
-              if not checks[name]:
-                  raise SystemExit(code)
+          failures = [name for name, passed in checks.items() if not passed]
+          if failures:
+              print("V3 FINAL CHECK FAILURES:", ",".join(failures))
+              raise SystemExit(1)
           PY
       - name: Verify cross-origin writes fail closed
         env:
