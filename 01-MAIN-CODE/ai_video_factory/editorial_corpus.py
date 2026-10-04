@@ -87,23 +87,6 @@ class EditorialCorpus:
         *,
         confidence: float,
     ) -> None:
-        """Capture existing heuristic metrics without fabricating human labels."""
-        for dimension in PERFORMANCE_DIMENSIONS:
-            if dimension in metrics:
-                self.add_prediction(
-                    case_id,
-                    dimension,
-                    float(metrics[dimension]) / 100.0,
-                    confidence,
-                )
-
-    def add_blueprint_predictions(
-        self,
-        case_id: str,
-        metrics: Mapping[str, float],
-        *,
-        confidence: float,
-    ) -> None:
         """Store pipeline heuristics; human ratings and outcomes remain independent."""
         for dimension in PERFORMANCE_DIMENSIONS:
             if dimension in metrics:
