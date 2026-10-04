@@ -206,9 +206,12 @@ class EffectCompiler:
                 gate = f"between(t,{start:.3f},{end:.3f})"
                 zoom_w = f"if({gate},ceil(iw*1.08/2)*2,iw)"
                 zoom_h = f"if({gate},ceil(ih*1.08/2)*2,ih)"
+                pan_x = f"if({gate},min((iw-ow)*0.25,12)*sin(PI*(t-{start:.3f})/{duration:.3f}),0)"
+                pan_y = f"if({gate},min((ih-oh)*0.18,8)*cos(PI*(t-{start:.3f})/{duration:.3f}),0)"
                 filters.append(
                     f"scale=w='{zoom_w}':h='{zoom_h}':eval=frame:flags=lanczos,"
-                    f"crop={source_width}:{source_height}:x=(iw-ow)/2:y=(ih-oh)/2"
+                    f"crop={source_width}:{source_height}:x='(iw-ow)/2+{pan_x}':"
+                    f"y='(ih-oh)/2+{pan_y}'"
                 )
             elif effect.kind is EffectKind.CROP:
                 gate = f"between(t,{start:.3f},{end:.3f})"
