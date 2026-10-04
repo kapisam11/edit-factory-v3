@@ -226,7 +226,10 @@ def verify_visual_effect(
         reason = "spatial/reframe multi-signal evidence detected" if passed else "insufficient spatial/reframe evidence"
     elif kind in {"text", "caption"}:
         semantic_signal = lower_band
-        passed = pixel >= max(0.75, expected_change * 0.55) and lower_band >= 0.005
+        # At the 160x90 verification resolution, a legitimate small caption can
+        # occupy only a few rows. Keep a modest absolute lower-band floor while the
+        # independent event-vs-control pixel gate rejects unrelated frame noise.
+        passed = pixel >= max(0.75, expected_change * 0.55) and lower_band >= 0.002
         reason = "caption-specific multi-signal evidence detected" if passed else "caption-specific visual evidence not measurable"
     elif kind in {"clip", "cut"}:
         semantic_signal = structural
