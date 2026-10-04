@@ -4,6 +4,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .audience import parse_audience
+
 
 def compact_overlay_text(text: str, max_words: int = 6) -> str:
     return " ".join(str(text).strip().split()[:max_words])
@@ -103,9 +105,16 @@ def build_clip_plan(core: Any, edit_type: Any, config: Any) -> list[Any]:
         len(strategy["purposes"]),
         math.ceil(config.target_seconds / config.max_clip_seconds),
     )
+    audience = parse_audience(config.audience)
+    cadence_seconds = {
+        "fast": 2.25,
+        "balanced": 2.70,
+        "measured": 3.20,
+        "tight": 2.45,
+    }.get(audience.pacing, 2.70)
     preferred_count = max(
         len(strategy["purposes"]),
-        round(config.target_seconds / 2.7),
+        round(config.target_seconds / cadence_seconds),
     )
     count = min(
         max(minimum_count, preferred_count),
