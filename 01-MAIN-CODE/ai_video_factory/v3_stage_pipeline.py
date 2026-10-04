@@ -285,6 +285,18 @@ def _guard_workspace_isolation(
     identity = package / "job_identity.json"
     expected = _expected_job_identity(request, source_metadata=source_metadata)
     if not identity.is_file():
+        readiness_path = package / "v3_readiness.json"
+        failure_path = package / "v3_failure.json"
+        if failure_path.is_file():
+            # A failed attempt is explicitly retryable; the next run may safely reset
+            # generated outputs because no successful identity exists to protect.
+            return
+        try:
+            readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            readiness = {}
+        if readiness.get("state") == "FAILED":
+            return
         raise V3InputError(
             "package directory already contains generated artifacts without a job identity; "
             "use a dedicated jobs/<job_id> workspace"
