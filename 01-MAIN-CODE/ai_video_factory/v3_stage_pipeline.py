@@ -562,9 +562,18 @@ class PlanningStage:
 
     def run(self, context: V3ExecutionContext) -> None:
         config = context.request.config()
+        fixture_evidence_override = (
+            os.environ.get("AIVF_ENV", "").strip().lower() == "test"
+            and os.environ.get("AIVF_ALLOW_SKIP_QC", "0").strip() == "1"
+            and (
+                context.request.allow_unsupported_critical_evidence
+                or context.request.skip_qc
+                or os.environ.get("AIVF_V3_SEMANTIC_QC", "1").strip() == "0"
+            )
+        )
         planning_footage_evidence = (
             None
-            if context.request.allow_unsupported_critical_evidence
+            if fixture_evidence_override
             else context.footage_evidence
         )
         blueprint = create_v3_blueprint(
