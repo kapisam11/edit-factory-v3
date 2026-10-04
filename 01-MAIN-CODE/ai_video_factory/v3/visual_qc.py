@@ -184,11 +184,13 @@ def verify_visual_effect(
     # retention QC provides the second independent gate.
     if kind in {"zoom", "motion", "angle"}:
         flow_signal = min(1.0, max(0.0, float(optical_flow or 0.0)))
-        semantic_signal = max(spatial_scale, flow_signal, structural * 0.50)
+        # Zoom/reframe proof must remain spatial. Global brightness/histogram
+        # changes are intentionally not allowed to satisfy this gate.
+        semantic_signal = max(spatial_scale, flow_signal)
         passed = (
             pixel >= max(0.75, expected_change * 0.55)
             and ssim < 0.999
-            and semantic_signal >= 0.025
+            and semantic_signal >= 0.01
         )
         reason = "spatial/reframe multi-signal evidence detected" if passed else "insufficient spatial/reframe evidence"
     elif kind in {"text", "caption"}:
