@@ -224,7 +224,7 @@ class EffectCompiler:
                 text = _escape_drawtext(str(effect.parameters.get("text") or "Key detail"))
                 filters.append(
                     f"drawtext=text='{text}':x=(w-text_w)/2:y=h-text_h-80:"
-                    f"fontsize=48:fontcolor=white:borderw=3:bordercolor=black:"
+                    f"fontsize=64:fontcolor=white:borderw=4:bordercolor=black:"
                     f"enable='between(t,{start:.3f},{end:.3f})'"
                 )
             elif effect.kind is EffectKind.TRANSITION:
@@ -317,7 +317,7 @@ def _compile_ffmpeg_filter_complex(
             text = _escape_drawtext(str(effect.parameters.get("text") or "Key detail"))
             parts.append(
                 "[%s]drawtext=text='%s':x=(w-text_w)/2:y=h-text_h-80:"
-                "fontsize=48:fontcolor=white:borderw=3:bordercolor=black:"
+                "fontsize=64:fontcolor=white:borderw=4:bordercolor=black:"
                 "enable='between(t,%.3f,%.3f)'[%s]"
                 % (fx, text, start, end, effected)
             )
