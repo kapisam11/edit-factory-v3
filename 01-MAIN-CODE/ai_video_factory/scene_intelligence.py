@@ -9,12 +9,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from dataclasses import asdict
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .production_models import Scene
 from .v3_exceptions import V3ExternalToolError
-from .render_engine import run_ffprobe
+from .render_engine import run_ffmpeg, run_ffprobe
 from .scene_detect_adapter import scene_windows
 
 
@@ -51,6 +52,49 @@ def _ffprobe_duration(video_path: str) -> float:
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, float(value)))
+
+
+def _audio_energy(video_path: str, start: float, end: float) -> float:
+    """Measure normalized RMS audio activity for one scene window."""
+    duration = max(0.05, float(end) - float(start))
+    try:
+        result = run_ffmpeg(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostats",
+                "-ss",
+                f"{max(0.0, float(start)):.3f}",
+                "-t",
+                f"{duration:.3f}",
+                "-i",
+                video_path,
+                "-vn",
+                "-af",
+                "astats=metadata=1:reset=1",
+                "-f",
+                "null",
+                "-",
+            ],
+            timeout=30,
+            capture_output=True,
+        )
+    except (OSError, RuntimeError):
+        return 0.0
+
+    levels = []
+    for match in re.finditer(
+        r"RMS level dB:\s*(-?(?:\d+(?:\.\d*)?|\.\d+)|-inf)",
+        result.stderr or "",
+    ):
+        raw = match.group(1)
+        if raw != "-inf":
+            levels.append(float(raw))
+    if not levels:
+        return 0.0
+
+    linear = sum(10.0 ** (level / 20.0) for level in levels) / len(levels)
+    return round(_clamp(linear), 4)
 
 
 def _tokenize(text: str) -> List[str]:
@@ -184,7 +228,13 @@ def analyze_video(
         motion = sum(motions) / len(motions) if motions else 0.0
         brightness = sum(brightness_values) / len(brightness_values) if brightness_values else 0.0
         faces = max(face_counts) if face_counts else 0
-        importance = _clamp(0.45 * motion + 0.25 * min(1.0, faces / 2.0) + 0.30 * (0.5 + abs(brightness - 0.5)))
+        audio_energy = _audio_energy(video_path, start, end)
+        importance = _clamp(
+            0.35 * motion
+            + 0.20 * min(1.0, faces / 2.0)
+            + 0.20 * (0.5 + abs(brightness - 0.5))
+            + 0.25 * audio_energy
+        )
 
         scene = Scene(
             id=f"scene_{index:04d}",
@@ -194,6 +244,7 @@ def analyze_video(
             objects=[],
             text=sorted(set(ocr_text))[:12],
             motion_score=round(_clamp(motion), 4),
+            audio_energy=audio_energy,
             brightness=round(_clamp(brightness), 4),
             face_count=int(faces),
             importance_score=round(importance, 4),
