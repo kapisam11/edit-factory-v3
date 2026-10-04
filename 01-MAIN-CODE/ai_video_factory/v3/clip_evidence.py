@@ -136,11 +136,14 @@ def build_clip_evidence(
             best_score >= 0.12
             or visual_evidence >= 0.15
         )
+        critical_purpose = purpose in {"hook", "payoff", "punchline", "climax", "final impact"}
         status = (
             "supported"
             if semantic_supported and best_score >= 0.30
             else "weak"
-            if traceable_weak
+            if semantic_supported and traceable_weak
+            else "weak"
+            if (not critical_purpose) and traceable_weak
             else "unsupported"
         )
         results.append({
