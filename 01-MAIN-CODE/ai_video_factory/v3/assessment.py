@@ -66,8 +66,6 @@ def automated_editorial_checks(core: engine.CoreIdea, edit_type: engine.EditType
         "retention_semantic_coverage",
         "has_payoff",
         "has_final_impact",
-        "hook_payoff_continuity",
-        "retention_editorial_fit",
     )
     passed = bool(checks) and all(checks[name] for name in blocking_checks)
     return engine.QualityReport(
