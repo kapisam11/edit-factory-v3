@@ -564,12 +564,7 @@ class PlanningStage:
         config = context.request.config()
         fixture_evidence_override = (
             os.environ.get("AIVF_ENV", "").strip().lower() == "test"
-            and os.environ.get("AIVF_ALLOW_SKIP_QC", "0").strip() == "1"
-            and (
-                context.request.allow_unsupported_critical_evidence
-                or context.request.skip_qc
-                or os.environ.get("AIVF_V3_SEMANTIC_QC", "1").strip() == "0"
-            )
+            and context.request.allow_unsupported_critical_evidence
         )
         planning_footage_evidence = (
             None
