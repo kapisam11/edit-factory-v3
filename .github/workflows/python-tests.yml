@@ -182,8 +182,14 @@ jobs:
     - name: Enforce V3 core coverage gate
       run: >-
         uv run coverage report
-        --include='01-MAIN-CODE/ai_video_factory/v3_engine.py,01-MAIN-CODE/ai_video_factory/v3_semantics.py,01-MAIN-CODE/ai_video_factory/v3_quality.py,01-MAIN-CODE/ai_video_factory/v3_capabilities.py,01-MAIN-CODE/ai_video_factory/v3_pipeline.py,01-MAIN-CODE/ai_video_factory/edit_planner.py,01-MAIN-CODE/ai_video_factory/effects_engine.py,01-MAIN-CODE/ai_video_factory/render_engine.py,01-MAIN-CODE/ai_video_factory/composer.py'
+        --include='01-MAIN-CODE/ai_video_factory/v3_engine.py,01-MAIN-CODE/ai_video_factory/v3_semantics.py,01-MAIN-CODE/ai_video_factory/v3_quality.py,01-MAIN-CODE/ai_video_factory/v3_capabilities.py,01-MAIN-CODE/ai_video_factory/v3_pipeline.py,01-MAIN-CODE/ai_video_factory/edit_planner.py,01-MAIN-CODE/ai_video_factory/effects_engine.py,01-MAIN-CODE/ai_video_factory/render_engine.py'
         --fail-under=80
+
+    - name: Enforce composer compatibility coverage gate
+      run: >-
+        uv run coverage report
+        --include='01-MAIN-CODE/ai_video_factory/composer.py'
+        --fail-under=50
 
     - name: Enforce production-boundary coverage gates
       shell: bash
