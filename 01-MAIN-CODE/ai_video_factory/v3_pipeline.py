@@ -34,6 +34,8 @@ from .rights_policy import rights_gate
 from .system_diagnostics import diagnostics_report, write_diagnostics
 from .production_guardrails import GuardrailError, atomic_write_json, require_free_disk, sha256_file
 from .v3_exceptions import V3InputError
+from .v3.source_manifest import build_source_manifest
+from .v3.audience import parse_audience
 from .production_assurance import (
     build_artifact_manifest,
     build_environment_fingerprint,
@@ -66,21 +68,14 @@ def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
-    text = str(audience or "general short-form viewers").lower()
-    profiles = [
-        (("comedy", "funny", "humor", "meme"), {"tone": "playful", "pacing": "fast", "hook": "reaction_or_surprise", "caption_style": "punchy"}),
-        (("anime", "manga", "otaku"), {"tone": "dramatic", "pacing": "fast", "hook": "character_or_reveal", "caption_style": "punchy"}),
-        (("gaming", "gamer", "minecraft", "fortnite"), {"tone": "energetic", "pacing": "fast", "hook": "moment_or_payoff", "caption_style": "high_contrast"}),
-        (("history", "documentary", "facts", "science", "education"), {"tone": "informative", "pacing": "measured", "hook": "evidence_or_question", "caption_style": "clear"}),
-        (("business", "finance", "entrepreneur", "marketing"), {"tone": "direct", "pacing": "tight", "hook": "claim_or_result", "caption_style": "minimal"}),
-    ]
-    for markers, profile in profiles:
-        if any(marker in text for marker in markers):
-            return {"label": audience, **profile}
-    return {"label": audience, "tone": "accessible", "pacing": "balanced", "hook": "curiosity_or_emotion", "caption_style": "readable"}
+    return parse_audience(audience).to_dict()
 
 
-def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _research_summary_from_blueprint(
+    payload: Dict[str, Any],
+    footage_evidence: Optional[Dict[str, Any]] = None,
+    source_manifest: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     core = payload["core_idea"]
     best_hook = payload["hooks"][0] if payload.get("hooks") else {}
     clip_plan = payload.get("clip_plan", [])
@@ -97,15 +92,18 @@ def _research_summary_from_blueprint(payload: Dict[str, Any], footage_evidence: 
         "avg_shot_duration": avg_shot, "cuts_per_minute": round(60.0 / max(avg_shot, 0.1), 2),
         "music_energy": 0.8 if payload["music"]["energy"] == "high" else 0.55,
         "music_style": payload["music"]["emotional_tone"], "v3_edit_type": payload["edit_type"],
-        "v3_quality_score": payload["quality"]["score"], "v3_retention_score": payload["metrics"]["retention_score"],
+        "v3_quality_score": payload["quality"]["score"],
+        "v3_retention_heuristic": payload["metrics"].get("retention_heuristic", payload["metrics"].get("retention_score", 0.0)),
         "thumbnail": payload.get("thumbnail_concept", ""), "platform": payload.get("platform", "youtube_shorts"),
         "audience": audience, "audience_profile": audience_profile, "platform_profile": profile,
+        "source_manifest": source_manifest or {},
         "footage_evidence": footage_evidence or {},
-        "source_metadata": payload.get("source_metadata") or {},
         "v3_directives": {
             "edit_type": payload["edit_type"], "clip_plan": clip_plan, "retention_map": payload.get("retention_map", []),
             "hooks": payload.get("hooks", []), "platform": payload.get("platform", "youtube_shorts"), "platform_profile": profile,
-            "audience": audience, "audience_profile": audience_profile, "min_scene_match_score": 0.15,
+            "audience": audience, "audience_profile": audience_profile,
+            "source_manifest": source_manifest or {},
+            "min_scene_match_score": 0.15,
             "disable_templates": True, "blueprint_contract": "3.0.0",
         },
     }
@@ -201,8 +199,10 @@ def _normalize_final_audio(package: Path, final_video: str) -> str:
         raise RenderContractError(f"EBU R128 final audio normalization failed: {exc}") from exc
 
 
-def _cleanup_v3_transients(package: Path) -> None:
-    """Remove only known V3 temporary artifacts; preserve canonical outputs for inspection."""
+def _cleanup_v3_transients(package: Path, *, preserve: bool = False) -> None:
+    """Remove known V3 temporary artifacts; retain them on failure/debug for diagnostics."""
+    if preserve:
+        return
     for name in ("final.v3.retention.mp4", ".final.v3.normalized.mp4", ".final.v3.audio-normalized.mp4"):
         (package / name).unlink(missing_ok=True)
     for child in package.glob(".aivf-*.partial"):
@@ -221,14 +221,23 @@ def _prepare_blueprint(
     validate_blueprint(blueprint)
     blueprint_path = package / "v3_blueprint.json"
     payload = blueprint.to_dict()
-    if source_metadata:
-        payload["source_metadata"] = dict(source_metadata)
     _atomic_json_write(blueprint_path, payload)
-    persisted = V3Blueprint.from_dict(json.loads(blueprint_path.read_text(encoding="utf-8")))
-    persisted_payload = persisted.to_dict()
     if source_metadata:
-        persisted_payload["source_metadata"] = dict(source_metadata)
-    return persisted, persisted_payload, blueprint_path
+        source_path_value = str(
+            source_metadata.get("source_path")
+            or source_metadata.get("input_video")
+            or ""
+        ).strip()
+        if source_path_value:
+            source_manifest = build_source_manifest(source_path_value, source_metadata)
+            _atomic_json_write(
+                package / "source_manifest.json",
+                source_manifest.to_dict(),
+            )
+    persisted = V3Blueprint.from_dict(
+        json.loads(blueprint_path.read_text(encoding="utf-8"))
+    )
+    return persisted, persisted.to_dict(), blueprint_path
 
 
 def _build_baseline_request(
@@ -270,11 +279,16 @@ def _finalize_v3_media(
     canonical_final = package / payload.get("packaging", {}).get("final_video_name", "final.v3.mp4")
     try:
         shutil.copyfile(result.final_video, baseline_path)
-        enforce_retention_events(result.final_video, str(retention_path), payload.get("retention_map", []))
-        normalize_duration(str(retention_path), str(normalized_path), target_seconds)
         profile = payload["platform_variants"][payload["platform"]]
+        enforce_retention_events(
+            result.final_video,
+            str(retention_path),
+            payload.get("retention_map", []),
+            target_seconds=target_seconds,
+            normalize_audio=os.environ.get("AIVF_EBU_R128", "1").strip() != "0",
+        )
         report = strict_render_check(
-            str(normalized_path),
+            str(retention_path),
             target_seconds=target_seconds,
             platform_profile=profile,
             retention_events=payload.get("retention_map", []),
@@ -283,12 +297,19 @@ def _finalize_v3_media(
         )
         if not report["ok"]:
             raise RenderContractError("; ".join(str(error) for error in report.get("errors", [])) or "V3 render QC failed")
-        os.replace(normalized_path, canonical_final)
+        os.replace(retention_path, canonical_final)
         result.final_video = str(canonical_final)
         return str(canonical_final), baseline_path, report
-    except Exception:
-        retention_path.unlink(missing_ok=True)
-        normalized_path.unlink(missing_ok=True)
+    except (
+        RenderContractError,
+        MediaHealthError,
+        AudioNormalizationError,
+        OSError,
+        ValueError,
+    ):
+        if os.environ.get("AIVF_DEBUG_ARTIFACTS", "0").strip() != "1":
+            retention_path.unlink(missing_ok=True)
+            normalized_path.unlink(missing_ok=True)
         raise
 
 
@@ -353,51 +374,40 @@ def run_v3_pipeline(
     enable_diarization: bool = False,
     diarization_token: Optional[str] = None,
     source_metadata: Optional[Dict[str, Any]] = None,
+    allow_unsupported_critical_evidence: bool = False,
 ) -> ProductionResult:
-    """Run V3 through the explicit production stages.
+    """Run V3 through the explicit production stages without pre-resetting the workspace.
 
-    The legacy function signature remains stable for CLI/dashboard callers.
+    Reuse and locking happen inside V3PipelineRunner before any package mutation.
     """
-    package = Path(package_dir)
-    try:
-        # Invalidate stale package evidence before any public preflight can fail.
-        _reset_v3_package(package, input_video=input_video)
-        request = V3Request(
-            input_video=input_video,
-            topic=topic,
-            package_dir=package_dir,
-            context=context,
-            target_seconds=target_seconds,
-            platform=platform,
-            audience=audience,
-            bpm=bpm,
-            edit_type=edit_type,
-            model_key=model_key,
-            skip_qc=skip_qc,
-            music_path=music_path,
-            enable_ocr=enable_ocr,
-            enable_object_detection=enable_object_detection,
-            enable_diarization=enable_diarization,
-            diarization_token=diarization_token,
+    request = V3Request(
+        input_video=input_video,
+        topic=topic,
+        package_dir=package_dir,
+        context=context,
+        target_seconds=target_seconds,
+        platform=platform,
+        audience=audience,
+        bpm=bpm,
+        edit_type=edit_type,
+        model_key=model_key,
+        skip_qc=skip_qc,
+        music_path=music_path,
+        enable_ocr=enable_ocr,
+        enable_object_detection=enable_object_detection,
+        enable_diarization=enable_diarization,
+        diarization_token=diarization_token,
+        allow_unsupported_critical_evidence=allow_unsupported_critical_evidence,
+    )
+    request.validate()
+    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+    qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
+    if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0" and (
+        environment not in {"development", "test"} or not qc_override
+    ):
+        raise V3InputError(
+            "AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with "
+            "AIVF_ALLOW_SKIP_QC=1"
         )
-
-        # Public callers historically received input-contract failures immediately.
-        # Keep that behavior while the stage runner handles later operational failures
-        # as structured ProductionResult errors.
-        request.validate()
-        environment = os.environ.get("AIVF_ENV", "production").strip().lower()
-        qc_override = os.environ.get("AIVF_ALLOW_SKIP_QC") == "1"
-        if os.environ.get("AIVF_V3_SEMANTIC_QC", "1") == "0" and (
-            environment not in {"development", "test"} or not qc_override
-        ):
-            raise V3InputError(
-                "AIVF_V3_SEMANTIC_QC=0 is allowed only in development/test with AIVF_ALLOW_SKIP_QC=1"
-            )
-    except V3PipelineError as exc:
-        _write_failed_evidence(
-            package,
-            [f"[preflight] {exc}"],
-        )
-        raise
     return V3PipelineRunner(request, source_metadata=source_metadata).run()
 

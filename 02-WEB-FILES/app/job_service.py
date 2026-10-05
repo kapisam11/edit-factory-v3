@@ -1,6 +1,7 @@
 """Framework-independent job parameter validation for the dashboard."""
 from __future__ import annotations
 
+import os
 from typing import Any, Mapping
 
 from ai_video_factory.v3_engine import EditType, V3Config
@@ -52,6 +53,10 @@ def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, al
         "enable_ocr": _flag(data.get("enable_ocr")),
         "enable_object_detection": _flag(data.get("enable_object_detection", "false")),
         "enable_diarization": _flag(data.get("enable_diarization")),
+        "allow_unsupported_critical_evidence": bool(
+            os.environ.get("AIVF_ENV", "").strip().lower() == "test"
+            and _flag(data.get("allow_unsupported_critical_evidence"))
+        ),
         "source_metadata": {
             "creator": str(data.get("source_creator", "")).strip()[:200],
             "title": str(data.get("source_title", "")).strip()[:300],

@@ -101,7 +101,7 @@ def _source_records(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             if isinstance(raw, Mapping):
                 add(raw)
 
-    source_meta = summary.get("source_metadata")
+    source_meta = summary.get("source_manifest") or summary.get("source_metadata")
     if isinstance(source_meta, Mapping):
         add(source_meta, default_source="user_provided")
 
@@ -536,12 +536,22 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
     summary = summary or {}
     hooks = summary.get("hooks") or []
     hook = str(summary.get("hook") or (hooks[0].get("hook") if hooks and isinstance(hooks[0], dict) else ""))
-    title_rankings = rank_title_candidates(topic, hook=hook, strongest_angle=str(summary.get("strongest_angle") or ""), emotion=str(summary.get("emotion") or ""), title_limit=profile.title_limit, max_candidates=20)
-    chosen_title = title_rankings[0]["title"] if title_rankings else _normalize_phrase(topic)[: profile.title_limit]
+    final_metadata = summary.get("final_metadata") or {}
+    title_rankings = rank_title_candidates(
+        topic,
+        hook=hook,
+        strongest_angle=str(summary.get("strongest_angle") or ""),
+        emotion=str(summary.get("emotion") or ""),
+        candidates=final_metadata.get("title_candidates") if isinstance(final_metadata, Mapping) else None,
+        title_limit=profile.title_limit,
+        max_candidates=20,
+    )
+    chosen_title = str(final_metadata.get("selected_title") or (title_rankings[0]["title"] if title_rankings else _normalize_phrase(topic)[: profile.title_limit]))
     rights = media_rights_report(summary)
     source_records = rights["sources"]
-    description = build_description(topic, summary, script, platform)
-    tags = generate_platform_tags(chosen_title, description, topic, max_tags=profile.tag_limit, source_records=source_records)
+    description = str(final_metadata.get("description") or build_description(topic, summary, script, platform))
+    final_tags = final_metadata.get("hashtags") if isinstance(final_metadata, Mapping) else None
+    tags = list(final_tags) if isinstance(final_tags, Sequence) and not isinstance(final_tags, (str, bytes)) else generate_platform_tags(chosen_title, description, topic, max_tags=profile.tag_limit, source_records=source_records)
     metadata_quality = validate_metadata_quality(
         topic,
         chosen_title,

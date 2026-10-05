@@ -147,6 +147,7 @@ def test_v3_pipeline_renders_contract_valid_video(tmp_path, monkeypatch):
         enable_object_detection=False,
         enable_diarization=False,
         skip_qc=True,
+        allow_unsupported_critical_evidence=True,
     )
 
     assert result.errors == []

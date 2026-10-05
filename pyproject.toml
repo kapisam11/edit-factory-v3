@@ -9,7 +9,7 @@ description = "Emotion-first AI short-form video planning, production, retention
 requires-python = ">=3.10"
 license = "LicenseRef-Edit-Factory-Source-Available"
 license-files = ["LICENSE"]
-dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "urllib3>=2.8.0", "edge-tts>=6.1.0", "numpy>=1.23.0"]
+dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "urllib3>=2.8.0", "edge-tts>=6.1.0", "numpy>=1.23.0", "pydantic>=2.7.0"]
 
 [project.scripts]
 aivf = "app.cli:main"
@@ -36,7 +36,7 @@ youtube = ["google-api-python-client>=2.100.0", "google-auth>=2.30.0", "google-a
 
 [tool.setuptools]
 package-dir = {"" = "01-MAIN-CODE", "app" = "02-WEB-FILES/app", "tools" = "03-SIDE-CODE/tools"}
-packages = ["ai_video_factory", "app", "tools"]
+packages = ["ai_video_factory", "ai_video_factory.v3", "app", "tools"]
 py-modules = ["cli", "dashboard_auth", "dashboard_cache", "dashboard_compat", "dashboard_optimizations", "dashboard_shutdown", "dashboard_store", "dashboard_worker", "resource_governor", "wsgi"]
 
 [tool.setuptools.data-files]
@@ -97,6 +97,31 @@ files = [
   "01-MAIN-CODE/ai_video_factory/v3_asset_packager.py",
   "01-MAIN-CODE/ai_video_factory/v3_stage_pipeline.py",
   "01-MAIN-CODE/ai_video_factory/v3_performance.py",
+  "01-MAIN-CODE/ai_video_factory/v3/platform_policy.py",
+  "01-MAIN-CODE/ai_video_factory/v3/production_spec.py",
+  "01-MAIN-CODE/ai_video_factory/v3/hook_eval.py",
+  "01-MAIN-CODE/ai_video_factory/v3/source_manifest.py",
+  "01-MAIN-CODE/ai_video_factory/v3/job_identity.py",
+  "01-MAIN-CODE/ai_video_factory/v3/effects.py",
+  "01-MAIN-CODE/ai_video_factory/v3/visual_qc.py",
+  "01-MAIN-CODE/ai_video_factory/v3/schema.py",
+  "01-MAIN-CODE/ai_video_factory/v3/schema_models.py",
+  "01-MAIN-CODE/ai_video_factory/v3/metadata.py",
+  "01-MAIN-CODE/ai_video_factory/editorial_corpus.py",
+  "01-MAIN-CODE/ai_video_factory/v3/migrations.py",
+  "01-MAIN-CODE/ai_video_factory/v3/architecture.py",
+  "01-MAIN-CODE/ai_video_factory/v3/final_content_manifest.py",
+  "01-MAIN-CODE/ai_video_factory/v3/clip_evidence.py",
+  "01-MAIN-CODE/ai_video_factory/v3/planner.py",
+  "01-MAIN-CODE/ai_video_factory/v3/planning.py",
+  "01-MAIN-CODE/ai_video_factory/v3/validators.py",
+  "01-MAIN-CODE/ai_video_factory/v3/validation.py",
+  "01-MAIN-CODE/ai_video_factory/v3/assessment.py",
+  "01-MAIN-CODE/ai_video_factory/v3/models.py",
+  "01-MAIN-CODE/ai_video_factory/v3/audience.py",
+  "01-MAIN-CODE/ai_video_factory/v3/creative_provenance.py",
+  "01-MAIN-CODE/ai_video_factory/v3/workspace.py",
+  "01-MAIN-CODE/ai_video_factory/v3/render_ir.py",
   "01-MAIN-CODE/ai_video_factory/editorial_evaluation.py",
   "01-MAIN-CODE/ai_video_factory/editorial_benchmark.py",
   "01-MAIN-CODE/ai_video_factory/editorial_regression.py",

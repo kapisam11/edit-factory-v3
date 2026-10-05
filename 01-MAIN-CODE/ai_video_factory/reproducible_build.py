@@ -27,7 +27,7 @@ def build_twice(project_root:str|Path,python_executable:str|None=None)->dict[str
         first.mkdir(); second.mkdir()
         env=dict(os.environ); env["SOURCE_DATE_EPOCH"]=str(epoch)
         for out in (first,second):
-            result=subprocess.run([executable,"-m","build","--wheel","--outdir",str(out),str(root)],cwd=str(root),env=env,capture_output=True,text=True,timeout=900,check=False)
+            result=subprocess.run([executable,"-m","build","--wheel","--no-isolation","--outdir",str(out),str(root)],cwd=str(root),env=env,capture_output=True,text=True,timeout=900,check=False)
             if result.returncode!=0: raise ReproducibilityError((result.stderr or result.stdout)[-4000:])
         a=next(first.glob("*.whl"),None); b=next(second.glob("*.whl"),None)
         if not a or not b: raise ReproducibilityError("two wheel artifacts were not produced")

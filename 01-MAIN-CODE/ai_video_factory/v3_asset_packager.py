@@ -38,8 +38,10 @@ class V3AssetPackager:
             )
             try:
                 frame_path = extract_best_video_frame(source_video, str(thumbnail_work_dir))
+                final_metadata = baseline_summary.get("final_metadata") or {}
                 subject = str(
-                    baseline_summary.get("hook")
+                    final_metadata.get("thumbnail_concept")
+                    or baseline_summary.get("hook")
                     or baseline_summary.get("thumbnail")
                     or topic
                 ).strip()

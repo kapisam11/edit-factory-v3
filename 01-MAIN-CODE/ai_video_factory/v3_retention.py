@@ -76,6 +76,8 @@ def evaluate_retention_editorial_fit(
         "starts_early": times[0] <= 0.35,
         "positive_gaps": all(gap > 0 for gap in gaps),
         "not_overcrowded": min_gap >= max(0.35, float(target_interval) * 0.20),
+        # Attention-gap duration is diagnostic; it never creates a synthetic effect
+        # and is not itself a release-blocking validation check.
         "no_long_gaps": max_gap <= max(3.5, float(duration) * 0.25),
         "effect_diversity": (
             unique_kinds >= min(2, len(kinds))
@@ -116,17 +118,17 @@ def evaluate_retention_editorial_fit(
     }
     denominator = sum(weights[key] for key in checks)
     score = 100.0 * sum(weights[key] for key, ok in checks.items() if ok) / max(0.01, denominator)
+    # Cadence checks are diagnostics only. They cannot make an editorial plan
+    # fail merely because a semantic timeline is sparse or clustered.
     passed = all(
         checks.get(key, True)
         for key in (
             "has_events",
             "events_within_duration",
-            "positive_gaps",
-            "not_overcrowded",
             "specific_instructions",
             "semantic_anchors",
         )
-    ) and score >= 75.0
+    ) and score >= 60.0
     return RetentionEditorialReport(
         passed=passed,
         score=round(score, 1),

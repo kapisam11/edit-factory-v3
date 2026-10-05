@@ -137,7 +137,7 @@ def test_v3_blueprint_round_trip_is_strict_and_immutable():
     payload = blueprint.to_dict()
     restored = blueprint.from_dict(payload)
 
-    assert restored.schema_version == "3.0.0"
+    assert restored.schema_version == "3.0.1"
     assert restored.platform == "youtube_shorts"
     assert restored.duration == blueprint.duration
     assert isinstance(restored.hooks, tuple)
@@ -174,7 +174,8 @@ def test_v3_blueprint_exposes_contract_platform_and_duration():
     )
     assert blueprint.platform == "tiktok"
     assert blueprint.duration == 12.0
-    assert blueprint.schema_version == blueprint.version == "3.0.0"
+    assert blueprint.version == "3.0.0"
+    assert blueprint.schema_version == "3.0.1"
 
 
 
@@ -238,3 +239,22 @@ def test_v3_music_sync_points_must_be_monotonic():
     payload["music"]["sync_points"] = [0.0, 4.0, 3.0, blueprint.duration]
     with pytest.raises(ValueError, match="monotonic"):
         blueprint.from_dict(payload)
+
+
+def test_retention_map_does_not_schedule_effects_from_time_alone(monkeypatch):
+    monkeypatch.setenv("AIVF_DISABLE_SEMANTIC", "1")
+    from ai_video_factory.v3_engine import (
+        V3Config,
+        analyze_core_idea,
+        analyze_music,
+        build_clip_plan,
+        build_retention_map,
+        choose_edit_type,
+    )
+    config = V3Config(target_seconds=30)
+    core = analyze_core_idea("A subject")
+    edit_type = choose_edit_type(core)
+    clips = build_clip_plan(core, edit_type, config)
+    music = analyze_music(core, config, clips)
+    events = build_retention_map(config, clips, music)
+    assert all(event.reason != "VISUAL_CONTINUITY" for event in events)
