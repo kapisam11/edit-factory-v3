@@ -40,6 +40,23 @@ def test_audio_energy_parses_rms_from_ffmpeg(monkeypatch):
     assert 0.49 < energy < 0.51
 
 
+def test_audio_energy_uses_scene_wide_astats(monkeypatch):
+    captured = {}
+
+    class Result:
+        stderr = "[Parsed_astats_0 @ 0x0] RMS level dB: -6.02\n"
+    
+    def fake_ffmpeg(args, **kwargs):
+        captured["args"] = args
+        return Result()
+
+    monkeypatch.setattr(scene_intelligence, "run_ffmpeg", fake_ffmpeg)
+    energy = scene_intelligence._audio_energy("audio.mp4", 0.0, 2.0)
+
+    assert 0.49 < energy < 0.51
+    assert "astats=metadata=1:reset=0" in captured["args"]
+
+
 def test_ffprobe_duration_failure_is_hard_failure(monkeypatch):
     class Result:
         returncode = 1
