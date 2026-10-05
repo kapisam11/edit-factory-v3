@@ -71,7 +71,7 @@ def _audio_energy(video_path: str, start: float, end: float) -> float:
                 video_path,
                 "-vn",
                 "-af",
-                "astats=metadata=1:reset=1",
+                "astats=metadata=1:reset=0",
                 "-f",
                 "null",
                 "-",
