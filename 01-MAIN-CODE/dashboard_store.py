@@ -82,6 +82,20 @@ class DashboardStore:
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
+        if "principal" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN principal TEXT NOT NULL DEFAULT 'unknown'")
+        if "attempt_id" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN attempt_id TEXT")
+        if "worker_token" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN worker_token TEXT")
+        if "workspace_dir" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN workspace_dir TEXT")
+        if "resource_units" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN resource_units INTEGER NOT NULL DEFAULT 1")
+        if "reserved_disk_bytes" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN reserved_disk_bytes INTEGER NOT NULL DEFAULT 0")
+        if "reserved_memory_bytes" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN reserved_memory_bytes INTEGER NOT NULL DEFAULT 0")
         if "worker_heartbeat_at" not in columns:
             try:
                 conn.execute(
@@ -116,6 +130,13 @@ class DashboardStore:
                     error TEXT,
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     worker_heartbeat_at TEXT,
+                    principal TEXT NOT NULL DEFAULT 'unknown',
+                    attempt_id TEXT,
+                    worker_token TEXT,
+                    workspace_dir TEXT,
+                    resource_units INTEGER NOT NULL DEFAULT 1,
+                    reserved_disk_bytes INTEGER NOT NULL DEFAULT 0,
+                    reserved_memory_bytes INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -164,6 +185,14 @@ class DashboardStore:
                 "ON jobs(status, worker_heartbeat_at)"
             )
             conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_principal_status "
+                "ON jobs(principal, status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_attempt "
+                "ON jobs(attempt_id)"
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id "
                 "ON job_logs(job_id, id)"
             )
@@ -180,6 +209,25 @@ class DashboardStore:
             """)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_job_events_job_id_id ON job_events(job_id, id)"
+            )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_attempts (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    attempt_number INTEGER NOT NULL,
+                    worker_id TEXT NOT NULL,
+                    lease_token TEXT NOT NULL,
+                    workspace_dir TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'running',
+                    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TEXT,
+                    error_code TEXT
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_attempts_job_status "
+                "ON job_attempts(job_id, status, attempt_number)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_rate_limits_client_ip_ts "
@@ -238,6 +286,15 @@ class DashboardStore:
         max_queued_jobs: int | None = None,
         principal: str | None = None,
         principal_limit: int | None = None,
+        resource_units: int | None = None,
+        reserved_disk_bytes: int | None = None,
+        reserved_memory_bytes: int | None = None,
+        available_disk_bytes: int | None = None,
+        resource_capacity_units: int | None = None,
+        max_reserved_memory_bytes: int | None = None,
+        attempt_id: str | None = None,
+        worker_token: str | None = None,
+        workspace_dir: str | None = None,
     ) -> None:
         """Insert a queued job while enforcing admission limits in one transaction."""
         encoded = json.dumps(params)
@@ -255,23 +312,40 @@ class DashboardStore:
                 if queued >= int(max_queued_jobs):
                     raise JobAdmissionError("queue capacity reached")
             if principal is not None and principal_limit is not None:
-                rows = conn.execute(
-                    "SELECT params FROM jobs WHERE status IN ('queued','running')"
-                ).fetchall()
-                count = 0
-                for row in rows:
-                    try:
-                        payload = json.loads(row["params"] or "{}")
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                    if str(payload.get("_principal", "")) == principal:
-                        count += 1
+                count = int(conn.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE principal=? AND status IN ('queued','running')",
+                    (str(principal).strip() or "unknown",),
+                ).fetchone()[0])
                 if count >= int(principal_limit):
                     raise JobAdmissionError("principal queue capacity reached")
+            if resource_units is not None:
+                used_units = int(conn.execute(
+                    "SELECT COALESCE(SUM(resource_units),0) FROM jobs WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+                if used_units + int(resource_units) > int(resource_capacity_units or 100):
+                    raise JobAdmissionError("resource capacity reached")
+            if reserved_memory_bytes is not None and max_reserved_memory_bytes is not None:
+                used_memory = int(conn.execute(
+                    "SELECT COALESCE(SUM(reserved_memory_bytes),0) FROM jobs WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+                if used_memory + int(reserved_memory_bytes) > int(max_reserved_memory_bytes):
+                    raise JobAdmissionError("reserved memory capacity reached")
+            if reserved_disk_bytes is not None and available_disk_bytes is not None:
+                used_disk = int(conn.execute(
+                    "SELECT COALESCE(SUM(reserved_disk_bytes),0) FROM jobs WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+                if used_disk + int(reserved_disk_bytes) > int(available_disk_bytes):
+                    raise JobAdmissionError("reserved disk capacity reached")
             conn.execute(
-                "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
-                "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                (job_id, topic, encoded),
+                "INSERT INTO jobs (id, topic, status, step, params, principal, attempt_id, worker_token, "
+                "workspace_dir, resource_units, reserved_disk_bytes, reserved_memory_bytes, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (
+                    job_id, topic, encoded, str(principal).strip() or "unknown",
+                    attempt_id, worker_token, workspace_dir,
+                    int(resource_units or 1), int(reserved_disk_bytes or 0),
+                    int(reserved_memory_bytes or 0),
+                ),
             )
             self._record_event(conn, job_id, "created", to_status="queued", details=f"topic={topic[:200]}")
 
@@ -346,6 +420,15 @@ class DashboardStore:
         request_hash: str,
         max_queued_jobs: int | None = None,
         principal_limit: int | None = None,
+        resource_units: int | None = None,
+        reserved_disk_bytes: int | None = None,
+        reserved_memory_bytes: int | None = None,
+        available_disk_bytes: int | None = None,
+        resource_capacity_units: int | None = None,
+        max_reserved_memory_bytes: int | None = None,
+        attempt_id: str | None = None,
+        worker_token: str | None = None,
+        workspace_dir: str | None = None,
     ) -> tuple[str, bool]:
         """Atomically reserve an idempotency key and insert the job.
 
@@ -388,14 +471,56 @@ class DashboardStore:
                         count += 1
                 if count >= int(principal_limit):
                     raise JobAdmissionError("principal queue capacity reached")
+            if resource_units is not None:
+                used_units = int(conn.execute(
+                    "SELECT COALESCE(SUM(resource_units),0) FROM jobs WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+                if used_units + int(resource_units) > int(resource_capacity_units or 100):
+                    raise JobAdmissionError("resource capacity reached")
+            if reserved_memory_bytes is not None and max_reserved_memory_bytes is not None:
+                used_memory = int(conn.execute(
+                    "SELECT COALESCE(SUM(reserved_memory_bytes),0) FROM jobs WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+                if used_memory + int(reserved_memory_bytes) > int(max_reserved_memory_bytes):
+                    raise JobAdmissionError("reserved memory capacity reached")
+            if reserved_disk_bytes is not None and available_disk_bytes is not None:
+                used_disk = int(conn.execute(
+                    "SELECT COALESCE(SUM(reserved_disk_bytes),0) FROM jobs WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+                if used_disk + int(reserved_disk_bytes) > int(available_disk_bytes):
+                    raise JobAdmissionError("reserved disk capacity reached")
             conn.execute(
                 "INSERT INTO idempotency_keys(principal, idem_key, request_hash, job_id) VALUES (?,?,?,?)",
                 (principal_value, key, fingerprint, job_id),
             )
+            if resource_units is not None:
+                used_units = int(conn.execute(
+                    "SELECT COALESCE(SUM(resource_units),0) FROM jobs WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+                if used_units + int(resource_units) > int(resource_capacity_units or 100):
+                    raise JobAdmissionError("resource capacity reached")
+            if reserved_memory_bytes is not None and max_reserved_memory_bytes is not None:
+                used_memory = int(conn.execute(
+                    "SELECT COALESCE(SUM(reserved_memory_bytes),0) FROM jobs WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+                if used_memory + int(reserved_memory_bytes) > int(max_reserved_memory_bytes):
+                    raise JobAdmissionError("reserved memory capacity reached")
+            if reserved_disk_bytes is not None and available_disk_bytes is not None:
+                used_disk = int(conn.execute(
+                    "SELECT COALESCE(SUM(reserved_disk_bytes),0) FROM jobs WHERE status IN ('queued','running')"
+                ).fetchone()[0])
+                if used_disk + int(reserved_disk_bytes) > int(available_disk_bytes):
+                    raise JobAdmissionError("reserved disk capacity reached")
             conn.execute(
-                "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
-                "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                (job_id, topic, encoded),
+                "INSERT INTO jobs (id, topic, status, step, params, principal, attempt_id, worker_token, "
+                "workspace_dir, resource_units, reserved_disk_bytes, reserved_memory_bytes, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (
+                    job_id, topic, encoded, str(principal).strip() or "unknown",
+                    attempt_id, worker_token, workspace_dir,
+                    int(resource_units or 1), int(reserved_disk_bytes or 0),
+                    int(reserved_memory_bytes or 0),
+                ),
             )
             self._record_event(conn, job_id, "created", to_status="queued", details="idempotent request")
             return job_id, True
@@ -470,50 +595,120 @@ class DashboardStore:
             ).rowcount)
 
         return int(self.write(write))
-    def claim_job(self, job_id: str) -> bool:
-        """Atomically claim a queued job and establish its heartbeat lease."""
+    def claim_job(
+        self,
+        job_id: str,
+        *,
+        attempt_id: str | None = None,
+        worker_id: str | None = None,
+        lease_token: str | None = None,
+        workspace_dir: str | None = None,
+    ) -> bool:
+        """Atomically claim a queued job and optionally bind it to a fenced attempt."""
         def write(conn: sqlite3.Connection) -> int:
             self._ensure_job_columns(conn)
-            row = conn.execute(
-                "SELECT status FROM jobs WHERE id=?",
-                (job_id,),
-            ).fetchone()
+            row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
             if row is None or str(row["status"]) != "queued":
                 return 0
             validate_transition("queued", "running")
-            changed = int(
-                conn.execute(
-                    "UPDATE jobs SET status='running', step='starting', "
-                    "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, "
-                    "updated_at=CURRENT_TIMESTAMP "
-                    "WHERE id=? AND status='queued'",
+            changed = int(conn.execute(
+                "UPDATE jobs SET status='running', step='starting', "
+                "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, attempt_id=?, worker_token=?, "
+                "workspace_dir=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'",
+                (attempt_id, lease_token, workspace_dir, job_id),
+            ).rowcount)
+            if changed and attempt_id and worker_id and lease_token and workspace_dir:
+                next_number = int(conn.execute(
+                    "SELECT COALESCE(MAX(attempt_number),0)+1 FROM job_attempts WHERE job_id=?",
                     (job_id,),
-                ).rowcount
-            )
+                ).fetchone()[0])
+                conn.execute(
+                    "INSERT INTO job_attempts(id,job_id,attempt_number,worker_id,lease_token,workspace_dir) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (attempt_id, job_id, next_number, worker_id, lease_token, workspace_dir),
+                )
             if changed:
                 self._record_event(
-                    conn,
-                    job_id,
-                    "status_change",
-                    from_status="queued",
-                    to_status="running",
-                    details="worker lease claimed",
+                    conn, job_id, "JOB_CLAIMED", from_status="queued",
+                    to_status="running", details=f"attempt_id={attempt_id or ''}",
                 )
             return changed
         return int(self.write(write)) == 1
 
-    def heartbeat_job(self, job_id: str) -> bool:
-        """Refresh the durable worker lease for a non-terminal job."""
+    def heartbeat_job(
+        self,
+        job_id: str,
+        *,
+        attempt_id: str | None = None,
+        lease_token: str | None = None,
+    ) -> bool:
+        """Refresh the durable worker lease, fenced to the active attempt when supplied."""
         def write(conn: sqlite3.Connection) -> int:
             self._ensure_job_columns(conn)
-            return int(
+            if attempt_id and lease_token:
+                changed = int(conn.execute(
+                    "UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status IN ('running','cancelling') AND attempt_id=? AND worker_token=?",
+                    (job_id, attempt_id, lease_token),
+                ).rowcount)
+                if changed:
+                    conn.execute(
+                        "UPDATE job_attempts SET heartbeat_at=CURRENT_TIMESTAMP WHERE id=? AND lease_token=?",
+                        (attempt_id, lease_token),
+                    )
+                return changed
+            return int(conn.execute(
+                "UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND status IN ('running','cancelling')",
+                (job_id,),
+            ).rowcount)
+        return bool(self.write(write))
+
+    def is_attempt_owner(self, job_id: str, attempt_id: str, lease_token: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM jobs WHERE id=? AND attempt_id=? AND worker_token=? "
+                "AND status IN ('running','cancelling')",
+                (job_id, attempt_id, lease_token),
+            ).fetchone()
+            return row is not None
+
+    def update_job_if_owned(
+        self,
+        job_id: str,
+        attempt_id: str,
+        lease_token: str,
+        **kwargs: Any,
+    ) -> bool:
+        allowed = {"status", "step", "params", "pkg_dir", "error", "workspace_dir"}
+        invalid = set(kwargs) - allowed
+        if invalid or not kwargs:
+            raise ValueError(f"Invalid owned job update fields: {sorted(invalid)}")
+        def write(conn: sqlite3.Connection) -> bool:
+            row = conn.execute(
+                "SELECT status FROM jobs WHERE id=? AND attempt_id=? AND worker_token=?",
+                (job_id, attempt_id, lease_token),
+            ).fetchone()
+            if row is None:
+                return False
+            current = str(row["status"])
+            target = str(kwargs.get("status", current))
+            if target != current:
+                validate_transition(current, target)
+            fields = ", ".join(f"{key}=?" for key in kwargs)
+            changed = conn.execute(
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND attempt_id=? AND worker_token=?",
+                [*kwargs.values(), job_id, attempt_id, lease_token],
+            ).rowcount
+            if changed and "status" in kwargs:
                 conn.execute(
-                    "UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP, "
-                    "updated_at=CURRENT_TIMESTAMP "
-                    "WHERE id=? AND status IN ('running','cancelling')",
-                    (job_id,),
-                ).rowcount
-            )
+                    "UPDATE job_attempts SET status=?, finished_at=CASE WHEN ? IN "
+                    "('done','error','interrupted','cancelled') THEN CURRENT_TIMESTAMP ELSE finished_at END "
+                    "WHERE id=? AND lease_token=?",
+                    (target, target, attempt_id, lease_token),
+                )
+            return bool(changed)
         return bool(self.write(write))
 
     def update_job_if_status(
