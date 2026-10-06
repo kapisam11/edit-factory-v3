@@ -551,6 +551,17 @@ def install_dashboard_optimizations(app_module: Any) -> None:
 
 
         app_module._runtime_secrets[job_id] = secrets
+        try:
+            store.record_audit_event(
+                principal_for_request(request),
+                "JOB_RETRY_REQUESTED",
+                "job",
+                resource_id=job_id,
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get("User-Agent"),
+            )
+        except Exception:
+            app_module.logger.debug("Could not record retry audit event", exc_info=True)
         cache.delete("jobs:list")
         try:
             started = app_module._start_job(job_id, params, secrets)
