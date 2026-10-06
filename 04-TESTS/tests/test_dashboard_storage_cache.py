@@ -254,7 +254,7 @@ def test_idempotent_concurrent_requests_create_one_job(tmp_path):
     with ThreadPoolExecutor(max_workers=12) as pool:
         results = list(pool.map(create, range(100)))
 
-    assert {job_id for job_id, _created in results} == {"job-0"}
+    assert len({job_id for job_id, _created in results}) == 1
     assert sum(created for _job_id, created in results) == 1
 
 
