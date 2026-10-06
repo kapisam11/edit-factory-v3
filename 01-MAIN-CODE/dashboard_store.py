@@ -513,6 +513,16 @@ class DashboardStore:
             ).rowcount)
         return bool(self.write(write))
 
+    def can_publish_attempt(self, job_id: str, attempt_id: str, lease_token: str) -> bool:
+        """Return true only while the fenced attempt still owns a running job."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM jobs WHERE id=? AND attempt_id=? AND worker_token=? "
+                "AND status='running'",
+                (job_id, attempt_id, lease_token),
+            ).fetchone()
+        return row is not None
+
     def is_attempt_owner(self, job_id: str, attempt_id: str, lease_token: str) -> bool:
         with self.connect() as conn:
             row = conn.execute(
