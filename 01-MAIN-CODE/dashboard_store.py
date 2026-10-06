@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -507,6 +508,156 @@ class DashboardStore:
             ).rowcount)
 
         return int(self.write(write))
+    def begin_attempt(self, job_id: str, worker_id: str, workspace: str) -> dict[str, str] | None:
+        """Create a fenced execution attempt and bind its lease to the job."""
+        attempt_id = uuid.uuid4().hex
+        lease_token = uuid.uuid4().hex
+        worker_value = str(worker_id).strip() or "unknown"
+        workspace_value = str(workspace).strip()
+        if not workspace_value:
+            raise ValueError("attempt workspace is required")
+
+        def write(conn: sqlite3.Connection) -> dict[str, str] | None:
+            row = conn.execute(
+                "SELECT status, current_attempt FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None or str(row["status"]) not in {"running", "cancelling"}:
+                return None
+            attempt_number = int(row["current_attempt"] or 0) + 1
+            conn.execute(
+                """
+                INSERT INTO job_attempts(
+                    id, job_id, attempt_number, worker_id, lease_token,
+                    workspace, heartbeat_at, status
+                ) VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP,'running')
+                """,
+                (
+                    attempt_id,
+                    job_id,
+                    attempt_number,
+                    worker_value,
+                    lease_token,
+                    workspace_value,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE jobs
+                SET current_attempt=?, worker_id=?, lease_token=?,
+                    worker_heartbeat_at=CURRENT_TIMESTAMP,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND status IN ('running','cancelling')
+                """,
+                (attempt_number, worker_value, lease_token, job_id),
+            )
+            self._record_event(
+                conn,
+                job_id,
+                "attempt_started",
+                details=f"attempt_id={attempt_id};attempt_number={attempt_number}",
+            )
+            return {
+                "attempt_id": attempt_id,
+                "lease_token": lease_token,
+                "worker_id": worker_value,
+                "attempt_number": str(attempt_number),
+            }
+
+        return self.write(write)
+
+    def heartbeat_attempt(self, job_id: str, attempt_id: str, lease_token: str) -> bool:
+        """Refresh the attempt lease only when the worker still owns the fence."""
+        def write(conn: sqlite3.Connection) -> int:
+            changed = int(
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET worker_heartbeat_at=CURRENT_TIMESTAMP,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND status IN ('running','cancelling') AND lease_token=?
+                    """,
+                    (job_id, lease_token),
+                ).rowcount
+            )
+            if changed != 1:
+                return 0
+            return int(
+                conn.execute(
+                    """
+                    UPDATE job_attempts
+                    SET heartbeat_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND job_id=? AND lease_token=? AND status='running'
+                    """,
+                    (attempt_id, job_id, lease_token),
+                ).rowcount
+            )
+
+        return bool(self.write(write))
+
+    def attempt_can_publish(self, job_id: str, attempt_id: str, lease_token: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM jobs j
+                JOIN job_attempts a ON a.job_id=j.id
+                WHERE j.id=? AND j.status IN ('running','cancelling')
+                  AND j.lease_token=? AND a.id=? AND a.lease_token=?
+                  AND a.status='running'
+                """,
+                (job_id, lease_token, attempt_id, lease_token),
+            ).fetchone()
+        return row is not None
+
+    def finish_attempt(
+        self,
+        job_id: str,
+        attempt_id: str,
+        lease_token: str,
+        *,
+        status: str,
+        error_code: str | None = None,
+    ) -> bool:
+        """Close an attempt only when the lease still belongs to that worker."""
+        def write(conn: sqlite3.Connection) -> int:
+            changed = int(
+                conn.execute(
+                    """
+                    UPDATE job_attempts
+                    SET status=?, error_code=?, finished_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND job_id=? AND lease_token=? AND status='running'
+                    """,
+                    (
+                        str(status),
+                        None if error_code is None else str(error_code),
+                        attempt_id,
+                        job_id,
+                        lease_token,
+                    ),
+                ).rowcount
+            )
+            if changed != 1:
+                return 0
+            conn.execute(
+                """
+                UPDATE jobs
+                SET worker_id=NULL, lease_token=NULL,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND lease_token=?
+                """,
+                (job_id, lease_token),
+            )
+            self._record_event(
+                conn,
+                job_id,
+                "attempt_finished",
+                details=f"attempt_id={attempt_id};status={status}",
+            )
+            return changed
+
+        return bool(self.write(write))
+
     def claim_job(self, job_id: str) -> bool:
         """Atomically claim a queued job and establish its heartbeat lease."""
         def write(conn: sqlite3.Connection) -> int:
