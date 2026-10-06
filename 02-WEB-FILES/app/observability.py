@@ -27,6 +27,7 @@ def install_observability(app: Flask) -> None:
         g.request_id = supplied if _REQUEST_ID_RE.fullmatch(supplied) else uuid.uuid4().hex
         g.request_started_at = time.perf_counter()
 
+    app.config["AIVF_DB_PATH"] = app.config.get("AIVF_DB_PATH") or str(Path(state_dir) / "jobs.db")
     redaction_filter = SecretRedactionFilter()
     for logger in (app.logger, logging.getLogger()):
         for handler in logger.handlers:
@@ -39,6 +40,19 @@ def install_observability(app: Flask) -> None:
         GLOBAL_METRICS.increment(f"http_requests_total:{request.method}:{request.endpoint or 'unknown'}")
         GLOBAL_METRICS.increment(f"http_response_total:{response.status_code}")
         GLOBAL_METRICS.observe_ms("http_request", (time.perf_counter() - started) * 1000.0)
+        try:
+            with __import__("sqlite3").connect(str(app.config.get("AIVF_DB_PATH") or "")) as conn:
+                if app.config.get("AIVF_DB_PATH"):
+                    queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
+                    running = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0])
+                    GLOBAL_METRICS.set_gauge("queue_depth", queued)
+                    GLOBAL_METRICS.set_gauge("jobs_running", running)
+            GLOBAL_METRICS.set_gauge(
+                "disk_free_bytes",
+                float(__import__("shutil").disk_usage(state_dir or Path(".")).free),
+            )
+        except (OSError, __import__("sqlite3").Error, TypeError, ValueError):
+            pass
         response.headers[REQUEST_ID_HEADER] = getattr(g, "request_id", "")
         return response
 
