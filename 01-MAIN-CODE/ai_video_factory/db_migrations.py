@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 
 
 def _table_columns(conn: sqlite3.Connection) -> set[str]:
@@ -222,6 +222,21 @@ def migrate(conn: sqlite3.Connection) -> int:
         if "user_agent" not in existing_audit_columns:
             conn.execute("ALTER TABLE audit_events ADD COLUMN user_agent TEXT")
         conn.execute("INSERT INTO schema_migrations(version) VALUES (9)")
+    # Version 10: resource-class admission.
+    if 10 not in applied:
+        existing_job_columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "resource_class" not in existing_job_columns:
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN resource_class TEXT NOT NULL DEFAULT 'STANDARD'"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_resource_class_status "
+            "ON jobs(resource_class, status)"
+        )
+        conn.execute("INSERT INTO schema_migrations(version) VALUES (10)")
+
 
     conn.commit()
     return CURRENT_SCHEMA_VERSION
