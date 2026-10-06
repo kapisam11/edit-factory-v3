@@ -830,8 +830,13 @@ def _watch_job_process(job_id: str, process: multiprocessing.Process) -> None:
                 if exitcode not in (0, None)
                 else "Worker process exited before reaching a terminal job state"
             )
-            db_update_job(job_id, status="interrupted", step="interrupted", error=reason)
-            db_append_log(job_id, "ERROR", reason)
+            db_update_job(job_id, status="interrupted", step="interrupted", error=reason, error_code="worker_crash")
+            db_append_log(job_id, "ERROR", "[worker_crash] " + reason)
+            try:
+                from dashboard_store import DashboardStore
+                DashboardStore(DB_PATH).release_resources(job_id)
+            except Exception:
+                logger.exception("Could not release resource reservation for interrupted job %s", job_id)
     except Exception:
         logger.exception("Could not reconcile worker exit for %s", job_id)
 
