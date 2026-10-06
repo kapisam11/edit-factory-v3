@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+from prometheus_client import CollectorRegistry, CounterMetricFamily, GaugeMetricFamily, generate_latest
+
 
 @dataclass(frozen=True)
 class MetricSnapshot:
@@ -176,30 +178,51 @@ class MetricsRegistry:
         return self.to_prometheus()
 
     def to_prometheus(self) -> str:
+        """Expose official Prometheus metric families from the durable snapshot."""
         snapshot = self.snapshot()
-        lines: list[str] = []
+        registry = CollectorRegistry()
+
         for raw_name, count in snapshot.counters.items():
             if raw_name.startswith("http_requests_total:"):
                 _, method, endpoint = raw_name.split(":", 2)
-                method = re.sub(r"[^A-Za-z0-9_]", "_", method)
-                endpoint = endpoint.replace("\\", "\\\\").replace('"', '\\"')
-                lines.append(
-                    f'aivf_http_requests_total{{method="{method}",endpoint="{endpoint}"}} {int(count)}'
+                family = CounterMetricFamily(
+                    "aivf_http_requests_total",
+                    "HTTP requests handled by Edit Factory",
+                    labels=["method", "endpoint"],
                 )
+                family.add_metric(
+                    [
+                        re.sub(r"[^A-Za-z0-9_]", "_", method),
+                        endpoint.replace('\\', '/'),
+                    ],
+                    int(count),
+                )
+                registry.register(family)
             else:
-                metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
-                lines.append(f"aivf_{metric} {int(count)}")
+                metric = re.sub(r"[^A-Za-z0-9_]", "_", raw_name).strip("_") or "counter"
+                if metric.endswith("_total"):
+                    metric = metric[:-6]
+                family = CounterMetricFamily(f"aivf_{metric}", f"{raw_name} counter")
+                family.add_metric([], int(count))
+                registry.register(family)
+
         for raw_name, value in snapshot.gauges.items():
-            metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
-            lines.append(f"aivf_{metric} {value}")
-        for raw_name, average_ms in snapshot.timings_ms.items():
-            metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
-            quantiles = snapshot.timing_percentiles_ms.get(raw_name, {})
-            for percentile, value in quantiles.items():
-                lines.append(
-                    f'aivf_{metric}_milliseconds{{quantile="{percentile}"}} {value}'
+            metric = re.sub(r"[^A-Za-z0-9_]", "_", raw_name).strip("_") or "gauge"
+            family = GaugeMetricFamily(f"aivf_{metric}", f"{raw_name} gauge")
+            family.add_metric([], float(value))
+            registry.register(family)
+
+        for raw_name, quantiles in snapshot.timing_percentiles_ms.items():
+            metric = re.sub(r"[^A-Za-z0-9_]", "_", raw_name).strip("_") or "timing"
+            for quantile, value in quantiles.items():
+                family = GaugeMetricFamily(
+                    f"aivf_{metric}_milliseconds_{quantile}",
+                    f"{raw_name} {quantile} timing in milliseconds",
                 )
-        return "\n".join(lines) + ("\n" if lines else "")
+                family.add_metric([], float(value))
+                registry.register(family)
+
+        return generate_latest(registry).decode("utf-8")
 
     def to_json(self) -> str:
         s = self.snapshot()
