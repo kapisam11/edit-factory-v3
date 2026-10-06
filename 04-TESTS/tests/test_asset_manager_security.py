@@ -32,3 +32,13 @@ def test_import_asset_sanitizes_filename(tmp_path: Path) -> None:
     uri = manager.import_asset(str(source), "video")
     assert uri == "assets://video/clip.mp4"
     assert (tmp_path / "assets" / "video" / "clip.mp4").is_file()
+
+
+def test_runtime_asset_verification_requires_sha256(tmp_path):
+    from ai_video_factory.asset_manager import RuntimeAssetSpec, runtime_asset_path, verify_runtime_asset
+
+    spec = RuntimeAssetSpec("demo_asset", "https://example.invalid/demo", ".models/demo.bin")
+    target = runtime_asset_path(spec, tmp_path)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"demo")
+    assert verify_runtime_asset(spec, tmp_path) is False
