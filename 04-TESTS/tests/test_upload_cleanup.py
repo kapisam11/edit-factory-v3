@@ -22,7 +22,7 @@ def test_cleanup_removes_stale_unreferenced_upload(tmp_path, monkeypatch):
     db = state_dir / "jobs.db"
     stale = upload_dir / "stale.mp4"
     stale.write_bytes(b"x")
-    old = time.time() - 2 * 24 * 60 * 60
+    old = time.time() - 8 * 24 * 60 * 60
     os.utime(stale, (old, old))
 
     monkeypatch.setenv("AIVF_UPLOAD_DIR", str(upload_dir))
