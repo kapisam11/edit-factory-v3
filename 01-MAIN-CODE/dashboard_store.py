@@ -7,6 +7,7 @@ timeouts, bounded write retries, and performance indexes.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -416,15 +417,12 @@ class DashboardStore:
                 if queued >= int(max_queued_jobs):
                     raise JobAdmissionError("queue capacity reached")
             if principal_limit is not None:
-                rows = conn.execute("SELECT params FROM jobs WHERE status IN ('queued','running')").fetchall()
-                count = 0
-                for row in rows:
-                    try:
-                        payload = json.loads(row["params"] or "{}")
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                    if str(payload.get("_principal", "")) == principal_value:
-                        count += 1
+                count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM jobs WHERE principal=? AND status IN ('queued','running')",
+                        (principal_value,),
+                    ).fetchone()[0]
+                )
                 if count >= int(principal_limit):
                     raise JobAdmissionError("principal queue capacity reached")
             conn.execute(
@@ -432,9 +430,9 @@ class DashboardStore:
                 (principal_value, key, fingerprint, job_id),
             )
             conn.execute(
-                "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
-                "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                (job_id, topic, encoded),
+                "INSERT INTO jobs (id, topic, status, step, params, principal, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (job_id, topic, encoded, principal_value),
             )
             self._record_event(conn, job_id, "created", to_status="queued", details="idempotent request")
             return job_id, True
