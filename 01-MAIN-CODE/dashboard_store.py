@@ -229,19 +229,6 @@ class DashboardStore:
         to_status: str | None = None,
         details: Any = "",
     ) -> None:
-        # Unit/integration callers can construct the legacy jobs schema without
-        # running ensure_indexes(). Make event persistence self-contained.
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS job_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id TEXT NOT NULL,
-                from_status TEXT,
-                to_status TEXT,
-                event TEXT NOT NULL,
-                details TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
         if isinstance(details, dict):
             detail_text = json.dumps(details, sort_keys=True, ensure_ascii=False)
         else:
@@ -423,9 +410,6 @@ class DashboardStore:
         def write(conn: sqlite3.Connection) -> tuple[str, bool]:
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
-            migrate(conn)
-            from db_migrations import apply_schema_migrations
-            apply_schema_migrations(conn)
             existing = conn.execute(
                 "SELECT job_id, request_hash FROM idempotency_keys WHERE principal=? AND idem_key=?",
                 (principal_value, key),
