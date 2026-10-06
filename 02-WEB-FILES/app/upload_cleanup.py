@@ -15,7 +15,7 @@ from typing import Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
-RETENTION_SECONDS = int(os.environ.get("AIVF_UPLOAD_RETENTION_SECONDS", str(24 * 60 * 60)))
+RETENTION_SECONDS = int(os.environ.get("AIVF_UPLOAD_RETENTION_SECONDS", str(7 * 24 * 60 * 60)))
 TEMP_RETENTION_SECONDS = int(os.environ.get("AIVF_UPLOAD_TEMP_RETENTION_SECONDS", str(60 * 60)))
 
 
