@@ -28,7 +28,7 @@ def _update_runtime_gauges() -> None:
             db_path = str(Path(state_dir) / "jobs.db") if state_dir else None
         if db_path:
             store = DashboardStore(db_path)
-            store.ensure_indexes()
+            store.verify_schema()
             with store.connect() as conn:
                 queued = int(conn.execute(
                     "SELECT COUNT(*) FROM jobs WHERE status='queued'"
