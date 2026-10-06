@@ -47,3 +47,30 @@ def test_output_limit_rejects_excess_channels(tmp_path):
     path.write_bytes(b"x")
     with pytest.raises(Exception, match="channel"):
         validate_output_probe(path, _payload(channels=16), limits=MediaLimits(max_audio_channels=8))
+
+
+def test_input_size_limit_rejects_before_probe(tmp_path):
+    from ai_video_factory.media_limits import validate_input_file
+
+    path = tmp_path / "input.mp4"
+    path.write_bytes(b"not-a-real-video")
+    with pytest.raises(Exception, match="size"):
+        validate_input_file(path, suffix=".mp4", limits=MediaLimits(max_input_bytes=4))
+
+
+def test_input_signature_rejects_mismatched_container(tmp_path):
+    from ai_video_factory.media_limits import validate_input_file
+
+    path = tmp_path / "input.mp4"
+    path.write_bytes(b"plain text")
+    with pytest.raises(Exception, match="signature"):
+        validate_input_file(path, suffix=".mp4", limits=MediaLimits())
+
+
+def test_output_frame_limit_rejects_render_bomb(tmp_path):
+    path = tmp_path / "output.mp4"
+    path.write_bytes(b"x")
+    payload = _payload()
+    payload["streams"][0]["nb_frames"] = 200
+    with pytest.raises(Exception, match="frame count"):
+        validate_output_probe(path, payload, limits=MediaLimits(max_frames=100))
