@@ -29,6 +29,7 @@ def cleanup_operational_state(
         "job_events": 0,
         "workspaces": 0,
         "old_jobs": 0,
+        "vacuumed": 0,
     }
     if not db.is_file():
         return stats
@@ -57,6 +58,10 @@ def cleanup_operational_state(
             "AND status IN ('done','cancelled')",
             (cutoff,),
         ).rowcount)
+        conn.execute("ANALYZE")
+        if str(__import__("os").environ.get("AIVF_JANITOR_VACUUM", "")).strip().lower() in {"1", "true", "yes"}:
+            conn.execute("VACUUM")
+            stats["vacuumed"] = 1
         conn.commit()
 
         active_rows = conn.execute(
