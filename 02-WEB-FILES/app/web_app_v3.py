@@ -32,7 +32,7 @@ from ai_video_factory.production_guardrails import sha256_file
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
-from ai_video_factory.media_limits import MediaLimits, probe_media_contract
+from ai_video_factory.media_limits import MediaLimits, estimate_resource_budget, probe_media_contract
 from ai_video_factory.db_migrations import migrate_database, verify_database_schema, SchemaMismatch
 from app.job_service import build_job_params
 
@@ -1039,6 +1039,7 @@ def create_job():
 
     upload = request.files.get("raw_video")
     upload_path: Optional[Path] = None
+    resource_reserved = False
     try:
         usage = shutil.disk_usage(UPLOAD_FOLDER)
         if usage.free < _MIN_FREE_DISK_BYTES:
@@ -1060,6 +1061,14 @@ def create_job():
         except (OSError, ValueError):
             return jsonify({"error": "Upload is too large or is not a valid supported video stream"}), 400
         params["raw_video"] = str(upload_path)
+
+    media_contract: Optional[dict[str, Any]] = None
+    if upload_path is not None:
+        try:
+            media_contract = probe_media_contract(upload_path, MEDIA_LIMITS)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            upload_path.unlink(missing_ok=True)
+            return jsonify({"error": "Uploaded media failed the production media contract"}), 400
 
     request_hash = ""
     if idem_key:
@@ -1184,6 +1193,35 @@ def create_job():
                 upload_path.unlink(missing_ok=True)
             logger.warning("Job admission resource limit reached: %s", exc)
             return jsonify({"error": "Job admission resource limit reached"}), 429
+
+        if media_contract is not None:
+            from resource_governor import (
+                MAX_CPU_WEIGHT,
+                MAX_RESERVED_DISK_BYTES,
+                MAX_RESERVED_MEMORY_BYTES,
+            )
+            budget = estimate_resource_budget(
+                media_contract,
+                target_seconds=float(target_seconds),
+                limits=MEDIA_LIMITS,
+            )
+            if not store.reserve_resources(
+                job_id,
+                input_bytes=int(budget["input_bytes"]),
+                reserved_bytes=int(budget["reserved_bytes"]),
+                cpu_weight=float(budget["cpu_weight"]),
+                memory_bytes=int(budget["memory_bytes"]),
+                max_reserved_disk_bytes=MAX_RESERVED_DISK_BYTES,
+                max_cpu_weight=MAX_CPU_WEIGHT,
+                max_memory_bytes=MAX_RESERVED_MEMORY_BYTES,
+            ):
+                if upload_path is not None:
+                    upload_path.unlink(missing_ok=True)
+                logger.warning("Job admission resource budget exhausted")
+                return jsonify({"error": "Job admission resource budget exhausted"}), 429
+            resource_reserved = True
+            params["_resource_budget"] = budget
+
         if idem_key:
             actual_job_id, created = store.insert_job_idempotent(
                 job_id,
@@ -1196,6 +1234,9 @@ def create_job():
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
             )
             if not created:
+                if resource_reserved:
+                    store.release_resources(actual_job_id)
+                    resource_reserved = False
                 if upload_path is not None:
                     upload_path.unlink(missing_ok=True)
                 existing = store.get_job(actual_job_id) or {}
@@ -1210,16 +1251,25 @@ def create_job():
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
             )
     except IdempotencyConflict as exc:
+        if resource_reserved:
+            store.release_resources(job_id)
+            resource_reserved = False
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
         logger.info("Idempotency conflict for job creation request")
         return jsonify({"error": "Idempotency key was already used for a different request"}), 409
     except JobAdmissionError as exc:
+        if resource_reserved:
+            store.release_resources(job_id)
+            resource_reserved = False
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
         logger.info("Job admission limit rejected request: %s", type(exc).__name__)
         return jsonify({"error": "Job admission limit reached"}), 429
     except Exception:
+        if resource_reserved:
+            store.release_resources(job_id)
+            resource_reserved = False
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
         raise
