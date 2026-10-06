@@ -68,50 +68,8 @@ class DashboardStore:
         raise AssertionError("unreachable")
 
     def ensure_indexes(self) -> None:
-        """Bootstrap required tables, then add indexes and lifecycle guards."""
+        """Apply explicit migrations, then install lifecycle triggers/indexes."""
         with self.connect() as conn:
-            # DashboardStore is also used against fresh/empty SQLite files in
-            # tests and recovery paths. Bootstrap the minimal storage schema
-            # before creating triggers or indexes that reference these tables.
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY,
-                    topic TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'queued',
-                    step TEXT NOT NULL DEFAULT 'waiting',
-                    params TEXT NOT NULL DEFAULT '{}',
-                    pkg_dir TEXT,
-                    error TEXT,
-                    error_code TEXT,
-                    retry_count INTEGER NOT NULL DEFAULT 0,
-                    worker_heartbeat_at TEXT,
-                    principal TEXT NOT NULL DEFAULT 'unknown',
-                    attempt_id TEXT,
-                    worker_token TEXT,
-                    workspace_dir TEXT,
-                    resource_units INTEGER NOT NULL DEFAULT 1,
-                    reserved_disk_bytes INTEGER NOT NULL DEFAULT 0,
-                    reserved_memory_bytes INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS job_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    level TEXT NOT NULL,
-                    message TEXT NOT NULL
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS rate_limits (
-                    client_ip TEXT NOT NULL,
-                    ts REAL NOT NULL
-                )
-            """)
-            # Explicit migrations run during bootstrap only, before admission queries.
             migrate(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
@@ -128,97 +86,35 @@ class DashboardStore:
                     SELECT RAISE(ABORT, 'invalid job status transition');
                 END
             """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_jobs_status_created "
-                "ON jobs(status, created_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_jobs_status_updated "
-                "ON jobs(status, updated_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_jobs_worker_heartbeat "
-                "ON jobs(status, worker_heartbeat_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_jobs_principal_status "
-                "ON jobs(principal, status)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_jobs_attempt "
-                "ON jobs(attempt_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id "
-                "ON job_logs(job_id, id)"
-            )
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS job_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id TEXT NOT NULL,
-                    from_status TEXT,
-                    to_status TEXT,
-                    event TEXT NOT NULL,
-                    details TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+
+    def verify_schema(self) -> int:
+        """Verify production schema is current without mutating it."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(version) FROM schema_migrations"
+            ).fetchone()
+            if row is None or row[0] is None:
+                raise RuntimeError("database schema has not been migrated")
+            version = int(row[0])
+            from ai_video_factory.db_migrations import CURRENT_SCHEMA_VERSION
+            if version != CURRENT_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"database schema version {version} does not match required "
+                    f"{CURRENT_SCHEMA_VERSION}"
                 )
-            """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_job_events_job_id_id ON job_events(job_id, id)"
-            )
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS job_attempts (
-                    id TEXT PRIMARY KEY,
-                    job_id TEXT NOT NULL,
-                    attempt_number INTEGER NOT NULL,
-                    worker_id TEXT NOT NULL,
-                    lease_token TEXT NOT NULL,
-                    workspace_dir TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'running',
-                    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    finished_at TEXT,
-                    error_code TEXT
-                )
-            """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_job_attempts_job_status "
-                "ON job_attempts(job_id, status, attempt_number)"
-            )
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS audit_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    principal TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    resource TEXT NOT NULL,
-                    resource_id TEXT,
-                    result TEXT NOT NULL,
-                    metadata TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_audit_events_principal_created "
-                "ON audit_events(principal, created_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_rate_limits_client_ip_ts "
-                "ON rate_limits(client_ip, ts)"
-            )
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS idempotency_keys (
-                    principal TEXT NOT NULL,
-                    idem_key TEXT NOT NULL,
-                    request_hash TEXT NOT NULL,
-                    job_id TEXT NOT NULL,
-                    created_at REAL NOT NULL DEFAULT (unixepoch()),
-                    PRIMARY KEY (principal, idem_key)
-                )
-            """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_idempotency_created "
-                "ON idempotency_keys(created_at)"
-            )
+            required = {
+                "jobs": {"principal", "attempt_id", "worker_token", "current_attempt", "error_code"},
+                "job_attempts": {"lease_token", "worker_id", "heartbeat_at"},
+                "job_artifacts": {"path", "sha256", "size_bytes"},
+                "job_events": {"id", "event", "details"},
+                "audit_events": {"principal", "action", "resource", "ip_address", "user_agent"},
+            }
+            for table, columns in required.items():
+                actual = {str(item["name"]) for item in conn.execute(f"PRAGMA table_info({table})")}
+                if not columns <= actual:
+                    missing = ", ".join(sorted(columns - actual))
+                    raise RuntimeError(f"database table {table} is missing columns: {missing}")
+        return version
 
     @staticmethod
     def _record_event(
