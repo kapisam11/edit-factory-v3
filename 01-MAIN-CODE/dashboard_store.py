@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 
 from ai_video_factory.job_state import validate_transition
 from ai_video_factory.retry_policy import backoff_seconds, is_retryable_error
+from ai_video_factory.db_migrations import migrate_database, verify_database_schema
 
 
 class JobAdmissionError(RuntimeError):
@@ -82,6 +83,30 @@ class DashboardStore:
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
+        if "principal" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN principal TEXT NOT NULL DEFAULT 'unknown'")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        if "current_attempt" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN current_attempt INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        if "worker_id" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN worker_id TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        if "lease_token" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN lease_token TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
         if "worker_heartbeat_at" not in columns:
             try:
                 conn.execute(
@@ -100,7 +125,13 @@ class DashboardStore:
                     raise
 
     def ensure_indexes(self) -> None:
-        """Bootstrap required tables, then add indexes and lifecycle guards."""
+        """Ensure the storage boundary is ready without mutating production schema."""
+        environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+        allow_runtime = os.environ.get("AIVF_ALLOW_RUNTIME_MIGRATIONS", "0").strip() == "1"
+        if environment == "production" and not allow_runtime:
+            verify_database_schema(self.db_path)
+            return
+        migrate_database(self.db_path)
         with self.connect() as conn:
             # DashboardStore is also used against fresh/empty SQLite files in
             # tests and recovery paths. Bootstrap the minimal storage schema
@@ -116,6 +147,10 @@ class DashboardStore:
                     error TEXT,
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     worker_heartbeat_at TEXT,
+                    current_attempt INTEGER NOT NULL DEFAULT 0,
+                    worker_id TEXT,
+                    lease_token TEXT,
+                    principal TEXT NOT NULL DEFAULT 'unknown',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -136,7 +171,9 @@ class DashboardStore:
                 )
             """)
             self._ensure_job_columns(conn)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_principal_status ON jobs(principal, status)")
             conn.execute("""
+
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
                 BEFORE UPDATE OF status ON jobs
                 WHEN NOT (
@@ -241,6 +278,7 @@ class DashboardStore:
     ) -> None:
         """Insert a queued job while enforcing admission limits in one transaction."""
         encoded = json.dumps(params)
+        principal_value = str(principal).strip() or "unknown"
 
         def write(conn: sqlite3.Connection) -> None:
             # Serialize admission with all other writers so quota checks and the
@@ -256,7 +294,7 @@ class DashboardStore:
                     raise JobAdmissionError("queue capacity reached")
             if principal is not None and principal_limit is not None:
                 rows = conn.execute(
-                    "SELECT params FROM jobs WHERE status IN ('queued','running')"
+                    "SELECT principal, params FROM jobs WHERE status IN ('queued','running')"
                 ).fetchall()
                 count = 0
                 for row in rows:
@@ -264,14 +302,15 @@ class DashboardStore:
                         payload = json.loads(row["params"] or "{}")
                     except (TypeError, ValueError, json.JSONDecodeError):
                         continue
-                    if str(payload.get("_principal", "")) == principal:
+                    row_principal = str(row["principal"] or "").strip()
+                    if row_principal == str(principal).strip() or str(payload.get("_principal", "")) == str(principal).strip():
                         count += 1
                 if count >= int(principal_limit):
                     raise JobAdmissionError("principal queue capacity reached")
             conn.execute(
-                "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
-                "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                (job_id, topic, encoded),
+                "INSERT INTO jobs (id, topic, status, step, params, principal, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (job_id, topic, encoded, principal_value),
             )
             self._record_event(conn, job_id, "created", to_status="queued", details=f"topic={topic[:200]}")
 
