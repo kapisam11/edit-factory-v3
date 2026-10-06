@@ -867,7 +867,7 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
             return False
 
         attempt_id = f"attempt_{uuid.uuid4().hex[:16]}"
-        lease_token = secrets.token_hex(32)
+        lease_token = uuid.uuid4().hex + uuid.uuid4().hex
         worker_id = f"worker-{uuid.uuid4().hex[:12]}"
         workspace_root = OUTPUT_FOLDER / ".workspaces" / secure_filename(str(job_id))
         workspace_dir = workspace_root / attempt_id
