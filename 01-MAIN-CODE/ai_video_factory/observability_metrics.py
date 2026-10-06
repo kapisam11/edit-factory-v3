@@ -10,7 +10,7 @@ from typing import Iterator
 
 @dataclass(frozen=True)
 class MetricSnapshot:
-    counters: dict[str,int]
+    counters: dict[str,int|float]
     timings_ms: dict[str,float]
     timing_percentiles_ms: dict[str,dict[str,float]]
     generated_at: float
