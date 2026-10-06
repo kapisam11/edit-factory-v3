@@ -104,20 +104,14 @@ def total_storage_bytes(*roots: str | Path, limit: int | None = None) -> int:
 
 
 def principal_queued_jobs(db_connect, principal: str) -> int:
+    """Count active jobs for a principal using the indexed relational column."""
     with db_connect() as conn:
-        rows = conn.execute(
-            "SELECT params FROM jobs WHERE status IN ('queued','running')"
-        ).fetchall()
-    count = 0
-    for row in rows:
-        try:
-            raw_params = row["params"] if hasattr(row, "keys") else row[0]
-            params = json.loads(raw_params or "{}")
-        except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if str(params.get("_principal", "")) == principal:
-            count += 1
-    return count
+        row = conn.execute(
+            "SELECT COUNT(*) FROM jobs "
+            "WHERE principal=? AND status IN ('queued','running')",
+            (str(principal).strip() or "unknown",),
+        ).fetchone()
+    return int(row[0] if row is not None else 0)
 
 
 def check_job_creation_limits(db_connect, principal: str, upload_roots: Iterable[str | Path]) -> None:
