@@ -15,7 +15,13 @@ root = Path("/tmp/aivf-restore-smoke")
 shutil.rmtree(root, ignore_errors=True)
 root.mkdir(parents=True)
 with tarfile.open(archive, "r:gz") as handle:
-    handle.extractall(root)
+    members = handle.getmembers()
+    root_resolved = root.resolve()
+    for member in members:
+        target = (root / member.name).resolve()
+        if target != root_resolved and root_resolved not in target.parents:
+            raise SystemExit(f"unsafe archive member: {member.name}")
+    handle.extractall(root, members=members)
 
 manifests = list(root.glob("**/backup_manifest.json"))
 if not manifests:
