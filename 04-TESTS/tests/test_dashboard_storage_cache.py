@@ -67,6 +67,7 @@ def test_dashboard_store_list_limit_is_bounded(tmp_path):
     db = tmp_path / "jobs.db"
     _create_schema(db)
     store = DashboardStore(db)
+    store.ensure_indexes()
     for index in range(3):
         store.insert_job(f"job-{index}", f"topic-{index}", {"topic": f"topic-{index}"})
     assert len(store.list_jobs(999999)) == 3
@@ -91,6 +92,7 @@ def test_dashboard_store_rejects_illegal_status_transition(tmp_path):
     db = tmp_path / "jobs.db"
     _create_schema(db)
     store = DashboardStore(db)
+    store.ensure_indexes()
     store.insert_job("job-1", "topic", {})
     assert store.claim_job("job-1") is True
     assert store.claim_job("job-1") is False
@@ -104,6 +106,7 @@ def test_dashboard_store_claim_is_atomic(tmp_path):
     _create_schema(db)
     store_a = DashboardStore(db)
     store_b = DashboardStore(db)
+    store_a.ensure_indexes()
     store_a.insert_job("job-1", "topic", {})
     results = []
     import threading
@@ -124,6 +127,7 @@ def test_dashboard_store_retry_policy_is_bounded_and_rejects_deterministic_failu
     db = tmp_path / "jobs.db"
     _create_schema(db)
     store = DashboardStore(db)
+    store.ensure_indexes()
     store.insert_job("job-1", "topic", {})
     assert store.claim_job("job-1") is True
     store.update_job("job-1", status="error", error="provider returned 429")
@@ -183,7 +187,7 @@ def test_dashboard_job_event_history_tracks_lifecycle(tmp_path):
     assert store.update_job("job-events", status="done", step="Complete") == 1
 
     events = store.events_since("job-events")
-    assert [event["event"] for event in events][:1] == ["created"]
+    assert [event["event"] for event in events][:1] == ["JOB_CREATED"]
     assert ("queued", "running") in {(event["from_status"], event["to_status"]) for event in events}
     assert ("running", "done") in {(event["from_status"], event["to_status"]) for event in events}
 
@@ -292,7 +296,7 @@ def test_stale_attempt_cannot_update_new_attempt(tmp_path):
 def test_explicit_schema_migration_upgrades_legacy_jobs(tmp_path):
     import sqlite3
     from dashboard_store import DashboardStore
-    from db_migrations import CURRENT_SCHEMA_VERSION
+    from ai_video_factory.db_migrations import CURRENT_SCHEMA_VERSION
 
     db = tmp_path / "legacy.db"
     conn = sqlite3.connect(db)
