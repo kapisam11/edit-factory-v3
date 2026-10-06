@@ -786,6 +786,36 @@ class DashboardStore:
             ),
         ))
 
+    def register_worker(
+        self,
+        worker_id: str,
+        pid: int,
+        *,
+        status: str = "running",
+        capabilities: dict[str, Any] | None = None,
+    ) -> None:
+        payload = json.dumps(capabilities or {}, sort_keys=True)
+        import socket
+        self.write(lambda conn: conn.execute(
+            "INSERT INTO workers(id, hostname, pid, status, last_heartbeat_at, capabilities) "
+            "VALUES (?,?,?,?,CURRENT_TIMESTAMP,?) "
+            "ON CONFLICT(id) DO UPDATE SET hostname=excluded.hostname, pid=excluded.pid, "
+            "status=excluded.status, last_heartbeat_at=CURRENT_TIMESTAMP, capabilities=excluded.capabilities",
+            (str(worker_id), socket.gethostname()[:255], int(pid), str(status)[:32], payload[:4000]),
+        ))
+
+    def heartbeat_worker(self, worker_id: str) -> bool:
+        return bool(self.write(lambda conn: conn.execute(
+            "UPDATE workers SET last_heartbeat_at=CURRENT_TIMESTAMP WHERE id=?",
+            (str(worker_id),),
+        ).rowcount))
+
+    def set_worker_status(self, worker_id: str, status: str, *, pid: int | None = None) -> bool:
+        return bool(self.write(lambda conn: conn.execute(
+            "UPDATE workers SET status=?, pid=COALESCE(?,pid), last_heartbeat_at=CURRENT_TIMESTAMP WHERE id=?",
+            (str(status)[:32], pid, str(worker_id)),
+        ).rowcount))
+
     def record_artifact(
         self,
         job_id: str,
