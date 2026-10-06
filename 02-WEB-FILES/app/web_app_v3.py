@@ -428,9 +428,36 @@ def _probe_video(path: Path) -> bool:
 def _runtime_capabilities() -> dict[str, bool]:
     detected = capabilities()
     vision = detected["vision"].available
-    model_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_MODEL", ".models/mobilenet_ssd/mobilenet.caffemodel"))
-    config_path = Path(os.environ.get("EDIT_FACTORY_MOBILENET_CONFIG", ".models/mobilenet_ssd/deploy.prototxt"))
-    object_detection = vision and model_path.is_file() and config_path.is_file()
+    from ai_video_factory.asset_manager import RUNTIME_ASSETS, verify_runtime_asset
+    configured_model = Path(
+        os.environ.get(
+            "EDIT_FACTORY_MOBILENET_MODEL",
+            ".models/mobilenet_ssd/mobilenet.caffemodel",
+        )
+    )
+    configured_config = Path(
+        os.environ.get(
+            "EDIT_FACTORY_MOBILENET_CONFIG",
+            ".models/mobilenet_ssd/deploy.prototxt",
+        )
+    )
+    model_spec = next(
+        (item for item in RUNTIME_ASSETS if item.name == "mobilenet_ssd_weights"),
+        None,
+    )
+    config_spec = next(
+        (item for item in RUNTIME_ASSETS if item.name == "mobilenet_ssd_config"),
+        None,
+    )
+    object_detection = bool(
+        vision
+        and model_spec is not None
+        and config_spec is not None
+        and configured_model == Path(model_spec.relative_path)
+        and configured_config == Path(config_spec.relative_path)
+        and verify_runtime_asset(model_spec)
+        and verify_runtime_asset(config_spec)
+    )
     return {
         "ocr": detected["ocr"].available,
         "object_detection": object_detection,
