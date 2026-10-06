@@ -157,6 +157,10 @@ def validate_input_file(path: str | Path, *, suffix: str, limits: MediaLimits | 
         raise GuardrailError("media input resolution exceeds the hard limit")
     if summary["fps"] <= 0.0 or summary["fps"] > policy.max_fps:
         raise GuardrailError("media input frame rate exceeds the hard limit")
+    if summary["video_codec"] and str(summary["video_codec"]).lower() not in policy.allowed_video_codecs:
+        raise GuardrailError("media input video codec is not supported")
+    if summary["audio_codec"] and str(summary["audio_codec"]).lower() not in policy.allowed_audio_codecs:
+        raise GuardrailError("media input audio codec is not supported")
     if summary["audio_channels"] > policy.max_audio_channels:
         raise GuardrailError("media input audio channel count exceeds the hard limit")
     _allowed_codecs(summary)
@@ -184,6 +188,12 @@ def validate_output_probe(path: str | Path, payload: Mapping[str, Any], *, limit
         raise GuardrailError("media output resolution exceeds the hard limit")
     if summary["fps"] > policy.max_fps:
         raise GuardrailError("media output frame rate exceeds the hard limit")
+    if summary["video_codec"] and str(summary["video_codec"]).lower() not in policy.allowed_video_codecs:
+        raise GuardrailError("media output video codec is not supported")
+    if summary["audio_codec"] and str(summary["audio_codec"]).lower() not in policy.allowed_audio_codecs:
+        raise GuardrailError("media output audio codec is not supported")
+    if summary["bit_rate"] > 0 and summary["bit_rate"] > 100_000_000:
+        raise GuardrailError("media output bitrate exceeds the hard limit")
     if summary["audio_channels"] > policy.max_audio_channels:
         raise GuardrailError("media output audio channel count exceeds the hard limit")
     _allowed_codecs(summary)
