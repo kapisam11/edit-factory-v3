@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ai_video_factory.job_state import validate_transition
+from db_migrations import migrate
 from ai_video_factory.retry_policy import backoff_seconds, is_retryable_error
 
 
