@@ -868,6 +868,58 @@ class DashboardStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def record_audit_event(
+        self,
+        *,
+        principal: str,
+        action: str,
+        resource: str,
+        resource_id: str | None = None,
+        remote_addr: str | None = None,
+        user_agent: str | None = None,
+        result: str = "success",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist a security/audit action separately from job lifecycle events."""
+        payload = json.dumps(metadata or {}, sort_keys=True, ensure_ascii=False)
+
+        def write(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                """
+                INSERT INTO audit_events(
+                    principal, action, resource, resource_id, remote_addr,
+                    user_agent, result, metadata
+                ) VALUES (?,?,?,?,?,?,?,?)
+                """,
+                (
+                    str(principal).strip() or "unknown",
+                    str(action).strip() or "unknown",
+                    str(resource).strip() or "unknown",
+                    None if resource_id is None else str(resource_id),
+                    None if remote_addr is None else str(remote_addr),
+                    None if user_agent is None else str(user_agent)[:512],
+                    str(result).strip() or "unknown",
+                    payload,
+                ),
+            )
+
+        self.write(write)
+
+    def audit_events_since(self, *, principal: str | None = None, last_id: int = 0, limit: int = 200) -> list[dict]:
+        bounded_limit = max(1, min(int(limit), 1000))
+        with self.connect() as conn:
+            if principal:
+                rows = conn.execute(
+                    "SELECT * FROM audit_events WHERE id>? AND principal=? ORDER BY id ASC LIMIT ?",
+                    (max(0, int(last_id)), str(principal), bounded_limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM audit_events WHERE id>? ORDER BY id ASC LIMIT ?",
+                    (max(0, int(last_id)), bounded_limit),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
     def append_log(self, job_id: str, level: str, message: str) -> None:
         self.write(
             lambda conn: conn.execute(
