@@ -212,6 +212,20 @@ jobs:
             printf 'image=%s\n' "$previous" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Migrate and verify production database
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_DIGEST: ${{ needs.container.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_DIGEST"
+          [[ "$DEPLOY_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          IMAGE="${REGISTRY}/${IMAGE_NAME}@${DEPLOY_DIGEST}"
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          printf -v q_image '%q' "$IMAGE"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && AIVF_IMAGE=${q_image} docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml run --rm -T web aivf-db-migrate"
       - name: Pull exact built image and restart service
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
