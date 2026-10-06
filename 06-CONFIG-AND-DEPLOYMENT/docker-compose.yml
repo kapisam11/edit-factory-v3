@@ -5,7 +5,7 @@ services:
       context: ..
       dockerfile: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     cpus: "${AIVF_CONTAINER_CPUS:-4}"
     mem_limit: "${AIVF_CONTAINER_MEM_LIMIT:-8g}"
     pids_limit: ${AIVF_CONTAINER_PIDS_LIMIT:-512}
