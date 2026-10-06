@@ -31,6 +31,7 @@ from ai_video_factory.render_engine import run_ffprobe
 from ai_video_factory.production_guardrails import GuardrailError, sha256_file
 from ai_video_factory.media_limits import DEFAULT_MEDIA_LIMITS, estimate_resource_budget, validate_input_file
 from ai_video_factory.error_codes import classify_exception
+from ai_video_factory.observability_metrics import GLOBAL_METRICS
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
@@ -764,8 +765,7 @@ def _run_job_worker_impl(
             except Exception:
                 logger.exception("Could not finalize resource telemetry for %s", job_id)
         try:
-            from ai_video_factory.observability_metrics import GLOBAL_METRICS
-            final_row = store.get_job(job_id)
+                        final_row = store.get_job(job_id)
             if final_row and owned():
                 final_status = str(final_row.get("status") or "")
                 if final_status == "done":
