@@ -20,6 +20,8 @@ sys.modules.setdefault("web_app_v3", _web_app_v3)
 
 app = _web_app_v3.app
 
+_web_app_v3.bootstrap_runtime()
+
 if os.environ.get("AIVF_TRUST_PROXY", "0") == "1":
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_host=1, x_proto=1)
 
