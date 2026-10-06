@@ -17,6 +17,7 @@ from .hardware import choose_encoder, ffmpeg_preset_for
 from .production_guardrails import terminate_process_tree
 from .runtime_config import runtime_config
 from .media_limits import DEFAULT_MEDIA_LIMITS, validate_output_probe
+from .observability_metrics import GLOBAL_METRICS
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +333,7 @@ def _run_ffmpeg_streaming(
             )
         return subprocess.CompletedProcess(cmd, returncode, stdout=None, stderr=detail)
     except FFmpegExecutionError:
+        GLOBAL_METRICS.increment("ffmpeg_failures_total")
         raise
     except BaseException:
         if process is not None and process.poll() is None:
@@ -374,8 +376,8 @@ def run_ffmpeg(
         if len(detail) > 2000:
             detail = detail[-2000:]
         suffix = f": {detail}" if detail else ""
+        GLOBAL_METRICS.increment("ffmpeg_failures_total")
         raise RuntimeError(f"FFmpeg failed with exit code {exc.returncode}{suffix}") from exc
-
 
 def render_segment(src_clip: str, ss: float, duration: float, vf: str, dst: str) -> None:
     if duration <= 0:
