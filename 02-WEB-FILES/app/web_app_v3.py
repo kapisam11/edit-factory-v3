@@ -99,10 +99,7 @@ _PACKAGE_CACHE_TTL = 2.0
 _SQLITE_WRITE_RETRIES = 3
 _SQLITE_RETRY_DELAY_SECONDS = 0.05
 _MAX_QUEUED_JOBS = RUNTIME_CONFIG.max_queued_jobs
-_MIN_FREE_DISK_BYTES = max(
-    256 * 1024 * 1024,
-    RUNTIME_CONFIG.min_free_disk_mb * 1024 * 1024,
-)
+_MIN_FREE_DISK_BYTES = DEFAULT_MEDIA_LIMITS.min_free_disk_bytes
 
 
 def get_db() -> sqlite3.Connection:
