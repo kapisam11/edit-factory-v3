@@ -198,10 +198,10 @@ def validate_output_probe(path: str | Path, payload: Mapping[str, Any], *, limit
 @dataclass(frozen=True)
 class ResourceBudget:
     resource_units: int
-    resource_class: str
     reserved_disk_bytes: int
     reserved_memory_bytes: int
     estimated_job_seconds: int
+    resource_class: str = "STANDARD"
 
 def classify_resource_class(summary: Mapping[str, Any]) -> str:
     width = int(summary.get("width") or 0)
