@@ -483,15 +483,10 @@ class DashboardStore:
                 if queued >= int(max_queued_jobs):
                     raise JobAdmissionError("queue capacity reached")
             if principal_limit is not None:
-                rows = conn.execute("SELECT params FROM jobs WHERE status IN ('queued','running')").fetchall()
-                count = 0
-                for row in rows:
-                    try:
-                        payload = json.loads(row["params"] or "{}")
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                    if str(payload.get("_principal", "")) == principal_value:
-                        count += 1
+                count = int(conn.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE principal=? AND status IN ('queued','running')",
+                    (principal_value,),
+                ).fetchone()[0])
                 if count >= int(principal_limit):
                     raise JobAdmissionError("principal queue capacity reached")
             if resource_units is not None:
