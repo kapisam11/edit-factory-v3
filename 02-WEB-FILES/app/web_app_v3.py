@@ -1371,26 +1371,41 @@ def job_logs_stream(job_id):
     if not authorized_job:
         return jsonify({"error": "Job not found"}), 404
 
+    raw_last_id = request.headers.get("Last-Event-ID") or request.args.get("last_id") or "0"
+    try:
+        initial_last_id = max(0, int(raw_last_id))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Last-Event-ID must be an integer"}), 400
+
     def stream():
-        last_id = 0
-        job = dict(authorized_job)
+        last_id = initial_last_id
         while True:
             current = db_get_job(job_id)
             if not current:
-                yield "data: " + json.dumps({"level": "ERROR", "msg": "Job not found"}) + "\n\n"
+                yield "event: error\ndata: " + json.dumps({"level": "ERROR", "msg": "Job not found"}) + "\n\n"
                 return
-            job["status"] = current.get("status")
             for row in db_logs_since(job_id, last_id):
-                last_id = row["id"]
-                yield "data: " + json.dumps({"time": row["created_at"], "level": row["level"], "msg": row["message"]}) + "\n\n"
-            if job["status"] in TERMINAL_STATUSES:
+                last_id = int(row["id"])
+                payload = {
+                    "time": row["created_at"],
+                    "level": row["level"],
+                    "msg": row["message"],
+                }
+                yield f"id: {last_id}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            if current.get("status") in TERMINAL_STATUSES:
                 return
             yield ": heartbeat\n\n"
             time.sleep(0.5)
+
     return Response(
         stream(),
         mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "X-AIVF-SSE-Replay": "database-log-id",
+        },
     )
 
 
