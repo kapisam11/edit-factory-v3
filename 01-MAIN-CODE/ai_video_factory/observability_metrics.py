@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from prometheus_client import CollectorRegistry, CounterMetricFamily, GaugeMetricFamily, generate_latest
+from prometheus_client import CollectorRegistry, generate_latest
+from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 
 
 @dataclass(frozen=True)
