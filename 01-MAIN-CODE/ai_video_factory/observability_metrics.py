@@ -17,10 +17,14 @@ class MetricSnapshot:
 
 class MetricsRegistry:
     def __init__(self)->None:
-        self._lock=threading.RLock(); self._counters: dict[str, int] = {}; self._timings: dict[str, list[float]] = {}
+        self._lock=threading.RLock(); self._counters: dict[str, int] = {}; self._gauges: dict[str, float] = {}; self._timings: dict[str, list[float]] = {}
 
     def increment(self,name:str,value:int=1)->None:
         with self._lock: self._counters[name]=self._counters.get(name,0)+int(value)
+
+    def set_gauge(self,name:str,value:float)->None:
+        with self._lock:
+            self._gauges[name]=float(value)
 
     def observe_ms(self,name:str,value_ms:float)->None:
         with self._lock:
@@ -39,6 +43,9 @@ class MetricsRegistry:
                 lines.append(
                     f'aivf_http_requests_total{{method="{method}",endpoint="{endpoint}"}} {int(count)}'
                 )
+            elif raw_name.startswith("gauge:"):
+                metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name[6:])
+                lines.append(f"aivf_{metric} {float(count)}")
             else:
                 metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
                 lines.append(f"aivf_{metric} {int(count)}")
@@ -68,7 +75,10 @@ class MetricsRegistry:
                     "p95": pct(0.95),
                     "p99": pct(0.99),
                 }
-            return MetricSnapshot(dict(self._counters), averages, percentiles, time.time())
+            counters = dict(self._counters)
+            for name, value in self._gauges.items():
+                counters[f"gauge:{name}"] = value
+            return MetricSnapshot(counters, averages, percentiles, time.time())
 
     def prometheus(self) -> str:
         return self.to_prometheus()
