@@ -229,3 +229,61 @@ def test_idempotency_hash_migration_is_atomic(tmp_path):
         new_hash="new-hash",
     ) is True
     assert store.lookup_idempotency(principal="alice", idempotency_key="legacy-key") == ("job-1", "new-hash")
+
+
+def test_idempotent_concurrent_requests_create_one_job(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    store = DashboardStore(tmp_path / "jobs.db")
+    store.ensure_indexes()
+
+    def create(index):
+        return store.insert_job_idempotent(
+            f"job-{index}",
+            "same request",
+            {"topic": "same", "_principal": "tester"},
+            principal="tester",
+            idempotency_key="same-key",
+            request_hash="same-hash",
+        )
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        results = list(pool.map(create, range(100)))
+
+    assert {job_id for job_id, _created in results} == {"job-0"}
+    assert sum(created for _job_id, created in results) == 1
+
+
+def test_stale_attempt_cannot_update_new_attempt(tmp_path):
+    store = DashboardStore(tmp_path / "jobs.db")
+    store.ensure_indexes()
+    store.insert_job("job-1", "topic", {"topic": "topic"}, principal="tester")
+    assert store.claim_job(
+        "job-1",
+        attempt_id="attempt-a",
+        worker_id="worker-a",
+        lease_token="lease-a",
+        workspace_dir=str(tmp_path / "attempt-a"),
+    )
+    assert store.update_job_if_owned(
+        "job-1",
+        "attempt-a",
+        "lease-a",
+        status="error",
+        error="worker crashed",
+    )
+    assert store.retry_job("job-1", max_attempts=2) == 1
+    assert store.claim_job(
+        "job-1",
+        attempt_id="attempt-b",
+        worker_id="worker-b",
+        lease_token="lease-b",
+        workspace_dir=str(tmp_path / "attempt-b"),
+    )
+    assert not store.update_job_if_owned(
+        "job-1",
+        "attempt-a",
+        "lease-a",
+        step="stale worker",
+    )
+    assert store.is_attempt_owner("job-1", "attempt-b", "lease-b")
