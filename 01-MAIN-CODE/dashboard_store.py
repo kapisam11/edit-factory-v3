@@ -493,24 +493,6 @@ class DashboardStore:
                 "INSERT INTO idempotency_keys(principal, idem_key, request_hash, job_id) VALUES (?,?,?,?)",
                 (principal_value, key, fingerprint, job_id),
             )
-            if resource_units is not None:
-                used_units = int(conn.execute(
-                    "SELECT COALESCE(SUM(resource_units),0) FROM jobs WHERE status IN ('queued','running')"
-                ).fetchone()[0])
-                if used_units + int(resource_units) > int(resource_capacity_units or 100):
-                    raise JobAdmissionError("resource capacity reached")
-            if reserved_memory_bytes is not None and max_reserved_memory_bytes is not None:
-                used_memory = int(conn.execute(
-                    "SELECT COALESCE(SUM(reserved_memory_bytes),0) FROM jobs WHERE status IN ('queued','running')"
-                ).fetchone()[0])
-                if used_memory + int(reserved_memory_bytes) > int(max_reserved_memory_bytes):
-                    raise JobAdmissionError("reserved memory capacity reached")
-            if reserved_disk_bytes is not None and available_disk_bytes is not None:
-                used_disk = int(conn.execute(
-                    "SELECT COALESCE(SUM(reserved_disk_bytes),0) FROM jobs WHERE status IN ('queued','running')"
-                ).fetchone()[0])
-                if used_disk + int(reserved_disk_bytes) > int(available_disk_bytes):
-                    raise JobAdmissionError("reserved disk capacity reached")
             conn.execute(
                 "INSERT INTO jobs (id, topic, status, step, params, principal, attempt_id, worker_token, "
                 "workspace_dir, resource_units, reserved_disk_bytes, reserved_memory_bytes, created_at, updated_at) "
