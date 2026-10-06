@@ -147,12 +147,16 @@ def init_db() -> None:
 
     if auto_migrate:
         store.ensure_indexes()
+        if os.environ.get("AIVF_WORKER_PROCESS") != "1":
+            store.recover_nonterminal_jobs()
         return
 
     # Production deployments must run the migration command before starting
     # the application. Startup is verification-only so two processes cannot
     # race to mutate the schema.
     store.verify_schema()
+    if os.environ.get("AIVF_WORKER_PROCESS") != "1":
+        store.recover_nonterminal_jobs()
 
 def db_insert_job(job_id: str, topic: str, params: dict) -> None:
     def write(conn):
