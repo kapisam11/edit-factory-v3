@@ -178,33 +178,36 @@ class MetricsRegistry:
         return self.to_prometheus()
 
     def to_prometheus(self) -> str:
-        """Expose official Prometheus metric families from the durable snapshot."""
+        """Export a single valid Prometheus registry without duplicate families."""
         snapshot = self.snapshot()
         registry = CollectorRegistry()
 
+        http_family = CounterMetricFamily(
+            "aivf_http_requests_total",
+            "HTTP requests handled by Edit Factory",
+            labels=["method", "endpoint"],
+        )
+        http_added = False
         for raw_name, count in snapshot.counters.items():
             if raw_name.startswith("http_requests_total:"):
                 _, method, endpoint = raw_name.split(":", 2)
-                family = CounterMetricFamily(
-                    "aivf_http_requests_total",
-                    "HTTP requests handled by Edit Factory",
-                    labels=["method", "endpoint"],
-                )
-                family.add_metric(
-                    [
-                        re.sub(r"[^A-Za-z0-9_]", "_", method),
-                        endpoint.replace('\\', '/'),
-                    ],
+                http_family.add_metric(
+                    [re.sub(r"[^A-Za-z0-9_]", "_", method), endpoint.replace('\\', '/')],
                     int(count),
                 )
-                registry.register(family)
-            else:
-                metric = re.sub(r"[^A-Za-z0-9_]", "_", raw_name).strip("_") or "counter"
-                if metric.endswith("_total"):
-                    metric = metric[:-6]
-                family = CounterMetricFamily(f"aivf_{metric}", f"{raw_name} counter")
-                family.add_metric([], int(count))
-                registry.register(family)
+                http_added = True
+        if http_added:
+            registry.register(http_family)
+
+        for raw_name, count in snapshot.counters.items():
+            if raw_name.startswith("http_requests_total:"):
+                continue
+            metric = re.sub(r"[^A-Za-z0-9_]", "_", raw_name).strip("_") or "counter"
+            if metric.endswith("_total"):
+                metric = metric[:-6]
+            family = CounterMetricFamily(f"aivf_{metric}", f"{raw_name} counter")
+            family.add_metric([], int(count))
+            registry.register(family)
 
         for raw_name, value in snapshot.gauges.items():
             metric = re.sub(r"[^A-Za-z0-9_]", "_", raw_name).strip("_") or "gauge"
@@ -214,13 +217,14 @@ class MetricsRegistry:
 
         for raw_name, quantiles in snapshot.timing_percentiles_ms.items():
             metric = re.sub(r"[^A-Za-z0-9_]", "_", raw_name).strip("_") or "timing"
+            family = GaugeMetricFamily(
+                f"aivf_{metric}_milliseconds",
+                f"{raw_name} timing in milliseconds",
+                labels=["quantile"],
+            )
             for quantile, value in quantiles.items():
-                family = GaugeMetricFamily(
-                    f"aivf_{metric}_milliseconds_{quantile}",
-                    f"{raw_name} {quantile} timing in milliseconds",
-                )
-                family.add_metric([], float(value))
-                registry.register(family)
+                family.add_metric([quantile], float(value))
+            registry.register(family)
 
         return generate_latest(registry).decode("utf-8")
 
