@@ -33,6 +33,7 @@ from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
 from ai_video_factory.media_limits import MediaLimits, probe_media_contract
+from ai_video_factory.db_migrations import migrate_database, verify_database_schema, SchemaMismatch
 from app.job_service import build_job_params
 
 APP_DIR = Path(__file__).resolve().parent
@@ -135,6 +136,12 @@ def _run_db_write(operation, db_path=DB_PATH):
 
 
 def init_db() -> None:
+    environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+    allow_runtime = os.environ.get("AIVF_ALLOW_RUNTIME_MIGRATIONS", "0").strip() == "1"
+    if environment == "production" and not allow_runtime:
+        verify_database_schema(DB_PATH)
+        return
+    migrate_database(DB_PATH)
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS jobs (
@@ -528,6 +535,7 @@ def _redact_job(job: dict, include_logs: bool = False) -> dict:
 def _publish_attempt_package(
     package_dir: Path,
     output_root: str,
+    db_path: str,
     job_id: str,
     attempt_id: str,
     lease_token: str,
@@ -535,8 +543,7 @@ def _publish_attempt_package(
     """Atomically publish an attempt workspace only while its fence is valid."""
     from dashboard_store import DashboardStore
 
-    store = DashboardStore(db_path=str(Path(output_root).resolve().parent / "state" / "jobs.db"))
-    # The caller supplies the authoritative DB path through the job's fenced params.
+    store = DashboardStore(db_path)
     if not store.attempt_can_publish(job_id, attempt_id, lease_token):
         raise RuntimeError("stale worker cannot publish artifacts")
 
