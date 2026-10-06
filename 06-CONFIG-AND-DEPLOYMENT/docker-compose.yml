@@ -1,11 +1,14 @@
 services:
   web:
-    image: ${AIVF_IMAGE:-ghcr.io/kapisam11/edit-factory-v3:latest}
+    image: ${AIVF_IMAGE:?AIVF_IMAGE must be pinned to an immutable image digest}
     build:
       context: ..
       dockerfile: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
     ports:
       - "5000:5000"
+    cpus: "${AIVF_CONTAINER_CPUS:-4}"
+    mem_limit: "${AIVF_CONTAINER_MEMORY:-8g}"
+    pids_limit: ${AIVF_CONTAINER_PIDS:-512}
     env_file:
       - .env
     environment:
@@ -20,6 +23,18 @@ services:
       AIVF_V3_SEMANTIC_QC: ${AIVF_V3_SEMANTIC_QC:-1}
       AIVF_ENV: ${AIVF_ENV:-production}
       AIVF_REDIS_URL: ${AIVF_REDIS_URL:-}
+      AIVF_MAX_INPUT_BYTES: ${AIVF_MAX_INPUT_BYTES:-2147483648}
+      AIVF_MAX_INPUT_DURATION_SECONDS: ${AIVF_MAX_INPUT_DURATION_SECONDS:-900}
+      AIVF_MAX_INPUT_WIDTH: ${AIVF_MAX_INPUT_WIDTH:-3840}
+      AIVF_MAX_INPUT_HEIGHT: ${AIVF_MAX_INPUT_HEIGHT:-2160}
+      AIVF_MAX_INPUT_FPS: ${AIVF_MAX_INPUT_FPS:-120}
+      AIVF_MAX_AUDIO_CHANNELS: ${AIVF_MAX_AUDIO_CHANNELS:-8}
+      AIVF_MAX_OUTPUT_BYTES: ${AIVF_MAX_OUTPUT_BYTES:-5368709120}
+      AIVF_MAX_JOB_SECONDS: ${AIVF_MAX_JOB_SECONDS:-1800}
+      AIVF_MIN_FREE_DISK_BYTES: ${AIVF_MIN_FREE_DISK_BYTES:-21474836480}
+      AIVF_MAX_RESERVED_DISK_MB: ${AIVF_MAX_RESERVED_DISK_MB:-20000}
+      AIVF_MAX_RESERVED_MEMORY_MB: ${AIVF_MAX_RESERVED_MEMORY_MB:-16384}
+      AIVF_MAX_CPU_WEIGHT: ${AIVF_MAX_CPU_WEIGHT:-8}
     volumes:
       - aivf-output:/app/output
       - aivf-uploads:/app/uploads
