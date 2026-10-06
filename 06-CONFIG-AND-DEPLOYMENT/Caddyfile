@@ -1,0 +1,20 @@
+{$AIVF_DOMAIN} {
+    encode zstd gzip
+
+    request_body {
+        max_size 2GB
+    }
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+
+    reverse_proxy web:5000
+}
+
+# This file intentionally contains no private keys or static certificates.
+# Caddy obtains/renews TLS automatically for a configured domain.
+# Keep the Flask service bound to the internal Docker network only in production.
