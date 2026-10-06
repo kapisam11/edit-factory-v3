@@ -118,7 +118,7 @@ class RuntimeAssetSpec:
     name: str
     url: str
     relative_path: str
-    sha256: Optional[str] = None
+    sha256: str = ""
 
 
 # Heavy model files stay external to the Python wheel. They are downloaded once,
@@ -128,11 +128,13 @@ RUNTIME_ASSETS = (
         "mobilenet_ssd_config",
         "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/deploy.prototxt",
         ".models/mobilenet_ssd/deploy.prototxt",
+        os.environ.get("AIVF_MOBILENET_CONFIG_SHA256", "").strip().lower(),
     ),
     RuntimeAssetSpec(
         "mobilenet_ssd_weights",
         "https://github.com/chuanqi305/MobileNet-SSD/raw/master/mobilenet_iter_73000.caffemodel",
         ".models/mobilenet_ssd/mobilenet.caffemodel",
+        os.environ.get("AIVF_MOBILENET_WEIGHTS_SHA256", "").strip().lower(),
     ),
 )
 
@@ -157,7 +159,8 @@ def verify_runtime_asset(spec: RuntimeAssetSpec, root: Optional[Path] = None) ->
     path = runtime_asset_path(spec, root)
     if not path.exists() or path.stat().st_size == 0:
         return False
-    return spec.sha256 is None or _sha256(path).lower() == spec.sha256.lower()
+    expected = str(spec.sha256 or "").strip().lower()
+    return bool(expected) and _sha256(path).lower() == expected
 
 
 def install_runtime_assets(*, root: Optional[Path] = None, download_missing: bool = False,
@@ -170,6 +173,15 @@ def install_runtime_assets(*, root: Optional[Path] = None, download_missing: boo
     result: Dict[str, Dict[str, object]] = {}
     for spec in RUNTIME_ASSETS:
         path = runtime_asset_path(spec, root)
+        if not spec.sha256:
+            result[spec.name] = {
+                "available": False,
+                "path": str(path),
+                "url": str(spec.url),
+                "verified": False,
+                "error": "runtime asset integrity hash is not configured",
+            }
+            continue
         if not verify_runtime_asset(spec, root) and download_missing:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".part")
