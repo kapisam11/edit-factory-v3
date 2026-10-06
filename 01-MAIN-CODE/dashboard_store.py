@@ -552,7 +552,7 @@ class DashboardStore:
                     job_id,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
                 ) VALUES (?,?,?,?,?,?)
                 """,
-                (*values, time.time()),
+                (job_id, *values, time.time()),
             )
             self._record_event(
                 conn,
