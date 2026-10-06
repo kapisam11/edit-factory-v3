@@ -1,0 +1,56 @@
+groups:
+  - name: edit-factory-v3
+    rules:
+      - alert: AIVFHighJobFailureRate
+        expr: increase(aivf_jobs_failed_total[5m]) > 0 and increase(aivf_jobs_completed_total[5m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Edit Factory jobs are failing without successful completions
+          description: Check job error codes, worker health, FFmpeg failures, and disk pressure.
+
+      - alert: AIVFQueueDepthHigh
+        expr: aivf_queue_depth > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Edit Factory queue depth is high
+          description: Queue admission or worker capacity may need investigation.
+
+      - alert: AIVFDiskLow
+        expr: aivf_disk_free_bytes < 21474836480
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Edit Factory disk headroom is below 20 GiB
+          description: Stop admitting new heavy work and inspect output/upload retention.
+
+      - alert: AIVFWorkerCrashes
+        expr: increase(aivf_worker_crashes_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Edit Factory worker crash detected
+          description: Check stale attempts, recovery events, and orphan external processes.
+
+      - alert: AIVFJobRecovery
+        expr: increase(aivf_job_recovery_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Edit Factory recovered a job
+          description: Recovery activity is increasing and should be investigated.
+
+      - alert: AIVFJobMemoryHigh
+        expr: max_over_time(aivf_job_duration_milliseconds_p99[10m]) > 1800000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Edit Factory job runtime p99 is above 30 minutes
+          description: Review resource admission and render performance.
