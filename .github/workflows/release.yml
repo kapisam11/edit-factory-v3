@@ -174,11 +174,37 @@ jobs:
           set -euo pipefail
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/backup_smoke.sh"
+      - name: Verify required CI check-runs for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          checks="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")"
+          printf "%s" "$checks" > "$RUNNER_TEMP/check-runs.json"
+          require_success() {
+            local name="$1"
+            if ! jq -e --arg name "$name" '.check_runs[] | select(.name == $name and .conclusion == "success")' "$RUNNER_TEMP/check-runs.json" >/dev/null; then
+              echo "Required successful check not found: $name"
+              jq -r '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' "$RUNNER_TEMP/check-runs.json"
+              exit 1
+            fi
+          }
+          require_success "Python package"
+          require_success "Dashboard E2E"
+          require_success "V3 editorial regression"
+          require_success "Docker"
+          require_success "CodeQL (Python)"
+          require_success "pip-audit"
+          require_success "Bandit (high severity/high confidence)"
+          echo "AIVF_RELEASE_CI_GREEN=1" >> "$GITHUB_ENV"
+          echo "AIVF_RELEASE_SECURITY_GREEN=1" >> "$GITHUB_ENV"
+          echo "AIVF_RELEASE_E2E_GREEN=1" >> "$GITHUB_ENV"
+
       - name: Run strict production release gate
         env:
-          AIVF_RELEASE_CI_GREEN: "1"
-          AIVF_RELEASE_SECURITY_GREEN: "1"
-          AIVF_RELEASE_E2E_GREEN: "1"
+          AIVF_RELEASE_CI_GREEN: "${{ env.AIVF_RELEASE_CI_GREEN }}"
+          AIVF_RELEASE_SECURITY_GREEN: "${{ env.AIVF_RELEASE_SECURITY_GREEN }}"
+          AIVF_RELEASE_E2E_GREEN: "${{ env.AIVF_RELEASE_E2E_GREEN }}"
           AIVF_RELEASE_ENVIRONMENT_GREEN: "${{ vars.AIVF_RELEASE_ENVIRONMENT_GREEN || 'false' }}"
           AIVF_RELEASE_BACKUP_VERIFIED: "1"
           AIVF_RELEASE_MODEL_DIGESTS_PRESENT: "${{ vars.AIVF_RELEASE_MODEL_DIGESTS_PRESENT || 'false' }}"
