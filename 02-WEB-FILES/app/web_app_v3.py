@@ -734,6 +734,17 @@ def _run_job_worker_impl(
             published_video = ctx.final_video
             if attempt_id and lease_token and publish_dir:
                 published_video = publish_workspace(pkg_dir, Path(publish_dir), ctx.final_video)
+            try:
+                store.record_artifact(
+                    job_id,
+                    "final_video",
+                    str(published_video),
+                    attempt_id=attempt_id,
+                    sha256=sha256_file(str(published_video)),
+                    size_bytes=Path(str(published_video)).stat().st_size,
+                )
+            except Exception as exc:
+                raise RuntimeError(f"artifact registration failed: {exc}") from exc
             if update(status="done", step="Complete", pkg_dir=str(publish_dir or pkg_dir)):
                 log("INFO", "Job complete!")
     except Exception as exc:
@@ -750,6 +761,30 @@ def _run_job_worker_impl(
                 _write_resource_report(package_dir if isinstance(package_dir, Path) else None)
             except Exception:
                 logger.exception("Could not finalize resource telemetry for %s", job_id)
+        try:
+            from ai_video_factory.observability_metrics import GLOBAL_METRICS
+            final_row = store.get_job(job_id)
+            if final_row and owned():
+                final_status = str(final_row.get("status") or "")
+                if final_status == "done":
+                    GLOBAL_METRICS.increment("jobs_completed_total")
+                elif final_status == "error":
+                    GLOBAL_METRICS.increment("jobs_failed_total")
+                elif final_status == "interrupted":
+                    GLOBAL_METRICS.increment("job_recovery_total")
+                started_at = final_row.get("started_at")
+                if started_at:
+                    try:
+                        from datetime import datetime, timezone
+                        started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                        GLOBAL_METRICS.observe_ms(
+                            "job_duration",
+                            max(0.0, (datetime.now(timezone.utc) - started).total_seconds() * 1000.0),
+                        )
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+        except Exception:
+            logger.debug("Unable to record final job metrics", exc_info=True)
 
 
 def _artifact_is_valid(final_video: Any) -> bool:
@@ -795,6 +830,13 @@ def _watch_job_process(
                 if exitcode not in (0, None)
                 else "Worker process exited before reaching a terminal job state"
             )
+            if exitcode not in (0, None):
+                try:
+                    from ai_video_factory.observability_metrics import GLOBAL_METRICS
+                    GLOBAL_METRICS.increment("worker_crashes_total")
+                    GLOBAL_METRICS.increment("job_recovery_total")
+                except Exception:
+                    pass
 
         try:
             store = globals().get("dashboard_store")
@@ -1414,6 +1456,7 @@ def create_job():
     except JobAdmissionError as exc:
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
+        GLOBAL_METRICS.increment("job_admission_rejections_total")
         logger.info("Job admission limit rejected request: %s", type(exc).__name__)
         return jsonify({"error": "Job admission limit reached"}), 429
     except Exception:
