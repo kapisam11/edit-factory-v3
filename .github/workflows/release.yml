@@ -189,13 +189,14 @@ jobs:
               exit 1
             fi
           }
-          require_success "Python package"
-          require_success "Dashboard E2E"
-          require_success "V3 editorial regression"
-          require_success "Docker"
+          for version in 3.10 3.11 3.12 3.13 3.14; do require_success "test (${version})"; done
+          require_success "dashboard-e2e"
+          require_success "editorial"
+          require_success "build"
           require_success "CodeQL (Python)"
           require_success "pip-audit"
           require_success "Bandit (high severity/high confidence)"
+          require_success "Snyk Open Source"
           echo "AIVF_RELEASE_CI_GREEN=1" >> "$GITHUB_ENV"
           echo "AIVF_RELEASE_SECURITY_GREEN=1" >> "$GITHUB_ENV"
           echo "AIVF_RELEASE_E2E_GREEN=1" >> "$GITHUB_ENV"
