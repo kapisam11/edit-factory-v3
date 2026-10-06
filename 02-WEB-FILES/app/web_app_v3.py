@@ -220,6 +220,10 @@ def init_db() -> None:
                 "UPDATE jobs SET status='interrupted', step='interrupted', updated_at=CURRENT_TIMESTAMP "
                 "WHERE status IN ('queued','running','cancelling')"
             )
+        # Centralize schema/index bootstrap at application startup. Request handlers
+        # must never discover or mutate the production schema while admitting jobs.
+        from dashboard_store import DashboardStore
+        DashboardStore(DB_PATH).ensure_indexes()
 
 
 def db_insert_job(job_id: str, topic: str, params: dict) -> None:
@@ -1171,7 +1175,6 @@ def create_job():
             # object on the module. Never write a new request into another
             # deployment/test database.
             store = DashboardStore(DB_PATH)
-        store.ensure_indexes()
         if idem_key:
             existing_idempotency = store.lookup_idempotency(
                 principal=principal,
