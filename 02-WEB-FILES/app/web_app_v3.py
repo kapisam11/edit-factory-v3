@@ -618,11 +618,17 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         fields = ", ".join(f"{key}=?" for key in kwargs)
 
         def write(conn):
-            rowcount = conn.execute(
-                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
+            where = (
                 "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted') "
-                "AND (lease_token=? OR lease_token IS NULL)",
-                list(kwargs.values()) + [job_id, attempt_lease],
+                "AND lease_token=?"
+                if attempt_lease
+                else "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted') "
+                     "AND lease_token IS NULL"
+            )
+            values = list(kwargs.values()) + [job_id, attempt_lease] if attempt_lease else list(kwargs.values()) + [job_id]
+            rowcount = conn.execute(
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP {where}",
+                values,
             ).rowcount
             return rowcount > 0
 
@@ -701,7 +707,15 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 if not result_payload["errors"]:
                     result_payload["errors"].append("V3 final artifact failed media validation")
                 message = "; ".join(str(error) for error in result_payload["errors"])
-                if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
+                from ai_video_factory.structured_errors import classify_exception
+                classified = classify_exception(RuntimeError(message))
+                if update(
+                    status="error",
+                    step="failed",
+                    error=message,
+                    error_code=classified.code.value,
+                    pkg_dir=str(pkg_dir),
+                ):
                     log("ERROR", message)
             else:
                 _write_resource_report(pkg_dir)
@@ -762,8 +776,15 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 log("INFO", "Job complete!")
     except Exception as exc:
         try:
-            if update(status="error", step="failed", error=str(exc)):
-                log("ERROR", f"Job failed: {exc}")
+            from ai_video_factory.structured_errors import classify_exception
+            classified = classify_exception(exc)
+            if update(
+                status="error",
+                step="failed",
+                error=classified.message,
+                error_code=classified.code.value,
+            ):
+                log("ERROR", f"[{classified.code.value}] {classified.message}")
         except Exception:
             logger.exception("Could not record worker failure for %s", job_id)
     finally:
