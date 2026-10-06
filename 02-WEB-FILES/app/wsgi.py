@@ -3,6 +3,8 @@ import os
 import sys
 
 from app import web_app_v3 as _web_app_v3
+from ai_video_factory import configure_logging
+configure_logging()
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Production must use a stable explicitly configured session secret. The
