@@ -287,3 +287,31 @@ def test_stale_attempt_cannot_update_new_attempt(tmp_path):
         step="stale worker",
     )
     assert store.is_attempt_owner("job-1", "attempt-b", "lease-b")
+
+
+def test_explicit_schema_migration_upgrades_legacy_jobs(tmp_path):
+    import sqlite3
+    from dashboard_store import DashboardStore
+    from db_migrations import CURRENT_SCHEMA_VERSION
+
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE jobs (id TEXT PRIMARY KEY, topic TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'queued', step TEXT NOT NULL DEFAULT 'waiting', "
+        "params TEXT NOT NULL DEFAULT '{}', pkg_dir TEXT, error TEXT, "
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = DashboardStore(db)
+    store.ensure_indexes()
+
+    with store.connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        version = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+
+    assert {"principal", "attempt_id", "worker_token", "resource_units", "error_code"} <= columns
+    assert version == CURRENT_SCHEMA_VERSION
