@@ -67,55 +67,6 @@ class DashboardStore:
                 time.sleep(backoff_seconds(attempt + 1, base=self.RETRY_DELAY_SECONDS, cap=1.0))
         raise AssertionError("unreachable")
 
-    @staticmethod
-    def _ensure_job_columns(conn: sqlite3.Connection) -> None:
-        """Apply lightweight job-table migrations required by lifecycle features."""
-        columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
-        }
-        if not columns:
-            return
-        if "error_code" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN error_code TEXT")
-        if "retry_count" not in columns:
-            try:
-                conn.execute(
-                    "ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
-                )
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
-        if "principal" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN principal TEXT NOT NULL DEFAULT 'unknown'")
-        if "attempt_id" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN attempt_id TEXT")
-        if "worker_token" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN worker_token TEXT")
-        if "workspace_dir" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN workspace_dir TEXT")
-        if "resource_units" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN resource_units INTEGER NOT NULL DEFAULT 1")
-        if "reserved_disk_bytes" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN reserved_disk_bytes INTEGER NOT NULL DEFAULT 0")
-        if "reserved_memory_bytes" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN reserved_memory_bytes INTEGER NOT NULL DEFAULT 0")
-        if "worker_heartbeat_at" not in columns:
-            try:
-                conn.execute(
-                    "ALTER TABLE jobs ADD COLUMN worker_heartbeat_at TEXT"
-                )
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
-            try:
-                conn.execute(
-                    "UPDATE jobs SET worker_heartbeat_at=updated_at "
-                    "WHERE worker_heartbeat_at IS NULL"
-                )
-            except sqlite3.OperationalError as exc:
-                if "no such column" not in str(exc).lower():
-                    raise
-
     def ensure_indexes(self) -> None:
         """Bootstrap required tables, then add indexes and lifecycle guards."""
         with self.connect() as conn:
@@ -469,7 +420,7 @@ class DashboardStore:
         def write(conn: sqlite3.Connection) -> tuple[str, bool]:
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
-            self._ensure_job_columns(conn)
+            migrate(conn)
             from db_migrations import apply_schema_migrations
             apply_schema_migrations(conn)
             existing = conn.execute(
