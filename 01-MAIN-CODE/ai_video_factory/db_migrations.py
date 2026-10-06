@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 def _table_columns(conn: sqlite3.Connection) -> set[str]:
@@ -210,6 +210,18 @@ def migrate(conn: sqlite3.Connection) -> int:
             "ON jobs(finished_at, status)"
         )
         conn.execute("INSERT INTO schema_migrations(version) VALUES (8)")
+
+    # Version 9: operational audit context.
+    if 9 not in applied:
+        existing_audit_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(audit_events)").fetchall()
+        }
+        if "ip_address" not in existing_audit_columns:
+            conn.execute("ALTER TABLE audit_events ADD COLUMN ip_address TEXT")
+        if "user_agent" not in existing_audit_columns:
+            conn.execute("ALTER TABLE audit_events ADD COLUMN user_agent TEXT")
+        conn.execute("INSERT INTO schema_migrations(version) VALUES (9)")
 
     conn.commit()
     return CURRENT_SCHEMA_VERSION
