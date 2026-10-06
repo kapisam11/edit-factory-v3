@@ -46,8 +46,8 @@ groups:
           summary: Edit Factory recovered a job
           description: Recovery activity is increasing and should be investigated.
 
-      - alert: AIVFJobMemoryHigh
-        expr: max_over_time(aivf_job_duration_milliseconds_p99[10m]) > 1800000
+      - alert: AIVFJobRuntimeP99High
+        expr: max_over_time(aivf_job_duration_milliseconds{quantile="p99"}[10m]) > 1800000
         for: 10m
         labels:
           severity: warning
