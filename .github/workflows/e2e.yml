@@ -2,7 +2,7 @@ name: Dashboard E2E
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/v3-production-hardening-review]
   pull_request:
     branches: [main]
   workflow_dispatch:
