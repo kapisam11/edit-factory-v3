@@ -227,7 +227,7 @@ class DashboardStore:
         *,
         from_status: str | None = None,
         to_status: str | None = None,
-        details: str = "",
+        details: Any = "",
     ) -> None:
         # Unit/integration callers can construct the legacy jobs schema without
         # running ensure_indexes(). Make event persistence self-contained.
@@ -242,9 +242,13 @@ class DashboardStore:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        if isinstance(details, dict):
+            detail_text = json.dumps(details, sort_keys=True, ensure_ascii=False)
+        else:
+            detail_text = json.dumps({"message": str(details)[:3000]}, ensure_ascii=False)
         conn.execute(
             "INSERT INTO job_events(job_id, from_status, to_status, event, details) VALUES (?,?,?,?,?)",
-            (job_id, from_status, to_status, str(event)[:120], str(details)[:4000]),
+            (job_id, from_status, to_status, str(event)[:120], detail_text[:4000]),
         )
 
     def insert_job(
@@ -318,7 +322,7 @@ class DashboardStore:
                     int(reserved_memory_bytes or 0),
                 ),
             )
-            self._record_event(conn, job_id, "created", to_status="queued", details=f"topic={topic[:200]}")
+            self._record_event(conn, job_id, "JOB_CREATED", to_status="queued", details={"topic": topic[:200]})
 
         self.write(write)
 
@@ -474,7 +478,7 @@ class DashboardStore:
                     int(reserved_memory_bytes or 0),
                 ),
             )
-            self._record_event(conn, job_id, "created", to_status="queued", details="idempotent request")
+            self._record_event(conn, job_id, "JOB_CREATED", to_status="queued", details={"idempotent": True})
             return job_id, True
 
         return self.write(write)
@@ -511,10 +515,10 @@ class DashboardStore:
                 self._record_event(
                     conn,
                     job_id,
-                    "status_change",
+                    "JOB_STATUS_CHANGED",
                     from_status=previous_status,
                     to_status=target_status,
-                    details=str(kwargs.get("error") or kwargs.get("step") or ""),
+                    details={"step": kwargs.get("step"), "error_code": kwargs.get("error_code")},
                 )
             return changed
 
@@ -564,9 +568,10 @@ class DashboardStore:
             validate_transition("queued", "running")
             changed = int(conn.execute(
                 "UPDATE jobs SET status='running', step='starting', "
-                "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, attempt_id=?, worker_token=?, "
-                "workspace_dir=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'",
-                (attempt_id, lease_token, workspace_dir, job_id),
+                "worker_heartbeat_at=CURRENT_TIMESTAMP, started_at=CURRENT_TIMESTAMP, finished_at=NULL, "
+                "current_attempt=?, attempt_id=?, worker_token=?, workspace_dir=?, error=NULL, error_code=NULL, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'",
+                (attempt_id, attempt_id, lease_token, workspace_dir, job_id),
             ).rowcount)
             if changed and attempt_id and worker_id and lease_token and workspace_dir:
                 next_number = int(conn.execute(
@@ -647,16 +652,19 @@ class DashboardStore:
                 validate_transition(current, target)
             fields = ", ".join(f"{key}=?" for key in kwargs)
             changed = conn.execute(
-                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
+                f"UPDATE jobs SET {fields}, "
+                "finished_at=CASE WHEN ? IN ('done','error','interrupted','cancelled') "
+                "THEN COALESCE(finished_at, CURRENT_TIMESTAMP) ELSE finished_at END, "
+                "updated_at=CURRENT_TIMESTAMP "
                 "WHERE id=? AND attempt_id=? AND worker_token=?",
-                [*kwargs.values(), job_id, attempt_id, lease_token],
+                [*kwargs.values(), kwargs.get("status"), job_id, attempt_id, lease_token],
             ).rowcount
-            if changed and "status" in kwargs:
+            if changed:
                 conn.execute(
-                    "UPDATE job_attempts SET status=?, finished_at=CASE WHEN ? IN "
+                    "UPDATE job_attempts SET status=?, error_code=?, finished_at=CASE WHEN ? IN "
                     "('done','error','interrupted','cancelled') THEN CURRENT_TIMESTAMP ELSE finished_at END "
                     "WHERE id=? AND lease_token=?",
-                    (target, target, attempt_id, lease_token),
+                    (target, kwargs.get("error_code"), target, attempt_id, lease_token),
                 )
             return bool(changed)
         return bool(self.write(write))
@@ -723,10 +731,10 @@ class DashboardStore:
                 self._record_event(
                     conn,
                     job_id,
-                    "retry",
+                    "JOB_RETRY_SCHEDULED",
                     from_status=status,
                     to_status="queued",
-                    details=f"attempt={attempts + 1}",
+                    details={"attempt": attempts + 1, "error_code": row["error_code"]},
                 )
             return changed
 
@@ -747,6 +755,24 @@ class DashboardStore:
                 "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (bounded_limit,)
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def record_job_event(
+        self,
+        job_id: str,
+        event: str,
+        *,
+        from_status: str | None = None,
+        to_status: str | None = None,
+        details: Any = None,
+    ) -> None:
+        self.write(lambda conn: self._record_event(
+            conn,
+            job_id,
+            event,
+            from_status=from_status,
+            to_status=to_status,
+            details=details or {},
+        ))
 
     def record_audit_event(
         self,
