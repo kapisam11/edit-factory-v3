@@ -693,7 +693,7 @@ class DashboardStore:
         def write(conn: sqlite3.Connection) -> int:
             rows = conn.execute(
                 "SELECT id, status, attempt_id FROM jobs "
-                "WHERE status IN ('queued','running','cancelling')"
+                "WHERE status IN ('running','cancelling')"
             ).fetchall()
             changed = 0
             for row in rows:
@@ -702,7 +702,7 @@ class DashboardStore:
                 updated = conn.execute(
                     "UPDATE jobs SET status='interrupted', step='interrupted', "
                     "finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
-                    "WHERE id=? AND status IN ('queued','running','cancelling')",
+                    "WHERE id=? AND status IN ('running','cancelling')",
                     (job_id,),
                 ).rowcount
                 if not updated:
