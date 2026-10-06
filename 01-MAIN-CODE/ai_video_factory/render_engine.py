@@ -16,6 +16,7 @@ from .ffmpeg_budget import slot
 from .hardware import choose_encoder, ffmpeg_preset_for
 from .production_guardrails import terminate_process_tree
 from .runtime_config import runtime_config
+from .media_limits import DEFAULT_MEDIA_LIMITS, validate_output_probe
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,10 @@ def validate_media_output(path: str, require_video: bool = True, require_audio: 
     duration = float((data.get("format") or {}).get("duration") or 0.0)
     if duration <= 0:
         raise RuntimeError(f"Media output has no positive duration: {target}")
+    try:
+        validate_output_probe(target, data, limits=DEFAULT_MEDIA_LIMITS)
+    except Exception as exc:
+        raise RuntimeError(f"Media output violates hard media limits: {exc}") from exc
     return data
 
 
