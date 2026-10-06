@@ -782,36 +782,62 @@ def _running_count() -> int:
 
 
 def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
+    from dashboard_store import DashboardStore
+
     with _active_processes_lock:
         if _running_count() >= max(1, int(get_settings()["max_concurrent_jobs"])):
             return False
-        if not db_claim_job(job_id):
-            return False
-        from dashboard_worker import run_job
-        ctx = multiprocessing.get_context("spawn")
-        process = ctx.Process(
-            target=run_job,
-            args=(job_id, params, secrets, str(OUTPUT_FOLDER), str(DB_PATH)),
-            daemon=False,
-        )
+
+        attempt_id = f"attempt_{uuid.uuid4().hex[:16]}"
+        lease_token = secrets.token_hex(32)
+        worker_id = f"worker-{uuid.uuid4().hex[:12]}"
+        workspace_root = OUTPUT_FOLDER / ".workspaces" / secure_filename(str(job_id))
+        workspace_dir = workspace_root / attempt_id
+        publish_dir = OUTPUT_FOLDER / f"{_safe_topic_slug(params['topic'])}_{uuid.uuid4().hex[:10]}"
+        workspace_dir.mkdir(parents=True, exist_ok=False)
+
+        store = DashboardStore(DB_PATH)
         try:
-            process.start()
-        except Exception:
-            db_update_job(
+            if not store.claim_job(
                 job_id,
-                status="error",
-                step="failed",
-                error="Worker failed to start",
+                attempt_id=attempt_id,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                workspace_dir=str(workspace_dir),
+            ):
+                shutil.rmtree(workspace_root, ignore_errors=True)
+                return False
+
+            from dashboard_worker import run_job
+            ctx = multiprocessing.get_context("spawn")
+            process = ctx.Process(
+                target=run_job,
+                args=(
+                    job_id, params, secrets, str(OUTPUT_FOLDER), str(DB_PATH),
+                    attempt_id, lease_token, worker_id, str(workspace_dir), str(publish_dir),
+                ),
+                daemon=False,
             )
+            try:
+                process.start()
+            except Exception:
+                store.update_job_if_owned(
+                    job_id, attempt_id, lease_token,
+                    status="error", step="failed", error="Worker failed to start",
+                )
+                shutil.rmtree(workspace_root, ignore_errors=True)
+                raise
+            _active_processes[job_id] = process
+            threading.Thread(
+                target=_watch_job_process,
+                args=(job_id, process, attempt_id, lease_token),
+                name=f"aivf-reaper-{job_id}",
+                daemon=True,
+            ).start()
+            return True
+        except Exception:
+            shutil.rmtree(workspace_root, ignore_errors=True)
             raise
-        _active_processes[job_id] = process
-        threading.Thread(
-            target=_watch_job_process,
-            args=(job_id, process),
-            name=f"aivf-reaper-{job_id}",
-            daemon=True,
-        ).start()
-        return True
 
 
 def _resolve_package(name: str) -> Optional[Path]:
