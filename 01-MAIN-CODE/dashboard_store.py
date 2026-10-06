@@ -496,10 +496,18 @@ class DashboardStore:
                 list(kwargs.values()) + [job_id],
             ).rowcount)
             if changed and target_status != previous_status:
+                event_name = {
+                    "running": "JOB_STARTED",
+                    "cancelling": "JOB_CANCEL_REQUESTED",
+                    "cancelled": "JOB_CANCELLED",
+                    "error": "JOB_FAILED",
+                    "done": "JOB_COMPLETED",
+                    "interrupted": "JOB_RECOVERED",
+                }.get(target_status, "JOB_STATUS_CHANGED")
                 self._record_event(
                     conn,
                     job_id,
-                    "JOB_STATUS_CHANGED",
+                    event_name,
                     from_status=previous_status,
                     to_status=target_status,
                     details={"step": kwargs.get("step"), "error_code": kwargs.get("error_code")},
