@@ -969,6 +969,14 @@ def settings():
         try:
             for key, value in data.items():
                 set_setting(key, value)
+            principal_for_audit = str(session.get("aivf_principal") or request.remote_addr or "unknown")
+            dashboard_store.record_audit_event(
+                principal_for_audit,
+                "SETTINGS_CHANGED",
+                "settings",
+                result="success",
+                metadata=json.dumps(sorted(data.keys())),
+            )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
     return jsonify(get_settings())
@@ -1352,6 +1360,17 @@ def create_job():
             upload_path.unlink(missing_ok=True)
         raise
 
+    try:
+        dashboard_store.record_audit_event(
+            principal,
+            "JOB_CREATED",
+            "job",
+            resource_id=job_id if idem_key or created else job_id,
+            metadata=json.dumps({"workflow": workflow, "idempotent": bool(idem_key)}),
+        )
+    except Exception:
+        logger.debug("Audit event could not be recorded for job creation", exc_info=True)
+
     _runtime_secrets[job_id] = secrets
     cache = globals().get("dashboard_cache")
     if cache is not None:
@@ -1393,7 +1412,18 @@ def cancel_job(job_id):
     if callable(role_gate):
         role_gate("editor")
     from dashboard_compat import cancel_process
-    return cancel_process(job_id)
+    result = cancel_process(job_id)
+    try:
+        from resource_governor import principal_for_request
+        dashboard_store.record_audit_event(
+            principal_for_request(request),
+            "JOB_CANCEL_REQUESTED",
+            "job",
+            resource_id=job_id,
+        )
+    except Exception:
+        logger.debug("Audit event could not be recorded for job cancellation", exc_info=True)
+    return result
 
 
 @app.route("/api/jobs/<job_id>/logs")
