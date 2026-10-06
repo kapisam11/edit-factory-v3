@@ -3,7 +3,7 @@ import os
 import sys
 
 from app import web_app_v3 as _web_app_v3
-from ai_video_factory import configure_logging
+from ai_video_factory import bootstrap_runtime, configure_logging
 configure_logging()
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -22,7 +22,7 @@ sys.modules.setdefault("web_app_v3", _web_app_v3)
 
 app = _web_app_v3.app
 
-_web_app_v3.bootstrap_runtime()
+bootstrap_runtime()
 
 if os.environ.get("AIVF_TRUST_PROXY", "0") == "1":
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_host=1, x_proto=1)
