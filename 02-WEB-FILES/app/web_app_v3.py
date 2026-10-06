@@ -1162,19 +1162,26 @@ def create_job():
         if not filename or suffix not in ALLOWED_EXTENSIONS:
             return jsonify({"error": "Unsupported video file type"}), 400
         try:
-            upload_path, media_summary = _save_and_validate_upload(upload, suffix)
-            resource_budget = estimate_resource_budget(
-                media_summary,
-                input_size_bytes=upload_path.stat().st_size,
-                limits=DEFAULT_MEDIA_LIMITS,
-            )
-            params["_media_summary"] = media_summary
-            params["_resource_budget"] = {
-                "resource_units": resource_budget.resource_units,
-                "reserved_disk_bytes": resource_budget.reserved_disk_bytes,
-                "reserved_memory_bytes": resource_budget.reserved_memory_bytes,
-                "estimated_job_seconds": resource_budget.estimated_job_seconds,
-            }
+            upload_result = _save_and_validate_upload(upload, suffix)
+            if isinstance(upload_result, tuple):
+                upload_path, media_summary = upload_result
+            else:
+                # Backward-compatible seam for legacy tests/callers that return only Path.
+                upload_path = upload_result
+                media_summary = {}
+            if isinstance(media_summary, Mapping) and media_summary:
+                resource_budget = estimate_resource_budget(
+                    media_summary,
+                    input_size_bytes=upload_path.stat().st_size,
+                    limits=DEFAULT_MEDIA_LIMITS,
+                )
+                params["_media_summary"] = media_summary
+                params["_resource_budget"] = {
+                    "resource_units": resource_budget.resource_units,
+                    "reserved_disk_bytes": resource_budget.reserved_disk_bytes,
+                    "reserved_memory_bytes": resource_budget.reserved_memory_bytes,
+                    "estimated_job_seconds": resource_budget.estimated_job_seconds,
+                }
             remaining = shutil.disk_usage(UPLOAD_FOLDER).free
             if remaining < _MIN_FREE_DISK_BYTES:
                 upload_path.unlink(missing_ok=True)
