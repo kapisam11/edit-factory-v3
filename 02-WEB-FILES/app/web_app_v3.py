@@ -93,6 +93,8 @@ _runtime_secret_expiry: Dict[str, float] = {}
 _runtime_default_secrets: Dict[str, str] = {key: "" for key in SECRET_PARAM_KEYS}
 _active_processes: Dict[str, multiprocessing.Process] = {}
 _active_processes_lock = threading.RLock()
+_queue_pump_lock = threading.RLock()
+_QUEUE_PUMP_INTERVAL_SECONDS = max(0.5, float(os.environ.get("AIVF_QUEUE_PUMP_INTERVAL_SECONDS", "2.0")))
 _package_cache_lock = threading.RLock()
 _package_cache: Optional[tuple[float, list]] = None
 _PACKAGE_CACHE_TTL = 2.0
@@ -805,6 +807,10 @@ def _watch_job_process(
                     _runtime_secret_expiry.pop(job_id, None)
                     _runtime_secrets.pop(job_id, None)
         _invalidate_package_cache()
+        try:
+            _pump_queued_jobs()
+        except Exception:
+            logger.exception("Queue pump failed after worker exit")
 
 
 def _running_count() -> int:
@@ -873,6 +879,55 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
             shutil.rmtree(workspace_root, ignore_errors=True)
             raise
 
+
+def _pump_queued_jobs() -> int:
+    """Start queued jobs whenever durable admission and local worker capacity permit."""
+    from dashboard_store import DashboardStore
+
+    started = 0
+    with _queue_pump_lock:
+        store = DashboardStore(DB_PATH)
+        rows = store.list_jobs(limit=_MAX_QUEUED_JOBS)
+        for row in rows:
+            if str(row.get("status")) != "queued":
+                continue
+            job_id = str(row.get("id") or "")
+            if not job_id:
+                continue
+            try:
+                params = json.loads(row.get("params") or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                store.update_job(job_id, status="error", step="failed", error="Queued job parameters are invalid", error_code="input_invalid")
+                continue
+            if not isinstance(params, dict):
+                continue
+            secrets_payload = dict(_runtime_secrets.get(job_id) or _runtime_default_secrets)
+            try:
+                if _start_job(job_id, params, secrets_payload):
+                    started += 1
+            except Exception:
+                logger.exception("Failed to start queued job %s", job_id)
+            if _running_count() >= max(1, int(get_settings().get("max_concurrent_jobs", 2))):
+                break
+    return started
+
+
+def _queue_pump_loop() -> None:
+    while True:
+        try:
+            _pump_queued_jobs()
+        except Exception:
+            logger.exception("Queue pump failed")
+        time.sleep(_QUEUE_PUMP_INTERVAL_SECONDS)
+
+
+def _start_queue_pump() -> None:
+    if os.environ.get("AIVF_WORKER_PROCESS") == "1":
+        return
+    enabled = os.environ.get("AIVF_QUEUE_PUMP_ENABLED", "1").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return
+    threading.Thread(target=_queue_pump_loop, name="aivf-queue-pump", daemon=True).start()
 
 def _resolve_package(name: str) -> Optional[Path]:
     raw_name = str(name)
@@ -1348,9 +1403,8 @@ def create_job():
             cache.delete("jobs:list")
         except Exception:
             logger.debug("Unable to invalidate dashboard job-list cache", exc_info=True)
-    if not _start_job(job_id, params, secrets):
-        _runtime_secrets.pop(job_id, None)
-        return jsonify({"error": "Worker capacity is temporarily unavailable"}), 503
+    _runtime_secrets[job_id] = secrets
+    _pump_queued_jobs()
     return jsonify({"job_id": job_id, "status": "queued"}), 202
 
 @app.route("/api/jobs", methods=["GET"])
