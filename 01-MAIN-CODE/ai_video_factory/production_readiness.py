@@ -215,15 +215,96 @@ def render_markdown(data:dict)->str:
     return "\n".join(lines)
 
 
+def _env_true(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "green", "approved", "pass"}
+
+
+def release_check(root: str | Path = ".") -> dict:
+    """Strict release gate backed by explicit CI/environment/process evidence."""
+    report = report_dict(root)
+    overrides = {
+        "CI": _env_true("AIVF_RELEASE_CI_GREEN"),
+        "ENVIRONMENT": _env_true("AIVF_RELEASE_ENVIRONMENT_GREEN"),
+        "MANUAL": (
+            _env_true("AIVF_RELEASE_HUMAN_APPROVED")
+            and _env_true("AIVF_RELEASE_EXTERNAL_CONTROLS_GREEN")
+        ),
+        "PROCESS": _env_true("AIVF_RELEASE_PROCESS_APPROVED"),
+    }
+    blockers = []
+    for item in report["items"]:
+        status = item["status"]
+        if status == "BLOCKED":
+            blockers.append(item)
+        elif status in overrides and not overrides[status]:
+            blockers.append({
+                **item,
+                "detail": (
+                    item.get("detail", "")
+                    + f" Evidence override for {status} is not satisfied."
+                ).strip(),
+            })
+    required_flags = {
+        "backup_verified": _env_true("AIVF_RELEASE_BACKUP_VERIFIED"),
+        "model_digests_present": _env_true("AIVF_RELEASE_MODEL_DIGESTS_PRESENT"),
+    }
+    if not required_flags["backup_verified"]:
+        blockers.append({
+            "number": 0,
+            "name": "Verified backup",
+            "status": "BLOCKED",
+            "evidence": "AIVF_RELEASE_BACKUP_VERIFIED",
+            "detail": "Verified backup evidence is required.",
+        })
+    if not required_flags["model_digests_present"]:
+        blockers.append({
+            "number": 0,
+            "name": "Runtime model digests",
+            "status": "BLOCKED",
+            "evidence": "AIVF_RELEASE_MODEL_DIGESTS_PRESENT",
+            "detail": "Pinned runtime model digest evidence is required.",
+        })
+    return {
+        "ok": not blockers,
+        "blockers": blockers,
+        "evidence": {
+            "ci_green": overrides["CI"],
+            "environment_green": overrides["ENVIRONMENT"],
+            "human_approved": _env_true("AIVF_RELEASE_HUMAN_APPROVED"),
+            "external_controls_green": _env_true("AIVF_RELEASE_EXTERNAL_CONTROLS_GREEN"),
+            "process_approved": overrides["PROCESS"],
+            **required_flags,
+        },
+        "report": report,
+    }
+
+
+def release_check_main(argv: list[str] | None = None) -> int:
+    args = list(argv or sys.argv[1:])
+    root = next((value for value in args if not value.startswith("-")), ".")
+    result = release_check(root)
+    if "--json" in args:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(render_markdown(result["report"]))
+        if result["blockers"]:
+            print("\nRelease gate blockers:")
+            for item in result["blockers"]:
+                print(f"- {item['number']}: {item['name']} [{item['status']}]")
+    return 0 if result["ok"] else 1
+
+
 def main(argv:list[str]|None=None)->int:
     args=list(argv or sys.argv[1:])
-    root=args[0] if args else "."
+    if "--strict" in args or "--release-check" in args:
+        return release_check_main(args)
+    root=next((value for value in args if not value.startswith("-")), ".")
     output=report_dict(root)
     if "--json" in args:
         print(json.dumps(output,indent=2,sort_keys=True))
     else:
         print(render_markdown(output))
-    return 0 if all(item["status"] not in {"BLOCKED"} for item in output["items"]) else 1
+    return 0 if all(item["status"] != "BLOCKED" for item in output["items"]) else 1
 
 
 if __name__=="__main__":
