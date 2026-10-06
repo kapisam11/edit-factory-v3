@@ -39,6 +39,30 @@ def migrate(conn: sqlite3.Connection) -> int:
         )
     """)
 
+    # Bootstrap all legacy base tables before any later migration can
+    # create indexes, triggers, or foreign keys against them.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS job_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rate_limits (
+            client_ip TEXT NOT NULL,
+            ts REAL NOT NULL
+        )
+    """)
+
     # Version 1: lifecycle/recovery columns.
     if 1 not in applied:
         columns = _table_columns(conn)
