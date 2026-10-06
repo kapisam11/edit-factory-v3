@@ -235,11 +235,23 @@ def register_dashboard_compat(app):
                 SELECT RAISE(ABORT, 'job cancellation already requested');
             END
         """)
-    web_app_v3._watch_job_process = lambda job_id, process, attempt_id=None, lease_token=None: _watch_job_process(
-        web_app_v3,
+    original_watch_job_process = web_app_v3._watch_job_process
+
+    def locked_watch_job_process(
         job_id,
         process,
-    )
+        attempt_id=None,
+        lease_token=None,
+    ):
+        with _LIFECYCLE_LOCK:
+            return original_watch_job_process(
+                job_id,
+                process,
+                attempt_id,
+                lease_token,
+            )
+
+    web_app_v3._watch_job_process = locked_watch_job_process
     original_start_job = web_app_v3._start_job
 
     def locked_start_job(job_id, params, secrets):
