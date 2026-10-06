@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ai_video_factory.job_state import validate_transition
+from ai_video_factory.job_events import EVENT_VOCABULARY
 from ai_video_factory.db_migrations import migrate
 from ai_video_factory.retry_policy import backoff_seconds, is_retryable_error
 
@@ -127,13 +128,16 @@ class DashboardStore:
         to_status: str | None = None,
         details: Any = "",
     ) -> None:
+        event_name = str(event).strip().upper()
+        if event_name not in EVENT_VOCABULARY:
+            raise ValueError(f"unsupported job event: {event_name}")
         if isinstance(details, dict):
             detail_text = json.dumps(details, sort_keys=True, ensure_ascii=False)
         else:
             detail_text = json.dumps({"message": str(details)[:3000]}, ensure_ascii=False)
         conn.execute(
             "INSERT INTO job_events(job_id, from_status, to_status, event, details) VALUES (?,?,?,?,?)",
-            (job_id, from_status, to_status, str(event)[:120], detail_text[:4000]),
+            (job_id, from_status, to_status, event_name, detail_text[:4000]),
         )
 
     def insert_job(
