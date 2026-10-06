@@ -129,4 +129,86 @@ def verify_backup(backup_dir: str | Path) -> dict[str, Any]:
     }
 
 
-__all__ = ["create_backup", "restore_backup", "verify_backup"]
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import os
+    parser = argparse.ArgumentParser(prog="aivf-backup")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    backup = sub.add_parser("backup")
+    backup.add_argument("--db", required=True)
+    backup.add_argument("--knowledge", required=True)
+    backup.add_argument("--output", required=True)
+    backup.add_argument("--backup", required=True)
+
+    verify = sub.add_parser("verify")
+    verify.add_argument("--backup", required=True)
+    verify.add_argument("--marker", default="state/backup-restore-verified")
+
+    restore = sub.add_parser("restore")
+    restore.add_argument("--backup", required=True)
+    restore.add_argument("--state", required=True)
+    restore.add_argument("--knowledge", required=True)
+    restore.add_argument("--output", required=True)
+
+    args = parser.parse_args(list(argv or []))
+
+    if args.command == "backup":
+        destination = Path(args.backup)
+        if destination.suffix == ".tar.gz":
+            destination_dir = destination.parent / (destination.stem + ".snapshot")
+        else:
+            destination_dir = destination
+        result = create_backup(
+            state_dir=Path(args.db).parent,
+            knowledge_dir=args.knowledge,
+            output_dir=args.output,
+            destination=destination_dir.parent,
+            include_output=True,
+        )
+        archive = destination
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        base = Path(result["path"])
+        shutil.make_archive(str(archive.with_suffix("")), "gztar", root_dir=str(base.parent), base_dir=base.name)
+        return 0 if archive.is_file() else 1
+
+    if args.command == "verify":
+        archive = Path(args.backup)
+        if not archive.is_file():
+            raise SystemExit(f"backup archive not found: {archive}")
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="aivf-backup-verify-") as temp:
+            shutil.unpack_archive(str(archive), temp)
+            roots = [item for item in Path(temp).iterdir() if item.is_dir()]
+            if not roots:
+                raise SystemExit("backup archive contains no snapshot directory")
+            report = verify_backup(roots[0])
+            if not report["ok"]:
+                raise SystemExit(json.dumps(report, sort_keys=True))
+        marker = Path(args.marker)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(datetime.now(timezone.utc).isoformat() + "\n", encoding="utf-8")
+        return 0
+
+    if args.command == "restore":
+        archive = Path(args.backup)
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="aivf-backup-restore-") as temp:
+            shutil.unpack_archive(str(archive), temp)
+            roots = [item for item in Path(temp).iterdir() if item.is_dir()]
+            if not roots:
+                raise SystemExit("backup archive contains no snapshot directory")
+            report = restore_backup(
+                backup_dir=roots[0],
+                state_dir=args.state,
+                knowledge_dir=args.knowledge,
+                output_dir=args.output,
+            )
+            if not report["ok"]:
+                raise SystemExit(json.dumps(report, sort_keys=True))
+        return 0
+
+    return 1
+
+
+__all__ = ["create_backup", "restore_backup", "verify_backup", "main"]
