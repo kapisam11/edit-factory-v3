@@ -29,9 +29,29 @@ def _safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
             target.relative_to(root)
         except ValueError as exc:
             raise ValueError(f"backup member escapes restore root: {member.name}") from exc
-        if member.issym() or member.islnk():
-            raise ValueError(f"backup contains an unsafe link: {member.name}")
-    archive.extractall(destination)
+        if member.issym() or member.islnk() or member.type not in {
+            tarfile.REGTYPE,
+            tarfile.AREGTYPE,
+            tarfile.DIRTYPE,
+        }:
+            raise ValueError(f"backup contains an unsafe member: {member.name}")
+
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = archive.extractfile(member)
+        if source is None:
+            raise ValueError(f"backup file cannot be read: {member.name}")
+        temporary = target.with_name(target.name + ".partial")
+        temporary.unlink(missing_ok=True)
+        try:
+            with source, temporary.open("wb") as handle:
+                shutil.copyfileobj(source, handle, length=1024 * 1024)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def backup_database(source: str | Path, destination: str | Path) -> Path:
