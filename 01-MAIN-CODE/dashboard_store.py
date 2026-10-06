@@ -325,6 +325,7 @@ class DashboardStore:
             # Serialize admission with all other writers so quota checks and the
             # subsequent INSERT cannot race across concurrent dashboard requests.
             conn.execute("BEGIN IMMEDIATE")
+            self._ensure_job_columns(conn)
             if max_queued_jobs is not None:
                 queued = int(
                     conn.execute(
