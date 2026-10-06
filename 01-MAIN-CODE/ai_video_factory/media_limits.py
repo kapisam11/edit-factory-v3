@@ -74,6 +74,60 @@ def _fps(stream: dict[str, Any]) -> float:
     return value if math.isfinite(value) else 0.0
 
 
+def _validate_container_signature(path: Path) -> None:
+    """Reject extension-only lookalikes before invoking expensive media processing."""
+    suffix = path.suffix.lower()
+    with path.open("rb") as handle:
+        header = handle.read(16)
+    if suffix in {".mp4", ".m4v", ".mov"}:
+        valid = len(header) >= 8 and header[4:8] == b"ftyp"
+    elif suffix == ".avi":
+        valid = len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"AVI "
+    elif suffix in {".mkv", ".webm"}:
+        valid = header.startswith(bytes.fromhex("1A45DFA3"))
+    else:
+        valid = bool(header)
+    if not valid:
+        raise ValueError("media input container signature does not match its extension")
+
+
+def estimate_resource_budget(
+    media: dict[str, Any],
+    *,
+    target_seconds: float,
+    limits: MediaLimits | None = None,
+) -> dict[str, int | float]:
+    """Estimate conservative disk/CPU/memory reservations for one media job."""
+    limits = limits or MediaLimits.from_environment()
+    pixels_per_second = max(
+        1.0,
+        float(media.get("width", 0))
+        * float(media.get("height", 0))
+        * max(1.0, float(media.get("fps", 0))),
+    )
+    baseline = 1920.0 * 1080.0 * 30.0
+    cpu_weight = max(0.5, min(4.0, pixels_per_second / baseline))
+    memory_bytes = int(
+        max(
+            512 * 1024**2,
+            min(8 * 1024**3, float(media["width"]) * float(media["height"]) * 4.0),
+        )
+    )
+    input_bytes = int(media["size_bytes"])
+    reserved_bytes = int(
+        min(
+            limits.max_output_bytes,
+            max(512 * 1024**2, input_bytes * 3, int(float(target_seconds) * 8 * 1024**2)),
+        )
+    )
+    return {
+        "input_bytes": input_bytes,
+        "reserved_bytes": reserved_bytes,
+        "cpu_weight": round(cpu_weight, 3),
+        "memory_bytes": memory_bytes,
+    }
+
+
 def probe_media_contract(path: str | Path, limits: MediaLimits | None = None) -> dict[str, Any]:
     limits = limits or MediaLimits.from_environment()
     target = Path(path)
@@ -82,6 +136,7 @@ def probe_media_contract(path: str | Path, limits: MediaLimits | None = None) ->
     size = target.stat().st_size
     if size <= 0:
         raise ValueError("media input is empty")
+    _validate_container_signature(target)
     if size > limits.max_input_bytes:
         raise ValueError(
             f"media input exceeds {limits.max_input_bytes} bytes: {size}"
@@ -175,4 +230,4 @@ def validate_render_output(
     return report
 
 
-__all__ = ["MediaLimits", "probe_media_contract", "validate_render_output"]
+__all__ = ["MediaLimits", "probe_media_contract", "validate_render_output", "estimate_resource_budget"]

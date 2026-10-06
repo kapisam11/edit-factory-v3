@@ -11,12 +11,6 @@ on:
         required: false
         default: false
         type: boolean
-      image_tag:
-        description: "Image tag to deploy when running manually"
-        required: false
-        default: "latest"
-        type: string
-
       recovery_smoke:
         description: "Run cancellation + restart recovery smoke on the target host"
         required: false
@@ -154,6 +148,7 @@ jobs:
           set -euo pipefail
           scp 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh \
             06-CONFIG-AND-DEPLOYMENT/target_recovery_smoke.sh \
+            06-CONFIG-AND-DEPLOYMENT/deploy_with_rollback.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/"
 
       - name: Log in to GHCR on remote host
@@ -171,7 +166,7 @@ jobs:
           printf '%s' "$REGISTRY_TOKEN" | ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker login ${q_registry} -u ${q_registry_user} --password-stdin"
 
-      - name: Pull exact built image and restart service
+      - name: Deploy exact immutable image with rollback protection
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -184,8 +179,7 @@ jobs:
           IMAGE="${REGISTRY}/${IMAGE_NAME}@${DEPLOY_DIGEST}"
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           printf -v q_image '%q' "$IMAGE"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && docker pull ${q_image} && AIVF_IMAGE=${q_image} AIVF_COOKIE_SECURE=1 docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml up -d --no-build --remove-orphans"
-
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && chmod +x 06-CONFIG-AND-DEPLOYMENT/deploy_with_rollback.sh && bash 06-CONFIG-AND-DEPLOYMENT/deploy_with_rollback.sh ${q_image}"
       - name: Verify deployed health endpoint
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}

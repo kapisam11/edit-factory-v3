@@ -32,6 +32,8 @@ from ai_video_factory.production_guardrails import sha256_file
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
+from ai_video_factory.media_limits import MediaLimits, estimate_resource_budget, probe_media_contract
+from ai_video_factory.db_migrations import migrate_database, verify_database_schema, SchemaMismatch
 from app.job_service import build_job_params
 
 APP_DIR = Path(__file__).resolve().parent
@@ -45,6 +47,7 @@ STATE_DIR = Path(os.environ.get("AIVF_STATE_DIR", BASE_DIR / "state")).resolve()
 UPLOAD_FOLDER = Path(os.environ.get("AIVF_UPLOAD_DIR", BASE_DIR / "uploads")).resolve()
 OUTPUT_FOLDER = Path(os.environ.get("AIVF_OUTPUT_DIR", BASE_DIR / "output")).resolve()
 RUNTIME_CONFIG = runtime_config()
+MEDIA_LIMITS = MediaLimits.from_environment()
 DB_PATH = STATE_DIR / "jobs.db"
 for directory in (STATE_DIR, UPLOAD_FOLDER, OUTPUT_FOLDER):
     directory.mkdir(parents=True, exist_ok=True)
@@ -133,6 +136,12 @@ def _run_db_write(operation, db_path=DB_PATH):
 
 
 def init_db() -> None:
+    environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+    allow_runtime = os.environ.get("AIVF_ALLOW_RUNTIME_MIGRATIONS", "0").strip() == "1"
+    if environment == "production" and not allow_runtime:
+        verify_database_schema(DB_PATH)
+        return
+    migrate_database(DB_PATH)
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS jobs (
@@ -442,7 +451,10 @@ def _safe_package_dir(topic: str, output_root: str) -> Path:
 
 
 def _save_and_validate_upload(upload, suffix: str) -> Path:
-    max_bytes = int(app.config["MAX_CONTENT_LENGTH"])
+    max_bytes = min(
+        int(app.config["MAX_CONTENT_LENGTH"]),
+        int(MEDIA_LIMITS.max_input_bytes),
+    )
     declared_size = getattr(upload, "content_length", None)
     if declared_size and declared_size > max_bytes:
         raise ValueError("Upload is too large")
@@ -453,7 +465,9 @@ def _save_and_validate_upload(upload, suffix: str) -> Path:
     final_path = UPLOAD_FOLDER / f"{uuid.uuid4().hex}{suffix}"
     try:
         upload.save(temp_path)
-        if temp_path.stat().st_size > max_bytes or not _probe_video(temp_path):
+        if temp_path.stat().st_size > max_bytes:
+            raise ValueError("Upload is too large")
+        if not _probe_video(temp_path):
             raise ValueError("Upload is too large or is not a valid supported video stream")
         os.replace(temp_path, final_path)
         return final_path
@@ -462,34 +476,8 @@ def _save_and_validate_upload(upload, suffix: str) -> Path:
 
 def _probe_video(path: Path) -> bool:
     try:
-        result = run_ffprobe([
-            "ffprobe",
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=codec_type,width,height,duration",
-            "-show_entries", "format=duration",
-            "-of", "json",
-            str(path),
-        ], timeout=30)
-        if result.returncode != 0:
-            return False
-        payload = json.loads(result.stdout or "{}")
-        streams = payload.get("streams") or []
-        if not streams:
-            return False
-        stream = streams[0]
-        width = int(stream.get("width") or 0)
-        height = int(stream.get("height") or 0)
-        duration_raw = stream.get("duration") or (payload.get("format") or {}).get("duration")
-        duration = float(duration_raw)
-        return (
-            width > 0
-            and height > 0
-            and width <= 7680
-            and height <= 7680
-            and duration > 0
-            and duration <= 3600
-        )
+        probe_media_contract(path, MEDIA_LIMITS)
+        return True
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return False
 
@@ -544,6 +532,61 @@ def _redact_job(job: dict, include_logs: bool = False) -> dict:
     return result
 
 
+def _publish_attempt_package(
+    package_dir: Path,
+    output_root: str,
+    db_path: str,
+    job_id: str,
+    attempt_id: str,
+    lease_token: str,
+) -> Path:
+    """Atomically publish an attempt workspace only while its fence is valid."""
+    from dashboard_store import DashboardStore
+
+    store = DashboardStore(db_path)
+    if not store.attempt_can_publish(job_id, attempt_id, lease_token):
+        raise RuntimeError("stale worker cannot publish artifacts")
+
+    root = Path(output_root).resolve()
+    package = package_dir.resolve()
+    work_root = (root / ".work").resolve()
+    package.relative_to(work_root)
+
+    destination = root / package.name
+    if destination.exists():
+        for index in range(2, 10000):
+            candidate = root / f"{package.name}-{index}"
+            if not candidate.exists():
+                destination = candidate
+                break
+        else:
+            raise RuntimeError("unable to allocate publish destination")
+
+    os.replace(package, destination)
+    return destination
+
+
+def _rewrite_published_paths(value: Any, old_root: Path, new_root: Path) -> Any:
+    """Rewrite only absolute paths that belong to an unpublished attempt package."""
+    if isinstance(value, dict):
+        return {
+            key: _rewrite_published_paths(item, old_root, new_root)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_rewrite_published_paths(item, old_root, new_root) for item in value]
+    if isinstance(value, str):
+        try:
+            candidate = Path(value)
+            candidate.relative_to(old_root)
+        except (OSError, ValueError):
+            return value
+        return str(new_root / candidate.relative_to(old_root))
+    return value
+
+
+
+
 def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str, skip_stages: Optional[list[str]] = None) -> None:
     resource_monitor = None
     resource_report_written = False
@@ -565,6 +608,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         finally:
             resource_report_written = True
 
+    attempt_lease = str(params.get("_lease_token") or "")
+    attempt_id = str(params.get("_attempt_id") or "")
+
     def update(**kwargs: Any) -> bool:
         allowed = {"status", "step", "params", "pkg_dir", "error"}
         if set(kwargs) - allowed:
@@ -572,10 +618,17 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         fields = ", ".join(f"{key}=?" for key in kwargs)
 
         def write(conn):
+            where = (
+                "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted') "
+                "AND lease_token=?"
+                if attempt_lease
+                else "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted') "
+                     "AND lease_token IS NULL"
+            )
+            values = list(kwargs.values()) + [job_id, attempt_lease] if attempt_lease else list(kwargs.values()) + [job_id]
             rowcount = conn.execute(
-                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted')",
-                list(kwargs.values()) + [job_id],
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP {where}",
+                values,
             ).rowcount
             return rowcount > 0
 
@@ -606,7 +659,12 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         if not update(status="running", step="Initializing"):
             return
         log("INFO", "→ Initializing")
-        pkg_dir = _safe_package_dir(params["topic"], output_root)
+        attempt_root = Path(
+            params.get("_workspace_root")
+            or (Path(output_root).resolve() / ".work" / job_id / str(params.get("_attempt_id") or "legacy"))
+        ).resolve()
+        attempt_root.mkdir(parents=True, exist_ok=True)
+        pkg_dir = _safe_package_dir(params["topic"], str(attempt_root))
         if params.get("workflow") == "v3":
             from ai_video_factory.v3_pipeline import run_v3_pipeline
 
@@ -649,11 +707,35 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 if not result_payload["errors"]:
                     result_payload["errors"].append("V3 final artifact failed media validation")
                 message = "; ".join(str(error) for error in result_payload["errors"])
-                if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
+                from ai_video_factory.structured_errors import classify_exception
+                classified = classify_exception(RuntimeError(message))
+                if update(
+                    status="error",
+                    step="failed",
+                    error=message,
+                    error_code=classified.code.value,
+                    pkg_dir=str(pkg_dir),
+                ):
                     log("ERROR", message)
             else:
                 _write_resource_report(pkg_dir)
-                if update(status="done", step="Complete (V3)", pkg_dir=str(pkg_dir)):
+                old_package = pkg_dir.resolve()
+                published = _publish_attempt_package(
+                    pkg_dir,
+                    output_root,
+                    db_path,
+                    job_id,
+                    attempt_id,
+                    attempt_lease,
+                )
+                result_payload = _rewrite_published_paths(
+                    result_payload,
+                    old_package,
+                    published.resolve(),
+                )
+                with open(published / "v3_job_result.json", "w", encoding="utf-8") as handle:
+                    json.dump(result_payload, handle, indent=2, ensure_ascii=False)
+                if update(status="done", step="Complete (V3)", pkg_dir=str(published)):
                     log("INFO", "V3 job complete!")
                     for warning in result_payload["warnings"]:
                         log("WARNING", str(warning))
@@ -682,12 +764,27 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 log("ERROR", message)
         else:
             _write_resource_report(pkg_dir)
-            if update(status="done", step="Complete", pkg_dir=str(pkg_dir)):
+            published = _publish_attempt_package(
+                pkg_dir,
+                output_root,
+                db_path,
+                job_id,
+                attempt_id,
+                attempt_lease,
+            )
+            if update(status="done", step="Complete", pkg_dir=str(published)):
                 log("INFO", "Job complete!")
     except Exception as exc:
         try:
-            if update(status="error", step="failed", error=str(exc)):
-                log("ERROR", f"Job failed: {exc}")
+            from ai_video_factory.structured_errors import classify_exception
+            classified = classify_exception(exc)
+            if update(
+                status="error",
+                step="failed",
+                error=classified.message,
+                error_code=classified.code.value,
+            ):
+                log("ERROR", f"[{classified.code.value}] {classified.message}")
         except Exception:
             logger.exception("Could not record worker failure for %s", job_id)
     finally:
@@ -704,8 +801,11 @@ def _artifact_is_valid(final_video: Any) -> bool:
     if not final_video:
         return False
     try:
-        from ai_video_factory.render_engine import validate_media_output
-        validate_media_output(str(final_video), require_video=True, require_audio=False)
+        from ai_video_factory.media_limits import MediaLimits, validate_render_output
+        validate_render_output(
+            str(final_video),
+            limits=MediaLimits.from_environment(),
+        )
         return True
     except (OSError, RuntimeError, ValueError):
         return False
@@ -730,8 +830,13 @@ def _watch_job_process(job_id: str, process: multiprocessing.Process) -> None:
                 if exitcode not in (0, None)
                 else "Worker process exited before reaching a terminal job state"
             )
-            db_update_job(job_id, status="interrupted", step="interrupted", error=reason)
-            db_append_log(job_id, "ERROR", reason)
+            db_update_job(job_id, status="interrupted", step="interrupted", error=reason, error_code="worker_crash")
+            db_append_log(job_id, "ERROR", "[worker_crash] " + reason)
+            try:
+                from dashboard_store import DashboardStore
+                DashboardStore(DB_PATH).release_resources(job_id)
+            except Exception:
+                logger.exception("Could not release resource reservation for interrupted job %s", job_id)
     except Exception:
         logger.exception("Could not reconcile worker exit for %s", job_id)
 
@@ -1005,6 +1110,7 @@ def create_job():
 
     upload = request.files.get("raw_video")
     upload_path: Optional[Path] = None
+    resource_reserved = False
     try:
         usage = shutil.disk_usage(UPLOAD_FOLDER)
         if usage.free < _MIN_FREE_DISK_BYTES:
@@ -1026,6 +1132,14 @@ def create_job():
         except (OSError, ValueError):
             return jsonify({"error": "Upload is too large or is not a valid supported video stream"}), 400
         params["raw_video"] = str(upload_path)
+
+    media_contract: Optional[dict[str, Any]] = None
+    if upload_path is not None:
+        try:
+            media_contract = probe_media_contract(upload_path, MEDIA_LIMITS)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            upload_path.unlink(missing_ok=True)
+            return jsonify({"error": "Uploaded media failed the production media contract"}), 400
 
     request_hash = ""
     if idem_key:
@@ -1150,6 +1264,35 @@ def create_job():
                 upload_path.unlink(missing_ok=True)
             logger.warning("Job admission resource limit reached: %s", exc)
             return jsonify({"error": "Job admission resource limit reached"}), 429
+
+        if media_contract is not None:
+            from resource_governor import (
+                MAX_CPU_WEIGHT,
+                MAX_RESERVED_DISK_BYTES,
+                MAX_RESERVED_MEMORY_BYTES,
+            )
+            budget = estimate_resource_budget(
+                media_contract,
+                target_seconds=float(target_seconds),
+                limits=MEDIA_LIMITS,
+            )
+            if not store.reserve_resources(
+                job_id,
+                input_bytes=int(budget["input_bytes"]),
+                reserved_bytes=int(budget["reserved_bytes"]),
+                cpu_weight=float(budget["cpu_weight"]),
+                memory_bytes=int(budget["memory_bytes"]),
+                max_reserved_disk_bytes=MAX_RESERVED_DISK_BYTES,
+                max_cpu_weight=MAX_CPU_WEIGHT,
+                max_memory_bytes=MAX_RESERVED_MEMORY_BYTES,
+            ):
+                if upload_path is not None:
+                    upload_path.unlink(missing_ok=True)
+                logger.warning("Job admission resource budget exhausted")
+                return jsonify({"error": "Job admission resource budget exhausted"}), 429
+            resource_reserved = True
+            params["_resource_budget"] = budget
+
         if idem_key:
             actual_job_id, created = store.insert_job_idempotent(
                 job_id,
@@ -1162,6 +1305,9 @@ def create_job():
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
             )
             if not created:
+                if resource_reserved:
+                    store.release_resources(actual_job_id)
+                    resource_reserved = False
                 if upload_path is not None:
                     upload_path.unlink(missing_ok=True)
                 existing = store.get_job(actual_job_id) or {}
@@ -1176,16 +1322,25 @@ def create_job():
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
             )
     except IdempotencyConflict as exc:
+        if resource_reserved:
+            store.release_resources(job_id)
+            resource_reserved = False
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
         logger.info("Idempotency conflict for job creation request")
         return jsonify({"error": "Idempotency key was already used for a different request"}), 409
     except JobAdmissionError as exc:
+        if resource_reserved:
+            store.release_resources(job_id)
+            resource_reserved = False
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
         logger.info("Job admission limit rejected request: %s", type(exc).__name__)
         return jsonify({"error": "Job admission limit reached"}), 429
     except Exception:
+        if resource_reserved:
+            store.release_resources(job_id)
+            resource_reserved = False
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
         raise
@@ -1242,26 +1397,41 @@ def job_logs_stream(job_id):
     if not authorized_job:
         return jsonify({"error": "Job not found"}), 404
 
+    raw_last_id = request.headers.get("Last-Event-ID") or request.args.get("last_id") or "0"
+    try:
+        initial_last_id = max(0, int(raw_last_id))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Last-Event-ID must be an integer"}), 400
+
     def stream():
-        last_id = 0
-        job = dict(authorized_job)
+        last_id = initial_last_id
         while True:
             current = db_get_job(job_id)
             if not current:
-                yield "data: " + json.dumps({"level": "ERROR", "msg": "Job not found"}) + "\n\n"
+                yield "event: error\ndata: " + json.dumps({"level": "ERROR", "msg": "Job not found"}) + "\n\n"
                 return
-            job["status"] = current.get("status")
             for row in db_logs_since(job_id, last_id):
-                last_id = row["id"]
-                yield "data: " + json.dumps({"time": row["created_at"], "level": row["level"], "msg": row["message"]}) + "\n\n"
-            if job["status"] in TERMINAL_STATUSES:
+                last_id = int(row["id"])
+                payload = {
+                    "time": row["created_at"],
+                    "level": row["level"],
+                    "msg": row["message"],
+                }
+                yield f"id: {last_id}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            if current.get("status") in TERMINAL_STATUSES:
                 return
             yield ": heartbeat\n\n"
             time.sleep(0.5)
+
     return Response(
         stream(),
         mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+            "X-AIVF-SSE-Replay": "database-log-id",
+        },
     )
 
 

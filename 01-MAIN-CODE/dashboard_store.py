@@ -7,13 +7,16 @@ timeouts, bounded write retries, and performance indexes.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ai_video_factory.job_state import validate_transition
 from ai_video_factory.retry_policy import backoff_seconds, is_retryable_error
+from ai_video_factory.db_migrations import migrate_database, verify_database_schema
 
 
 class JobAdmissionError(RuntimeError):
@@ -74,11 +77,41 @@ class DashboardStore:
         }
         if not columns:
             return
+        if "error_code" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN error_code TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
         if "retry_count" not in columns:
             try:
                 conn.execute(
                     "ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
                 )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        if "principal" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN principal TEXT NOT NULL DEFAULT 'unknown'")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        if "current_attempt" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN current_attempt INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        if "worker_id" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN worker_id TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        if "lease_token" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN lease_token TEXT")
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc).lower():
                     raise
@@ -100,7 +133,13 @@ class DashboardStore:
                     raise
 
     def ensure_indexes(self) -> None:
-        """Bootstrap required tables, then add indexes and lifecycle guards."""
+        """Ensure the storage boundary is ready without mutating production schema."""
+        environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+        allow_runtime = os.environ.get("AIVF_ALLOW_RUNTIME_MIGRATIONS", "0").strip() == "1"
+        if environment == "production" and not allow_runtime:
+            verify_database_schema(self.db_path)
+            return
+        migrate_database(self.db_path)
         with self.connect() as conn:
             # DashboardStore is also used against fresh/empty SQLite files in
             # tests and recovery paths. Bootstrap the minimal storage schema
@@ -114,8 +153,13 @@ class DashboardStore:
                     params TEXT NOT NULL DEFAULT '{}',
                     pkg_dir TEXT,
                     error TEXT,
+                    error_code TEXT,
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     worker_heartbeat_at TEXT,
+                    current_attempt INTEGER NOT NULL DEFAULT 0,
+                    worker_id TEXT,
+                    lease_token TEXT,
+                    principal TEXT NOT NULL DEFAULT 'unknown',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -136,7 +180,9 @@ class DashboardStore:
                 )
             """)
             self._ensure_job_columns(conn)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_principal_status ON jobs(principal, status)")
             conn.execute("""
+
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
                 BEFORE UPDATE OF status ON jobs
                 WHEN NOT (
@@ -241,6 +287,7 @@ class DashboardStore:
     ) -> None:
         """Insert a queued job while enforcing admission limits in one transaction."""
         encoded = json.dumps(params)
+        principal_value = str(principal).strip() or "unknown"
 
         def write(conn: sqlite3.Connection) -> None:
             # Serialize admission with all other writers so quota checks and the
@@ -255,23 +302,18 @@ class DashboardStore:
                 if queued >= int(max_queued_jobs):
                     raise JobAdmissionError("queue capacity reached")
             if principal is not None and principal_limit is not None:
-                rows = conn.execute(
-                    "SELECT params FROM jobs WHERE status IN ('queued','running')"
-                ).fetchall()
-                count = 0
-                for row in rows:
-                    try:
-                        payload = json.loads(row["params"] or "{}")
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                    if str(payload.get("_principal", "")) == principal:
-                        count += 1
+                count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM jobs WHERE principal=? AND status IN ('queued','running')",
+                        (principal_value,),
+                    ).fetchone()[0]
+                )
                 if count >= int(principal_limit):
                     raise JobAdmissionError("principal queue capacity reached")
             conn.execute(
-                "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
-                "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                (job_id, topic, encoded),
+                "INSERT INTO jobs (id, topic, status, step, params, principal, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (job_id, topic, encoded, principal_value),
             )
             self._record_event(conn, job_id, "created", to_status="queued", details=f"topic={topic[:200]}")
 
@@ -377,15 +419,12 @@ class DashboardStore:
                 if queued >= int(max_queued_jobs):
                     raise JobAdmissionError("queue capacity reached")
             if principal_limit is not None:
-                rows = conn.execute("SELECT params FROM jobs WHERE status IN ('queued','running')").fetchall()
-                count = 0
-                for row in rows:
-                    try:
-                        payload = json.loads(row["params"] or "{}")
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                    if str(payload.get("_principal", "")) == principal_value:
-                        count += 1
+                count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM jobs WHERE principal=? AND status IN ('queued','running')",
+                        (principal_value,),
+                    ).fetchone()[0]
+                )
                 if count >= int(principal_limit):
                     raise JobAdmissionError("principal queue capacity reached")
             conn.execute(
@@ -393,9 +432,9 @@ class DashboardStore:
                 (principal_value, key, fingerprint, job_id),
             )
             conn.execute(
-                "INSERT INTO jobs (id, topic, status, step, params, created_at, updated_at) "
-                "VALUES (?, ?, 'queued', 'waiting', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                (job_id, topic, encoded),
+                "INSERT INTO jobs (id, topic, status, step, params, principal, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (job_id, topic, encoded, principal_value),
             )
             self._record_event(conn, job_id, "created", to_status="queued", details="idempotent request")
             return job_id, True
@@ -410,7 +449,7 @@ class DashboardStore:
         ).rowcount))
 
     def update_job(self, job_id: str, **kwargs: Any) -> int:
-        allowed = {"status", "step", "params", "pkg_dir", "error"}
+        allowed = {"status", "step", "params", "pkg_dir", "error", "error_code"}
         invalid = set(kwargs) - allowed
         if invalid:
             raise ValueError(f"Invalid job fields: {sorted(invalid)}")
@@ -470,6 +509,230 @@ class DashboardStore:
             ).rowcount)
 
         return int(self.write(write))
+    def reserve_resources(
+        self,
+        job_id: str,
+        *,
+        input_bytes: int,
+        reserved_bytes: int,
+        cpu_weight: float,
+        memory_bytes: int,
+        max_reserved_disk_bytes: int,
+        max_cpu_weight: float,
+        max_memory_bytes: int,
+    ) -> bool:
+        """Atomically reserve finite host capacity for a queued/running job."""
+        values = (
+            max(0, int(input_bytes)),
+            max(0, int(reserved_bytes)),
+            max(0.01, float(cpu_weight)),
+            max(0, int(memory_bytes)),
+        )
+
+        def write(conn: sqlite3.Connection) -> bool:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT 1 FROM resource_reservations WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            if existing is not None:
+                return True
+            disk = int(conn.execute("SELECT COALESCE(SUM(reserved_bytes),0) FROM resource_reservations").fetchone()[0])
+            cpu = float(conn.execute("SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations").fetchone()[0])
+            memory = int(conn.execute("SELECT COALESCE(SUM(memory_bytes),0) FROM resource_reservations").fetchone()[0])
+            if (
+                disk + values[1] > int(max_reserved_disk_bytes)
+                or cpu + values[2] > float(max_cpu_weight)
+                or memory + values[3] > int(max_memory_bytes)
+            ):
+                return False
+            conn.execute(
+                """
+                INSERT INTO resource_reservations(
+                    job_id,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
+                ) VALUES (?,?,?,?,?,?)
+                """,
+                (*values, time.time()),
+            )
+            self._record_event(
+                conn,
+                job_id,
+                "resource_reserved",
+                details=(
+                    f"disk={values[1]};cpu={values[2]:.3f};"
+                    f"memory={values[3]}"
+                ),
+            )
+            return True
+
+        return bool(self.write(write))
+
+    def release_resources(self, job_id: str) -> bool:
+        """Release a job's reserved host capacity."""
+        def write(conn: sqlite3.Connection) -> bool:
+            changed = int(
+                conn.execute(
+                    "DELETE FROM resource_reservations WHERE job_id=?",
+                    (job_id,),
+                ).rowcount
+            )
+            if changed:
+                self._record_event(conn, job_id, "resource_released")
+            return changed == 1
+
+        return bool(self.write(write))
+
+    def begin_attempt(self, job_id: str, worker_id: str, workspace: str) -> dict[str, str] | None:
+        """Create a fenced execution attempt and bind its lease to the job."""
+        attempt_id = uuid.uuid4().hex
+        lease_token = uuid.uuid4().hex
+        worker_value = str(worker_id).strip() or "unknown"
+        workspace_value = str(workspace).strip()
+        if not workspace_value:
+            raise ValueError("attempt workspace is required")
+
+        def write(conn: sqlite3.Connection) -> dict[str, str] | None:
+            row = conn.execute(
+                "SELECT status, current_attempt FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None or str(row["status"]) not in {"running", "cancelling"}:
+                return None
+            attempt_number = int(row["current_attempt"] or 0) + 1
+            attempt_workspace = str(Path(workspace) / attempt_id)
+            conn.execute(
+                """
+                INSERT INTO job_attempts(
+                    id, job_id, attempt_number, worker_id, lease_token,
+                    workspace, heartbeat_at, status
+                ) VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP,'running')
+                """,
+                (
+                    attempt_id,
+                    job_id,
+                    attempt_number,
+                    worker_value,
+                    lease_token,
+                    attempt_workspace,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE jobs
+                SET current_attempt=?, worker_id=?, lease_token=?,
+                    worker_heartbeat_at=CURRENT_TIMESTAMP,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND status IN ('running','cancelling')
+                """,
+                (attempt_number, worker_value, lease_token, job_id),
+            )
+            self._record_event(
+                conn,
+                job_id,
+                "attempt_started",
+                details=f"attempt_id={attempt_id};attempt_number={attempt_number}",
+            )
+            return {
+                "attempt_id": attempt_id,
+                "lease_token": lease_token,
+                "worker_id": worker_value,
+                "attempt_number": str(attempt_number),
+            }
+
+        return self.write(write)
+
+    def heartbeat_attempt(self, job_id: str, attempt_id: str, lease_token: str) -> bool:
+        """Refresh the attempt lease only when the worker still owns the fence."""
+        def write(conn: sqlite3.Connection) -> int:
+            changed = int(
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET worker_heartbeat_at=CURRENT_TIMESTAMP,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND status IN ('running','cancelling') AND lease_token=?
+                    """,
+                    (job_id, lease_token),
+                ).rowcount
+            )
+            if changed != 1:
+                return 0
+            return int(
+                conn.execute(
+                    """
+                    UPDATE job_attempts
+                    SET heartbeat_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND job_id=? AND lease_token=? AND status='running'
+                    """,
+                    (attempt_id, job_id, lease_token),
+                ).rowcount
+            )
+
+        return bool(self.write(write))
+
+    def attempt_can_publish(self, job_id: str, attempt_id: str, lease_token: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM jobs j
+                JOIN job_attempts a ON a.job_id=j.id
+                WHERE j.id=? AND j.status IN ('running','cancelling')
+                  AND j.lease_token=? AND a.id=? AND a.lease_token=?
+                  AND a.status='running'
+                """,
+                (job_id, lease_token, attempt_id, lease_token),
+            ).fetchone()
+        return row is not None
+
+    def finish_attempt(
+        self,
+        job_id: str,
+        attempt_id: str,
+        lease_token: str,
+        *,
+        status: str,
+        error_code: str | None = None,
+    ) -> bool:
+        """Close an attempt only when the lease still belongs to that worker."""
+        def write(conn: sqlite3.Connection) -> int:
+            changed = int(
+                conn.execute(
+                    """
+                    UPDATE job_attempts
+                    SET status=?, error_code=?, finished_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND job_id=? AND lease_token=? AND status='running'
+                    """,
+                    (
+                        str(status),
+                        None if error_code is None else str(error_code),
+                        attempt_id,
+                        job_id,
+                        lease_token,
+                    ),
+                ).rowcount
+            )
+            if changed != 1:
+                return 0
+            conn.execute(
+                """
+                UPDATE jobs
+                SET worker_id=NULL, lease_token=NULL,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND lease_token=?
+                """,
+                (job_id, lease_token),
+            )
+            self._record_event(
+                conn,
+                job_id,
+                "attempt_finished",
+                details=f"attempt_id={attempt_id};status={status}",
+            )
+            return changed
+
+        return bool(self.write(write))
+
     def claim_job(self, job_id: str) -> bool:
         """Atomically claim a queued job and establish its heartbeat lease."""
         def write(conn: sqlite3.Connection) -> int:
@@ -484,7 +747,7 @@ class DashboardStore:
             changed = int(
                 conn.execute(
                     "UPDATE jobs SET status='running', step='starting', "
-                    "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, "
+                    "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, error_code=NULL, "
                     "updated_at=CURRENT_TIMESTAMP "
                     "WHERE id=? AND status='queued'",
                     (job_id,),
@@ -522,7 +785,7 @@ class DashboardStore:
         expected_statuses: tuple[str, ...],
         **kwargs: Any,
     ) -> int:
-        allowed = {"status", "step", "params", "pkg_dir", "error"}
+        allowed = {"status", "step", "params", "pkg_dir", "error", "error_code"}
         invalid = set(kwargs) - allowed
         if invalid or not kwargs or not expected_statuses:
             raise ValueError("Invalid conditional job update")
@@ -551,7 +814,7 @@ class DashboardStore:
 
         def write(conn: sqlite3.Connection) -> int:
             row = conn.execute(
-                "SELECT status, error, retry_count FROM jobs WHERE id=?", (job_id,)
+                "SELECT status, error, error_code, retry_count FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
             if row is None:
                 return 0
@@ -561,11 +824,24 @@ class DashboardStore:
             attempts = int(row["retry_count"] or 0)
             if attempts >= max_attempts:
                 raise JobRetryNotAllowed("maximum retry attempts reached")
-            if status == "error" and row["error"]:
-                if not is_retryable_error(RuntimeError(str(row["error"]))):
+            if status == "error":
+                from ai_video_factory.structured_errors import ErrorCode
+                recorded_code = str(row["error_code"] or "").strip()
+                if recorded_code:
+                    try:
+                        retryable = recorded_code in {
+                            ErrorCode.TOOL_TIMEOUT.value,
+                            ErrorCode.DATABASE_BUSY.value,
+                            ErrorCode.WORKER_CRASH.value,
+                        }
+                    except Exception:
+                        retryable = False
+                    if not retryable:
+                        raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
+                elif row["error"] and not is_retryable_error(RuntimeError(str(row["error"]))):
                     raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
             changed = int(conn.execute(
-                "UPDATE jobs SET status='queued', step='waiting', error=NULL, pkg_dir=NULL, "
+                "UPDATE jobs SET status='queued', step='waiting', error=NULL, error_code=NULL, pkg_dir=NULL, "
                 "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
                 "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
                 (job_id, max_attempts),
@@ -597,6 +873,58 @@ class DashboardStore:
             rows = conn.execute(
                 "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (bounded_limit,)
             ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_audit_event(
+        self,
+        *,
+        principal: str,
+        action: str,
+        resource: str,
+        resource_id: str | None = None,
+        remote_addr: str | None = None,
+        user_agent: str | None = None,
+        result: str = "success",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist a security/audit action separately from job lifecycle events."""
+        payload = json.dumps(metadata or {}, sort_keys=True, ensure_ascii=False)
+
+        def write(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                """
+                INSERT INTO audit_events(
+                    principal, action, resource, resource_id, remote_addr,
+                    user_agent, result, metadata
+                ) VALUES (?,?,?,?,?,?,?,?)
+                """,
+                (
+                    str(principal).strip() or "unknown",
+                    str(action).strip() or "unknown",
+                    str(resource).strip() or "unknown",
+                    None if resource_id is None else str(resource_id),
+                    None if remote_addr is None else str(remote_addr),
+                    None if user_agent is None else str(user_agent)[:512],
+                    str(result).strip() or "unknown",
+                    payload,
+                ),
+            )
+
+        self.write(write)
+
+    def audit_events_since(self, *, principal: str | None = None, last_id: int = 0, limit: int = 200) -> list[dict]:
+        bounded_limit = max(1, min(int(limit), 1000))
+        with self.connect() as conn:
+            if principal:
+                rows = conn.execute(
+                    "SELECT * FROM audit_events WHERE id>? AND principal=? ORDER BY id ASC LIMIT ?",
+                    (max(0, int(last_id)), str(principal), bounded_limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM audit_events WHERE id>? ORDER BY id ASC LIMIT ?",
+                    (max(0, int(last_id)), bounded_limit),
+                ).fetchall()
         return [dict(row) for row in rows]
 
     def append_log(self, job_id: str, level: str, message: str) -> None:

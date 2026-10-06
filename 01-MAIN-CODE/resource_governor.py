@@ -29,6 +29,14 @@ def _int_env(name: str, default: int, minimum: int = 1) -> int:
 
 MAX_TOTAL_STORAGE_BYTES = _int_env("AIVF_MAX_TOTAL_STORAGE_MB", 20_000) * 1024 * 1024
 MAX_JOB_STORAGE_BYTES = _int_env("AIVF_MAX_JOB_DISK_MB", 4_096) * 1024 * 1024
+MAX_RESERVED_DISK_BYTES = _int_env("AIVF_MAX_RESERVED_DISK_MB", 20_000) * 1024 * 1024
+MAX_RESERVED_MEMORY_BYTES = _int_env("AIVF_MAX_RESERVED_MEMORY_MB", 16_384) * 1024 * 1024
+try:
+    MAX_CPU_WEIGHT = float(os.environ.get("AIVF_MAX_CPU_WEIGHT", "8.0"))
+except ValueError as exc:
+    raise ValueError("AIVF_MAX_CPU_WEIGHT must be numeric") from exc
+if MAX_CPU_WEIGHT <= 0:
+    raise ValueError("AIVF_MAX_CPU_WEIGHT must be > 0")
 MAX_QUEUED_PER_PRINCIPAL = _int_env("AIVF_MAX_QUEUED_PER_PRINCIPAL", 5)
 MAX_SSE_CONNECTIONS = min(3, _int_env("AIVF_MAX_SSE_CONNECTIONS", 2))
 MAX_SSE_LIFETIME_SECONDS = _int_env("AIVF_SSE_MAX_SECONDS", 900)
@@ -106,7 +114,7 @@ def total_storage_bytes(*roots: str | Path, limit: int | None = None) -> int:
 def principal_queued_jobs(db_connect, principal: str) -> int:
     with db_connect() as conn:
         rows = conn.execute(
-            "SELECT params FROM jobs WHERE status IN ('queued','running')"
+            "SELECT principal, params FROM jobs WHERE status IN ('queued','running')"
         ).fetchall()
     count = 0
     for row in rows:
@@ -115,7 +123,8 @@ def principal_queued_jobs(db_connect, principal: str) -> int:
             params = json.loads(raw_params or "{}")
         except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             continue
-        if str(params.get("_principal", "")) == principal:
+        row_principal = str(row["principal"] if hasattr(row, "keys") else "").strip()
+        if row_principal == principal or str(params.get("_principal", "")) == principal:
             count += 1
     return count
 
@@ -150,6 +159,9 @@ __all__ = [
     "ResourceLimitExceeded",
     "MAX_TOTAL_STORAGE_BYTES",
     "MAX_JOB_STORAGE_BYTES",
+    "MAX_RESERVED_DISK_BYTES",
+    "MAX_RESERVED_MEMORY_BYTES",
+    "MAX_CPU_WEIGHT",
     "MAX_QUEUED_PER_PRINCIPAL",
     "MAX_SSE_CONNECTIONS",
     "MAX_SSE_LIFETIME_SECONDS",

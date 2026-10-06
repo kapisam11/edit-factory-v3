@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+import uuid
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WEB_DIR = _REPO_ROOT / "02-WEB-FILES"
@@ -39,6 +40,8 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
 
     heartbeat_stop = threading.Event()
     heartbeat_store = DashboardStore(db_path)
+    attempt_id = ""
+    lease_token = ""
     try:
         raw_interval = os.environ.get("AIVF_WORKER_HEARTBEAT_SECONDS", "15")
         parsed_interval = float(raw_interval)
@@ -62,7 +65,7 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
         failures = 0
         while not heartbeat_stop.wait(interval):
             try:
-                alive = heartbeat_store.heartbeat_job(job_id)
+                alive = heartbeat_store.heartbeat_attempt(job_id, attempt_id, lease_token)
             except Exception:
                 alive = False
             if alive:
@@ -72,6 +75,24 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
                 # A transient SQLite lock must not terminate the lease-refresh thread.
                 if failures >= 5:
                     failures = 0
+
+    worker_id = f"pid:{os.getpid()}:{uuid.uuid4().hex[:12]}"
+    attempt = heartbeat_store.begin_attempt(
+        job_id,
+        worker_id,
+        str(Path(output_root).resolve() / ".work" / job_id),
+    )
+    if not attempt:
+        return
+    attempt_id = attempt["attempt_id"]
+    lease_token = attempt["lease_token"]
+    params = dict(params)
+    params["_attempt_id"] = attempt_id
+    params["_lease_token"] = lease_token
+    params["_worker_id"] = worker_id
+    params["_workspace_root"] = str(
+        Path(output_root).resolve() / ".work" / job_id / attempt_id
+    )
 
     heartbeat_thread = threading.Thread(
         target=heartbeat,
@@ -94,3 +115,21 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
     finally:
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=min(interval, 5.0))
+        try:
+            heartbeat_store.release_resources(job_id)
+        except Exception:
+            pass
+
+        try:
+            final = heartbeat_store.get_job(job_id) or {}
+            status = str(final.get("status") or "unknown")
+            heartbeat_store.finish_attempt(
+                job_id,
+                attempt_id,
+                lease_token,
+                status="succeeded" if status == "done" else (
+                    "cancelled" if status in {"cancelled", "cancelling"} else "failed"
+                ),
+            )
+        except Exception:
+            pass
