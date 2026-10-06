@@ -188,11 +188,24 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     original_start_job = app_module._start_job
     resource_watchdogs: set[str] = set()
 
-    def _watch_resource_budget(job_id: str, process: Any) -> None:
+    def _watch_resource_budget(job_id: str, process: Any, attempt_id: str | None = None, lease_token: str | None = None) -> None:
         clock = __import__("time")
         started = clock.monotonic()
         deadline = started + MAX_RENDER_WALLCLOCK_SECONDS
         last_total_storage_scan = 0.0
+
+        def fail_owned(message: str) -> None:
+            current = store.get_job(job_id) or {}
+            if attempt_id and lease_token:
+                changed = store.update_job_if_owned(
+                    job_id, attempt_id, lease_token,
+                    status="error", step="resource_limit", error=message,
+                )
+            else:
+                changed = app_module.db_update_job(job_id, status="error", step="resource_limit", error=message)
+            if changed:
+                store.append_log(job_id, "ERROR", message)
+
         while process.is_alive():
             now = clock.monotonic()
             if now >= deadline:
@@ -204,18 +217,14 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                         process.terminate()
                     except Exception:
                         pass
-                current = app_module.db_get_job(job_id) or {}
-                if current.get("status") in {"queued", "running", "cancelling"}:
-                    app_module.db_update_job(
-                        job_id,
-                        status="error",
-                        step="resource_limit",
-                        error=f"Render wall-clock budget exceeded ({MAX_RENDER_WALLCLOCK_SECONDS}s)",
-                    )
-                    app_module.db_append_log(job_id, "ERROR", "Render wall-clock budget exceeded")
+                fail_owned(f"Render wall-clock budget exceeded ({MAX_RENDER_WALLCLOCK_SECONDS}s)")
                 return
-            current = app_module.db_get_job(job_id) or {}
+
+            current = store.get_job(job_id) or {}
             package_dir = current.get("pkg_dir")
+            if attempt_id and lease_token and not store.is_attempt_owner(job_id, attempt_id, lease_token):
+                return
+
             if now - last_total_storage_scan >= RESOURCE_RECONCILE_INTERVAL_SECONDS:
                 last_total_storage_scan = now
                 if total_storage_bytes(
@@ -231,11 +240,9 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                             process.terminate()
                         except Exception:
                             pass
-                    current = app_module.db_get_job(job_id) or {}
-                    if current.get("status") in {"queued", "running", "cancelling"}:
-                        app_module.db_update_job(job_id, status="error", step="resource_limit", error="Total storage quota exceeded")
-                        app_module.db_append_log(job_id, "ERROR", "Total storage quota exceeded")
+                    fail_owned("Total storage quota exceeded")
                     return
+
             if package_dir and not job_storage_ok(package_dir):
                 try:
                     from dashboard_compat import _terminate_process_tree
@@ -245,25 +252,21 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                         process.terminate()
                     except Exception:
                         pass
-                current = app_module.db_get_job(job_id) or {}
-                if current.get("status") in {"queued", "running", "cancelling"}:
-                    app_module.db_update_job(
-                        job_id,
-                        status="error",
-                        step="resource_limit",
-                        error=f"Per-job storage quota exceeded ({MAX_JOB_STORAGE_BYTES // (1024 * 1024)} MiB)",
-                    )
-                    app_module.db_append_log(job_id, "ERROR", "Per-job storage quota exceeded")
+                fail_owned(f"Per-job storage quota exceeded ({MAX_JOB_STORAGE_BYTES // (1024 * 1024)} MiB)")
                 return
             clock.sleep(RESOURCE_CHECK_INTERVAL_SECONDS)
+
 
     def governed_start_job(job_id, params, secrets):
         started = original_start_job(job_id, params, secrets)
         process = app_module._active_processes.get(job_id)
         if started and process is not None:
+            current = store.get_job(job_id) or {}
+            attempt_id = str(current.get("attempt_id") or "") or None
+            lease_token = str(current.get("worker_token") or "") or None
             def watch_and_release():
                 try:
-                    _watch_resource_budget(job_id, process)
+                    _watch_resource_budget(job_id, process, attempt_id, lease_token)
                 finally:
                     resource_watchdogs.discard(job_id)
             thread = __import__("threading").Thread(
