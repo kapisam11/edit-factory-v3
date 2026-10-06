@@ -18,6 +18,33 @@ REQUEST_ID_HEADER = "X-Request-ID"
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 
 
+def _update_runtime_gauges() -> None:
+    try:
+        from dashboard_store import DashboardStore
+        from ai_video_factory.production_guardrails import free_disk_bytes
+        db_path = app.config.get("AIVF_DB_PATH")
+        if not db_path:
+            state_dir = app.config.get("AIVF_STATE_DIR") or os.environ.get("AIVF_STATE_DIR", "")
+            db_path = str(Path(state_dir) / "jobs.db") if state_dir else None
+        if db_path:
+            store = DashboardStore(db_path)
+            store.ensure_indexes()
+            with store.connect() as conn:
+                queued = int(conn.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE status='queued'"
+                ).fetchone()[0])
+                running = int(conn.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE status IN ('running','cancelling')"
+                ).fetchone()[0])
+            GLOBAL_METRICS.set_gauge("queue_depth", queued)
+            GLOBAL_METRICS.set_gauge("active_workers", running)
+        GLOBAL_METRICS.set_gauge("disk_free_bytes", free_disk_bytes(
+            os.environ.get("AIVF_STATE_DIR", app.config.get("AIVF_STATE_DIR", "."))
+        ))
+    except Exception:
+        logging.getLogger(__name__).debug("Unable to refresh runtime gauges", exc_info=True)
+
+
 def install_observability(app: Flask) -> None:
     """Install request correlation and lightweight health endpoints."""
 
@@ -79,6 +106,7 @@ def install_observability(app: Flask) -> None:
 
     @app.get("/api/metrics")
     def metrics():
+        _update_runtime_gauges()
         snapshot = GLOBAL_METRICS.snapshot()
         _update_operational_gauges()
         snapshot = GLOBAL_METRICS.snapshot()
