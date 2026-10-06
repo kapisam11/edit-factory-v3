@@ -508,6 +508,79 @@ class DashboardStore:
             ).rowcount)
 
         return int(self.write(write))
+    def reserve_resources(
+        self,
+        job_id: str,
+        *,
+        input_bytes: int,
+        reserved_bytes: int,
+        cpu_weight: float,
+        memory_bytes: int,
+        max_reserved_disk_bytes: int,
+        max_cpu_weight: float,
+        max_memory_bytes: int,
+    ) -> bool:
+        """Atomically reserve finite host capacity for a queued/running job."""
+        values = (
+            max(0, int(input_bytes)),
+            max(0, int(reserved_bytes)),
+            max(0.01, float(cpu_weight)),
+            max(0, int(memory_bytes)),
+        )
+
+        def write(conn: sqlite3.Connection) -> bool:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT 1 FROM resource_reservations WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            if existing is not None:
+                return True
+            disk = int(conn.execute("SELECT COALESCE(SUM(reserved_bytes),0) FROM resource_reservations").fetchone()[0])
+            cpu = float(conn.execute("SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations").fetchone()[0])
+            memory = int(conn.execute("SELECT COALESCE(SUM(memory_bytes),0) FROM resource_reservations").fetchone()[0])
+            if (
+                disk + values[1] > int(max_reserved_disk_bytes)
+                or cpu + values[2] > float(max_cpu_weight)
+                or memory + values[3] > int(max_memory_bytes)
+            ):
+                return False
+            conn.execute(
+                """
+                INSERT INTO resource_reservations(
+                    job_id,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
+                ) VALUES (?,?,?,?,?,?)
+                """,
+                (*values, time.time()),
+            )
+            self._record_event(
+                conn,
+                job_id,
+                "resource_reserved",
+                details=(
+                    f"disk={values[1]};cpu={values[2]:.3f};"
+                    f"memory={values[3]}"
+                ),
+            )
+            return True
+
+        return bool(self.write(write))
+
+    def release_resources(self, job_id: str) -> bool:
+        """Release a job's reserved host capacity."""
+        def write(conn: sqlite3.Connection) -> bool:
+            changed = int(
+                conn.execute(
+                    "DELETE FROM resource_reservations WHERE job_id=?",
+                    (job_id,),
+                ).rowcount
+            )
+            if changed:
+                self._record_event(conn, job_id, "resource_released")
+            return changed == 1
+
+        return bool(self.write(write))
+
     def begin_attempt(self, job_id: str, worker_id: str, workspace: str) -> dict[str, str] | None:
         """Create a fenced execution attempt and bind its lease to the job."""
         attempt_id = uuid.uuid4().hex
@@ -525,6 +598,7 @@ class DashboardStore:
             if row is None or str(row["status"]) not in {"running", "cancelling"}:
                 return None
             attempt_number = int(row["current_attempt"] or 0) + 1
+        attempt_workspace = str(Path(workspace) / attempt_id)
             conn.execute(
                 """
                 INSERT INTO job_attempts(
@@ -538,7 +612,7 @@ class DashboardStore:
                     attempt_number,
                     worker_value,
                     lease_token,
-                    workspace_value,
+                    attempt_workspace,
                 ),
             )
             conn.execute(
