@@ -106,6 +106,20 @@ jobs:
       - name: Checkout deployment configuration
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
+      - name: Run strict production release gate
+        env:
+          AIVF_RELEASE_CI_GREEN: "1"
+          AIVF_RELEASE_SECURITY_GREEN: "1"
+          AIVF_RELEASE_E2E_GREEN: "1"
+          AIVF_RELEASE_ENVIRONMENT_GREEN: "${{ vars.AIVF_RELEASE_ENVIRONMENT_GREEN || 'false' }}"
+          AIVF_RELEASE_BACKUP_VERIFIED: "${{ vars.AIVF_RELEASE_BACKUP_VERIFIED || 'false' }}"
+          AIVF_RELEASE_MODEL_DIGESTS_PRESENT: "${{ vars.AIVF_RELEASE_MODEL_DIGESTS_PRESENT || 'false' }}"
+          AIVF_RELEASE_HUMAN_APPROVED: "${{ vars.AIVF_RELEASE_HUMAN_APPROVED || 'false' }}"
+          AIVF_RELEASE_PROCESS_APPROVED: "${{ vars.AIVF_RELEASE_PROCESS_APPROVED || 'false' }}"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=01-MAIN-CODE:02-WEB-FILES python 01-MAIN-CODE/ai_video_factory/production_readiness.py --strict --json .
+
       - name: Configure SSH
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
