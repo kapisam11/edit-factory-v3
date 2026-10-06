@@ -813,11 +813,23 @@ def _watch_job_process(
         with _active_processes_lock:
             _active_processes.pop(job_id, None)
             row = db_get_job(job_id)
-            if row and row.get("status") in {"error", "interrupted"}:
-                _retain_runtime_secrets_for_retry(job_id)
-            else:
-                _runtime_secret_expiry.pop(job_id, None)
-                _runtime_secrets.pop(job_id, None)
+            owns_current_attempt = bool(
+                row
+                and (
+                    not attempt_id
+                    or not lease_token
+                    or (
+                        row.get("attempt_id") == attempt_id
+                        and row.get("worker_token") == lease_token
+                    )
+                )
+            )
+            if owns_current_attempt:
+                if row and row.get("status") in {"error", "interrupted"}:
+                    _retain_runtime_secrets_for_retry(job_id)
+                else:
+                    _runtime_secret_expiry.pop(job_id, None)
+                    _runtime_secrets.pop(job_id, None)
         _invalidate_package_cache()
 
 
