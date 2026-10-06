@@ -1650,6 +1650,7 @@ def health_details():
 init_db()
 
 if __name__ == "__main__":
+    _start_queue_pump()
     from dashboard_auth import configure_dashboard_auth
     from dashboard_compat import register_dashboard_compat
     configure_dashboard_auth(app)
