@@ -159,6 +159,7 @@ class DashboardStore:
                     ts REAL NOT NULL
                 )
             """)
+            migrate(conn)
             self._ensure_job_columns(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
@@ -319,7 +320,6 @@ class DashboardStore:
         encoded = json.dumps(params)
 
         def write(conn: sqlite3.Connection) -> None:
-            self._ensure_job_columns(conn)
             conn.commit()
             # Serialize admission with all other writers so quota checks and the
             # subsequent INSERT cannot race across concurrent dashboard requests.
@@ -467,7 +467,6 @@ class DashboardStore:
         encoded = json.dumps(params)
 
         def write(conn: sqlite3.Connection) -> tuple[str, bool]:
-            self._ensure_job_columns(conn)
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
@@ -606,7 +605,6 @@ class DashboardStore:
     ) -> bool:
         """Atomically claim a queued job and optionally bind it to a fenced attempt."""
         def write(conn: sqlite3.Connection) -> int:
-            self._ensure_job_columns(conn)
             row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
             if row is None or str(row["status"]) != "queued":
                 return 0
@@ -644,7 +642,6 @@ class DashboardStore:
     ) -> bool:
         """Refresh the durable worker lease, fenced to the active attempt when supplied."""
         def write(conn: sqlite3.Connection) -> int:
-            self._ensure_job_columns(conn)
             if attempt_id and lease_token:
                 changed = int(conn.execute(
                     "UPDATE jobs SET worker_heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
