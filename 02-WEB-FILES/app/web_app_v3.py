@@ -546,9 +546,31 @@ def _redact_job(job: dict, include_logs: bool = False) -> dict:
     return result
 
 
-def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str, skip_stages: Optional[list[str]] = None) -> None:
+def _run_job_worker_impl(
+    job_id: str,
+    params: dict,
+    secrets: dict,
+    output_root: str,
+    db_path: str,
+    skip_stages: Optional[list[str]] = None,
+    *,
+    attempt_id: str | None = None,
+    lease_token: str | None = None,
+    worker_id: str | None = None,
+    workspace_dir: str | None = None,
+    publish_dir: str | None = None,
+) -> None:
     resource_monitor = None
     resource_report_written = False
+    store = globals().get("dashboard_store")
+    if store is None:
+        from dashboard_store import DashboardStore
+        store = DashboardStore(db_path)
+
+    def owned() -> bool:
+        if not (attempt_id and lease_token):
+            return True
+        return bool(store.is_attempt_owner(job_id, attempt_id, lease_token))
 
     def _write_resource_report(package_dir: Optional[Path]) -> None:
         nonlocal resource_report_written
@@ -568,32 +590,53 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             resource_report_written = True
 
     def update(**kwargs: Any) -> bool:
+        if not owned():
+            return False
+        if attempt_id and lease_token:
+            return bool(store.update_job_if_owned(job_id, attempt_id, lease_token, **kwargs))
         allowed = {"status", "step", "params", "pkg_dir", "error"}
         if set(kwargs) - allowed:
             raise ValueError("Invalid worker update")
         fields = ", ".join(f"{key}=?" for key in kwargs)
-
         def write(conn):
-            rowcount = conn.execute(
-                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted')",
+            return conn.execute(
+                f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP WHERE id=? "
+                "AND status NOT IN ('cancelling','cancelled','interrupted')",
                 list(kwargs.values()) + [job_id],
-            ).rowcount
-            return rowcount > 0
-
-        return _run_db_write(write, db_path)
+            ).rowcount > 0
+        return bool(_run_db_write(write, db_path))
 
     def log(level: str, message: str) -> None:
+        if attempt_id and lease_token:
+            if owned():
+                store.append_log(job_id, level, message)
+            return
         def write(conn):
             conn.execute(
                 "INSERT INTO job_logs (job_id, level, message) VALUES (?, ?, ?)",
                 (job_id, level.upper(), str(message)[:10000]),
             )
-
         _run_db_write(write, db_path)
+
+    def publish_workspace(source: Path, target: Path, final_video: Any) -> Any:
+        if attempt_id and lease_token and not owned():
+            raise RuntimeError("worker attempt lost ownership before artifact publication")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            raise RuntimeError("publish destination already exists")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, target)
+        if final_video:
+            try:
+                relative = Path(str(final_video)).resolve().relative_to(source.resolve())
+                return str((target / relative).resolve())
+            except (OSError, RuntimeError, ValueError):
+                return final_video
+        return final_video
 
     try:
         from ai_video_factory.resource_metrics import ResourceMonitor
+        from ai_video_factory.media_limits import DEFAULT_MEDIA_LIMITS
 
         raw_interval = os.environ.get("AIVF_RESOURCE_SAMPLE_SECONDS", "1.0")
         try:
@@ -608,36 +651,34 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         if not update(status="running", step="Initializing"):
             return
         log("INFO", "→ Initializing")
-        pkg_dir = _safe_package_dir(params["topic"], output_root)
+
+        if workspace_dir:
+            pkg_dir = Path(workspace_dir).resolve()
+            pkg_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            pkg_dir = _safe_package_dir(params["topic"], output_root)
+
         if params.get("workflow") == "v3":
             from ai_video_factory.v3_pipeline import run_v3_pipeline
-
             if not params.get("raw_video"):
                 raise ValueError("V3 production requires a raw video")
             if not update(step="Running V3 Pipeline", pkg_dir=str(pkg_dir)):
                 return
             log("INFO", "→ Running V3 Pipeline")
             result = run_v3_pipeline(
-                params["raw_video"],
-                params["topic"],
-                str(pkg_dir),
+                params["raw_video"], params["topic"], str(pkg_dir),
                 context=params.get("context", ""),
                 target_seconds=params.get("target_seconds", 30.0),
                 platform=params.get("platform", "youtube_shorts"),
                 audience=params.get("audience", "general short-form viewers"),
-                bpm=params.get("bpm", 120),
-                edit_type=params.get("edit_type"),
-                model_key=secrets.get("model_key"),
-                skip_qc=params.get("skip_qc", False),
-                music_path=params.get("music_path"),
-                enable_ocr=params.get("enable_ocr", False),
+                bpm=params.get("bpm", 120), edit_type=params.get("edit_type"),
+                model_key=secrets.get("model_key"), skip_qc=params.get("skip_qc", False),
+                music_path=params.get("music_path"), enable_ocr=params.get("enable_ocr", False),
                 enable_object_detection=params.get("enable_object_detection", True),
                 enable_diarization=params.get("enable_diarization", False),
                 diarization_token=secrets.get("diarization_token"),
                 source_metadata=params.get("source_metadata"),
-                allow_unsupported_critical_evidence=bool(
-                    params.get("allow_unsupported_critical_evidence", False)
-                ),
+                allow_unsupported_critical_evidence=bool(params.get("allow_unsupported_critical_evidence", False)),
             )
             result_payload = {
                 "errors": list(getattr(result, "errors", []) or []),
@@ -651,11 +692,15 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 if not result_payload["errors"]:
                     result_payload["errors"].append("V3 final artifact failed media validation")
                 message = "; ".join(str(error) for error in result_payload["errors"])
-                if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
+                update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir))
+                if owned():
                     log("ERROR", message)
             else:
                 _write_resource_report(pkg_dir)
-                if update(status="done", step="Complete (V3)", pkg_dir=str(pkg_dir)):
+                if attempt_id and lease_token and publish_dir:
+                    published = publish_workspace(pkg_dir, Path(publish_dir), result_payload.get("final_video"))
+                    result_payload["final_video"] = published
+                if update(status="done", step="Complete (V3)", pkg_dir=str(publish_dir or pkg_dir)):
                     log("INFO", "V3 job complete!")
                     for warning in result_payload["warnings"]:
                         log("WARNING", str(warning))
@@ -663,12 +708,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
 
         from ai_video_factory.pipeline import PipelineContext, build_director_pipeline
         ctx = PipelineContext(
-            topic=params["topic"],
-            raw_video=params.get("raw_video"),
-            target_seconds=params.get("target_seconds", 45.0),
-            skip_qc=params.get("skip_qc", False),
-            use_groq=params.get("use_groq", False),
-            model_key=secrets.get("model_key"),
+            topic=params["topic"], raw_video=params.get("raw_video"),
+            target_seconds=params.get("target_seconds", 45.0), skip_qc=params.get("skip_qc", False),
+            use_groq=params.get("use_groq", False), model_key=secrets.get("model_key"),
             groq_key=secrets.get("groq_key"),
         )
         ctx.package_dir = str(pkg_dir)
@@ -680,11 +722,15 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
             if not ctx.errors:
                 ctx.errors.append("Final artifact failed media validation")
             message = "; ".join(str(error) for error in ctx.errors)
-            if update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir)):
+            update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir))
+            if owned():
                 log("ERROR", message)
         else:
             _write_resource_report(pkg_dir)
-            if update(status="done", step="Complete", pkg_dir=str(pkg_dir)):
+            published_video = ctx.final_video
+            if attempt_id and lease_token and publish_dir:
+                published_video = publish_workspace(pkg_dir, Path(publish_dir), ctx.final_video)
+            if update(status="done", step="Complete", pkg_dir=str(publish_dir or pkg_dir)):
                 log("INFO", "Job complete!")
     except Exception as exc:
         try:
