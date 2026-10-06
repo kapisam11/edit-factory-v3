@@ -115,83 +115,91 @@ def report_dict(root:str|Path=".")->dict:
 
 
 def _flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on", "green", "approved", "pass"}
 
 
 def release_check(root: str | Path = ".") -> dict:
-    """Strict release gate for production deployment decisions.
-
-    Evidence-report statuses become green only when the corresponding externally
-    supplied release evidence has actually been recorded.
-    """
-    data = report_dict(root)
+    """Strict release gate backed by explicit evidence for each non-code control."""
+    report = report_dict(root)
     ci_green = _flag("AIVF_RELEASE_CI_GREEN")
-    env_green = _flag("AIVF_RELEASE_ENVIRONMENT_GREEN")
-    manual_green = _flag("AIVF_RELEASE_HUMAN_APPROVED")
-    process_green = _flag("AIVF_RELEASE_PROCESS_APPROVED")
     security_green = _flag("AIVF_RELEASE_SECURITY_GREEN")
     e2e_green = _flag("AIVF_RELEASE_E2E_GREEN")
+    environment_green = _flag("AIVF_RELEASE_ENVIRONMENT_GREEN")
+    human_green = _flag("AIVF_RELEASE_HUMAN_APPROVED")
+    external_green = _flag("AIVF_RELEASE_EXTERNAL_CONTROLS_GREEN")
+    process_green = _flag("AIVF_RELEASE_PROCESS_APPROVED")
     backup_green = _flag("AIVF_RELEASE_BACKUP_VERIFIED")
     models_green = _flag("AIVF_RELEASE_MODEL_DIGESTS_PRESENT")
 
+    satisfied_ci = ci_green and security_green and e2e_green
     blockers = []
-    for item in data["items"]:
+    for item in report["items"]:
         status = item["status"]
         number = int(item["number"])
-        satisfied = status == "PASS"
+        ok = status == "PASS"
         if status == "CI":
-            satisfied = ci_green
-            if number in {3, 5} and security_green:
-                satisfied = True
-            if number in {26, 32} and e2e_green:
-                satisfied = True
-            if number == 29 and security_green:
-                satisfied = True
-            if number == 30 and ci_green:
-                satisfied = True
-            if number == 6 and ci_green:
-                satisfied = True
+            ok = satisfied_ci
+            if number == 26 or number == 32:
+                ok = e2e_green
+            elif number == 29 or number == 3 or number == 5:
+                ok = security_green
+            elif number in {2, 28, 30}:
+                ok = ci_green
         elif status == "ENVIRONMENT":
-            satisfied = env_green
-            if number == 9 and env_green:
-                satisfied = True
-            if number == 11 and env_green:
-                satisfied = True
-            if number == 12 and env_green:
-                satisfied = True
-            if number == 31 and env_green:
-                satisfied = True
+            ok = environment_green
         elif status == "MANUAL":
-            satisfied = manual_green
-            if number == 34:
-                satisfied = manual_green and backup_green and models_green
+            ok = human_green and external_green
         elif status == "PROCESS":
-            satisfied = process_green
+            ok = process_green
         elif status == "BLOCKED":
-            satisfied = False
-        if not satisfied:
+            ok = False
+        if number == 6:
+            ok = ci_green
+        if number == 11 or number == 12 or number == 31:
+            ok = environment_green
+        if number == 34:
+            ok = human_green and external_green and backup_green and models_green
+        if not ok:
             blockers.append(item)
+
+    if not backup_green:
+        blockers.append({
+            "number": 0,
+            "name": "Verified backup evidence",
+            "status": "BLOCKED",
+            "evidence": "AIVF_RELEASE_BACKUP_VERIFIED",
+            "detail": "A verified pre-deploy backup is required.",
+        })
+    if not models_green:
+        blockers.append({
+            "number": 0,
+            "name": "Runtime model digest evidence",
+            "status": "BLOCKED",
+            "evidence": "AIVF_RELEASE_MODEL_DIGESTS_PRESENT",
+            "detail": "Pinned model SHA-256 evidence is required.",
+        })
 
     return {
         "ok": not blockers,
         "blockers": blockers,
         "evidence": {
             "ci_green": ci_green,
-            "environment_green": env_green,
-            "human_approved": manual_green,
-            "process_approved": process_green,
             "security_green": security_green,
             "e2e_green": e2e_green,
+            "environment_green": environment_green,
+            "human_approved": human_green,
+            "external_controls_green": external_green,
+            "process_approved": process_green,
             "backup_verified": backup_green,
             "model_digests_present": models_green,
         },
-        "report": data,
+        "report": report,
     }
 
 
 def release_check_main(argv: list[str] | None = None) -> int:
     args = list(argv or sys.argv[1:])
-    root = args[0] if args and not args[0].startswith("-") else "."
+    root = next((value for value in args if not value.startswith("-")), ".")
     result = release_check(root)
     if "--json" in args:
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -202,7 +210,6 @@ def release_check_main(argv: list[str] | None = None) -> int:
             for item in result["blockers"]:
                 print(f"- {item['number']}: {item['name']} [{item['status']}]")
     return 0 if result["ok"] else 1
-
 
 def render_markdown(data:dict)->str:
     lines=["# Edit Factory v3 — 34-point production readiness","","| # | Item | Status | Evidence | Detail |","|---:|---|---|---|---|"]
