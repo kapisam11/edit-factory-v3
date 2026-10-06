@@ -190,20 +190,24 @@ class DashboardStore:
                 ).fetchone()[0])
                 if used_units + int(resource_units) > int(resource_capacity_units or 100):
                     raise JobAdmissionError("resource capacity reached")
-            class_name = str(resource_class or "STANDARD").strip().upper()
-            class_caps = {
-                "LIGHT": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_LIGHT_CAPACITY", "4"))),
-                "STANDARD": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_STANDARD_CAPACITY", "2"))),
-                "HEAVY": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_HEAVY_CAPACITY", "1"))),
-            }
-            class_limit = class_caps.get(class_name)
-            if class_limit is not None:
+            class_name = str(resource_class).strip().upper() if resource_class else None
+            if class_name is not None:
+                class_caps = {
+                    "LIGHT": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_LIGHT_CAPACITY", "4"))),
+                    "STANDARD": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_STANDARD_CAPACITY", "2"))),
+                    "HEAVY": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_HEAVY_CAPACITY", "1"))),
+                }
+                class_limit = class_caps.get(class_name)
+                if class_limit is None:
+                    raise JobAdmissionError(f"unsupported resource class: {class_name}")
                 active_class = int(conn.execute(
                     "SELECT COUNT(*) FROM jobs WHERE resource_class=? AND status IN ('queued','running')",
                     (class_name,),
                 ).fetchone()[0])
                 if active_class >= class_limit:
                     raise JobAdmissionError(f"resource class {class_name} capacity reached")
+            else:
+                class_name = "STANDARD"
             if reserved_memory_bytes is not None and max_reserved_memory_bytes is not None:
                 used_memory = int(conn.execute(
                     "SELECT COALESCE(SUM(reserved_memory_bytes),0) FROM jobs WHERE status IN ('queued','running')"
@@ -354,16 +358,24 @@ class DashboardStore:
                 ).fetchone()[0])
                 if used_units + int(resource_units) > int(resource_capacity_units or 100):
                     raise JobAdmissionError("resource capacity reached")
-            class_name = str(resource_class or "STANDARD").strip().upper()
-            class_caps = {"LIGHT": 4, "STANDARD": 2, "HEAVY": 1}
-            class_limit = class_caps.get(class_name)
-            if class_limit is not None:
+            class_name = str(resource_class).strip().upper() if resource_class else None
+            if class_name is not None:
+                class_caps = {
+                    "LIGHT": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_LIGHT_CAPACITY", "4"))),
+                    "STANDARD": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_STANDARD_CAPACITY", "2"))),
+                    "HEAVY": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_HEAVY_CAPACITY", "1"))),
+                }
+                class_limit = class_caps.get(class_name)
+                if class_limit is None:
+                    raise JobAdmissionError(f"unsupported resource class: {class_name}")
                 active_class = int(conn.execute(
                     "SELECT COUNT(*) FROM jobs WHERE resource_class=? AND status IN ('queued','running')",
                     (class_name,),
                 ).fetchone()[0])
                 if active_class >= class_limit:
                     raise JobAdmissionError(f"resource class {class_name} capacity reached")
+            else:
+                class_name = "STANDARD"
             if reserved_memory_bytes is not None and max_reserved_memory_bytes is not None:
                 used_memory = int(conn.execute(
                     "SELECT COALESCE(SUM(reserved_memory_bytes),0) FROM jobs WHERE status IN ('queued','running')"
