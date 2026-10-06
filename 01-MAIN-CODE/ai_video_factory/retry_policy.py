@@ -52,7 +52,7 @@ def is_retryable_error(error: Exception) -> bool:
     text = str(error).lower()
     if any(marker in text for marker in NON_RETRYABLE_TEXT):
         return False
-    if any(marker in text for marker in ("429", "temporarily unavailable", "timeout", "timed out", "rate limit", "connection reset", "502", "503", "504")):
+    if any(marker in text for marker in ("429", "temporarily unavailable", "timeout", "timed out", "rate limit", "connection reset", "worker crashed", "worker exited", "worker died", "502", "503", "504")):
         return True
     # Unknown RuntimeError instances are not safe to retry. The caller may
     # explicitly classify known transient runtime failures using the markers above.
