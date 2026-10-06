@@ -38,6 +38,7 @@ jobs:
           AIVF_STATE_DIR: ${{ runner.temp }}/aivf-state
           AIVF_UPLOAD_DIR: ${{ runner.temp }}/aivf-uploads
           AIVF_OUTPUT_DIR: ${{ runner.temp }}/aivf-output
+          AIVF_MEDIA_MIN_FREE_DISK_BYTES: "268435456"
           PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
         run: |
           mkdir -p "$AIVF_STATE_DIR" "$AIVF_UPLOAD_DIR" "$AIVF_OUTPUT_DIR"
