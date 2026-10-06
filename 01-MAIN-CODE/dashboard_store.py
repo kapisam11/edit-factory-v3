@@ -296,6 +296,7 @@ class DashboardStore:
         max_queued_jobs: int | None = None,
         principal_limit: int | None = None,
         resource_units: int | None = None,
+        resource_class: str | None = None,
         reserved_disk_bytes: int | None = None,
         reserved_memory_bytes: int | None = None,
         available_disk_bytes: int | None = None,
@@ -348,6 +349,16 @@ class DashboardStore:
                 ).fetchone()[0])
                 if used_units + int(resource_units) > int(resource_capacity_units or 100):
                     raise JobAdmissionError("resource capacity reached")
+            class_name = str(resource_class or "STANDARD").strip().upper()
+            class_caps = {"LIGHT": 4, "STANDARD": 2, "HEAVY": 1}
+            class_limit = class_caps.get(class_name)
+            if class_limit is not None:
+                active_class = int(conn.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE resource_class=? AND status IN ('queued','running')",
+                    (class_name,),
+                ).fetchone()[0])
+                if active_class >= class_limit:
+                    raise JobAdmissionError(f"resource class {class_name} capacity reached")
             if reserved_memory_bytes is not None and max_reserved_memory_bytes is not None:
                 used_memory = int(conn.execute(
                     "SELECT COALESCE(SUM(reserved_memory_bytes),0) FROM jobs WHERE status IN ('queued','running')"
@@ -366,13 +377,13 @@ class DashboardStore:
             )
             conn.execute(
                 "INSERT INTO jobs (id, topic, status, step, params, principal, attempt_id, worker_token, "
-                "workspace_dir, resource_units, reserved_disk_bytes, reserved_memory_bytes, created_at, updated_at) "
-                "VALUES (?, ?, 'queued', 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                "workspace_dir, resource_units, resource_class, reserved_disk_bytes, reserved_memory_bytes, created_at, updated_at) "
+                "VALUES (?, ?, 'queued', 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 (
                     job_id, topic, encoded, str(principal).strip() or "unknown",
                     attempt_id, worker_token, workspace_dir,
-                    int(resource_units or 1), int(reserved_disk_bytes or 0),
-                    int(reserved_memory_bytes or 0),
+                    int(resource_units or 1), class_name,
+                    int(reserved_disk_bytes or 0), int(reserved_memory_bytes or 0),
                 ),
             )
             self._record_event(conn, job_id, "JOB_CREATED", to_status="queued", details={"idempotent": True})
