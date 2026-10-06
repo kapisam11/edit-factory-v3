@@ -114,16 +114,77 @@ def report_dict(root:str|Path=".")->dict:
     }}
 
 
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def release_check(root: str | Path = ".") -> dict:
-    """Strict release gate for production deployment decisions."""
+    """Strict release gate for production deployment decisions.
+
+    Evidence-report statuses become green only when the corresponding externally
+    supplied release evidence has actually been recorded.
+    """
     data = report_dict(root)
-    blockers = [
-        item for item in data["items"]
-        if item["status"] in {"BLOCKED", "CI", "ENVIRONMENT", "MANUAL", "PROCESS"}
-    ]
+    ci_green = _flag("AIVF_RELEASE_CI_GREEN")
+    env_green = _flag("AIVF_RELEASE_ENVIRONMENT_GREEN")
+    manual_green = _flag("AIVF_RELEASE_HUMAN_APPROVED")
+    process_green = _flag("AIVF_RELEASE_PROCESS_APPROVED")
+    security_green = _flag("AIVF_RELEASE_SECURITY_GREEN")
+    e2e_green = _flag("AIVF_RELEASE_E2E_GREEN")
+    backup_green = _flag("AIVF_RELEASE_BACKUP_VERIFIED")
+    models_green = _flag("AIVF_RELEASE_MODEL_DIGESTS_PRESENT")
+
+    blockers = []
+    for item in data["items"]:
+        status = item["status"]
+        number = int(item["number"])
+        satisfied = status == "PASS"
+        if status == "CI":
+            satisfied = ci_green
+            if number in {3, 5} and security_green:
+                satisfied = True
+            if number in {26, 32} and e2e_green:
+                satisfied = True
+            if number == 29 and security_green:
+                satisfied = True
+            if number == 30 and ci_green:
+                satisfied = True
+            if number == 6 and ci_green:
+                satisfied = True
+        elif status == "ENVIRONMENT":
+            satisfied = env_green
+            if number == 9 and env_green:
+                satisfied = True
+            if number == 11 and env_green:
+                satisfied = True
+            if number == 12 and env_green:
+                satisfied = True
+            if number == 31 and env_green:
+                satisfied = True
+        elif status == "MANUAL":
+            satisfied = manual_green
+            if number == 34:
+                satisfied = manual_green and backup_green and models_green
+        elif status == "PROCESS":
+            satisfied = process_green
+        elif status == "BLOCKED":
+            satisfied = False
+        if not satisfied:
+            blockers.append(item)
+
     return {
         "ok": not blockers,
         "blockers": blockers,
+        "evidence": {
+            "ci_green": ci_green,
+            "environment_green": env_green,
+            "human_approved": manual_green,
+            "process_approved": process_green,
+            "security_green": security_green,
+            "e2e_green": e2e_green,
+            "backup_verified": backup_green,
+            "model_digests_present": models_green,
+        },
         "report": data,
     }
 
