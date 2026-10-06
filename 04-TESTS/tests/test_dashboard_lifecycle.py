@@ -242,7 +242,7 @@ def test_startup_reconciles_non_terminal_jobs(monkeypatch, tmp_path):
     appmod.db_insert_job("running", "running", {"topic": "running"})
     appmod.db_update_job("running", status="running")
     importlib.reload(appmod)
-    assert appmod.db_get_job("queued")["status"] == "interrupted"
+    assert appmod.db_get_job("queued")["status"] == "queued"
     assert appmod.db_get_job("running")["status"] == "interrupted"
 
 
@@ -541,3 +541,41 @@ def test_create_job_idempotency_reuses_existing_job_and_rejects_payload_conflict
     conflict = client.post("/api/jobs", data={"topic": "different topic"}, headers=headers)
     assert conflict.status_code == 409
     assert "different request" in conflict.get_json()["error"]
+
+
+def test_audit_and_artifact_records_are_durable(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_store import DashboardStore
+    store = DashboardStore(appmod.DB_PATH)
+    package = tmp_path / "output" / "audit-artifact"
+    package.mkdir(parents=True)
+    artifact = package / "final.v3.mp4"
+    artifact.write_bytes(b"artifact")
+
+    store.record_audit_event(
+        "alice",
+        "JOB_PUBLISHED",
+        "job",
+        resource_id="job-1",
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+        metadata='{"ok":true}',
+    )
+    store.record_artifact(
+        "job-1",
+        "final_video",
+        str(artifact),
+        attempt_id="attempt-1",
+        sha256="00" * 32,
+    )
+
+    with store.connect() as conn:
+        audit = conn.execute(
+            "SELECT principal, action, resource_id, ip_address, user_agent FROM audit_events"
+        ).fetchone()
+        artifact_row = conn.execute(
+            "SELECT job_id, attempt_id, kind, sha256, size_bytes FROM job_artifacts"
+        ).fetchone()
+
+    assert tuple(audit) == ("alice", "JOB_PUBLISHED", "job-1", "127.0.0.1", "pytest")
+    assert tuple(artifact_row) == ("job-1", "attempt-1", "final_video", "00" * 32, 8)
