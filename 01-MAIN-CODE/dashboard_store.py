@@ -77,6 +77,12 @@ class DashboardStore:
         }
         if not columns:
             return
+        if "error_code" not in columns:
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN error_code TEXT")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
         if "retry_count" not in columns:
             try:
                 conn.execute(
@@ -147,6 +153,7 @@ class DashboardStore:
                     params TEXT NOT NULL DEFAULT '{}',
                     pkg_dir TEXT,
                     error TEXT,
+                    error_code TEXT,
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     worker_heartbeat_at TEXT,
                     current_attempt INTEGER NOT NULL DEFAULT 0,
@@ -448,7 +455,7 @@ class DashboardStore:
         ).rowcount))
 
     def update_job(self, job_id: str, **kwargs: Any) -> int:
-        allowed = {"status", "step", "params", "pkg_dir", "error"}
+        allowed = {"status", "step", "params", "pkg_dir", "error", "error_code"}
         invalid = set(kwargs) - allowed
         if invalid:
             raise ValueError(f"Invalid job fields: {sorted(invalid)}")
