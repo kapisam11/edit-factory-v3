@@ -12,6 +12,7 @@ from typing import Iterator
 class MetricSnapshot:
     counters: dict[str,int]
     timings_ms: dict[str,float]
+    timing_percentiles_ms: dict[str,dict[str,float]]
     generated_at: float
 
 class MetricsRegistry:
@@ -44,16 +45,37 @@ class MetricsRegistry:
         for raw_name, timing_ms in snapshot.timings_ms.items():
             metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name)
             lines.append(f"aivf_{metric}_milliseconds_avg {timing_ms}")
+            percentiles = snapshot.timing_percentiles_ms.get(raw_name, {})
+            for percentile, value in percentiles.items():
+                lines.append(f'aivf_{metric}_milliseconds{{quantile="{percentile}"}} {value}')
         return "\n".join(lines) + ("\n" if lines else "")
 
     def snapshot(self)->MetricSnapshot:
         with self._lock:
-            averages={name:round(sum(vals)/len(vals),3) for name,vals in self._timings.items() if vals}
-            return MetricSnapshot(dict(self._counters),averages,time.time())
+            averages = {}
+            percentiles = {}
+            for name, vals in self._timings.items():
+                if not vals:
+                    continue
+                ordered = sorted(vals)
+                averages[name] = round(sum(ordered) / len(ordered), 3)
+                def pct(fraction: float) -> float:
+                    index = min(len(ordered) - 1, max(0, int(round((len(ordered) - 1) * fraction))))
+                    return round(ordered[index], 3)
+                percentiles[name] = {
+                    "p50": pct(0.50),
+                    "p90": pct(0.90),
+                    "p95": pct(0.95),
+                    "p99": pct(0.99),
+                }
+            return MetricSnapshot(dict(self._counters), averages, percentiles, time.time())
+
+    def prometheus(self) -> str:
+        return self.to_prometheus()
 
     def to_json(self)->str:
         s=self.snapshot()
-        return json.dumps({"counters":s.counters,"timings_ms_avg":s.timings_ms,"generated_at":s.generated_at},sort_keys=True,indent=2)
+        return json.dumps({"counters":s.counters,"timings_ms_avg":s.timings_ms,"timing_percentiles_ms":s.timing_percentiles_ms,"generated_at":s.generated_at},sort_keys=True,indent=2)
 
 @contextmanager
 def timed(registry: MetricsRegistry,name:str)->Iterator[None]:
