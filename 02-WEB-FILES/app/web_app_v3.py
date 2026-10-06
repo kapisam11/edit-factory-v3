@@ -634,6 +634,17 @@ def _run_job_worker_impl(
                 if attempt_id and lease_token and publish_dir:
                     published = publish_workspace(pkg_dir, Path(publish_dir), result_payload.get("final_video"))
                     result_payload["final_video"] = published
+                    try:
+                        store.record_artifact(
+                            job_id,
+                            "final_video",
+                            str(published),
+                            attempt_id=attempt_id,
+                            sha256=sha256_file(str(published)),
+                            size_bytes=Path(str(published)).stat().st_size,
+                        )
+                    except Exception as exc:
+                        raise RuntimeError(f"artifact registration failed: {exc}") from exc
 
                     published_dir = Path(publish_dir)
                     from ai_video_factory.production_assurance import build_artifact_manifest
@@ -921,6 +932,8 @@ def settings():
                 "settings",
                 result="success",
                 metadata=json.dumps(sorted(data.keys())),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get("User-Agent"),
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -1322,6 +1335,8 @@ def create_job():
             "job",
             resource_id=job_id,
             metadata=json.dumps({"workflow": workflow, "idempotent": bool(idem_key)}),
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get("User-Agent"),
         )
     except Exception:
         logger.debug("Audit event could not be recorded for job creation", exc_info=True)
@@ -1376,6 +1391,8 @@ def cancel_job(job_id):
             "JOB_CANCEL_REQUESTED",
             "job",
             resource_id=job_id,
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get("User-Agent"),
         )
     except Exception:
         logger.debug("Audit event could not be recorded for job cancellation", exc_info=True)
