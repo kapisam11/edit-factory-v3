@@ -9,7 +9,7 @@ description = "Emotion-first AI short-form video planning, production, retention
 requires-python = ">=3.10"
 license = "LicenseRef-Edit-Factory-Source-Available"
 license-files = ["LICENSE"]
-dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "urllib3>=2.8.0", "edge-tts>=6.1.0", "numpy>=1.23.0", "pydantic>=2.7.0"]
+dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "urllib3>=2.8.0", "edge-tts>=6.1.0", "numpy>=1.23.0", "pydantic>=2.7.0", "multidict>=6.9.1,<7"]
 
 [project.scripts]
 aivf = "app.cli:main"
@@ -21,7 +21,7 @@ aivf-content = "app.content_factory_cli:main"
 aivf-v3 = "ai_video_factory.v3_cli:main"
 
 [project.optional-dependencies]
-web = ["flask>=2.3.0", "gunicorn>=22.0.0; platform_system != 'Windows'"]
+web = ["flask>=2.3.0", "gunicorn>=22.0.0; platform_system != 'Windows'", "werkzeug>=3.1.9"]
 dev = ["pytest>=7.0", "pytest-cov>=5.0", "mypy>=1.0", "ruff>=0.6.0", "build>=1.2.0"]
 audit = ["pip-audit>=2.9.0"]
 beats = ["librosa>=0.10.0"]
