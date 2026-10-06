@@ -1,10 +1,33 @@
 """AI Video Factory v3 — emotion-first automated short video production."""
 import logging
 import os
+import threading
 
 
 def configure_logging(level=logging.INFO):
-    logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
+    """Explicitly configure application logging; importing the package does not alter global handlers."""
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
+_RUNTIME_BOOTSTRAP_LOCK = threading.RLock()
+_RUNTIME_BOOTSTRAPPED = False
+
+
+def bootstrap_runtime() -> None:
+    """Install optional roadmap compatibility bindings exactly once at application startup."""
+    global _RUNTIME_BOOTSTRAPPED
+    with _RUNTIME_BOOTSTRAP_LOCK:
+        if _RUNTIME_BOOTSTRAPPED:
+            return
+        from .roadmap_runtime import install as install_runtime
+        from .roadmap_runtime_bindings import install as install_bindings
+        install_runtime()
+        install_bindings()
+        _RUNTIME_BOOTSTRAPPED = True
 
 
 from .factory import create_package
@@ -89,16 +112,10 @@ def __getattr__(name):
     raise AttributeError(name)
 
 
-from .roadmap_runtime import install as _install_roadmap_runtime
-
-_install_roadmap_runtime()
-from .roadmap_runtime_bindings import install as _install_roadmap_bindings
-
-_install_roadmap_bindings()
-
 __version__ = "3.0.0"
 __all__ = [
     "VideoDirector",
+    "bootstrap_runtime",
     "create_package",
     "compose_short_from_video",
     "run_production_pipeline",
