@@ -319,6 +319,8 @@ class DashboardStore:
         encoded = json.dumps(params)
 
         def write(conn: sqlite3.Connection) -> None:
+            self._ensure_job_columns(conn)
+            conn.commit()
             # Serialize admission with all other writers so quota checks and the
             # subsequent INSERT cannot race across concurrent dashboard requests.
             conn.execute("BEGIN IMMEDIATE")
@@ -465,6 +467,8 @@ class DashboardStore:
         encoded = json.dumps(params)
 
         def write(conn: sqlite3.Connection) -> tuple[str, bool]:
+            self._ensure_job_columns(conn)
+            conn.commit()
             conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 "SELECT job_id, request_hash FROM idempotency_keys WHERE principal=? AND idem_key=?",
