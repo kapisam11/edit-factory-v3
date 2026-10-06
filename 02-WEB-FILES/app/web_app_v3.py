@@ -132,97 +132,21 @@ def _run_db_write(operation, db_path=DB_PATH):
 
 
 def init_db() -> None:
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS jobs (
-                id TEXT PRIMARY KEY,
-                topic TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'queued',
-                step TEXT NOT NULL DEFAULT 'waiting',
-                params TEXT NOT NULL DEFAULT '{}',
-                pkg_dir TEXT,
-                error TEXT,
-                retry_count INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS job_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                level TEXT NOT NULL,
-                message TEXT NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS validate_job_status_transition
-            BEFORE UPDATE OF status ON jobs
-            WHEN NOT (
-                NEW.status = OLD.status OR
-                (OLD.status = 'queued' AND NEW.status IN ('running','cancelling','cancelled','error','interrupted')) OR
-                (OLD.status = 'running' AND NEW.status IN ('cancelling','cancelled','done','error','interrupted')) OR
-                (OLD.status = 'cancelling' AND NEW.status IN ('cancelled','error','interrupted')) OR
-                (OLD.status IN ('done','cancelled')) OR
-                (OLD.status IN ('error','interrupted') AND NEW.status = 'queued')
-            )
-            BEGIN
-                SELECT RAISE(ABORT, 'invalid job status transition');
-            END
-        """)
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
-        if "retry_count" not in columns:
-            conn.execute("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id ON job_logs(job_id, id)")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS idempotency_keys (
-                principal TEXT NOT NULL,
-                idem_key TEXT NOT NULL,
-                request_hash TEXT NOT NULL,
-                job_id TEXT NOT NULL,
-                created_at REAL NOT NULL DEFAULT (unixepoch()),
-                PRIMARY KEY (principal, idem_key)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS job_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id TEXT NOT NULL,
-                from_status TEXT,
-                to_status TEXT,
-                event TEXT NOT NULL,
-                details TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_job_events_job_id_id ON job_events(job_id, id)")
+    """Initialize and migrate the dashboard database before serving requests."""
+    from dashboard_store import DashboardStore
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at)
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS rate_limits (
-                client_ip TEXT NOT NULL,
-                ts REAL NOT NULL
-            )
-        """)
-        if os.environ.get("AIVF_WORKER_PROCESS") != "1":
-            conn.execute(
-                "UPDATE jobs SET status='interrupted', step='interrupted', updated_at=CURRENT_TIMESTAMP "
+    store = DashboardStore(DB_PATH)
+    store.ensure_indexes()
+
+    if os.environ.get("AIVF_WORKER_PROCESS") != "1":
+        store.write(
+            lambda conn: conn.execute(
+                "UPDATE jobs SET status='interrupted', step='interrupted', "
+                "updated_at=CURRENT_TIMESTAMP "
                 "WHERE status IN ('queued','running','cancelling')"
             )
+        )
 
-    # Perform the shared schema/index bootstrap only after this connection has
-    # committed and closed. This avoids nested SQLite writers during Gunicorn boot.
-    from dashboard_store import DashboardStore
-    DashboardStore(DB_PATH).ensure_indexes()
 
 
 def db_insert_job(job_id: str, topic: str, params: dict) -> None:
