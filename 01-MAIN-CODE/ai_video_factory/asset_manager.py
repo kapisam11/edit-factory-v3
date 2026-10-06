@@ -113,26 +113,36 @@ class AssetManager:
         return None
 
 
+def _configured_runtime_digest(name: str) -> str:
+    return os.environ.get(
+        "AIVF_RUNTIME_ASSET_SHA256_" + name.upper(),
+        "",
+    ).strip().lower()
+
+
 @dataclass(frozen=True)
 class RuntimeAssetSpec:
     name: str
     url: str
     relative_path: str
-    sha256: str = ""
+    sha256: str
 
 
-# Heavy model files stay external to the Python wheel. They are downloaded once,
+# Heavy model files stay external to the Python wheel. They are downloaded only
+# in explicit development/test mode and must always have a SHA-256 digest.
 # checked when a digest is supplied, and reused by all production runs.
 RUNTIME_ASSETS = (
     RuntimeAssetSpec(
         "mobilenet_ssd_config",
         "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/bb17b6c3eef36d80be441ae8e5339be66e8e3b7a/deploy.prototxt",
         ".models/mobilenet_ssd/deploy.prototxt",
+        sha256=_configured_runtime_digest("mobilenet_ssd_config"),
     ),
     RuntimeAssetSpec(
         "mobilenet_ssd_weights",
         "https://github.com/chuanqi305/MobileNet-SSD/raw/bb17b6c3eef36d80be441ae8e5339be66e8e3b7a/mobilenet_iter_73000.caffemodel",
         ".models/mobilenet_ssd/mobilenet.caffemodel",
+        sha256=_configured_runtime_digest("mobilenet_ssd_weights"),
     ),
 )
 
@@ -154,8 +164,7 @@ def _sha256(path: Path) -> str:
 
 
 def _expected_sha256(spec: RuntimeAssetSpec) -> str:
-    env_name = "AIVF_RUNTIME_ASSET_SHA256_" + spec.name.upper()
-    return str(spec.sha256 or os.environ.get(env_name, "")).strip().lower()
+    return str(spec.sha256).strip().lower()
 
 
 def verify_runtime_asset(spec: RuntimeAssetSpec, root: Optional[Path] = None) -> bool:
