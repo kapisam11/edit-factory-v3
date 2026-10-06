@@ -198,6 +198,7 @@ def redact_log_message(message: object, *, max_length: int = 4000) -> str:
         r"(?i)(\b(?:api[_ -]?key|token|secret|password|access[_ -]?token|refresh[_ -]?token)\s*[:=]\s*)[^\s,;]+",
         r"(?i)(https?://)[^\s/@:]+:[^\s/@]+(@)",
         r"(?i)([?&](?:api[_-]?key|token|access[_-]?token|refresh[_-]?token|password|secret)=)[^&#\s]+",
+        r"(?i)(authorization:\s*basic\s+)[^\s,;]+",
     )
     replacements = {
         patterns[2]: r"\1<REDACTED>:<REDACTED>\2",
