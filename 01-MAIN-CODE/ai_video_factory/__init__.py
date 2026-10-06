@@ -24,6 +24,13 @@ class _LazyVideoDirector:
     @classmethod
     def _class(cls):
         if cls._legacy_class is None:
+            import warnings
+            warnings.warn(
+                "VideoDirector is a legacy compatibility API; prefer run_v3_pipeline(). "
+                "It remains supported for the current 3.x compatibility window.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
             from .director import VideoDirector as legacy_class
 
             class VideoDirector(legacy_class):
