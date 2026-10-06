@@ -712,6 +712,11 @@ class DashboardStore:
                 (job_id, max_attempts),
             ).rowcount)
             if changed:
+                try:
+                    from ai_video_factory.observability_metrics import GLOBAL_METRICS
+                    GLOBAL_METRICS.increment("jobs_retried_total")
+                except Exception:
+                    pass
                 self._record_event(
                     conn,
                     job_id,
