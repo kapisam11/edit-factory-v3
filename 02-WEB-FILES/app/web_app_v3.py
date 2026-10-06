@@ -710,7 +710,28 @@ def _run_job_worker_impl(
                 if attempt_id and lease_token and publish_dir:
                     published = publish_workspace(pkg_dir, Path(publish_dir), result_payload.get("final_video"))
                     result_payload["final_video"] = published
-                    with open(Path(publish_dir) / "v3_job_result.json", "w", encoding="utf-8") as handle:
+
+                    published_dir = Path(publish_dir)
+                    from ai_video_factory.production_assurance import build_artifact_manifest
+                    previous_manifest_path = published_dir / "artifact_manifest.json"
+                    try:
+                        previous_manifest = json.loads(previous_manifest_path.read_text(encoding="utf-8"))
+                    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                        previous_manifest = {}
+                    required_files = previous_manifest.get("required_files") or []
+                    final_manifest = build_artifact_manifest(
+                        published_dir,
+                        required_files=required_files,
+                        include_hashes=True,
+                    )
+                    temporary_manifest = published_dir / ".artifact_manifest.json.partial"
+                    temporary_manifest.write_text(
+                        json.dumps(final_manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+                        encoding="utf-8",
+                    )
+                    os.replace(temporary_manifest, previous_manifest_path)
+
+                    with open(published_dir / "v3_job_result.json", "w", encoding="utf-8") as handle:
                         json.dump(result_payload, handle, indent=2, ensure_ascii=False)
                 if update(status="done", step="Complete (V3)", pkg_dir=str(publish_dir or pkg_dir)):
                     log("INFO", "V3 job complete!")
