@@ -7,6 +7,7 @@ timeouts, bounded write retries, and performance indexes.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -190,7 +191,11 @@ class DashboardStore:
                 if used_units + int(resource_units) > int(resource_capacity_units or 100):
                     raise JobAdmissionError("resource capacity reached")
             class_name = str(resource_class or "STANDARD").strip().upper()
-            class_caps = {"LIGHT": 4, "STANDARD": 2, "HEAVY": 1}
+            class_caps = {
+                "LIGHT": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_LIGHT_CAPACITY", "4"))),
+                "STANDARD": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_STANDARD_CAPACITY", "2"))),
+                "HEAVY": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_HEAVY_CAPACITY", "1"))),
+            }
             class_limit = class_caps.get(class_name)
             if class_limit is not None:
                 active_class = int(conn.execute(
