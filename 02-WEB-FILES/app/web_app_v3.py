@@ -22,13 +22,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory, session
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 from ai_video_factory.render_engine import run_ffprobe
-from ai_video_factory.production_guardrails import sha256_file
+from ai_video_factory.production_guardrails import GuardrailError, sha256_file
 from ai_video_factory.media_limits import DEFAULT_MEDIA_LIMITS, estimate_resource_budget, validate_input_file
 from ai_video_factory.error_codes import classify_exception
 from ai_video_factory.runtime_capabilities import capabilities
@@ -970,8 +970,10 @@ def settings():
         try:
             for key, value in data.items():
                 set_setting(key, value)
+            from dashboard_store import DashboardStore
+            store = DashboardStore(DB_PATH)
             principal_for_audit = str(session.get("aivf_principal") or request.remote_addr or "unknown")
-            dashboard_store.record_audit_event(
+            store.record_audit_event(
                 principal_for_audit,
                 "SETTINGS_CHANGED",
                 "settings",
@@ -1179,6 +1181,8 @@ def create_job():
                 return jsonify({"error": "Server disk space is too low after upload"}), 503
         except (OSError, ValueError):
             return jsonify({"error": "Upload is too large or is not a valid supported video stream"}), 400
+        except GuardrailError as exc:
+            return jsonify({"error": str(exc)}), 400
         params["raw_video"] = str(upload_path)
 
     request_hash = ""
@@ -1362,11 +1366,12 @@ def create_job():
         raise
 
     try:
-        dashboard_store.record_audit_event(
+        from dashboard_store import DashboardStore
+        DashboardStore(DB_PATH).record_audit_event(
             principal,
             "JOB_CREATED",
             "job",
-            resource_id=job_id if idem_key or created else job_id,
+            resource_id=job_id,
             metadata=json.dumps({"workflow": workflow, "idempotent": bool(idem_key)}),
         )
     except Exception:
@@ -1416,7 +1421,8 @@ def cancel_job(job_id):
     result = cancel_process(job_id)
     try:
         from resource_governor import principal_for_request
-        dashboard_store.record_audit_event(
+        from dashboard_store import DashboardStore
+        DashboardStore(DB_PATH).record_audit_event(
             principal_for_request(request),
             "JOB_CANCEL_REQUESTED",
             "job",
