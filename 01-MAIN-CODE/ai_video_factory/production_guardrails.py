@@ -193,7 +193,12 @@ def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None =
 def redact_log_message(message: object, *, max_length: int = 4000) -> str:
     """Redact common credential-bearing values before they reach logs."""
     value = str(message or "")
-    patterns = (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"(?i)(\b(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+")
+    patterns = (
+        r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
+        r"(?i)(\b(?:api[_ -]?key|token|secret|password|access[_ -]?token|refresh[_ -]?token)\s*[:=]\s*)[^\s,;]+",
+        r"(?i)(https?://[^\s/@:]+:)[^\s/@]+(@)",
+        r"(?i)([?&](?:api[_-]?key|token|access[_-]?token|refresh[_-]?token|password|secret)=)[^&#\s]+",
+    )
     for pattern in patterns:
         value = re.sub(pattern, r"\1<REDACTED>", value)
     return value[:max(256, int(max_length))]
