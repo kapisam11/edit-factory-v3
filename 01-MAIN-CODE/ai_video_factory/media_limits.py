@@ -74,6 +74,22 @@ def _fps(stream: dict[str, Any]) -> float:
     return value if math.isfinite(value) else 0.0
 
 
+def _container_signature_ok(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(16)
+    except OSError:
+        return False
+    if suffix in {".mp4", ".mov"}:
+        return len(header) >= 8 and header[4:8] == b"ftyp"
+    if suffix == ".avi":
+        return len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"AVI "
+    if suffix in {".mkv", ".webm"}:
+        return len(header) >= 4 and header[:4] == bytes((0x1A, 0x45, 0xDF, 0xA3))
+    return False
+
+
 def probe_media_contract(path: str | Path, limits: MediaLimits | None = None) -> dict[str, Any]:
     limits = limits or MediaLimits.from_environment()
     target = Path(path)
@@ -86,6 +102,8 @@ def probe_media_contract(path: str | Path, limits: MediaLimits | None = None) ->
         raise ValueError(
             f"media input exceeds {limits.max_input_bytes} bytes: {size}"
         )
+    if not _container_signature_ok(target):
+        raise ValueError(f"media input failed container signature validation: {target.suffix.lower()}")
     result = run_ffprobe(
         [
             "ffprobe", "-v", "error",
@@ -150,6 +168,41 @@ def probe_media_contract(path: str | Path, limits: MediaLimits | None = None) ->
     }
 
 
+def estimate_resource_budget(
+    summary: dict[str, Any],
+    *,
+    target_seconds: float = 30.0,
+    limits: MediaLimits | None = None,
+) -> dict[str, float | int]:
+    """Estimate deterministic CPU, memory and disk reservation for a media job."""
+    policy = limits or MediaLimits.from_environment()
+    size_bytes = max(1, int(summary.get("size_bytes") or 0))
+    width = max(1, int(summary.get("width") or 0))
+    height = max(1, int(summary.get("height") or 0))
+    fps = max(1.0, float(summary.get("fps") or 0.0))
+    duration = max(1.0, float(target_seconds))
+    pixel_factor = (width * height) / float(1920 * 1080)
+    cpu_weight = min(4.0, max(0.5, 0.5 * pixel_factor * (fps / 30.0)))
+    memory_bytes = int(
+        min(
+            8 * 1024**3,
+            max(512 * 1024**2, 512 * 1024**2 * pixel_factor),
+        )
+    )
+    estimated_output = max(
+        size_bytes * 2,
+        int(duration * 8 * 1024 * 1024),
+        256 * 1024**2,
+    )
+    reserved_bytes = int(min(policy.max_output_bytes, estimated_output))
+    return {
+        "reserved_bytes": reserved_bytes,
+        "cpu_weight": round(cpu_weight, 3),
+        "memory_bytes": memory_bytes,
+        "estimated_job_seconds": int(min(policy.max_job_seconds, max(30, duration))),
+    }
+
+
 def validate_render_output(
     path: str | Path,
     *,
@@ -164,7 +217,18 @@ def validate_render_output(
         raise ValueError(
             f"render output exceeds {limits.max_output_bytes} bytes: {target.stat().st_size}"
         )
-    report = probe_media_contract(target, limits)
+    output_limits = MediaLimits(
+        max_input_bytes=limits.max_output_bytes,
+        max_duration_seconds=limits.max_duration_seconds,
+        max_width=limits.max_width,
+        max_height=limits.max_height,
+        max_fps=limits.max_fps,
+        max_audio_channels=limits.max_audio_channels,
+        max_output_bytes=limits.max_output_bytes,
+        max_job_seconds=limits.max_job_seconds,
+        min_free_disk_bytes=limits.min_free_disk_bytes,
+    )
+    report = probe_media_contract(target, output_limits)
     if expected_duration_seconds is not None:
         duration = float(report["duration_seconds"])
         tolerance = max(0.25, float(expected_duration_seconds) * 0.02)
@@ -175,4 +239,4 @@ def validate_render_output(
     return report
 
 
-__all__ = ["MediaLimits", "probe_media_contract", "validate_render_output"]
+__all__ = ["MediaLimits", "estimate_resource_budget", "probe_media_contract", "validate_render_output"]
