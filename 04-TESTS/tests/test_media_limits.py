@@ -74,3 +74,21 @@ def test_output_frame_limit_rejects_render_bomb(tmp_path):
     payload["streams"][0]["nb_frames"] = 200
     with pytest.raises(Exception, match="frame count"):
         validate_output_probe(path, payload, limits=MediaLimits(max_frames=100))
+
+
+def test_output_codec_allowlist(tmp_path):
+    path = tmp_path / "output.mp4"
+    path.write_bytes(b"x")
+    payload = _payload()
+    payload["streams"][0]["codec_name"] = "vp8"
+    with pytest.raises(Exception, match="video codec"):
+        validate_output_probe(path, payload)
+
+
+def test_output_bitrate_limit(tmp_path):
+    path = tmp_path / "output.mp4"
+    path.write_bytes(b"x")
+    payload = _payload()
+    payload["format"]["bit_rate"] = "200000000"
+    with pytest.raises(Exception, match="bitrate"):
+        validate_output_probe(path, payload)
