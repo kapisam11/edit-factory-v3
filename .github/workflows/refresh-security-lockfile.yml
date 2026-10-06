@@ -1,0 +1,30 @@
+name: Refresh security lockfile
+
+on:
+  push:
+    branches: [feat/v3-production-hardening-review]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: ${{ !startsWith(github.event.head_commit.message, 'ci: refresh security lockfile') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Refresh vulnerable transitive packages
+        run: uv lock --upgrade-package multidict --upgrade-package werkzeug
+      - name: Commit refreshed lockfile
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git diff --quiet -- uv.lock; then
+            echo 'Lockfile already current'
+            exit 0
+          fi
+          git add uv.lock
+          git commit -m 'ci: refresh security lockfile'
+          git push
