@@ -221,10 +221,11 @@ def init_db() -> None:
                 "UPDATE jobs SET status='interrupted', step='interrupted', updated_at=CURRENT_TIMESTAMP "
                 "WHERE status IN ('queued','running','cancelling')"
             )
-        # Centralize schema/index bootstrap at application startup. Request handlers
-        # must never discover or mutate the production schema while admitting jobs.
-        from dashboard_store import DashboardStore
-        DashboardStore(DB_PATH).ensure_indexes()
+
+    # Perform the shared schema/index bootstrap only after this connection has
+    # committed and closed. This avoids nested SQLite writers during Gunicorn boot.
+    from dashboard_store import DashboardStore
+    DashboardStore(DB_PATH).ensure_indexes()
 
 
 def db_insert_job(job_id: str, topic: str, params: dict) -> None:
