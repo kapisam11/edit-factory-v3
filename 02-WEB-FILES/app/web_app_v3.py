@@ -700,6 +700,8 @@ def _run_job_worker_impl(
                 if attempt_id and lease_token and publish_dir:
                     published = publish_workspace(pkg_dir, Path(publish_dir), result_payload.get("final_video"))
                     result_payload["final_video"] = published
+                    with open(Path(publish_dir) / "v3_job_result.json", "w", encoding="utf-8") as handle:
+                        json.dump(result_payload, handle, indent=2, ensure_ascii=False)
                 if update(status="done", step="Complete (V3)", pkg_dir=str(publish_dir or pkg_dir)):
                     log("INFO", "V3 job complete!")
                     for warning in result_payload["warnings"]:
@@ -1274,7 +1276,10 @@ def create_job():
                 resource_units=params.get("_resource_budget", {}).get("resource_units"),
                 reserved_disk_bytes=params.get("_resource_budget", {}).get("reserved_disk_bytes"),
                 reserved_memory_bytes=params.get("_resource_budget", {}).get("reserved_memory_bytes"),
-                available_disk_bytes=shutil.disk_usage(OUTPUT_FOLDER).free,
+                available_disk_bytes=max(
+                    0,
+                    shutil.disk_usage(OUTPUT_FOLDER).free - DEFAULT_MEDIA_LIMITS.min_free_disk_bytes,
+                ),
                 resource_capacity_units=DEFAULT_MEDIA_LIMITS.resource_capacity_units,
                 max_reserved_memory_bytes=DEFAULT_MEDIA_LIMITS.max_reserved_memory_bytes,
             )
@@ -1294,7 +1299,10 @@ def create_job():
                 resource_units=params.get("_resource_budget", {}).get("resource_units"),
                 reserved_disk_bytes=params.get("_resource_budget", {}).get("reserved_disk_bytes"),
                 reserved_memory_bytes=params.get("_resource_budget", {}).get("reserved_memory_bytes"),
-                available_disk_bytes=shutil.disk_usage(OUTPUT_FOLDER).free,
+                available_disk_bytes=max(
+                    0,
+                    shutil.disk_usage(OUTPUT_FOLDER).free - DEFAULT_MEDIA_LIMITS.min_free_disk_bytes,
+                ),
                 resource_capacity_units=DEFAULT_MEDIA_LIMITS.resource_capacity_units,
                 max_reserved_memory_bytes=DEFAULT_MEDIA_LIMITS.max_reserved_memory_bytes,
             )
