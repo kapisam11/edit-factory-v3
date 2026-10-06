@@ -113,18 +113,22 @@ def run_job(
     params["workflow"] = workflow
     skip_stages = _skip_stages_for_workflow(workflow)
     try:
+        worker_kwargs = {"skip_stages": skip_stages}
+        if attempt_id is not None:
+            worker_kwargs.update({
+                "attempt_id": attempt_id,
+                "lease_token": lease_token,
+                "worker_id": worker_id,
+                "workspace_dir": workspace_dir,
+                "publish_dir": publish_dir,
+            })
         web_app_v3._run_job_worker_impl(
             job_id,
             params,
             secrets,
             output_root,
             db_path,
-            skip_stages=skip_stages,
-            attempt_id=attempt_id,
-            lease_token=lease_token,
-            worker_id=worker_id,
-            workspace_dir=workspace_dir,
-            publish_dir=publish_dir,
+            **worker_kwargs,
         )
     finally:
         heartbeat_stop.set()
