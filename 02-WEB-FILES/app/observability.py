@@ -45,11 +45,11 @@ def install_observability(app: Flask) -> None:
     def _update_operational_gauges() -> None:
         try:
             from dashboard_store import DashboardStore
-            store = DashboardStore(str(app.config.get("AIVF_DB_PATH") or os.environ.get("AIVF_DB_PATH", "state/jobs.db")))
+            state_dir = str(app.config.get("AIVF_STATE_DIR") or os.environ.get("AIVF_STATE_DIR", "state"))
+            store = DashboardStore(str(Path(state_dir) / "jobs.db"))
             with store.connect() as conn:
                 queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
                 running = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0])
-            state_dir = str(app.config.get("AIVF_STATE_DIR") or os.environ.get("AIVF_STATE_DIR", "state"))
             free_disk = float(os.statvfs(state_dir).f_bavail * os.statvfs(state_dir).f_frsize)
             GLOBAL_METRICS.set_gauge("queue_depth", queued)
             GLOBAL_METRICS.set_gauge("jobs_running", running)
