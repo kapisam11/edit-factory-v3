@@ -1492,7 +1492,6 @@ def create_job():
             cache.delete("jobs:list")
         except Exception:
             logger.debug("Unable to invalidate dashboard job-list cache", exc_info=True)
-    _runtime_secrets[job_id] = secrets
     _pump_queued_jobs()
     return jsonify({"job_id": job_id, "status": "queued"}), 202
 
