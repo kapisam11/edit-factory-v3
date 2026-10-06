@@ -23,6 +23,22 @@ def migrate(conn: sqlite3.Connection) -> int:
         for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
     }
 
+    # Bootstrap the legacy base table before any ALTER TABLE operations.
+    # This is required for clean databases, including first boot in CI/containers.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            topic TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            step TEXT NOT NULL DEFAULT 'waiting',
+            params TEXT NOT NULL DEFAULT '{}',
+            pkg_dir TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # Version 1: lifecycle/recovery columns.
     if 1 not in applied:
         columns = _table_columns(conn)
