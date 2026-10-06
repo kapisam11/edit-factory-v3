@@ -718,34 +718,59 @@ def _invalidate_package_cache() -> None:
         _package_cache = None
 
 
-def _watch_job_process(job_id: str, process: multiprocessing.Process) -> None:
-    process.join()
-    exitcode = process.exitcode
+def _watch_job_process(
+    job_id: str,
+    process: multiprocessing.Process,
+    attempt_id: str | None = None,
+    lease_token: str | None = None,
+) -> None:
+    from ai_video_factory.media_limits import DEFAULT_MEDIA_LIMITS
+    from ai_video_factory.production_guardrails import terminate_process_tree
 
-    # A hard worker crash can bypass the worker's exception handler entirely.
-    # Never leave a job permanently stuck in RUNNING/CANCELLING.
     try:
-        row = db_get_job(job_id)
-        if row and row.get("status") in {"queued", "running", "cancelling"}:
+        process.join(timeout=max(30, int(DEFAULT_MEDIA_LIMITS.max_job_seconds) + 30))
+        if process.is_alive():
+            terminate_process_tree(process, grace_seconds=2.0)
+            process.join(timeout=5)
+            exitcode = process.exitcode
+            reason = (
+                f"Worker exceeded hard job runtime limit of {DEFAULT_MEDIA_LIMITS.max_job_seconds}s"
+            )
+        else:
+            exitcode = process.exitcode
             reason = (
                 f"Worker process exited unexpectedly with code {exitcode}"
                 if exitcode not in (0, None)
                 else "Worker process exited before reaching a terminal job state"
             )
-            db_update_job(job_id, status="interrupted", step="interrupted", error=reason)
-            db_append_log(job_id, "ERROR", reason)
-    except Exception:
-        logger.exception("Could not reconcile worker exit for %s", job_id)
 
-    with _active_processes_lock:
-        _active_processes.pop(job_id, None)
-        row = db_get_job(job_id)
-        if row and row.get("status") in {"error", "interrupted"}:
-            _retain_runtime_secrets_for_retry(job_id)
-        else:
-            _runtime_secret_expiry.pop(job_id, None)
-            _runtime_secrets.pop(job_id, None)
-    _invalidate_package_cache()
+        try:
+            store = globals().get("dashboard_store")
+            if attempt_id and lease_token and store is not None:
+                row = store.get_job(job_id)
+                if row and row.get("status") in {"queued", "running", "cancelling"}:
+                    if store.update_job_if_owned(
+                        job_id, attempt_id, lease_token,
+                        status="interrupted", step="interrupted", error=reason,
+                    ):
+                        store.append_log(job_id, "ERROR", reason)
+            else:
+                row = db_get_job(job_id)
+                if row and row.get("status") in {"queued", "running", "cancelling"}:
+                    db_update_job(job_id, status="interrupted", step="interrupted", error=reason)
+                    db_append_log(job_id, "ERROR", reason)
+        except Exception:
+            logger.exception("Could not reconcile worker exit for %s", job_id)
+    finally:
+        with _active_processes_lock:
+            _active_processes.pop(job_id, None)
+            row = db_get_job(job_id)
+            if row and row.get("status") in {"error", "interrupted"}:
+                _retain_runtime_secrets_for_retry(job_id)
+            else:
+                _runtime_secret_expiry.pop(job_id, None)
+                _runtime_secrets.pop(job_id, None)
+        _invalidate_package_cache()
 
 
 def _running_count() -> int:
