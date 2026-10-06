@@ -1,6 +1,7 @@
 """AI Video Factory v3 — emotion-first automated short video production."""
 import logging
 import os
+import warnings
 
 
 def configure_logging(level=logging.INFO):
@@ -22,6 +23,11 @@ class _LazyVideoDirector:
 
     @classmethod
     def _class(cls):
+        warnings.warn(
+            "VideoDirector is deprecated; migrate to run_v3_pipeline by version 4.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if cls._legacy_class is None:
             from .director import VideoDirector as legacy_class
 
