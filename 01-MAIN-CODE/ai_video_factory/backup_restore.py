@@ -90,8 +90,7 @@ def create_backup(
             "files": files,
         }
         (root / "backup-manifest.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "
-",
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
 
@@ -152,8 +151,7 @@ def verify_backup(
             marker = Path(marker_path)
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(
-                json.dumps({"backup": str(archive_path), "verified_files": verified}, sort_keys=True) + "
-",
+                json.dumps({"backup": str(archive_path), "verified_files": verified}, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
         return result
