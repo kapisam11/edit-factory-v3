@@ -18,6 +18,28 @@ NON_RETRYABLE_TEXT = (
     "invalid credentials",
 )
 
+
+
+NON_RETRYABLE_CODES = frozenset({
+    "input_invalid",
+    "input_too_large",
+    "media_unsupported",
+    "rights_failed",
+    "config_invalid",
+    "validation_failed",
+})
+
+
+def is_retryable_code(error_code: str | None) -> bool | None:
+    if not error_code:
+        return None
+    normalized = str(error_code).strip().lower()
+    if normalized in NON_RETRYABLE_CODES:
+        return False
+    if normalized in {"disk_full", "tool_timeout", "render_failed"}:
+        return True
+    return None
+
 def is_retryable_error(error: Exception) -> bool:
     if isinstance(error, (TimeoutError, ConnectionError)):
         return True
@@ -68,4 +90,4 @@ def is_stale(updated_at_epoch: float, *, now: float | None = None, stale_after_s
     current = time.time() if now is None else float(now)
     return current - float(updated_at_epoch) >= float(stale_after_seconds)
 
-__all__ = ["is_retryable_error","classify_failure","backoff_seconds","retry_after","idempotency_key","retry_deadline_exceeded","is_stale"]
+__all__ = ["is_retryable_error","is_retryable_code","classify_failure","backoff_seconds","retry_after","idempotency_key","retry_deadline_exceeded","is_stale"]
