@@ -201,6 +201,9 @@ def _ranked_thumbnail(package_dir: str, variants: Sequence[str], topic: str) -> 
 
 
 def run_complete_factory(input_video: Optional[str], topic: str, package_dir: str, *, target_seconds: float = 45.0, platforms: Sequence[str] = tuple(PLATFORM_LAYOUTS), clip_count: Optional[int] = None, experiment_history_path: Optional[str] = None, auto_research: bool = True, publish_youtube: bool = False, youtube_options: Optional[Mapping[str, Any]] = None, model_key: Optional[str] = None, skip_qc: bool = False) -> Dict[str, Any]:
+    from . import bootstrap_runtime
+    bootstrap_runtime()
+
     root = Path(package_dir)
     root.mkdir(parents=True, exist_ok=True)
     checkpoints = CheckpointStore(str(root / "checkpoints.json"))
