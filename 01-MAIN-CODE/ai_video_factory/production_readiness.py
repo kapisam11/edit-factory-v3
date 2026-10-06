@@ -114,6 +114,35 @@ def report_dict(root:str|Path=".")->dict:
     }}
 
 
+def release_check(root: str | Path = ".") -> dict:
+    """Strict release gate for production deployment decisions."""
+    data = report_dict(root)
+    blockers = [
+        item for item in data["items"]
+        if item["status"] in {"BLOCKED", "CI", "ENVIRONMENT", "MANUAL", "PROCESS"}
+    ]
+    return {
+        "ok": not blockers,
+        "blockers": blockers,
+        "report": data,
+    }
+
+
+def release_check_main(argv: list[str] | None = None) -> int:
+    args = list(argv or sys.argv[1:])
+    root = args[0] if args and not args[0].startswith("-") else "."
+    result = release_check(root)
+    if "--json" in args:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(render_markdown(result["report"]))
+        if result["blockers"]:
+            print("\nRelease gate blockers:")
+            for item in result["blockers"]:
+                print(f"- {item['number']}: {item['name']} [{item['status']}]")
+    return 0 if result["ok"] else 1
+
+
 def render_markdown(data:dict)->str:
     lines=["# Edit Factory v3 — 34-point production readiness","","| # | Item | Status | Evidence | Detail |","|---:|---|---|---|---|"]
     for item in data["items"]:
@@ -139,4 +168,4 @@ def main(argv:list[str]|None=None)->int:
 if __name__=="__main__":
     raise SystemExit(main())
 
-__all__=["ReadinessItem","report_dict","render_markdown","run_readiness"]
+__all__=["ReadinessItem","report_dict","render_markdown","release_check","release_check_main","run_readiness"]
