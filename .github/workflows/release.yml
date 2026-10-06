@@ -22,6 +22,11 @@ on:
         required: false
         default: false
         type: boolean
+      restore_drill:
+        description: "Run a restore drill against the verified backup on the target host"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 
@@ -261,6 +266,19 @@ jobs:
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh"
 
+      - name: Run target-host restore drill
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.restore_drill == true }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          backup_archive="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" "find "$DEPLOY_PATH" -maxdepth 1 -name 'aivf-backup*.tar.gz' -type f -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-" )"
+          test -n "$backup_archive"
+          scp "$DEPLOY_USER@$DEPLOY_HOST:$backup_archive" "$RUNNER_TEMP/aivf-backup-restore.tar.gz"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/restore_smoke.sh $(printf %q "$backup_archive")"
       - name: Roll back after deployment smoke failure
         if: ${{ failure() && steps.previous.outputs.image != '' }}
         env:
