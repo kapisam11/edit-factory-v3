@@ -774,6 +774,7 @@ def _watch_job_process(
     process: multiprocessing.Process,
     attempt_id: str | None = None,
     lease_token: str | None = None,
+    worker_id: str | None = None,
 ) -> None:
     from ai_video_factory.media_limits import DEFAULT_MEDIA_LIMITS
     from ai_video_factory.production_guardrails import terminate_process_tree
@@ -833,6 +834,12 @@ def _watch_job_process(
                 else:
                     _runtime_secret_expiry.pop(job_id, None)
                     _runtime_secrets.pop(job_id, None)
+        if worker_id:
+            try:
+                from dashboard_store import DashboardStore
+                DashboardStore(DB_PATH).set_worker_status(worker_id, "idle")
+            except Exception:
+                logger.debug("Unable to update worker registry after exit", exc_info=True)
         _invalidate_package_cache()
         try:
             _pump_queued_jobs()
@@ -894,10 +901,15 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
                 )
                 shutil.rmtree(workspace_root, ignore_errors=True)
                 raise
+            store.register_worker(
+                worker_id,
+                process.pid,
+                capabilities={"workflow": str(params.get("workflow", "default"))},
+            )
             _active_processes[job_id] = process
             threading.Thread(
                 target=_watch_job_process,
-                args=(job_id, process, attempt_id, lease_token),
+                args=(job_id, process, attempt_id, lease_token, worker_id),
                 name=f"aivf-reaper-{job_id}",
                 daemon=True,
             ).start()
