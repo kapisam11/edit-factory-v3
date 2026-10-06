@@ -162,6 +162,8 @@ class DashboardStore:
             """)
             migrate(conn)
             self._ensure_job_columns(conn)
+            from db_migrations import apply_schema_migrations
+            apply_schema_migrations(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
                 BEFORE UPDATE OF status ON jobs
