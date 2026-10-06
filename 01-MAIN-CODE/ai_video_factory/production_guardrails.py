@@ -196,11 +196,14 @@ def redact_log_message(message: object, *, max_length: int = 4000) -> str:
     patterns = (
         r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
         r"(?i)(\b(?:api[_ -]?key|token|secret|password|access[_ -]?token|refresh[_ -]?token)\s*[:=]\s*)[^\s,;]+",
-        r"(?i)(https?://[^\s/@:]+:)[^\s/@]+(@)",
+        r"(?i)(https?://)[^\s/@:]+:[^\s/@]+(@)",
         r"(?i)([?&](?:api[_-]?key|token|access[_-]?token|refresh[_-]?token|password|secret)=)[^&#\s]+",
     )
+    replacements = {
+        patterns[2]: r"\1<REDACTED>:<REDACTED>\2",
+    }
     for pattern in patterns:
-        value = re.sub(pattern, r"\1<REDACTED>", value)
+        value = re.sub(pattern, replacements.get(pattern, r"\1<REDACTED>"), value)
     return value[:max(256, int(max_length))]
 
 class SecretRedactionFilter(logging.Filter):
