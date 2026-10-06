@@ -473,6 +473,9 @@ class DashboardStore:
         def write(conn: sqlite3.Connection) -> tuple[str, bool]:
             conn.commit()
             conn.execute("BEGIN IMMEDIATE")
+            self._ensure_job_columns(conn)
+            from db_migrations import apply_schema_migrations
+            apply_schema_migrations(conn)
             existing = conn.execute(
                 "SELECT job_id, request_hash FROM idempotency_keys WHERE principal=? AND idem_key=?",
                 (principal_value, key),
@@ -538,7 +541,7 @@ class DashboardStore:
         ).rowcount))
 
     def update_job(self, job_id: str, **kwargs: Any) -> int:
-        allowed = {"status", "step", "params", "pkg_dir", "error"}
+        allowed = {"status", "step", "params", "pkg_dir", "error", "error_code"}
         invalid = set(kwargs) - allowed
         if invalid:
             raise ValueError(f"Invalid job fields: {sorted(invalid)}")
