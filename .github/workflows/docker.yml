@@ -2,7 +2,7 @@ name: Docker
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/v3-production-hardening-review]
   pull_request:
 
 permissions:
