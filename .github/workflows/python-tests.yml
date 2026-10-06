@@ -2,7 +2,7 @@ name: Python package
 
 on:
   push:
-    branches: [ main, production-hardening-10-of-10, hardening-complete-2026-09-30 ]
+    branches: [ main, production-hardening-10-of-10, hardening-complete-2026-09-30, feat/v3-production-hardening-review ]
   pull_request:
     branches: [ main ]
 
