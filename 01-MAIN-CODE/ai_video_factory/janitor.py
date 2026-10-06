@@ -55,7 +55,8 @@ def cleanup_operational_state(
         cutoff = f"-{max(1, int(job_retention_days))} days"
         stats["old_jobs"] = int(conn.execute(
             "DELETE FROM jobs WHERE created_at < datetime('now', ?) "
-            "AND status IN ('done','cancelled')",
+            "AND status IN ('done','cancelled') "
+            "AND NOT EXISTS (SELECT 1 FROM job_artifacts WHERE job_artifacts.job_id = jobs.id)",
             (cutoff,),
         ).rowcount)
         conn.execute("ANALYZE")
