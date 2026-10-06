@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sqlite3
 import time
 import uuid
 from pathlib import Path
@@ -41,14 +42,37 @@ def install_observability(app: Flask) -> None:
         response.headers[REQUEST_ID_HEADER] = getattr(g, "request_id", "")
         return response
 
+    def _update_operational_gauges() -> None:
+        try:
+            from dashboard_store import DashboardStore
+            store = DashboardStore(str(app.config.get("AIVF_DB_PATH") or os.environ.get("AIVF_DB_PATH", "state/jobs.db")))
+            with store.connect() as conn:
+                queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
+                running = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0])
+            state_dir = str(app.config.get("AIVF_STATE_DIR") or os.environ.get("AIVF_STATE_DIR", "state"))
+            free_disk = float(os.statvfs(state_dir).f_bavail * os.statvfs(state_dir).f_frsize)
+            GLOBAL_METRICS.set_gauge("queue_depth", queued)
+            GLOBAL_METRICS.set_gauge("jobs_running", running)
+            GLOBAL_METRICS.set_gauge("disk_free_bytes", free_disk)
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            return
+
     @app.get("/metrics")
     def prometheus_metrics():
+        _update_operational_gauges()
         return Response(GLOBAL_METRICS.prometheus(), mimetype="text/plain; version=0.0.4")
 
     @app.get("/api/metrics")
     def metrics():
         snapshot = GLOBAL_METRICS.snapshot()
-        return jsonify({"counters": snapshot.counters, "timings_ms_avg": snapshot.timings_ms, "generated_at": snapshot.generated_at})
+        _update_operational_gauges()
+        snapshot = GLOBAL_METRICS.snapshot()
+        return jsonify({
+            "counters": snapshot.counters,
+            "timings_ms_avg": snapshot.timings_ms,
+            "timing_percentiles_ms": snapshot.timing_percentiles_ms,
+            "generated_at": snapshot.generated_at,
+        })
 
     @app.route("/readyz")
     def readyz():
