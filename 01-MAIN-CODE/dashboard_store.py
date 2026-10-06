@@ -676,6 +676,44 @@ class DashboardStore:
 
         return int(self.write(write))
 
+    def recover_nonterminal_jobs(self) -> int:
+        """Fence all jobs left non-terminal by a previous web-process crash."""
+        def write(conn: sqlite3.Connection) -> int:
+            rows = conn.execute(
+                "SELECT id, status, attempt_id FROM jobs "
+                "WHERE status IN ('queued','running','cancelling')"
+            ).fetchall()
+            changed = 0
+            for row in rows:
+                job_id = str(row["id"])
+                attempt_id = row["attempt_id"]
+                updated = conn.execute(
+                    "UPDATE jobs SET status='interrupted', step='interrupted', "
+                    "finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status IN ('queued','running','cancelling')",
+                    (job_id,),
+                ).rowcount
+                if not updated:
+                    continue
+                changed += int(updated)
+                if attempt_id:
+                    conn.execute(
+                        "UPDATE job_attempts SET status='interrupted', finished_at=CURRENT_TIMESTAMP "
+                        "WHERE id=? AND status='running'",
+                        (attempt_id,),
+                    )
+                self._record_event(
+                    conn,
+                    job_id,
+                    "JOB_RECOVERED",
+                    from_status=str(row["status"]),
+                    to_status="interrupted",
+                    details={"attempt_id": attempt_id},
+                )
+            return changed
+
+        return int(self.write(write))
+
     def get_job(self, job_id: str) -> Optional[dict]:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
