@@ -198,9 +198,21 @@ def validate_output_probe(path: str | Path, payload: Mapping[str, Any], *, limit
 @dataclass(frozen=True)
 class ResourceBudget:
     resource_units: int
+    resource_class: str
     reserved_disk_bytes: int
     reserved_memory_bytes: int
     estimated_job_seconds: int
+
+def classify_resource_class(summary: Mapping[str, Any]) -> str:
+    width = int(summary.get("width") or 0)
+    height = int(summary.get("height") or 0)
+    fps = float(summary.get("fps") or 0.0)
+    duration = float(summary.get("duration") or 0.0)
+    if width >= 3840 or height >= 2160 or fps > 60 or duration > 120:
+        return "HEAVY"
+    if width <= 1280 and height <= 720 and fps <= 60 and duration <= 30:
+        return "LIGHT"
+    return "STANDARD"
 
 def estimate_resource_budget(summary: Mapping[str, Any], *, input_size_bytes: int | None = None, limits: MediaLimits | None = None) -> ResourceBudget:
     policy = limits or DEFAULT_MEDIA_LIMITS
@@ -217,6 +229,13 @@ def estimate_resource_budget(summary: Mapping[str, Any], *, input_size_bytes: in
     output_estimate = max(256 * 1024**2, int(max(input_size * 2.0, duration * 8 * 1024 * 1024)))
     reserved_disk = min(policy.max_output_bytes + input_size, input_size + output_estimate)
     estimated_seconds = max(30, min(policy.max_job_seconds, int(math.ceil(duration * (1 + pixel_factor * fps_factor)))))
-    return ResourceBudget(units, reserved_disk, memory, estimated_seconds)
+    resource_class = classify_resource_class(summary)
+    return ResourceBudget(
+        resource_units=units,
+        resource_class=resource_class,
+        reserved_disk_bytes=reserved_disk,
+        reserved_memory_bytes=memory,
+        estimated_job_seconds=estimated_seconds,
+    )
 
-__all__ = ["DEFAULT_MEDIA_LIMITS","MediaLimits","ResourceBudget","estimate_resource_budget","probe_media_file","validate_input_file","validate_output_probe"]
+__all__ = ["DEFAULT_MEDIA_LIMITS","MediaLimits","ResourceBudget","classify_resource_class","estimate_resource_budget","probe_media_file","validate_input_file","validate_output_probe"]
