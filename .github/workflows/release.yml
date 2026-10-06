@@ -171,6 +171,20 @@ jobs:
           printf '%s' "$REGISTRY_TOKEN" | ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker login ${q_registry} -u ${q_registry_user} --password-stdin"
 
+      - name: Capture previous production image
+        id: previous
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          previous=$(ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml ps -q web | xargs -r docker inspect --format='{{.Config.Image}}' 2>/dev/null || true")
+          if test -n "$previous" && [[ "$previous" == *@sha256:* ]]; then
+            printf 'image=%s\n' "$previous" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Pull exact built image and restart service
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -204,6 +218,20 @@ jobs:
           set -euo pipefail
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh"
+
+      - name: Roll back after deployment smoke failure
+        if: ${{ failure() && steps.previous.outputs.image != '' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+        run: |
+          set -euo pipefail
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          printf -v q_previous_image '%q' "$PREVIOUS_IMAGE"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && docker pull ${q_previous_image} && AIVF_IMAGE=${q_previous_image} AIVF_COOKIE_SECURE=1 docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml up -d --no-build --remove-orphans"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS http://127.0.0.1:5000/api/health && exit 0; sleep 3; done; exit 1"
 
       - name: Run target-host cancellation/restart recovery smoke
         if: >-
