@@ -747,7 +747,7 @@ class DashboardStore:
 
         def write(conn: sqlite3.Connection) -> int:
             row = conn.execute(
-                "SELECT status, error, retry_count FROM jobs WHERE id=?", (job_id,)
+                "SELECT status, error, error_code, retry_count FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
             if row is None:
                 return 0
@@ -757,11 +757,15 @@ class DashboardStore:
             attempts = int(row["retry_count"] or 0)
             if attempts >= max_attempts:
                 raise JobRetryNotAllowed("maximum retry attempts reached")
-            if status == "error" and row["error"]:
-                if not is_retryable_error(RuntimeError(str(row["error"]))):
+            if status == "error":
+                from ai_video_factory.retry_policy import is_retryable_code
+                code_result = is_retryable_code(row["error_code"])
+                if code_result is False:
+                    raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
+                if code_result is None and row["error"] and not is_retryable_error(RuntimeError(str(row["error"]))):
                     raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
             changed = int(conn.execute(
-                "UPDATE jobs SET status='queued', step='waiting', error=NULL, pkg_dir=NULL, "
+                "UPDATE jobs SET status='queued', step='waiting', error=NULL, error_code=NULL, pkg_dir=NULL, "
                 "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
                 "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
                 (job_id, max_attempts),
