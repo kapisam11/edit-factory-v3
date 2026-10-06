@@ -1,0 +1,28 @@
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
+    image: ghcr.io/kapisam11/edit-factory-v3:latest
+    ports:
+      - "5000:5000"
+    environment:
+      AIVF_ENV: development
+      AIVF_ALLOW_RUNTIME_ASSET_NETWORK: "1"
+      AIVF_COOKIE_SECURE: "0"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-dev-only-secret}"
+      AIVF_DASHBOARD_TOKEN: "${AIVF_DASHBOARD_TOKEN:-dev-only-token}"
+      AIVF_STATE_DIR: /app/state
+      AIVF_UPLOAD_DIR: /app/uploads
+      AIVF_OUTPUT_DIR: /app/output
+    volumes:
+      - aivf-dev-output:/app/output
+      - aivf-dev-uploads:/app/uploads
+      - aivf-dev-knowledge:/app/knowledge_base_v3
+      - aivf-dev-state:/app/state
+
+volumes:
+  aivf-dev-output:
+  aivf-dev-uploads:
+  aivf-dev-knowledge:
+  aivf-dev-state:
