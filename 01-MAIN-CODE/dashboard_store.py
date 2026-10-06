@@ -757,10 +757,13 @@ class DashboardStore:
         resource_id: str | None = None,
         result: str = "success",
         metadata: str = "",
+        ip_address: str | None = None,
+        user_agent: str | None = None,
     ) -> None:
         self.write(lambda conn: conn.execute(
-            "INSERT INTO audit_events(principal, action, resource, resource_id, result, metadata) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO audit_events("
+            "principal, action, resource, resource_id, result, metadata, ip_address, user_agent"
+            ") VALUES (?,?,?,?,?,?,?,?)",
             (
                 str(principal).strip() or "unknown",
                 str(action).strip() or "unknown",
@@ -768,7 +771,25 @@ class DashboardStore:
                 resource_id,
                 str(result).strip() or "success",
                 str(metadata)[:10000],
+                str(ip_address or "")[:128],
+                str(user_agent or "")[:512],
             ),
+        ))
+
+    def record_artifact(
+        self,
+        job_id: str,
+        kind: str,
+        path: str,
+        *,
+        attempt_id: str | None = None,
+        sha256: str | None = None,
+        size_bytes: int | None = None,
+    ) -> None:
+        resolved_size = int(size_bytes if size_bytes is not None else Path(path).stat().st_size)
+        self.write(lambda conn: conn.execute(
+            "INSERT INTO job_artifacts(job_id, attempt_id, kind, path, sha256, size_bytes) VALUES (?,?,?,?,?,?)",
+            (str(job_id), attempt_id, str(kind)[:120], str(path), sha256, resolved_size),
         ))
 
     def append_log(self, job_id: str, level: str, message: str) -> None:
