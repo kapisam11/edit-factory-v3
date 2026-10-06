@@ -41,17 +41,18 @@ def install_observability(app: Flask) -> None:
         GLOBAL_METRICS.increment(f"http_response_total:{response.status_code}")
         GLOBAL_METRICS.observe_ms("http_request", (time.perf_counter() - started) * 1000.0)
         try:
-            with __import__("sqlite3").connect(str(app.config.get("AIVF_DB_PATH") or "")) as conn:
-                if app.config.get("AIVF_DB_PATH"):
+            import shutil
+            import sqlite3
+            db_path = str(app.config.get("AIVF_DB_PATH") or "")
+            if db_path:
+                with sqlite3.connect(db_path, timeout=2) as conn:
                     queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
                     running = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0])
                     GLOBAL_METRICS.set_gauge("queue_depth", queued)
                     GLOBAL_METRICS.set_gauge("jobs_running", running)
-            GLOBAL_METRICS.set_gauge(
-                "disk_free_bytes",
-                float(__import__("shutil").disk_usage(state_dir or Path(".")).free),
-            )
-        except (OSError, __import__("sqlite3").Error, TypeError, ValueError):
+            state_path = Path(app.config.get("AIVF_STATE_DIR") or os.environ.get("AIVF_STATE_DIR", ".")).resolve()
+            GLOBAL_METRICS.set_gauge("disk_free_bytes", float(shutil.disk_usage(state_path).free))
+        except (OSError, sqlite3.Error, TypeError, ValueError):
             pass
         response.headers[REQUEST_ID_HEADER] = getattr(g, "request_id", "")
         return response
