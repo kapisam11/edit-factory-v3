@@ -302,18 +302,12 @@ class DashboardStore:
                 if queued >= int(max_queued_jobs):
                     raise JobAdmissionError("queue capacity reached")
             if principal is not None and principal_limit is not None:
-                rows = conn.execute(
-                    "SELECT principal, params FROM jobs WHERE status IN ('queued','running')"
-                ).fetchall()
-                count = 0
-                for row in rows:
-                    try:
-                        payload = json.loads(row["params"] or "{}")
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                    row_principal = str(row["principal"] or "").strip()
-                    if row_principal == str(principal).strip() or str(payload.get("_principal", "")) == str(principal).strip():
-                        count += 1
+                count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM jobs WHERE principal=? AND status IN ('queued','running')",
+                        (principal_value,),
+                    ).fetchone()[0]
+                )
                 if count >= int(principal_limit):
                     raise JobAdmissionError("principal queue capacity reached")
             conn.execute(
@@ -605,7 +599,7 @@ class DashboardStore:
             if row is None or str(row["status"]) not in {"running", "cancelling"}:
                 return None
             attempt_number = int(row["current_attempt"] or 0) + 1
-        attempt_workspace = str(Path(workspace) / attempt_id)
+            attempt_workspace = str(Path(workspace) / attempt_id)
             conn.execute(
                 """
                 INSERT INTO job_attempts(
@@ -753,7 +747,7 @@ class DashboardStore:
             changed = int(
                 conn.execute(
                     "UPDATE jobs SET status='running', step='starting', "
-                    "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, "
+                    "worker_heartbeat_at=CURRENT_TIMESTAMP, error=NULL, error_code=NULL, "
                     "updated_at=CURRENT_TIMESTAMP "
                     "WHERE id=? AND status='queued'",
                     (job_id,),
@@ -791,7 +785,7 @@ class DashboardStore:
         expected_statuses: tuple[str, ...],
         **kwargs: Any,
     ) -> int:
-        allowed = {"status", "step", "params", "pkg_dir", "error"}
+        allowed = {"status", "step", "params", "pkg_dir", "error", "error_code"}
         invalid = set(kwargs) - allowed
         if invalid or not kwargs or not expected_statuses:
             raise ValueError("Invalid conditional job update")
