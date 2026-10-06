@@ -8,6 +8,7 @@ services:
       - "5000:5000"
     environment:
       AIVF_ENV: development
+      AIVF_AUTO_MIGRATE: "1"
       AIVF_ALLOW_RUNTIME_ASSET_NETWORK: "1"
       AIVF_COOKIE_SECURE: "0"
       FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-dev-only-secret}"
