@@ -74,6 +74,8 @@ class DashboardStore:
         }
         if not columns:
             return
+        if "error_code" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN error_code TEXT")
         if "retry_count" not in columns:
             try:
                 conn.execute(
@@ -128,6 +130,7 @@ class DashboardStore:
                     params TEXT NOT NULL DEFAULT '{}',
                     pkg_dir TEXT,
                     error TEXT,
+                    error_code TEXT,
                     retry_count INTEGER NOT NULL DEFAULT 0,
                     worker_heartbeat_at TEXT,
                     principal TEXT NOT NULL DEFAULT 'unknown',
@@ -228,6 +231,22 @@ class DashboardStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_job_attempts_job_status "
                 "ON job_attempts(job_id, status, attempt_number)"
+            )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    principal TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    resource TEXT NOT NULL,
+                    resource_id TEXT,
+                    result TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_events_principal_created "
+                "ON audit_events(principal, created_at)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_rate_limits_client_ip_ts "
@@ -662,7 +681,7 @@ class DashboardStore:
         lease_token: str,
         **kwargs: Any,
     ) -> bool:
-        allowed = {"status", "step", "params", "pkg_dir", "error", "workspace_dir"}
+        allowed = {"status", "step", "params", "pkg_dir", "error", "error_code", "workspace_dir"}
         invalid = set(kwargs) - allowed
         if invalid or not kwargs:
             raise ValueError(f"Invalid owned job update fields: {sorted(invalid)}")
@@ -775,6 +794,29 @@ class DashboardStore:
                 "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (bounded_limit,)
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def record_audit_event(
+        self,
+        principal: str,
+        action: str,
+        resource: str,
+        *,
+        resource_id: str | None = None,
+        result: str = "success",
+        metadata: str = "",
+    ) -> None:
+        self.write(lambda conn: conn.execute(
+            "INSERT INTO audit_events(principal, action, resource, resource_id, result, metadata) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                str(principal).strip() or "unknown",
+                str(action).strip() or "unknown",
+                str(resource).strip() or "unknown",
+                resource_id,
+                str(result).strip() or "success",
+                str(metadata)[:10000],
+            ),
+        ))
 
     def append_log(self, job_id: str, level: str, message: str) -> None:
         self.write(
