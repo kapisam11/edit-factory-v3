@@ -242,16 +242,44 @@ def detect_emotion(text: str) -> Dict[str, Any]:
     return {"emotion": best, "scores": scores, "confidence": round(scores.get(best, 0) / max(1, sum(scores.values())), 3)}
 
 
-def adaptive_pacing(intensity: Sequence[float], *, total_seconds: float = 45.0, min_shot: float = 0.45, max_shot: float = 4.0) -> List[float]:
-    """Allocate more time to low-intensity context and tighter cuts to high intensity."""
+def adaptive_pacing(
+    intensity: Sequence[float],
+    *,
+    total_seconds: float = 45.0,
+    min_shot: float = 0.45,
+    max_shot: float = 4.0,
+) -> List[float]:
+    """Allocate bounded shot durations whose sum stays equal to total_seconds."""
     values = [max(0.0, min(1.0, float(v))) for v in intensity] or [0.5]
-    weights = [1.25 - v for v in values]
-    minimum = min_shot * len(values)
-    remaining = max(0.0, total_seconds - minimum)
-    total_weight = sum(weights) or 1.0
-    durations = [min(max_shot, min_shot + remaining * (w / total_weight)) for w in weights]
-    scale = total_seconds / max(sum(durations), 0.01)
-    return [round(max(min_shot, min(max_shot, d * scale)), 3) for d in durations]
+    if min_shot <= 0 or max_shot < min_shot:
+        raise ValueError("invalid shot duration bounds")
+    target = float(total_seconds)
+    minimum_total = min_shot * len(values)
+    maximum_total = max_shot * len(values)
+    if not minimum_total <= target <= maximum_total:
+        raise ValueError("total_seconds cannot satisfy shot duration bounds")
+
+    weights = [max(0.01, 1.25 - value) for value in values]
+    low = 0.0
+    high = target / min(weights)
+    for _ in range(80):
+        scale = (low + high) / 2.0
+        durations = [min(max_shot, max(min_shot, weight * scale)) for weight in weights]
+        if sum(durations) < target:
+            low = scale
+        else:
+            high = scale
+    durations = [min(max_shot, max(min_shot, weight * high)) for weight in weights]
+    rounded = [round(duration, 3) for duration in durations]
+    delta = round(target - sum(rounded), 3)
+    for index in sorted(range(len(rounded)), key=lambda i: rounded[i], reverse=True):
+        candidate = round(rounded[index] + delta, 3)
+        if min_shot <= candidate <= max_shot:
+            rounded[index] = candidate
+            delta = round(target - sum(rounded), 3)
+            if abs(delta) < 0.001:
+                break
+    return rounded
 
 
 def generate_hook_candidates(topic: str, summary: Mapping[str, Any], *, count: int = 8) -> List[Dict[str, Any]]:
