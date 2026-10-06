@@ -133,22 +133,25 @@ def _run_db_write(operation, db_path=DB_PATH):
 
 
 def init_db() -> None:
-    """Initialize and migrate the dashboard database before serving requests."""
+    """Validate or initialize the database at application bootstrap."""
     from dashboard_store import DashboardStore
 
     store = DashboardStore(DB_PATH)
-    store.ensure_indexes()
+    environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+    auto_migrate_raw = os.environ.get(
+        "AIVF_AUTO_MIGRATE",
+        "0" if environment == "production" else "1",
+    ).strip()
+    auto_migrate = auto_migrate_raw == "1"
 
-    if os.environ.get("AIVF_WORKER_PROCESS") != "1":
-        store.write(
-            lambda conn: conn.execute(
-                "UPDATE jobs SET status='interrupted', step='interrupted', "
-                "updated_at=CURRENT_TIMESTAMP "
-                "WHERE status IN ('running','cancelling')"
-            )
-        )
+    if auto_migrate:
+        store.ensure_indexes()
+        return
 
-
+    # Production deployments must run the migration command before starting
+    # the application. Startup is verification-only so two processes cannot
+    # race to mutate the schema.
+    store.verify_schema()
 
 def db_insert_job(job_id: str, topic: str, params: dict) -> None:
     def write(conn):
