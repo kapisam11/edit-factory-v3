@@ -54,11 +54,11 @@ trap on_exit EXIT
 
 mkdir -p "$BACKUP_DIR"
 docker pull "$previous"
-AIVF_IMAGE="$previous" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-backup backup   --db /app/state/jobs.db   --backup "$BACKUP_ARCHIVE"   --knowledge /app/knowledge_base_v3   --output /app/output
-AIVF_IMAGE="$previous" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-backup verify   --backup "$BACKUP_ARCHIVE"   --marker /app/state/backup-restore-verified
+AIVF_IMAGE="$previous" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web python -m ai_video_factory.backup_restore backup --db /app/state/jobs.db --backup "$BACKUP_ARCHIVE" --knowledge /app/knowledge_base_v3 --output /app/output
+AIVF_IMAGE="$previous" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web python -m ai_video_factory.backup_restore verify --backup "$BACKUP_ARCHIVE" --marker /app/state/backup-restore-verified
 
 docker pull "$IMAGE"
-AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-db-migrate /app/state/jobs.db
+AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web python -m ai_video_factory.db_migrations /app/state/jobs.db
 AIVF_IMAGE="$IMAGE" AIVF_COOKIE_SECURE=1 docker compose -f "$COMPOSE_FILE" up -d --no-build --remove-orphans
 
 for _ in $(seq 1 15); do
