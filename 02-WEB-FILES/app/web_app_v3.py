@@ -685,8 +685,11 @@ def _artifact_is_valid(final_video: Any) -> bool:
     if not final_video:
         return False
     try:
-        from ai_video_factory.render_engine import validate_media_output
-        validate_media_output(str(final_video), require_video=True, require_audio=False)
+        from ai_video_factory.media_limits import MediaLimits, validate_render_output
+        validate_render_output(
+            str(final_video),
+            limits=MediaLimits.from_environment(),
+        )
         return True
     except (OSError, RuntimeError, ValueError):
         return False
