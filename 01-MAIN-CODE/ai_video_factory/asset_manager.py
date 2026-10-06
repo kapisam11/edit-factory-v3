@@ -126,13 +126,13 @@ class RuntimeAssetSpec:
 RUNTIME_ASSETS = (
     RuntimeAssetSpec(
         "mobilenet_ssd_config",
-        "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/deploy.prototxt",
+        "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/97406996b1eee2d40eb0a00ae567cf41e23369f9/deploy.prototxt",
         ".models/mobilenet_ssd/deploy.prototxt",
         os.environ.get("AIVF_MOBILENET_CONFIG_SHA256", "").strip().lower(),
     ),
     RuntimeAssetSpec(
         "mobilenet_ssd_weights",
-        "https://github.com/chuanqi305/MobileNet-SSD/raw/master/mobilenet_iter_73000.caffemodel",
+        "https://github.com/chuanqi305/MobileNet-SSD/raw/97406996b1eee2d40eb0a00ae567cf41e23369f9/mobilenet_iter_73000.caffemodel",
         ".models/mobilenet_ssd/mobilenet.caffemodel",
         os.environ.get("AIVF_MOBILENET_WEIGHTS_SHA256", "").strip().lower(),
     ),
