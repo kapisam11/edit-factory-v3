@@ -1515,14 +1515,11 @@ def _package_access_allowed(pkg_dir: Optional[Path]) -> bool:
         from resource_governor import principal_for_request
         principal = principal_for_request(request)
         with get_db() as conn:
-            rows = conn.execute(
-                "SELECT params, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL"
-            ).fetchall()
-        for row in rows:
-            if str(Path(str(row["pkg_dir"])).resolve()) != str(pkg_dir.resolve()):
-                continue
-            payload = json.loads(row["params"] or "{}")
-            return str(payload.get("_principal") or "") == principal
+            row = conn.execute(
+                "SELECT principal FROM jobs WHERE pkg_dir=? LIMIT 1",
+                (str(pkg_dir),),
+            ).fetchone()
+        return bool(row and str(row["principal"] or "") == principal)
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
     return False
