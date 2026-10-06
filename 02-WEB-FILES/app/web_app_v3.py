@@ -143,7 +143,7 @@ def init_db() -> None:
             lambda conn: conn.execute(
                 "UPDATE jobs SET status='interrupted', step='interrupted', "
                 "updated_at=CURRENT_TIMESTAMP "
-                "WHERE status IN ('queued','running','cancelling')"
+                "WHERE status IN ('running','cancelling')"
             )
         )
 
