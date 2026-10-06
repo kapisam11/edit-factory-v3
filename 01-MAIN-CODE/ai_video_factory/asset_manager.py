@@ -118,7 +118,7 @@ class RuntimeAssetSpec:
     name: str
     url: str
     relative_path: str
-    sha256: Optional[str] = None
+    sha256: str = ""
 
 
 # Heavy model files stay external to the Python wheel. They are downloaded once,
@@ -126,12 +126,12 @@ class RuntimeAssetSpec:
 RUNTIME_ASSETS = (
     RuntimeAssetSpec(
         "mobilenet_ssd_config",
-        "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/deploy.prototxt",
+        "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/bb17b6c3eef36d80be441ae8e5339be66e8e3b7a/deploy.prototxt",
         ".models/mobilenet_ssd/deploy.prototxt",
     ),
     RuntimeAssetSpec(
         "mobilenet_ssd_weights",
-        "https://github.com/chuanqi305/MobileNet-SSD/raw/master/mobilenet_iter_73000.caffemodel",
+        "https://github.com/chuanqi305/MobileNet-SSD/raw/bb17b6c3eef36d80be441ae8e5339be66e8e3b7a/mobilenet_iter_73000.caffemodel",
         ".models/mobilenet_ssd/mobilenet.caffemodel",
     ),
 )
@@ -153,11 +153,22 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _expected_sha256(spec: RuntimeAssetSpec) -> str:
+    env_name = "AIVF_RUNTIME_ASSET_SHA256_" + spec.name.upper()
+    return str(spec.sha256 or os.environ.get(env_name, "")).strip().lower()
+
+
 def verify_runtime_asset(spec: RuntimeAssetSpec, root: Optional[Path] = None) -> bool:
     path = runtime_asset_path(spec, root)
-    if not path.exists() or path.stat().st_size == 0:
+    expected = _expected_sha256(spec)
+    if not path.exists() or path.stat().st_size == 0 or not expected:
         return False
-    return spec.sha256 is None or _sha256(path).lower() == spec.sha256.lower()
+    return _sha256(path).lower() == expected
+
+
+def _runtime_asset_download_allowed() -> bool:
+    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+    return os.environ.get("AIVF_ALLOW_RUNTIME_ASSET_NETWORK", "0").strip() == "1" and environment in {"development", "test"}
 
 
 def install_runtime_assets(*, root: Optional[Path] = None, download_missing: bool = False,
@@ -170,6 +181,16 @@ def install_runtime_assets(*, root: Optional[Path] = None, download_missing: boo
     result: Dict[str, Dict[str, object]] = {}
     for spec in RUNTIME_ASSETS:
         path = runtime_asset_path(spec, root)
+        expected_sha256 = _expected_sha256(spec)
+        if download_missing:
+            if not _runtime_asset_download_allowed():
+                raise GuardrailError(
+                    "runtime asset downloads are disabled outside explicit development/test mode"
+                )
+            if not expected_sha256:
+                raise GuardrailError(
+                    f"runtime asset {spec.name} requires a SHA-256 digest"
+                )
         if not verify_runtime_asset(spec, root) and download_missing:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".part")
@@ -185,7 +206,8 @@ def install_runtime_assets(*, root: Optional[Path] = None, download_missing: boo
             "available": verify_runtime_asset(spec, root),
             "path": str(path),
             "url": spec.url,
-            "verified": spec.sha256 is not None and verify_runtime_asset(spec, root),
+            "verified": bool(expected_sha256) and verify_runtime_asset(spec, root),
+            "expected_sha256": expected_sha256,
         }
     return result
 
