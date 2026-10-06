@@ -148,6 +148,7 @@ jobs:
           set -euo pipefail
           scp 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh \
             06-CONFIG-AND-DEPLOYMENT/target_recovery_smoke.sh \
+            06-CONFIG-AND-DEPLOYMENT/deploy_with_rollback.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/"
 
       - name: Log in to GHCR on remote host
@@ -165,28 +166,7 @@ jobs:
           printf '%s' "$REGISTRY_TOKEN" | ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker login ${q_registry} -u ${q_registry_user} --password-stdin"
 
-      - name: Capture previous production image
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        run: |
-          set -euo pipefail
-          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && cid=\$(docker ps --filter label=com.docker.compose.service=web -q | head -n 1) && test -n \"\$cid\" && docker inspect -f '{{.Config.Image}}' \"\$cid\" > .aivf-previous-image && grep -Eq '^.+@sha256:[a-f0-9]{64}$' .aivf-previous-image"
-
-      - name: Back up production state and verify restore
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        run: |
-          set -euo pipefail
-          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
-          printf -v q_backup_id '%q' "${GITHUB_SHA}-${GITHUB_RUN_ID}"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && mkdir -p /tmp/aivf-backup && AIVF_IMAGE=\$(cat .aivf-previous-image) docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml run --rm --no-deps -T web aivf-backup backup --db /app/state/jobs.db --backup /app/state/backups/${q_backup_id}.tar.gz --knowledge /app/knowledge_base_v3 --output /app/output && AIVF_IMAGE=\$(cat .aivf-previous-image) docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml run --rm --no-deps -T web aivf-backup verify --backup /app/state/backups/${q_backup_id}.tar.gz --marker /app/state/backup-restore-verified"
-
-      - name: Pull exact built image and migrate database
+      - name: Deploy exact immutable image with rollback protection
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -199,22 +179,7 @@ jobs:
           IMAGE="${REGISTRY}/${IMAGE_NAME}@${DEPLOY_DIGEST}"
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           printf -v q_image '%q' "$IMAGE"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && docker pull ${q_image} && AIVF_IMAGE=${q_image} docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml run --rm --no-deps -T web aivf-db-migrate /app/state/jobs.db"
-
-      - name: Start exact built image
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_DIGEST: ${{ needs.container.outputs.digest }}
-        run: |
-          set -euo pipefail
-          test -n "$DEPLOY_DIGEST"
-          [[ "$DEPLOY_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
-          IMAGE="${REGISTRY}/${IMAGE_NAME}@${DEPLOY_DIGEST}"
-          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
-          printf -v q_image '%q' "$IMAGE"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && AIVF_IMAGE=${q_image} AIVF_COOKIE_SECURE=1 docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml up -d --no-build --remove-orphans"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && chmod +x 06-CONFIG-AND-DEPLOYMENT/deploy_with_rollback.sh && bash 06-CONFIG-AND-DEPLOYMENT/deploy_with_rollback.sh ${q_image}"
       - name: Verify deployed health endpoint
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -234,26 +199,6 @@ jobs:
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh"
 
-      - name: Roll back to previous image on deployment failure
-        if: failure()
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        run: |
-          set -euo pipefail
-          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && test -f .aivf-previous-image && previous=\$(cat .aivf-previous-image) && grep -Eq '^.+@sha256:[a-f0-9]{64}        if: >-
-          ${{ github.event_name == 'workflow_dispatch' && inputs.recovery_smoke == true }}
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        run: |
-          set -euo pipefail
-          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/target_recovery_smoke.sh"
- <<< \"\$previous\" && docker pull \"\$previous\" && AIVF_IMAGE=\"\$previous\" AIVF_COOKIE_SECURE=1 docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml up -d --no-build --remove-orphans && for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS http://127.0.0.1:5000/api/health && exit 0; sleep 3; done; exit 1"
       - name: Run target-host cancellation/restart recovery smoke
         if: >-
           ${{ github.event_name == 'workflow_dispatch' && inputs.recovery_smoke == true }}
