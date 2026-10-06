@@ -525,6 +525,40 @@ def _redact_job(job: dict, include_logs: bool = False) -> dict:
     return result
 
 
+def _publish_attempt_package(
+    package_dir: Path,
+    output_root: str,
+    job_id: str,
+    attempt_id: str,
+    lease_token: str,
+) -> Path:
+    """Atomically publish an attempt workspace only while its fence is valid."""
+    from dashboard_store import DashboardStore
+
+    store = DashboardStore(db_path=str(Path(output_root).resolve().parent / "state" / "jobs.db"))
+    # The caller supplies the authoritative DB path through the job's fenced params.
+    if not store.attempt_can_publish(job_id, attempt_id, lease_token):
+        raise RuntimeError("stale worker cannot publish artifacts")
+
+    root = Path(output_root).resolve()
+    package = package_dir.resolve()
+    work_root = (root / ".work").resolve()
+    package.relative_to(work_root)
+
+    destination = root / package.name
+    if destination.exists():
+        for index in range(2, 10000):
+            candidate = root / f"{package.name}-{index}"
+            if not candidate.exists():
+                destination = candidate
+                break
+        else:
+            raise RuntimeError("unable to allocate publish destination")
+
+    os.replace(package, destination)
+    return destination
+
+
 def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str, skip_stages: Optional[list[str]] = None) -> None:
     resource_monitor = None
     resource_report_written = False
@@ -546,6 +580,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         finally:
             resource_report_written = True
 
+    attempt_lease = str(params.get("_lease_token") or "")
+    attempt_id = str(params.get("_attempt_id") or "")
+
     def update(**kwargs: Any) -> bool:
         allowed = {"status", "step", "params", "pkg_dir", "error"}
         if set(kwargs) - allowed:
@@ -555,8 +592,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         def write(conn):
             rowcount = conn.execute(
                 f"UPDATE jobs SET {fields}, updated_at=CURRENT_TIMESTAMP "
-                "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted')",
-                list(kwargs.values()) + [job_id],
+                "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted') "
+                "AND (lease_token=? OR lease_token IS NULL)",
+                list(kwargs.values()) + [job_id, attempt_lease],
             ).rowcount
             return rowcount > 0
 
@@ -587,7 +625,12 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         if not update(status="running", step="Initializing"):
             return
         log("INFO", "→ Initializing")
-        pkg_dir = _safe_package_dir(params["topic"], output_root)
+        attempt_root = Path(
+            params.get("_workspace_root")
+            or (Path(output_root).resolve() / ".work" / job_id / str(params.get("_attempt_id") or "legacy"))
+        ).resolve()
+        attempt_root.mkdir(parents=True, exist_ok=True)
+        pkg_dir = _safe_package_dir(params["topic"], str(attempt_root))
         if params.get("workflow") == "v3":
             from ai_video_factory.v3_pipeline import run_v3_pipeline
 
