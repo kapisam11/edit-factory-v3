@@ -92,6 +92,11 @@ def run_job(
                 alive = False
             if alive:
                 failures = 0
+                if worker_id:
+                    try:
+                        heartbeat_store.heartbeat_worker(worker_id)
+                    except Exception:
+                        pass
             else:
                 failures += 1
                 # A transient SQLite lock must not terminate the lease-refresh thread.
