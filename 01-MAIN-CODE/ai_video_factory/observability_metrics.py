@@ -75,7 +75,7 @@ class MetricsRegistry:
                     "p95": pct(0.95),
                     "p99": pct(0.99),
                 }
-            counters = dict(self._counters)
+            counters: dict[str, int | float] = dict(self._counters)
             for name, value in self._gauges.items():
                 counters[f"gauge:{name}"] = value
             return MetricSnapshot(counters, averages, percentiles, time.time())
