@@ -566,6 +566,27 @@ def _publish_attempt_package(
     return destination
 
 
+def _rewrite_published_paths(value: Any, old_root: Path, new_root: Path) -> Any:
+    """Rewrite only absolute paths that belong to an unpublished attempt package."""
+    if isinstance(value, dict):
+        return {
+            key: _rewrite_published_paths(item, old_root, new_root)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_rewrite_published_paths(item, old_root, new_root) for item in value]
+    if isinstance(value, str):
+        try:
+            candidate = Path(value)
+            candidate.relative_to(old_root)
+        except (OSError, ValueError):
+            return value
+        return str(new_root / candidate.relative_to(old_root))
+    return value
+
+
+
+
 def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str, skip_stages: Optional[list[str]] = None) -> None:
     resource_monitor = None
     resource_report_written = False
@@ -684,7 +705,23 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                     log("ERROR", message)
             else:
                 _write_resource_report(pkg_dir)
-                if update(status="done", step="Complete (V3)", pkg_dir=str(pkg_dir)):
+                old_package = pkg_dir.resolve()
+                published = _publish_attempt_package(
+                    pkg_dir,
+                    output_root,
+                    db_path,
+                    job_id,
+                    attempt_id,
+                    attempt_lease,
+                )
+                result_payload = _rewrite_published_paths(
+                    result_payload,
+                    old_package,
+                    published.resolve(),
+                )
+                with open(published / "v3_job_result.json", "w", encoding="utf-8") as handle:
+                    json.dump(result_payload, handle, indent=2, ensure_ascii=False)
+                if update(status="done", step="Complete (V3)", pkg_dir=str(published)):
                     log("INFO", "V3 job complete!")
                     for warning in result_payload["warnings"]:
                         log("WARNING", str(warning))
@@ -713,7 +750,15 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 log("ERROR", message)
         else:
             _write_resource_report(pkg_dir)
-            if update(status="done", step="Complete", pkg_dir=str(pkg_dir)):
+            published = _publish_attempt_package(
+                pkg_dir,
+                output_root,
+                db_path,
+                job_id,
+                attempt_id,
+                attempt_lease,
+            )
+            if update(status="done", step="Complete", pkg_dir=str(published)):
                 log("INFO", "Job complete!")
     except Exception as exc:
         try:
