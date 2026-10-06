@@ -32,6 +32,7 @@ from ai_video_factory.production_guardrails import sha256_file
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
+from ai_video_factory.media_limits import MediaLimits, probe_media_contract
 from app.job_service import build_job_params
 
 APP_DIR = Path(__file__).resolve().parent
@@ -45,6 +46,7 @@ STATE_DIR = Path(os.environ.get("AIVF_STATE_DIR", BASE_DIR / "state")).resolve()
 UPLOAD_FOLDER = Path(os.environ.get("AIVF_UPLOAD_DIR", BASE_DIR / "uploads")).resolve()
 OUTPUT_FOLDER = Path(os.environ.get("AIVF_OUTPUT_DIR", BASE_DIR / "output")).resolve()
 RUNTIME_CONFIG = runtime_config()
+MEDIA_LIMITS = MediaLimits.from_environment()
 DB_PATH = STATE_DIR / "jobs.db"
 for directory in (STATE_DIR, UPLOAD_FOLDER, OUTPUT_FOLDER):
     directory.mkdir(parents=True, exist_ok=True)
@@ -442,7 +444,10 @@ def _safe_package_dir(topic: str, output_root: str) -> Path:
 
 
 def _save_and_validate_upload(upload, suffix: str) -> Path:
-    max_bytes = int(app.config["MAX_CONTENT_LENGTH"])
+    max_bytes = min(
+        int(app.config["MAX_CONTENT_LENGTH"]),
+        int(MEDIA_LIMITS.max_input_bytes),
+    )
     declared_size = getattr(upload, "content_length", None)
     if declared_size and declared_size > max_bytes:
         raise ValueError("Upload is too large")
@@ -453,7 +458,9 @@ def _save_and_validate_upload(upload, suffix: str) -> Path:
     final_path = UPLOAD_FOLDER / f"{uuid.uuid4().hex}{suffix}"
     try:
         upload.save(temp_path)
-        if temp_path.stat().st_size > max_bytes or not _probe_video(temp_path):
+        if temp_path.stat().st_size > max_bytes:
+            raise ValueError("Upload is too large")
+        if not _probe_video(temp_path):
             raise ValueError("Upload is too large or is not a valid supported video stream")
         os.replace(temp_path, final_path)
         return final_path
@@ -462,34 +469,8 @@ def _save_and_validate_upload(upload, suffix: str) -> Path:
 
 def _probe_video(path: Path) -> bool:
     try:
-        result = run_ffprobe([
-            "ffprobe",
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=codec_type,width,height,duration",
-            "-show_entries", "format=duration",
-            "-of", "json",
-            str(path),
-        ], timeout=30)
-        if result.returncode != 0:
-            return False
-        payload = json.loads(result.stdout or "{}")
-        streams = payload.get("streams") or []
-        if not streams:
-            return False
-        stream = streams[0]
-        width = int(stream.get("width") or 0)
-        height = int(stream.get("height") or 0)
-        duration_raw = stream.get("duration") or (payload.get("format") or {}).get("duration")
-        duration = float(duration_raw)
-        return (
-            width > 0
-            and height > 0
-            and width <= 7680
-            and height <= 7680
-            and duration > 0
-            and duration <= 3600
-        )
+        probe_media_contract(path, MEDIA_LIMITS)
+        return True
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return False
 
