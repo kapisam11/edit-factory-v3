@@ -25,8 +25,19 @@ def _skip_stages_for_workflow(workflow: str) -> list[str]:
     return [name for name in all_names if name not in configured]
 
 
-def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str) -> None:
-    """Spawn-safe worker entrypoint; all pipeline choices are explicit arguments."""
+def run_job(
+    job_id: str,
+    params: dict,
+    secrets: dict,
+    output_root: str,
+    db_path: str,
+    attempt_id: str | None = None,
+    lease_token: str | None = None,
+    worker_id: str | None = None,
+    workspace_dir: str | None = None,
+    publish_dir: str | None = None,
+) -> None:
+    """Spawn-safe worker entrypoint with optional fenced-attempt ownership."""
     os.environ["AIVF_WORKER_PROCESS"] = "1"
     if os.name != "nt":
         try:
@@ -62,7 +73,11 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
         failures = 0
         while not heartbeat_stop.wait(interval):
             try:
-                alive = heartbeat_store.heartbeat_job(job_id)
+                alive = heartbeat_store.heartbeat_job(
+                    job_id,
+                    attempt_id=attempt_id,
+                    lease_token=lease_token,
+                )
             except Exception:
                 alive = False
             if alive:
@@ -89,7 +104,17 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
     skip_stages = _skip_stages_for_workflow(workflow)
     try:
         web_app_v3._run_job_worker_impl(
-            job_id, params, secrets, output_root, db_path, skip_stages=skip_stages
+            job_id,
+            params,
+            secrets,
+            output_root,
+            db_path,
+            skip_stages=skip_stages,
+            attempt_id=attempt_id,
+            lease_token=lease_token,
+            worker_id=worker_id,
+            workspace_dir=workspace_dir,
+            publish_dir=publish_dir,
         )
     finally:
         heartbeat_stop.set()
