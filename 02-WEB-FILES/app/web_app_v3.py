@@ -1418,6 +1418,7 @@ def create_job():
                 max_queued_jobs=_MAX_QUEUED_JOBS,
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
                 resource_units=params.get("_resource_budget", {}).get("resource_units"),
+                resource_class=params.get("_resource_budget", {}).get("resource_class"),
                 reserved_disk_bytes=params.get("_resource_budget", {}).get("reserved_disk_bytes"),
                 reserved_memory_bytes=params.get("_resource_budget", {}).get("reserved_memory_bytes"),
                 available_disk_bytes=max(
