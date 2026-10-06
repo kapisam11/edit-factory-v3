@@ -12,9 +12,11 @@ for _path in (_REPO_ROOT / "02-WEB-FILES", _REPO_ROOT / "03-SIDE-CODE"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
+from ai_video_factory import bootstrap_runtime
 from app.cli import main
 
 __all__ = ["main"]
 
 if __name__ == "__main__":
+    bootstrap_runtime()
     raise SystemExit(main())
