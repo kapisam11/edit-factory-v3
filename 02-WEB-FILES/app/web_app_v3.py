@@ -1435,7 +1435,11 @@ def job_logs_stream(job_id):
         return jsonify({"error": "Job not found"}), 404
 
     def stream():
-        last_id = 0
+        raw_last_id = request.headers.get("Last-Event-ID", "0").strip()
+        try:
+            last_id = max(0, int(raw_last_id))
+        except ValueError:
+            last_id = 0
         job = dict(authorized_job)
         while True:
             current = db_get_job(job_id)
@@ -1445,7 +1449,14 @@ def job_logs_stream(job_id):
             job["status"] = current.get("status")
             for row in db_logs_since(job_id, last_id):
                 last_id = row["id"]
-                yield "data: " + json.dumps({"time": row["created_at"], "level": row["level"], "msg": row["message"]}) + "\n\n"
+                yield (
+                    "id: " + str(last_id) + "\n"
+                    "data: " + json.dumps({
+                        "time": row["created_at"],
+                        "level": row["level"],
+                        "msg": row["message"],
+                    }) + "\n\n"
+                )
             if job["status"] in TERMINAL_STATUSES:
                 return
             yield ": heartbeat\n\n"
