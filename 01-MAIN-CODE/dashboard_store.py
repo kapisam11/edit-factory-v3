@@ -820,7 +820,7 @@ class DashboardStore:
 
         def write(conn: sqlite3.Connection) -> int:
             row = conn.execute(
-                "SELECT status, error, retry_count FROM jobs WHERE id=?", (job_id,)
+                "SELECT status, error, error_code, retry_count FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
             if row is None:
                 return 0
@@ -830,11 +830,24 @@ class DashboardStore:
             attempts = int(row["retry_count"] or 0)
             if attempts >= max_attempts:
                 raise JobRetryNotAllowed("maximum retry attempts reached")
-            if status == "error" and row["error"]:
-                if not is_retryable_error(RuntimeError(str(row["error"]))):
+            if status == "error":
+                from ai_video_factory.structured_errors import ErrorCode
+                recorded_code = str(row["error_code"] or "").strip()
+                if recorded_code:
+                    try:
+                        retryable = recorded_code in {
+                            ErrorCode.TOOL_TIMEOUT.value,
+                            ErrorCode.DATABASE_BUSY.value,
+                            ErrorCode.WORKER_CRASH.value,
+                        }
+                    except Exception:
+                        retryable = False
+                    if not retryable:
+                        raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
+                elif row["error"] and not is_retryable_error(RuntimeError(str(row["error"]))):
                     raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
             changed = int(conn.execute(
-                "UPDATE jobs SET status='queued', step='waiting', error=NULL, pkg_dir=NULL, "
+                "UPDATE jobs SET status='queued', step='waiting', error=NULL, error_code=NULL, pkg_dir=NULL, "
                 "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
                 "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
                 (job_id, max_attempts),
