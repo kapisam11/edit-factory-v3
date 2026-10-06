@@ -1,16 +1,11 @@
 """AI Video Factory v3 — emotion-first automated short video production."""
-import builtins
 import logging
 import os
-import tempfile
 
 
 def configure_logging(level=logging.INFO):
     logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
 
-
-configure_logging()
-builtins.tempfile = tempfile
 
 from .factory import create_package
 from .composer import compose_short_from_video
