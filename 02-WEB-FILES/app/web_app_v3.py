@@ -765,7 +765,7 @@ def _run_job_worker_impl(
             except Exception:
                 logger.exception("Could not finalize resource telemetry for %s", job_id)
         try:
-                        final_row = store.get_job(job_id)
+            final_row = store.get_job(job_id)
             if final_row and owned():
                 final_status = str(final_row.get("status") or "")
                 if final_status == "done":
