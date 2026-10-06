@@ -161,9 +161,10 @@ class DashboardStore:
                 )
             """)
             migrate(conn)
-            self._ensure_job_columns(conn)
-            from db_migrations import apply_schema_migrations
-            apply_schema_migrations(conn)
+            # Schema migration is a startup concern. The application boot path
+            # calls ensure_indexes() before serving requests, so request-time job
+            # admission never mutates the schema.
+            migrate(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
                 BEFORE UPDATE OF status ON jobs
@@ -327,7 +328,7 @@ class DashboardStore:
             # Serialize admission with all other writers so quota checks and the
             # subsequent INSERT cannot race across concurrent dashboard requests.
             conn.execute("BEGIN IMMEDIATE")
-            self._ensure_job_columns(conn)
+            migrate(conn)
             if max_queued_jobs is not None:
                 queued = int(
                     conn.execute(
