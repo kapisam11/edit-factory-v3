@@ -32,6 +32,7 @@ install_dashboard_optimizations(_web_app_v3)
 configure_dashboard_auth(app)
 register_dashboard_compat(app)
 install_observability(app)
+_web_app_v3._start_queue_pump()
 
 
 @app.before_request
