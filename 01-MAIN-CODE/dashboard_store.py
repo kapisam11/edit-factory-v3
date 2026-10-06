@@ -160,11 +160,6 @@ class DashboardStore:
                     ts REAL NOT NULL
                 )
             """)
-            migrate(conn)
-            # Schema migration is a startup concern. The application boot path
-            # calls ensure_indexes() before serving requests, so request-time job
-            # admission never mutates the schema.
-            migrate(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
                 BEFORE UPDATE OF status ON jobs
