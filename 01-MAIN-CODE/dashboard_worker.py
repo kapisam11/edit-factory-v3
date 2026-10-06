@@ -58,13 +58,23 @@ def run_job(
         interval = max(5.0, parsed_interval)
     except (TypeError, ValueError):
         try:
-            heartbeat_store.update_job_if_status(
-                job_id,
-                ("queued", "running"),
-                status="error",
-                step="failed",
-                error="AIVF_WORKER_HEARTBEAT_SECONDS must be numeric and greater than 0",
-            )
+            if attempt_id and lease_token:
+                heartbeat_store.update_job_if_owned(
+                    job_id,
+                    attempt_id,
+                    lease_token,
+                    status="error",
+                    step="failed",
+                    error="AIVF_WORKER_HEARTBEAT_SECONDS must be numeric and greater than 0",
+                )
+            else:
+                heartbeat_store.update_job_if_status(
+                    job_id,
+                    ("queued", "running"),
+                    status="error",
+                    step="failed",
+                    error="AIVF_WORKER_HEARTBEAT_SECONDS must be numeric and greater than 0",
+                )
         except Exception:
             pass
         return
