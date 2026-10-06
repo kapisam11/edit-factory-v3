@@ -29,6 +29,7 @@ from werkzeug.utils import secure_filename
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 from ai_video_factory.render_engine import run_ffprobe
 from ai_video_factory.production_guardrails import sha256_file
+from ai_video_factory.media_limits import DEFAULT_MEDIA_LIMITS, estimate_resource_budget, validate_input_file
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
@@ -72,7 +73,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
-INTERNAL_PARAM_KEYS = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
+INTERNAL_PARAM_KEYS = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir", "_media_summary", "_resource_budget"}
 RUNTIME_SECRET_TTL_SECONDS = RUNTIME_CONFIG.retry_secret_ttl_seconds
 TERMINAL_STATUSES = {"done", "error", "cancelled", "interrupted"}
 SETTINGS_SCHEMA = {
@@ -441,8 +442,8 @@ def _safe_package_dir(topic: str, output_root: str) -> Path:
     return path
 
 
-def _save_and_validate_upload(upload, suffix: str) -> Path:
-    max_bytes = int(app.config["MAX_CONTENT_LENGTH"])
+def _save_and_validate_upload(upload, suffix: str) -> tuple[Path, dict[str, Any]]:
+    max_bytes = min(int(app.config["MAX_CONTENT_LENGTH"]), DEFAULT_MEDIA_LIMITS.max_input_bytes)
     declared_size = getattr(upload, "content_length", None)
     if declared_size and declared_size > max_bytes:
         raise ValueError("Upload is too large")
@@ -453,10 +454,11 @@ def _save_and_validate_upload(upload, suffix: str) -> Path:
     final_path = UPLOAD_FOLDER / f"{uuid.uuid4().hex}{suffix}"
     try:
         upload.save(temp_path)
-        if temp_path.stat().st_size > max_bytes or not _probe_video(temp_path):
-            raise ValueError("Upload is too large or is not a valid supported video stream")
+        if temp_path.stat().st_size > max_bytes:
+            raise ValueError("Upload is too large")
+        summary = validate_input_file(temp_path, suffix=suffix, limits=DEFAULT_MEDIA_LIMITS)
         os.replace(temp_path, final_path)
-        return final_path
+        return final_path, summary
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -1018,7 +1020,19 @@ def create_job():
         if not filename or suffix not in ALLOWED_EXTENSIONS:
             return jsonify({"error": "Unsupported video file type"}), 400
         try:
-            upload_path = _save_and_validate_upload(upload, suffix)
+            upload_path, media_summary = _save_and_validate_upload(upload, suffix)
+            resource_budget = estimate_resource_budget(
+                media_summary,
+                input_size_bytes=upload_path.stat().st_size,
+                limits=DEFAULT_MEDIA_LIMITS,
+            )
+            params["_media_summary"] = media_summary
+            params["_resource_budget"] = {
+                "resource_units": resource_budget.resource_units,
+                "reserved_disk_bytes": resource_budget.reserved_disk_bytes,
+                "reserved_memory_bytes": resource_budget.reserved_memory_bytes,
+                "estimated_job_seconds": resource_budget.estimated_job_seconds,
+            }
             remaining = shutil.disk_usage(UPLOAD_FOLDER).free
             if remaining < _MIN_FREE_DISK_BYTES:
                 upload_path.unlink(missing_ok=True)
@@ -1160,6 +1174,12 @@ def create_job():
                 request_hash=request_hash,
                 max_queued_jobs=_MAX_QUEUED_JOBS,
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
+                resource_units=params.get("_resource_budget", {}).get("resource_units"),
+                reserved_disk_bytes=params.get("_resource_budget", {}).get("reserved_disk_bytes"),
+                reserved_memory_bytes=params.get("_resource_budget", {}).get("reserved_memory_bytes"),
+                available_disk_bytes=shutil.disk_usage(OUTPUT_FOLDER).free,
+                resource_capacity_units=DEFAULT_MEDIA_LIMITS.resource_capacity_units,
+                max_reserved_memory_bytes=DEFAULT_MEDIA_LIMITS.max_reserved_memory_bytes,
             )
             if not created:
                 if upload_path is not None:
@@ -1174,6 +1194,12 @@ def create_job():
                 max_queued_jobs=_MAX_QUEUED_JOBS,
                 principal=principal,
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
+                resource_units=params.get("_resource_budget", {}).get("resource_units"),
+                reserved_disk_bytes=params.get("_resource_budget", {}).get("reserved_disk_bytes"),
+                reserved_memory_bytes=params.get("_resource_budget", {}).get("reserved_memory_bytes"),
+                available_disk_bytes=shutil.disk_usage(OUTPUT_FOLDER).free,
+                resource_capacity_units=DEFAULT_MEDIA_LIMITS.resource_capacity_units,
+                max_reserved_memory_bytes=DEFAULT_MEDIA_LIMITS.max_reserved_memory_bytes,
             )
     except IdempotencyConflict as exc:
         if upload_path is not None:
