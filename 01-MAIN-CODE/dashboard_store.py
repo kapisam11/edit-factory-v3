@@ -111,6 +111,8 @@ class DashboardStore:
                     ts REAL NOT NULL
                 )
             """)
+            # Explicit migrations run during bootstrap only, before admission queries.
+            migrate(conn)
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
                 BEFORE UPDATE OF status ON jobs
