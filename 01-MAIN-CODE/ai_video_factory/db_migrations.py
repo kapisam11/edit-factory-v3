@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 8
 
 
 def _table_columns(conn: sqlite3.Connection) -> set[str]:
@@ -37,6 +37,10 @@ def migrate(conn: sqlite3.Connection) -> int:
             "reserved_disk_bytes": "INTEGER NOT NULL DEFAULT 0",
             "reserved_memory_bytes": "INTEGER NOT NULL DEFAULT 0",
             "error_code": "TEXT",
+            "priority": "INTEGER NOT NULL DEFAULT 0",
+            "started_at": "TEXT",
+            "finished_at": "TEXT",
+            "current_attempt": "TEXT",
         }
         for name, definition in additions.items():
             if name not in columns:
@@ -159,6 +163,53 @@ def migrate(conn: sqlite3.Connection) -> int:
             "ON rate_limits(client_ip, ts)"
         )
         conn.execute("INSERT INTO schema_migrations(version) VALUES (6)")
+
+    # Version 7: artifact and worker registries.
+    if 7 not in applied:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                attempt_id TEXT,
+                kind TEXT NOT NULL,
+                path TEXT NOT NULL,
+                sha256 TEXT,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_job_artifacts_job_attempt "
+            "ON job_artifacts(job_id, attempt_id, kind)"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS workers (
+                id TEXT PRIMARY KEY,
+                hostname TEXT NOT NULL,
+                pid INTEGER,
+                status TEXT NOT NULL DEFAULT 'idle',
+                last_heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                capabilities TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workers_status_heartbeat "
+            "ON workers(status, last_heartbeat_at)"
+        )
+        conn.execute("INSERT INTO schema_migrations(version) VALUES (7)")
+
+    # Version 8: job lookup indexes for priority and lifecycle timestamps.
+    if 8 not in applied:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_priority_status "
+            "ON jobs(priority DESC, status, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_finished "
+            "ON jobs(finished_at, status)"
+        )
+        conn.execute("INSERT INTO schema_migrations(version) VALUES (8)")
 
     conn.commit()
     return CURRENT_SCHEMA_VERSION
