@@ -246,27 +246,64 @@ def _run_ffmpeg_streaming(
             daemon=True,
         )
         reader.start()
+        output_path = None
         try:
-            returncode = process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            terminate_process_tree(process, grace_seconds=2.0)
+            candidate_output = str(cmd[-1]) if cmd else ""
+            if candidate_output and not candidate_output.startswith("-") and candidate_output not in {"-", "/dev/null", "pipe:1", "pipe:2"}:
+                output_path = Path(candidate_output)
+        except (OSError, TypeError):
+            output_path = None
+
+        deadline = time.monotonic() + float(timeout)
+        while True:
+            if output_path is not None:
+                try:
+                    if output_path.is_file() and output_path.stat().st_size > DEFAULT_MEDIA_LIMITS.max_output_bytes:
+                        terminate_process_tree(process, grace_seconds=2.0)
+                        try:
+                            process.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=3)
+                        reader.join(timeout=2)
+                        detail = "".join(stderr_tail).strip()
+                        raise FFmpegExecutionError(
+                            f"FFmpeg output exceeded hard size limit of {DEFAULT_MEDIA_LIMITS.max_output_bytes} bytes; "
+                            f"diagnostics={diagnostic_path}",
+                            command_id=command_id,
+                            command=cmd,
+                            exit_code=None,
+                            duration_seconds=time.perf_counter() - started,
+                            stderr_tail=detail[-2000:],
+                            stderr_path=str(diagnostic_path),
+                        )
+                except OSError:
+                    pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                terminate_process_tree(process, grace_seconds=2.0)
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+                reader.join(timeout=2)
+                detail = "".join(stderr_tail).strip()
+                detail_suffix = f": {detail[-2000:]}" if detail else ""
+                raise FFmpegExecutionError(
+                    f"FFmpeg timed out after {timeout}s{detail_suffix}; diagnostics={diagnostic_path}",
+                    command_id=command_id,
+                    command=cmd,
+                    exit_code=None,
+                    duration_seconds=time.perf_counter() - started,
+                    stderr_tail=detail[-2000:],
+                    stderr_path=str(diagnostic_path),
+                )
             try:
-                process.wait(timeout=3)
+                returncode = process.wait(timeout=min(0.5, remaining))
+                break
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
-            reader.join(timeout=2)
-            detail = "".join(stderr_tail).strip()
-            detail_suffix = f": {detail[-2000:]}" if detail else ""
-            raise FFmpegExecutionError(
-                f"FFmpeg timed out after {timeout}s{detail_suffix}; diagnostics={diagnostic_path}",
-                command_id=command_id,
-                command=cmd,
-                exit_code=None,
-                duration_seconds=time.perf_counter() - started,
-                stderr_tail=detail[-2000:],
-                stderr_path=str(diagnostic_path),
-            ) from exc
+                continue
 
         reader.join(timeout=2)
         detail = "".join(stderr_tail).strip()
