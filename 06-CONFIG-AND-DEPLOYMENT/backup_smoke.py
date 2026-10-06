@@ -27,5 +27,6 @@ if not verified["ok"]:
     raise SystemExit(f"backup verification failed: {verified}")
 archive = Path(args.archive)
 archive.parent.mkdir(parents=True, exist_ok=True)
-shutil.make_archive(str(archive.with_suffix("")), "gztar", root_dir=created["path"])
+base_name = str(archive)[:-7] if str(archive).endswith(".tar.gz") else str(archive)
+shutil.make_archive(base_name, "gztar", root_dir=created["path"])
 print(archive)
