@@ -30,6 +30,7 @@ from ai_video_factory.validation import normalize_workflow, validate_target_seco
 from ai_video_factory.render_engine import run_ffprobe
 from ai_video_factory.production_guardrails import sha256_file
 from ai_video_factory.media_limits import DEFAULT_MEDIA_LIMITS, estimate_resource_budget, validate_input_file
+from ai_video_factory.error_codes import classify_exception
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
@@ -696,9 +697,16 @@ def _run_job_worker_impl(
                 if not result_payload["errors"]:
                     result_payload["errors"].append("V3 final artifact failed media validation")
                 message = "; ".join(str(error) for error in result_payload["errors"])
-                update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir))
+                error = classify_exception(RuntimeError(message))
+                update(
+                    status="error",
+                    step="failed",
+                    error=message,
+                    error_code=error.code.value,
+                    pkg_dir=str(pkg_dir),
+                )
                 if owned():
-                    log("ERROR", message)
+                    log("ERROR", f"[{error.code.value}] {message}")
             else:
                 _write_resource_report(pkg_dir)
                 if attempt_id and lease_token and publish_dir:
@@ -728,9 +736,16 @@ def _run_job_worker_impl(
             if not ctx.errors:
                 ctx.errors.append("Final artifact failed media validation")
             message = "; ".join(str(error) for error in ctx.errors)
-            update(status="error", step="failed", error=message, pkg_dir=str(pkg_dir))
+            error = classify_exception(RuntimeError(message))
+            update(
+                status="error",
+                step="failed",
+                error=message,
+                error_code=error.code.value,
+                pkg_dir=str(pkg_dir),
+            )
             if owned():
-                log("ERROR", message)
+                log("ERROR", f"[{error.code.value}] {message}")
         else:
             _write_resource_report(pkg_dir)
             published_video = ctx.final_video
@@ -740,8 +755,9 @@ def _run_job_worker_impl(
                 log("INFO", "Job complete!")
     except Exception as exc:
         try:
-            if update(status="error", step="failed", error=str(exc)):
-                log("ERROR", f"Job failed: {exc}")
+            error = classify_exception(exc)
+            if update(status="error", step="failed", error=error.message, error_code=error.code.value):
+                log("ERROR", f"[{error.code.value}] Job failed: {error.message}")
         except Exception:
             logger.exception("Could not record worker failure for %s", job_id)
     finally:
