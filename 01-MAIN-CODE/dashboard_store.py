@@ -738,6 +738,12 @@ class DashboardStore:
             row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         return dict(row) if row else None
 
+    def queued_count(self) -> int:
+        with self.connect() as conn:
+            return int(conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status='queued'"
+            ).fetchone()[0])
+
     def list_queued_jobs(self, limit: int = 100) -> list[dict]:
         bounded_limit = max(1, min(int(limit), self.MAX_LIST_LIMIT))
         with self.connect() as conn:
