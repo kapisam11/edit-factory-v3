@@ -79,8 +79,11 @@ def _validate_container_signature(path: Path) -> None:
     suffix = path.suffix.lower()
     with path.open("rb") as handle:
         header = handle.read(16)
-    if suffix in {".mp4", ".m4v", ".mov"}:
+    if suffix in {".mp4", ".m4v"}:
         valid = len(header) >= 8 and header[4:8] == b"ftyp"
+    elif suffix == ".mov":
+        atom = header[4:8] if len(header) >= 8 else b""
+        valid = atom == b"ftyp" or atom in {b"moov", b"mdat", b"wide", b"free", b"skip"}
     elif suffix == ".avi":
         valid = len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"AVI "
     elif suffix in {".mkv", ".webm"}:
@@ -128,7 +131,12 @@ def estimate_resource_budget(
     }
 
 
-def probe_media_contract(path: str | Path, limits: MediaLimits | None = None) -> dict[str, Any]:
+def probe_media_contract(
+    path: str | Path,
+    limits: MediaLimits | None = None,
+    *,
+    enforce_input_size: bool = True,
+) -> dict[str, Any]:
     limits = limits or MediaLimits.from_environment()
     target = Path(path)
     if not target.is_file():
@@ -137,7 +145,7 @@ def probe_media_contract(path: str | Path, limits: MediaLimits | None = None) ->
     if size <= 0:
         raise ValueError("media input is empty")
     _validate_container_signature(target)
-    if size > limits.max_input_bytes:
+    if enforce_input_size and size > limits.max_input_bytes:
         raise ValueError(
             f"media input exceeds {limits.max_input_bytes} bytes: {size}"
         )
@@ -219,7 +227,7 @@ def validate_render_output(
         raise ValueError(
             f"render output exceeds {limits.max_output_bytes} bytes: {target.stat().st_size}"
         )
-    report = probe_media_contract(target, limits)
+    report = probe_media_contract(target, limits, enforce_input_size=False)
     if expected_duration_seconds is not None:
         duration = float(report["duration_seconds"])
         tolerance = max(0.25, float(expected_duration_seconds) * 0.02)
