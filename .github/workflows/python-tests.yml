@@ -43,6 +43,7 @@ jobs:
         uv run python -m py_compile 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py 06-CONFIG-AND-DEPLOYMENT/verify_human_acceptance.py
         bash -n 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh
         bash -n 06-CONFIG-AND-DEPLOYMENT/target_recovery_smoke.sh
+        bash -n 06-CONFIG-AND-DEPLOYMENT/backup_offhost.sh
     - name: Lint production Python for correctness
       run: uv run ruff check 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE --select E9,F --ignore F401,F811,F841
     - name: Run repository security audit
