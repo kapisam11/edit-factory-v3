@@ -157,11 +157,44 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _baked_model_hashes(root: Path) -> Dict[str, str]:
+    candidates = [
+        root / ".models" / "mobilenet_ssd" / "model-manifest.json",
+        root / ".models" / "mobilenet_ssd" / "SHA256SUMS",
+    ]
+    for candidate in candidates:
+        if candidate.name == "model-manifest.json" and candidate.is_file():
+            try:
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+                return {
+                    str(item.get("name")): str(item.get("sha256", "")).strip().lower()
+                    for item in payload.get("assets", [])
+                    if isinstance(item, dict) and item.get("name")
+                }
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+        if candidate.name == "SHA256SUMS" and candidate.is_file():
+            try:
+                result: Dict[str, str] = {}
+                for line in candidate.read_text(encoding="utf-8").splitlines():
+                    digest, _, name = line.strip().partition("  ")
+                    if len(digest) == 64 and name:
+                        result[Path(name).name] = digest.lower()
+                if result:
+                    return result
+            except OSError:
+                continue
+    return {}
+
+
 def verify_runtime_asset(spec: RuntimeAssetSpec, root: Optional[Path] = None) -> bool:
     path = runtime_asset_path(spec, root)
     if not path.exists() or path.stat().st_size == 0:
         return False
     expected = str(spec.sha256 or "").strip().lower()
+    if not expected:
+        baked = _baked_model_hashes(root or _project_root())
+        expected = baked.get(path.name, "")
     return bool(expected) and _sha256(path).lower() == expected
 
 
@@ -177,13 +210,15 @@ def install_runtime_assets(*, root: Optional[Path] = None, download_missing: boo
     result: Dict[str, Dict[str, object]] = {}
     for spec in RUNTIME_ASSETS:
         path = runtime_asset_path(spec, root)
-        if not spec.sha256:
+        configured_hash = str(spec.sha256 or "").strip().lower()
+        baked_hash = _baked_model_hashes(root).get(path.name, "")
+        if not configured_hash and not baked_hash:
             result[spec.name] = {
                 "available": False,
                 "path": str(path),
                 "url": str(spec.url),
                 "verified": False,
-                "error": "runtime asset integrity hash is not configured",
+                "error": "runtime asset integrity hash is not configured or baked into the image",
             }
             continue
         if not verify_runtime_asset(spec, root) and allow_download:
