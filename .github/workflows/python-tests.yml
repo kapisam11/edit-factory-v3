@@ -62,6 +62,13 @@ jobs:
         uv run python 01-MAIN-CODE/cli.py --help
         uv run python 01-MAIN-CODE/cli_v3.py --help
         uv run aivf --help
+    - name: Run admission/idempotency load smoke
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: |
+        uv run python 03-SIDE-CODE/tools/load_test_admission.py --requests 50
+        uv run python 03-SIDE-CODE/tools/load_test_admission.py --requests 50 --identical
+
     - name: Verify roadmap runtime contracts
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
