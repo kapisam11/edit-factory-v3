@@ -9,6 +9,17 @@ services:
     cpus: "${AIVF_CONTAINER_CPUS:-4}"
     mem_limit: "${AIVF_CONTAINER_MEMORY:-8g}"
     pids_limit: ${AIVF_CONTAINER_PIDS:-512}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     env_file:
       - .env
     environment:
@@ -35,11 +46,46 @@ services:
       AIVF_MAX_RESERVED_DISK_MB: ${AIVF_MAX_RESERVED_DISK_MB:-20000}
       AIVF_MAX_RESERVED_MEMORY_MB: ${AIVF_MAX_RESERVED_MEMORY_MB:-16384}
       AIVF_MAX_CPU_WEIGHT: ${AIVF_MAX_CPU_WEIGHT:-8}
+      AIVF_MODEL_LOCK_FILE: /app/06-CONFIG-AND-DEPLOYMENT/model-lock.json
+      AIVF_JOB_METADATA_RETENTION_DAYS: ${AIVF_JOB_METADATA_RETENTION_DAYS:-30}
+      AIVF_LOG_RETENTION_DAYS: ${AIVF_LOG_RETENTION_DAYS:-7}
+      AIVF_EVENT_RETENTION_DAYS: ${AIVF_EVENT_RETENTION_DAYS:-30}
+      AIVF_IDEMPOTENCY_RETENTION_HOURS: ${AIVF_IDEMPOTENCY_RETENTION_HOURS:-24}
+      AIVF_UPLOAD_RETENTION_DAYS: ${AIVF_UPLOAD_RETENTION_DAYS:-7}
+      AIVF_FAILED_WORKSPACE_RETENTION_HOURS: ${AIVF_FAILED_WORKSPACE_RETENTION_HOURS:-24}
     volumes:
       - aivf-output:/app/output
       - aivf-uploads:/app/uploads
       - aivf-knowledge:/app/knowledge_base_v3
       - aivf-state:/app/state
+
+  janitor:
+    image: ${AIVF_IMAGE:?AIVF_IMAGE must be pinned to an immutable image digest}
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    env_file:
+      - .env
+    environment:
+      AIVF_STATE_DIR: /app/state
+      AIVF_UPLOAD_DIR: /app/uploads
+      AIVF_OUTPUT_DIR: /app/output
+      AIVF_JOB_METADATA_RETENTION_DAYS: ${AIVF_JOB_METADATA_RETENTION_DAYS:-30}
+      AIVF_LOG_RETENTION_DAYS: ${AIVF_LOG_RETENTION_DAYS:-7}
+      AIVF_EVENT_RETENTION_DAYS: ${AIVF_EVENT_RETENTION_DAYS:-30}
+      AIVF_IDEMPOTENCY_RETENTION_HOURS: ${AIVF_IDEMPOTENCY_RETENTION_HOURS:-24}
+      AIVF_UPLOAD_RETENTION_DAYS: ${AIVF_UPLOAD_RETENTION_DAYS:-7}
+      AIVF_FAILED_WORKSPACE_RETENTION_HOURS: ${AIVF_FAILED_WORKSPACE_RETENTION_HOURS:-24}
+    volumes:
+      - aivf-output:/app/output
+      - aivf-uploads:/app/uploads
+      - aivf-state:/app/state
+    command: ["sh", "-c", "while true; do aivf-janitor; sleep 21600; done"]
 
 volumes:
   aivf-output:
