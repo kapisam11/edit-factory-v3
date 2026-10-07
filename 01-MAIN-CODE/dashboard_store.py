@@ -913,6 +913,9 @@ class DashboardStore:
                     reserved_bytes = max(0, int(budget.get("reserved_bytes", 0)))
                     cpu_weight = max(0.01, float(budget.get("cpu_weight", 0.01)))
                     memory_bytes = max(0, int(budget.get("memory_bytes", 0)))
+                    from ai_video_factory.job_class import budget_for
+                    resource_class = str(budget.get("job_class") or params.get("_resource_class") or "cpu_render")
+                    class_budget = budget_for(resource_class)
                     disk_used = int(conn.execute(
                         "SELECT COALESCE(SUM(reserved_bytes),0) FROM resource_reservations"
                     ).fetchone()[0])
@@ -922,20 +925,31 @@ class DashboardStore:
                     memory_used = int(conn.execute(
                         "SELECT COALESCE(SUM(memory_bytes),0) FROM resource_reservations"
                     ).fetchone()[0])
+                    class_count = int(conn.execute(
+                        "SELECT COUNT(*) FROM resource_reservations WHERE resource_class=?"
+                        (resource_class,),
+                    ).fetchone()[0])
+                    class_cpu = float(conn.execute(
+                        "SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations WHERE resource_class=?"
+                        (resource_class,),
+                    ).fetchone()[0])
                     if (
                         disk_used + reserved_bytes > MAX_RESERVED_DISK_BYTES
                         or cpu_used + cpu_weight > MAX_CPU_WEIGHT
                         or memory_used + memory_bytes > MAX_RESERVED_MEMORY_BYTES
+                        or class_count >= class_budget.max_active
+                        or class_cpu + cpu_weight > class_budget.max_cpu_weight
                     ):
                         raise JobRetryNotAllowed("retry resource capacity reached")
                     conn.execute(
                         """
                         INSERT INTO resource_reservations(
-                            job_id,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
-                        ) VALUES (?,?,?,?,?,?)
+                            job_id,resource_class,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
+                        ) VALUES (?,?,?,?,?,?,?)
                         """,
                         (
                             job_id,
+                            resource_class,
                             max(0, int(budget.get("input_bytes", 0))),
                             reserved_bytes,
                             cpu_weight,
