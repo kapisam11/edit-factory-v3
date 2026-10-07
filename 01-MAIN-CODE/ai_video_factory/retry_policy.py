@@ -21,21 +21,34 @@ NON_RETRYABLE_TEXT = (
 )
 
 def classify_job_error(error: Exception) -> JobError:
+    message = str(error).strip() or type(error).__name__
+    lowered = message.lower()
     if isinstance(error, TimeoutError):
-        return JobError(ErrorCode.TOOL_TIMEOUT, str(error) or "operation timed out", True)
+        return JobError(ErrorCode.TOOL_TIMEOUT, message, True)
     if isinstance(error, ConnectionError):
-        return JobError(ErrorCode.TOOL_FAILED, str(error) or "connection failure", True)
+        return JobError(ErrorCode.TOOL_FAILED, message, True)
     if isinstance(error, sqlite3.OperationalError):
-        message = str(error)
-        if "locked" in message.lower() or "busy" in message.lower():
+        if "locked" in lowered or "busy" in lowered:
             return JobError(ErrorCode.DATABASE_BUSY, message, True)
     if isinstance(error, PermissionError):
-        return JobError(ErrorCode.INTERNAL, str(error), False)
+        return JobError(ErrorCode.INTERNAL, message, False)
     if isinstance(error, FileNotFoundError):
-        return JobError(ErrorCode.TOOL_MISSING, str(error), False)
+        return JobError(ErrorCode.TOOL_MISSING, message, False)
     if isinstance(error, OSError):
-        return JobError(ErrorCode.TOOL_FAILED, str(error), True)
-    return classify_exception(error)
+        return JobError(ErrorCode.TOOL_FAILED, message, True)
+
+    structured = classify_exception(error)
+    if structured.code != ErrorCode.INTERNAL:
+        return structured
+    if any(marker in lowered for marker in NON_RETRYABLE_TEXT):
+        return JobError(ErrorCode.INTERNAL, message, False)
+    if any(marker in lowered for marker in (
+        "429", "temporarily unavailable", "temporary failure", "rate limit",
+        "connection reset", "connection aborted", "502", "503", "504",
+        "provider timeout", "provider unavailable",
+    )):
+        return JobError(ErrorCode.TOOL_FAILED, message, True)
+    return structured
 
 
 def is_retryable_error(error: Exception) -> bool:
