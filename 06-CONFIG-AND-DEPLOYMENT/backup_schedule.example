@@ -1,10 +1,11 @@
 # Backup and maintenance schedule examples for the single-host deployment
 
-# Daily: full SQLite + knowledge + output backup. Configure AIVF_BACKUP_S3_URI
-# for an encrypted off-host copy; production should not rely on local-only backups.
-0 2 * * * cd /opt/edit-factory-v3 && AIVF_ENV=production AIVF_BACKUP_S3_URI=s3://example-aivf-backups bash 06-CONFIG-AND-DEPLOYMENT/backup_smoke.sh >> /var/log/aivf-backup.log 2>&1
+# Daily: full SQLite + knowledge + published output backup. Use an encrypted
+# rclone crypt remote for off-host storage; production must not rely on local-only backups.
+0 2 * * * cd /opt/edit-factory-v3 && AIVF_ENV=production AIVF_BACKUP_RCLONE_REMOTE=crypt:aivf-offsite bash 06-CONFIG-AND-DEPLOYMENT/backup_state.sh >> /var/log/aivf-backup.log 2>&1
 
-# Hourly: operational retention cleanup and stale workspace cleanup.
+# Hourly: SQLite backup plus operational retention cleanup and stale workspace cleanup.
+5 * * * * cd /opt/edit-factory-v3 && AIVF_DB_BACKUP_RCLONE_REMOTE=crypt:aivf-db bash 06-CONFIG-AND-DEPLOYMENT/backup_db_hourly.sh >> /var/log/aivf-db-backup.log 2>&1
 17 * * * * cd /opt/edit-factory-v3 && /usr/local/bin/aivf-maintenance /srv/aivf/state >> /var/log/aivf-maintenance.log 2>&1
 
 # Weekly: run the restore drill against the most recent verified backup.
