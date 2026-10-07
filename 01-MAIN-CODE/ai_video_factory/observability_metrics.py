@@ -116,6 +116,7 @@ class MetricsRegistry:
             lines.append(f'aivf_{metric}_milliseconds_bucket{{le="+Inf"}} {int(hist["count"])}')
             lines.append(f"aivf_{metric}_milliseconds_count {int(hist['count'])}")
             lines.append(f"aivf_{metric}_milliseconds_sum {hist['sum']}")
+            lines.append(f"aivf_{metric}_milliseconds_avg {hist['sum'] / hist['count'] if hist['count'] else 0.0}")
         return "\n".join(lines)+("\n" if lines else "")
 
     def prometheus(self)->str: return self.to_prometheus()
