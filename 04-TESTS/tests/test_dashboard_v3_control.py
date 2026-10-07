@@ -32,6 +32,21 @@ def test_dashboard_queues_full_v3_configuration(monkeypatch, tmp_path):
 
     monkeypatch.setattr(appmod, "_runtime_capabilities", lambda: {"ocr": True, "object_detection": True, "diarization": True})
     monkeypatch.setattr(appmod, "_save_and_validate_upload", save_upload)
+    monkeypatch.setattr(
+        appmod,
+        "probe_media_contract",
+        lambda _path, _limits: {
+            "size_bytes": 7,
+            "duration_seconds": 10.0,
+            "width": 1280,
+            "height": 720,
+            "fps": 30.0,
+            "audio_channels": 2,
+            "format": "mov,mp4,m4a,3gp,3g2,mj2",
+            "video_codec": "h264",
+            "audio_codec": "aac",
+        },
+    )
     monkeypatch.setattr(appmod, "_start_job", start_job)
 
     response = appmod.app.test_client().post(
