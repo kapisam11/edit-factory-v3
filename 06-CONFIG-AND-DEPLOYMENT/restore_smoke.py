@@ -11,7 +11,7 @@ parser.add_argument("--archive", required=True)
 args = parser.parse_args()
 
 archive = Path(args.archive)
-root = Path("/tmp/aivf-restore-smoke")
+root = Path(os.environ.get("AIVF_RESTORE_STAGING_DIR", "/app/state/.restore-smoke"))
 shutil.rmtree(root, ignore_errors=True)
 root.mkdir(parents=True)
 with tarfile.open(archive, "r:gz") as handle:
