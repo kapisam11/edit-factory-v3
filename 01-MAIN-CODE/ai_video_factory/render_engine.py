@@ -217,6 +217,32 @@ def _run_ffmpeg_streaming(
         )
 
         reader_error: list[str] = []
+        output_limit_error: list[str] = []
+        watchdog_stop = threading.Event()
+
+        def watchdog_output_size() -> None:
+            try:
+                from .media_limits import MediaLimits
+                max_bytes = int(MediaLimits.from_environment().max_output_bytes)
+            except (TypeError, ValueError):
+                return
+            output_path = None
+            if cmd:
+                candidate = str(cmd[-1])
+                if candidate and not candidate.startswith("-") and not candidate.startswith("pipe:"):
+                    output_path = Path(candidate)
+            if output_path is None:
+                return
+            while not watchdog_stop.wait(0.25):
+                try:
+                    if output_path.is_file() and output_path.stat().st_size > max_bytes:
+                        output_limit_error.append(
+                            f"FFmpeg output exceeded {max_bytes} bytes: {output_path}"
+                        )
+                        terminate_process_tree(process, grace_seconds=0.5)
+                        return
+                except OSError:
+                    continue
 
         def pump_stderr() -> None:
             stream = process.stderr
@@ -240,7 +266,13 @@ def _run_ffmpeg_streaming(
             name="aivf-ffmpeg-stderr",
             daemon=True,
         )
+        watchdog = threading.Thread(
+            target=watchdog_output_size,
+            name="aivf-ffmpeg-output-watchdog",
+            daemon=True,
+        )
         reader.start()
+        watchdog.start()
         try:
             returncode = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
@@ -250,7 +282,9 @@ def _run_ffmpeg_streaming(
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=3)
+            watchdog_stop.set()
             reader.join(timeout=2)
+            watchdog.join(timeout=1)
             detail = "".join(stderr_tail).strip()
             detail_suffix = f": {detail[-2000:]}" if detail else ""
             raise FFmpegExecutionError(
@@ -263,7 +297,20 @@ def _run_ffmpeg_streaming(
                 stderr_path=str(diagnostic_path),
             ) from exc
 
+        watchdog_stop.set()
         reader.join(timeout=2)
+        watchdog.join(timeout=1)
+        if output_limit_error:
+            detail = "".join(stderr_tail).strip()
+            raise FFmpegExecutionError(
+                output_limit_error[-1],
+                command_id=command_id,
+                command=cmd,
+                exit_code=returncode,
+                duration_seconds=time.perf_counter() - started,
+                stderr_tail=detail[-2000:],
+                stderr_path=str(diagnostic_path),
+            )
         detail = "".join(stderr_tail).strip()
         if returncode != 0:
             detail_suffix = f": {detail[-2000:]}" if detail else ""
