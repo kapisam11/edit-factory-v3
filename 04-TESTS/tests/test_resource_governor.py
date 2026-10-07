@@ -153,3 +153,24 @@ def test_directory_size_does_not_follow_symlinks(tmp_path):
     except OSError:
         pytest.skip("symlinks are unavailable on this platform")
     assert directory_size(root) == 3
+
+
+def test_principal_queue_limit_uses_indexed_column(tmp_path):
+    import resource_governor as governor
+
+    db_path = tmp_path / "jobs.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE jobs(principal TEXT, params TEXT, status TEXT)")
+        conn.execute(
+            "INSERT INTO jobs(principal,params,status) VALUES(?,?,?)",
+            ("same-client", "not-json", "queued"),
+        )
+        conn.execute(
+            "INSERT INTO jobs(principal,params,status) VALUES(?,?,?)",
+            ("other-client", "not-json", "queued"),
+        )
+
+    assert governor.principal_queued_jobs(
+        lambda: sqlite3.connect(db_path),
+        "same-client",
+    ) == 1

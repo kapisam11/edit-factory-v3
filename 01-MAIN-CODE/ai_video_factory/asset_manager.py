@@ -193,11 +193,12 @@ def install_runtime_assets(*, root: Optional[Path] = None, download_missing: boo
             finally:
                 if tmp.exists():
                     tmp.unlink()
+        verified = verify_runtime_asset(spec, root)
         result[spec.name] = {
-            "available": verify_runtime_asset(spec, root),
+            "available": verified,
             "path": str(path),
             "url": spec.url,
-            "verified": spec.sha256 is not None and verify_runtime_asset(spec, root),
+            "verified": verified,
         }
     return result
 
