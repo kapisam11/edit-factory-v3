@@ -817,7 +817,7 @@ class DashboardStore:
 
         def write(conn: sqlite3.Connection) -> int:
             row = conn.execute(
-                "SELECT status, error, error_code, retry_count FROM jobs WHERE id=?", (job_id,)
+                "SELECT status, error, error_code, retry_count, params FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
             if row is None:
                 return 0
