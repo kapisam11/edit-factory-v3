@@ -290,7 +290,7 @@ jobs:
             break
           } catch {
             if ($attempt -lt 3) {
-              Write-Warning "Chocolatey FFmpeg install failed on attempt $attempt: $($_.Exception.Message)"
+              Write-Warning "Chocolatey FFmpeg install failed on attempt ${attempt}: $($_.Exception.Message)"
               Start-Sleep -Seconds (10 * $attempt)
             }
           }
