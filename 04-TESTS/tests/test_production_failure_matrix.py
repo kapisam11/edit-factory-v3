@@ -131,3 +131,30 @@ def test_fifty_unique_submissions_do_not_exceed_single_transaction_races(tmp_pat
 
     assert sum(results) == 50
     assert len(store.list_jobs(100)) == 50
+
+
+def test_idempotent_resource_class_uses_configured_capacity(tmp_path, monkeypatch):
+    store = DashboardStore(tmp_path / "jobs.db")
+    store.ensure_indexes()
+    monkeypatch.setenv("AIVF_RESOURCE_CLASS_STANDARD_CAPACITY", "1")
+
+    assert store.insert_job_idempotent(
+        "job-idem-standard-1",
+        "standard",
+        {},
+        principal="tester",
+        idempotency_key="same-1",
+        request_hash="hash-1",
+        resource_class="STANDARD",
+    ) == ("job-idem-standard-1", True)
+
+    with pytest.raises(JobAdmissionError, match="resource class STANDARD capacity reached"):
+        store.insert_job_idempotent(
+            "job-idem-standard-2",
+            "standard",
+            {},
+            principal="tester",
+            idempotency_key="same-2",
+            request_hash="hash-2",
+            resource_class="STANDARD",
+        )
