@@ -840,6 +840,60 @@ class DashboardStore:
                         raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
                 elif row["error"] and not is_retryable_error(RuntimeError(str(row["error"]))):
                     raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
+
+            # A failed/crashed worker may have released its reservation. If the
+            # persisted job contains a prior admission budget, restore that
+            # reservation atomically before putting the job back in the queue.
+            try:
+                params = json.loads(row["params"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                params = {}
+            budget = params.get("_resource_budget")
+            if isinstance(budget, dict):
+                existing_reservation = conn.execute(
+                    "SELECT 1 FROM resource_reservations WHERE job_id=?",
+                    (job_id,),
+                ).fetchone()
+                if existing_reservation is None:
+                    from resource_governor import (
+                        MAX_CPU_WEIGHT,
+                        MAX_RESERVED_DISK_BYTES,
+                        MAX_RESERVED_MEMORY_BYTES,
+                    )
+                    reserved_bytes = max(0, int(budget.get("reserved_bytes", 0)))
+                    cpu_weight = max(0.01, float(budget.get("cpu_weight", 0.01)))
+                    memory_bytes = max(0, int(budget.get("memory_bytes", 0)))
+                    disk_used = int(conn.execute(
+                        "SELECT COALESCE(SUM(reserved_bytes),0) FROM resource_reservations"
+                    ).fetchone()[0])
+                    cpu_used = float(conn.execute(
+                        "SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations"
+                    ).fetchone()[0])
+                    memory_used = int(conn.execute(
+                        "SELECT COALESCE(SUM(memory_bytes),0) FROM resource_reservations"
+                    ).fetchone()[0])
+                    if (
+                        disk_used + reserved_bytes > MAX_RESERVED_DISK_BYTES
+                        or cpu_used + cpu_weight > MAX_CPU_WEIGHT
+                        or memory_used + memory_bytes > MAX_RESERVED_MEMORY_BYTES
+                    ):
+                        raise JobRetryNotAllowed("retry resource capacity reached")
+                    conn.execute(
+                        """
+                        INSERT INTO resource_reservations(
+                            job_id,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
+                        ) VALUES (?,?,?,?,?,?)
+                        """,
+                        (
+                            job_id,
+                            max(0, int(budget.get("input_bytes", 0))),
+                            reserved_bytes,
+                            cpu_weight,
+                            memory_bytes,
+                            time.time(),
+                        ),
+                    )
+
             changed = int(conn.execute(
                 "UPDATE jobs SET status='queued', step='waiting', error=NULL, error_code=NULL, pkg_dir=NULL, "
                 "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
