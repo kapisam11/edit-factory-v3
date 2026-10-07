@@ -31,6 +31,18 @@ def verify(root: str | Path = ".") -> dict[str, object]:
         env_name = str(asset["sha256_env"])
         path = base / relative
         expected = os.environ.get(env_name, "").strip().lower()
+        manifest = path.parent / "model-manifest.json"
+        if not expected and manifest.is_file():
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+                expected = next(
+                    (str(item.get("sha256", "")).strip().lower()
+                     for item in payload.get("assets", [])
+                     if str(item.get("name")) == path.name),
+                    "",
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                expected = ""
         actual = sha256(path) if path.is_file() else ""
         results.append({
             "name": name,
