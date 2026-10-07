@@ -1209,9 +1209,12 @@ def create_job():
             settings_data,
             allow_skip_qc=os.environ.get("AIVF_ALLOW_SKIP_QC", "0") == "1",
         )
-    except (TypeError, ValueError) as exc:
-        logger.info("Job request validation failed: %s", type(exc).__name__)
+    except TypeError as exc:
+        logger.info("Job request validation failed: TypeError")
         return jsonify({"error": "Invalid job request"}), 400
+    except ValueError as exc:
+        logger.info("Job request validation failed: ValueError")
+        return jsonify({"error": str(exc) or "Invalid job request"}), 400
 
     topic = params["topic"]
     workflow = params["workflow"]
