@@ -124,6 +124,11 @@ def cancel_process(job_id):
                 return jsonify({"error": "Worker termination timed out"}), 503
         web_app_v3._active_processes.pop(job_id, None)
         web_app_v3._runtime_secrets.pop(job_id, None)
+        try:
+            from dashboard_store import DashboardStore
+            DashboardStore(web_app_v3.DB_PATH).release_resources(job_id)
+        except Exception:
+            web_app_v3.logger.exception("Could not release resources for cancelled job %s", job_id)
         web_app_v3.db_update_job(job_id, status="cancelled", step="cancelled")
         web_app_v3.db_append_log(job_id, "INFO", "Job cancelled")
         return jsonify({"job_id": job_id, "status": "cancelled"})
@@ -140,7 +145,7 @@ def _cleanup_old_packages(web_app_v3, max_age_days):
     removed = []
     root = web_app_v3.OUTPUT_FOLDER.resolve()
     for child in root.iterdir():
-        if not child.is_dir() or str(child.resolve()) in protected:
+        if child.name == ".work" or not child.is_dir() or str(child.resolve()) in protected:
             continue
         try:
             if child.stat().st_mtime < cutoff:
@@ -156,13 +161,18 @@ def _reconcile_worker_exit(web_app_v3, job_id, process):
         exit_code = process.exitcode
         with web_app_v3.get_db() as conn:
             cursor = conn.execute(
-                "UPDATE jobs SET status='interrupted', step='interrupted', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('queued','running')",
+                "UPDATE jobs SET status='interrupted', step='interrupted', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
                 (f"Worker exited unexpectedly with code {exit_code}", job_id),
             )
             cancelled_cursor = conn.execute(
                 "UPDATE jobs SET status='cancelled', step='cancelled', updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='cancelling'", (job_id,),
             )
         if cursor.rowcount or cancelled_cursor.rowcount:
+            try:
+                from dashboard_store import DashboardStore
+                DashboardStore(web_app_v3.DB_PATH).release_resources(job_id)
+            except Exception:
+                web_app_v3.logger.exception("Could not release resources after worker exit for %s", job_id)
             level = "INFO" if cancelled_cursor.rowcount else "ERROR"
             message = "Worker exited after cancellation" if cancelled_cursor.rowcount else "Worker exited unexpectedly"
             web_app_v3.db_append_log(job_id, level, message)

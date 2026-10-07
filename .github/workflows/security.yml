@@ -53,7 +53,7 @@ jobs:
       - name: Verify environment
         run: uv pip check
       - name: Audit dependencies
-        run: uv run pip-audit
+        run: uv run pip-audit --skip-editable
 
   bandit:
     name: Bandit (high severity/high confidence)

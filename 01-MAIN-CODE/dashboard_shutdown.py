@@ -13,6 +13,15 @@ def shutdown_active_workers() -> None:
         finally:
             web_app_v3._active_processes.pop(job_id, None)
             web_app_v3._runtime_secrets.pop(job_id, None)
+            db_path = getattr(web_app_v3, "DB_PATH", None)
+            if db_path is not None:
+                try:
+                    from dashboard_store import DashboardStore
+                    DashboardStore(db_path).release_resources(job_id)
+                except Exception:
+                    logger = getattr(web_app_v3, "logger", None)
+                    if logger is not None:
+                        logger.exception("Could not release resources during shutdown for %s", job_id)
             job = web_app_v3.db_get_job(job_id)
             if job and job["status"] not in web_app_v3.TERMINAL_STATUSES:
                 web_app_v3.db_update_job(job_id, status="interrupted", step="interrupted", error="Dashboard worker shut down")

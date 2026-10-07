@@ -6,12 +6,12 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 _REQUIRED_COLUMNS = {
     "jobs": {
         "id", "topic", "status", "step", "params", "principal", "pkg_dir",
-        "error", "retry_count", "worker_heartbeat_at", "current_attempt",
+        "error", "error_code", "retry_count", "worker_heartbeat_at", "current_attempt",
         "worker_id", "lease_token", "created_at", "updated_at",
     },
     "job_logs": {"id", "job_id", "created_at", "level", "message"},
@@ -79,6 +79,7 @@ def migrate_database(path: str | Path) -> int:
                 principal TEXT NOT NULL DEFAULT 'unknown',
                 pkg_dir TEXT,
                 error TEXT,
+                error_code TEXT,
                 retry_count INTEGER NOT NULL DEFAULT 0,
                 worker_heartbeat_at TEXT,
                 current_attempt INTEGER NOT NULL DEFAULT 0,
@@ -90,6 +91,7 @@ def migrate_database(path: str | Path) -> int:
             """
         )
         _add_column_if_missing(conn, "jobs", "principal", "TEXT NOT NULL DEFAULT 'unknown'")
+        _add_column_if_missing(conn, "jobs", "error_code", "TEXT")
         _add_column_if_missing(conn, "jobs", "retry_count", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(conn, "jobs", "worker_heartbeat_at", "TEXT")
         _add_column_if_missing(conn, "jobs", "current_attempt", "INTEGER NOT NULL DEFAULT 0")
@@ -218,7 +220,21 @@ def migrate_database(path: str | Path) -> int:
         )
 
         conn.execute(
-            "UPDATE jobs SET principal=COALESCE(NULLIF(principal,''), json_extract(params,'$._principal'), 'unknown')"
+            """
+            UPDATE jobs
+            SET principal=COALESCE(
+                NULLIF(
+                    CASE
+                        WHEN principal IS NULL OR principal='' OR principal='unknown'
+                        THEN json_extract(params, '$._principal')
+                        ELSE principal
+                    END,
+                    ''
+                ),
+                'unknown'
+            )
+            WHERE principal IS NULL OR principal='' OR principal='unknown'
+            """
         )
 
         if current == 0:
@@ -229,6 +245,8 @@ def migrate_database(path: str | Path) -> int:
             current = 3
         if current < 4:
             current = 4
+        if current < 5:
+            current = 5
         conn.execute("DELETE FROM schema_version")
         conn.execute("INSERT INTO schema_version(version) VALUES (?)", (CURRENT_SCHEMA_VERSION,))
         return CURRENT_SCHEMA_VERSION

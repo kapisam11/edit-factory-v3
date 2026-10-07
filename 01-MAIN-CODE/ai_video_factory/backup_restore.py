@@ -22,16 +22,41 @@ def _sha256(path: Path) -> str:
 
 
 def _safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
+    """Safely extract regular files/directories without tar path traversal."""
     root = destination.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    allowed_types = {tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE}
     for member in archive.getmembers():
+        if member.type not in allowed_types or member.issym() or member.islnk():
+            raise ValueError(f"backup contains an unsafe member: {member.name}")
         target = (root / member.name).resolve()
         try:
             target.relative_to(root)
         except ValueError as exc:
             raise ValueError(f"backup member escapes restore root: {member.name}") from exc
-        if member.issym() or member.islnk():
-            raise ValueError(f"backup contains an unsafe link: {member.name}")
-    archive.extractall(destination)
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = archive.extractfile(member)
+        if source is None:
+            raise ValueError(f"backup file cannot be read: {member.name}")
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".partial",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                shutil.copyfileobj(source, handle, length=1024 * 1024)
+            os.replace(temporary_path, target)
+        finally:
+            source.close()
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
 
 def backup_database(source: str | Path, destination: str | Path) -> Path:
@@ -90,8 +115,7 @@ def create_backup(
             "files": files,
         }
         (root / "backup-manifest.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "
-",
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
 
@@ -141,7 +165,10 @@ def verify_backup(
             verified += 1
 
         jobs = root / "jobs.db"
-        sqlite3.connect(str(jobs)).execute("PRAGMA integrity_check").fetchone()
+        with sqlite3.connect(str(jobs)) as conn:
+            integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0] or "").lower()
+        if integrity != "ok":
+            raise ValueError(f"backup database integrity check failed: {integrity}")
         result = {
             "ok": True,
             "archive": str(archive_path),
@@ -152,8 +179,7 @@ def verify_backup(
             marker = Path(marker_path)
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(
-                json.dumps({"backup": str(archive_path), "verified_files": verified}, sort_keys=True) + "
-",
+                json.dumps({"backup": str(archive_path), "verified_files": verified}, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
         return result
@@ -173,7 +199,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     verify.add_argument("--backup", required=True)
     verify.add_argument("--marker", default="state/backup-restore-verified")
 
-    args = parser.parse_args(list(argv or []))
+    args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "backup":
         result = create_backup(
             db_path=args.db,
@@ -190,3 +216,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 
 __all__ = ["backup_database", "create_backup", "verify_backup", "main"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

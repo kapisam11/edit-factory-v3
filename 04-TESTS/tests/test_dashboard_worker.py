@@ -38,7 +38,27 @@ def test_run_job_executes_worker_and_cleans_up(monkeypatch):
         def __init__(self, db_path):
             calls["store_db_path"] = db_path
 
-        def heartbeat_job(self, job_id):
+        def begin_attempt(self, job_id, worker_id, workspace):
+            calls["attempt"] = (job_id, worker_id, workspace)
+            return {
+                "attempt_id": "attempt-1",
+                "lease_token": "lease-1",
+                "worker_id": worker_id,
+                "attempt_number": "1",
+            }
+
+        def heartbeat_attempt(self, job_id, attempt_id, lease_token):
+            return True
+
+        def finish_attempt(self, job_id, attempt_id, lease_token, **kwargs):
+            calls["finished"] = (job_id, attempt_id, lease_token, kwargs)
+            return True
+
+        def get_job(self, job_id):
+            return {"status": "done"}
+
+        def release_resources(self, job_id):
+            calls["released"] = job_id
             return True
 
     def fake_run_job_worker_impl(job_id, params, secrets, output_root, db_path, skip_stages):
@@ -76,7 +96,14 @@ def test_run_job_executes_worker_and_cleans_up(monkeypatch):
     assert calls["joined_timeout"] == 5.0
     assert calls["worker"] == (
         "job-123",
-        {"workflow": "fast", "target_seconds": 60.0},
+        {
+            "workflow": "fast",
+            "target_seconds": 60.0,
+            "_attempt_id": "attempt-1",
+            "_lease_token": "lease-1",
+            "_worker_id": calls["attempt"][1],
+            "_workspace_root": "/tmp/output/.work/job-123/attempt-1",
+        },
         {"API_KEY": "secret"},
         "/tmp/output",
         "/tmp/jobs.db",

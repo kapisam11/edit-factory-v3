@@ -32,6 +32,21 @@ def test_dashboard_queues_full_v3_configuration(monkeypatch, tmp_path):
 
     monkeypatch.setattr(appmod, "_runtime_capabilities", lambda: {"ocr": True, "object_detection": True, "diarization": True})
     monkeypatch.setattr(appmod, "_save_and_validate_upload", save_upload)
+    monkeypatch.setattr(
+        appmod,
+        "probe_media_contract",
+        lambda _path, _limits: {
+            "size_bytes": 7,
+            "duration_seconds": 10.0,
+            "width": 1280,
+            "height": 720,
+            "fps": 30.0,
+            "audio_channels": 2,
+            "format": "mov,mp4,m4a,3gp,3g2,mj2",
+            "video_codec": "h264",
+            "audio_codec": "aac",
+        },
+    )
     monkeypatch.setattr(appmod, "_start_job", start_job)
 
     response = appmod.app.test_client().post(
@@ -150,8 +165,11 @@ def test_worker_dispatches_v3_to_real_v3_pipeline(monkeypatch, tmp_path):
     assert captured["topic"] == "V3 worker"
     assert captured["kwargs"]["platform"] == "youtube_shorts"
     assert captured["kwargs"]["audience"] == "general short-form viewers"
-    assert appmod.db_get_job("job-v3-worker")["status"] == "done"
-    assert (Path(captured["package_dir"]) / "v3_job_result.json").is_file()
+    job = appmod.db_get_job("job-v3-worker")
+    assert job["status"] == "done"
+    published_package = Path(job["pkg_dir"])
+    assert published_package != Path(captured["package_dir"])
+    assert (published_package / "v3_job_result.json").is_file()
 
 
 def test_v3_defaults_are_platform_safe(monkeypatch, tmp_path):
