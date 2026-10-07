@@ -119,6 +119,25 @@ class DashboardStore:
         return version
 
     @staticmethod
+    def _resource_class_capacity(class_name: str) -> int:
+        caps = {
+            "LIGHT": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_LIGHT_CAPACITY", "4"))),
+            "STANDARD": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_STANDARD_CAPACITY", "2"))),
+            "HEAVY": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_HEAVY_CAPACITY", "1"))),
+        }
+        try:
+            return caps[class_name]
+        except KeyError as exc:
+            raise JobAdmissionError(f"unsupported resource class: {class_name}") from exc
+
+    @staticmethod
+    def _resource_class_active_count(conn: sqlite3.Connection, class_name: str) -> int:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE resource_class=? AND status IN ('queued','running')",
+            (class_name,),
+        ).fetchone()[0])
+
+    @staticmethod
     def _record_event(
         conn: sqlite3.Connection,
         job_id: str,
@@ -190,24 +209,12 @@ class DashboardStore:
                 ).fetchone()[0])
                 if used_units + int(resource_units) > int(resource_capacity_units or 100):
                     raise JobAdmissionError("resource capacity reached")
-            class_name = str(resource_class).strip().upper() if resource_class else None
-            if class_name is not None:
-                class_caps = {
-                    "LIGHT": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_LIGHT_CAPACITY", "4"))),
-                    "STANDARD": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_STANDARD_CAPACITY", "2"))),
-                    "HEAVY": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_HEAVY_CAPACITY", "1"))),
-                }
-                class_limit = class_caps.get(class_name)
-                if class_limit is None:
-                    raise JobAdmissionError(f"unsupported resource class: {class_name}")
-                active_class = int(conn.execute(
-                    "SELECT COUNT(*) FROM jobs WHERE resource_class=? AND status IN ('queued','running')",
-                    (class_name,),
-                ).fetchone()[0])
-                if active_class >= class_limit:
+            requested_class = str(resource_class).strip().upper() if resource_class else None
+            class_name = requested_class or "STANDARD"
+            if requested_class is not None:
+                class_limit = self._resource_class_capacity(class_name)
+                if self._resource_class_active_count(conn, class_name) >= class_limit:
                     raise JobAdmissionError(f"resource class {class_name} capacity reached")
-            else:
-                class_name = "STANDARD"
             if reserved_memory_bytes is not None and max_reserved_memory_bytes is not None:
                 used_memory = int(conn.execute(
                     "SELECT COALESCE(SUM(reserved_memory_bytes),0) FROM jobs WHERE status IN ('queued','running')"
@@ -358,24 +365,12 @@ class DashboardStore:
                 ).fetchone()[0])
                 if used_units + int(resource_units) > int(resource_capacity_units or 100):
                     raise JobAdmissionError("resource capacity reached")
-            class_name = str(resource_class).strip().upper() if resource_class else None
-            if class_name is not None:
-                class_caps = {
-                    "LIGHT": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_LIGHT_CAPACITY", "4"))),
-                    "STANDARD": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_STANDARD_CAPACITY", "2"))),
-                    "HEAVY": max(1, int(os.environ.get("AIVF_RESOURCE_CLASS_HEAVY_CAPACITY", "1"))),
-                }
-                class_limit = class_caps.get(class_name)
-                if class_limit is None:
-                    raise JobAdmissionError(f"unsupported resource class: {class_name}")
-                active_class = int(conn.execute(
-                    "SELECT COUNT(*) FROM jobs WHERE resource_class=? AND status IN ('queued','running')",
-                    (class_name,),
-                ).fetchone()[0])
-                if active_class >= class_limit:
+            requested_class = str(resource_class).strip().upper() if resource_class else None
+            class_name = requested_class or "STANDARD"
+            if requested_class is not None:
+                class_limit = self._resource_class_capacity(class_name)
+                if self._resource_class_active_count(conn, class_name) >= class_limit:
                     raise JobAdmissionError(f"resource class {class_name} capacity reached")
-            else:
-                class_name = "STANDARD"
             if reserved_memory_bytes is not None and max_reserved_memory_bytes is not None:
                 used_memory = int(conn.execute(
                     "SELECT COALESCE(SUM(reserved_memory_bytes),0) FROM jobs WHERE status IN ('queued','running')"
@@ -562,6 +557,14 @@ class DashboardStore:
             ).fetchone()
         return row is not None
 
+    def has_attempt_ownership(self, job_id: str, attempt_id: str, lease_token: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM jobs WHERE id=? AND attempt_id=? AND worker_token=?",
+                (job_id, attempt_id, lease_token),
+            ).fetchone()
+        return row is not None
+
     def is_attempt_owner(self, job_id: str, attempt_id: str, lease_token: str) -> bool:
         with self.connect() as conn:
             row = conn.execute(
@@ -584,7 +587,8 @@ class DashboardStore:
             raise ValueError(f"Invalid owned job update fields: {sorted(invalid)}")
         def write(conn: sqlite3.Connection) -> bool:
             row = conn.execute(
-                "SELECT status FROM jobs WHERE id=? AND attempt_id=? AND worker_token=?",
+                "SELECT status FROM jobs WHERE id=? AND attempt_id=? AND worker_token=? "
+                "AND status IN ('running','cancelling')",
                 (job_id, attempt_id, lease_token),
             ).fetchone()
             if row is None:
@@ -666,7 +670,9 @@ class DashboardStore:
                     raise JobRetryNotAllowed("recorded job failure is deterministic and should not be retried")
             changed = int(conn.execute(
                 "UPDATE jobs SET status='queued', step='waiting', error=NULL, error_code=NULL, pkg_dir=NULL, "
-                "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
+                "attempt_id=NULL, worker_token=NULL, workspace_dir=NULL, current_attempt=NULL, "
+                "worker_heartbeat_at=NULL, started_at=NULL, finished_at=NULL, retry_count=retry_count+1, "
+                "updated_at=CURRENT_TIMESTAMP "
                 "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
                 (job_id, max_attempts),
             ).rowcount)
@@ -701,7 +707,8 @@ class DashboardStore:
                 attempt_id = row["attempt_id"]
                 updated = conn.execute(
                     "UPDATE jobs SET status='interrupted', step='interrupted', "
-                    "finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
+                    "finished_at=CURRENT_TIMESTAMP, attempt_id=NULL, worker_token=NULL, "
+                    "workspace_dir=NULL, current_attempt=NULL, updated_at=CURRENT_TIMESTAMP "
                     "WHERE id=? AND status IN ('running','cancelling')",
                     (job_id,),
                 ).rowcount
@@ -730,6 +737,16 @@ class DashboardStore:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         return dict(row) if row else None
+
+    def list_queued_jobs(self, limit: int = 100) -> list[dict]:
+        bounded_limit = max(1, min(int(limit), self.MAX_LIST_LIMIT))
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM jobs WHERE status='queued' "
+                "ORDER BY priority DESC, created_at ASC LIMIT ?",
+                (bounded_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_jobs(self, limit: int = 100) -> list[dict]:
         try:
