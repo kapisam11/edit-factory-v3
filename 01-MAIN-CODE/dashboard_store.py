@@ -926,11 +926,11 @@ class DashboardStore:
                         "SELECT COALESCE(SUM(memory_bytes),0) FROM resource_reservations"
                     ).fetchone()[0])
                     class_count = int(conn.execute(
-                        "SELECT COUNT(*) FROM resource_reservations WHERE resource_class=?"
+                        "SELECT COUNT(*) FROM resource_reservations WHERE resource_class=?",
                         (resource_class,),
                     ).fetchone()[0])
                     class_cpu = float(conn.execute(
-                        "SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations WHERE resource_class=?"
+                        "SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations WHERE resource_class=?",
                         (resource_class,),
                     ).fetchone()[0])
                     if (
