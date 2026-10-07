@@ -242,7 +242,7 @@ def db_update_job(job_id: str, **kwargs: Any) -> int:
     """Legacy-compatible status update routed through the durable lifecycle rules."""
     if not kwargs:
         return 0
-    allowed = {"status", "step", "params", "pkg_dir", "error"}
+    allowed = {"status", "step", "params", "pkg_dir", "error", "error_code"}
     invalid = set(kwargs) - allowed
     if invalid:
         raise ValueError(f"Invalid job fields: {sorted(invalid)}")
@@ -874,6 +874,11 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
         try:
             process.start()
         except Exception:
+            try:
+                from dashboard_store import DashboardStore
+                DashboardStore(DB_PATH).release_resources(job_id)
+            except Exception:
+                logger.exception("Could not release resources after worker start failure for %s", job_id)
             db_update_job(
                 job_id,
                 status="error",
@@ -1305,7 +1310,7 @@ def create_job():
             )
             if not created:
                 if resource_reserved:
-                    store.release_resources(actual_job_id)
+                    store.release_resources(job_id)
                     resource_reserved = False
                 if upload_path is not None:
                     upload_path.unlink(missing_ok=True)
