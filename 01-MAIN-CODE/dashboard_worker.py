@@ -1,6 +1,8 @@
 """Spawn-safe worker launcher."""
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import threading
 import uuid
@@ -24,6 +26,24 @@ def _skip_stages_for_workflow(workflow: str) -> list[str]:
     }[selected]
     all_names = ["research", "plan", "script", "thumbnail", "auto_edit", "voiceover", "music", "quality_control", "metadata", "metrics"]
     return [name for name in all_names if name not in configured]
+
+
+def _terminate_current_worker_tree() -> None:
+    """Terminate this worker and all child processes after a hard job deadline."""
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(os.getpid()), "/T", "/F"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+    try:
+        os.killpg(os.getpid(), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        os.kill(os.getpid(), signal.SIGKILL)
 
 
 def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str) -> None:
@@ -100,6 +120,44 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
         daemon=True,
     )
     heartbeat_thread.start()
+
+    deadline_stop = threading.Event()
+    try:
+        from ai_video_factory.media_limits import MediaLimits
+        max_job_seconds = float(MediaLimits.from_environment().max_job_seconds)
+    except (TypeError, ValueError):
+        max_job_seconds = 0.0
+
+    def enforce_deadline() -> None:
+        if max_job_seconds <= 0 or deadline_stop.wait(max_job_seconds):
+            return
+        message = f"Job exceeded maximum runtime of {max_job_seconds:g} seconds"
+        try:
+            heartbeat_store.update_job_if_status(
+                job_id,
+                ("running", "cancelling"),
+                status="error",
+                step="failed",
+                error=message,
+                error_code="tool_timeout",
+            )
+            heartbeat_store.release_resources(job_id)
+            heartbeat_store.finish_attempt(
+                job_id,
+                attempt_id,
+                lease_token,
+                status="failed",
+                error_code="tool_timeout",
+            )
+        finally:
+            _terminate_current_worker_tree()
+
+    deadline_thread = threading.Thread(
+        target=enforce_deadline,
+        name=f"aivf-worker-deadline-{job_id}",
+        daemon=True,
+    )
+    deadline_thread.start()
     params = dict(params)
     workflow = str(params.get("workflow", "default")).strip().lower()
     if workflow == "v3":
@@ -115,14 +173,20 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
     finally:
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=min(interval, 5.0))
+        deadline_stop.set()
         try:
-            heartbeat_store.release_resources(job_id)
+            deadline_thread.join(timeout=min(interval, 5.0))
         except Exception:
             pass
 
         try:
             final = heartbeat_store.get_job(job_id) or {}
             status = str(final.get("status") or "unknown")
+            if str(final.get("lease_token") or "") == lease_token:
+                try:
+                    heartbeat_store.release_resources(job_id)
+                except Exception:
+                    pass
             heartbeat_store.finish_attempt(
                 job_id,
                 attempt_id,
