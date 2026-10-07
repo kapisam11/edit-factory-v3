@@ -3,10 +3,11 @@ set -euo pipefail
 
 COMPOSE_FILE="${AIVF_COMPOSE_FILE:-06-CONFIG-AND-DEPLOYMENT/docker-compose.yml}"
 SERVICE="${AIVF_COMPOSE_SERVICE:-web}"
-REMOTE_ARCHIVE="/tmp/aivf-backup-$$.tar.gz"
+REMOTE_ARCHIVE="/app/state/backups/aivf-backup-$.tar.gz"
 LOCAL_ARCHIVE="${AIVF_BACKUP_ARCHIVE:-./aivf-backup.tar.gz}"
 
 docker compose -f "$COMPOSE_FILE" config >/dev/null
+docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" mkdir -p /app/state/backups
 docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" python /app/06-CONFIG-AND-DEPLOYMENT/backup_smoke.py --archive "$REMOTE_ARCHIVE"
 CONTAINER_ID="$(docker compose -f "$COMPOSE_FILE" ps -q "$SERVICE")"
 test -n "$CONTAINER_ID"
