@@ -56,14 +56,16 @@ def cleanup_operational_state(
         stats["old_jobs"] = int(conn.execute(
             "DELETE FROM jobs WHERE created_at < datetime('now', ?) "
             "AND status IN ('done','cancelled') "
+            "AND (pkg_dir IS NULL OR pkg_dir='') "
             "AND NOT EXISTS (SELECT 1 FROM job_artifacts WHERE job_artifacts.job_id = jobs.id)",
             (cutoff,),
         ).rowcount)
         conn.execute("ANALYZE")
+        conn.commit()
+
         if str(__import__("os").environ.get("AIVF_JANITOR_VACUUM", "")).strip().lower() in {"1", "true", "yes"}:
             conn.execute("VACUUM")
             stats["vacuumed"] = 1
-        conn.commit()
 
         active_rows = conn.execute(
             "SELECT workspace_dir FROM jobs WHERE workspace_dir IS NOT NULL "
