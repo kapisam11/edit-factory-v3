@@ -220,7 +220,21 @@ def migrate_database(path: str | Path) -> int:
         )
 
         conn.execute(
-            "UPDATE jobs SET principal=COALESCE(NULLIF(principal,''), json_extract(params,'$._principal'), 'unknown')"
+            """
+            UPDATE jobs
+            SET principal=COALESCE(
+                NULLIF(
+                    CASE
+                        WHEN principal IS NULL OR principal='' OR principal='unknown'
+                        THEN json_extract(params, '$._principal')
+                        ELSE principal
+                    END,
+                    ''
+                ),
+                'unknown'
+            )
+            WHERE principal IS NULL OR principal='' OR principal='unknown'
+            """
         )
 
         if current == 0:
