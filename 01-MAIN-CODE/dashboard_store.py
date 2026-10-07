@@ -6,7 +6,6 @@ timeouts, bounded write retries, and performance indexes.
 """
 from __future__ import annotations
 
-import os
 import json
 import os
 import sqlite3
