@@ -123,6 +123,8 @@ class RuntimeAssetSpec:
 
 # Heavy model files stay external to the Python wheel. They are downloaded once,
 # checked when a digest is supplied, and reused by all production runs.
+PRODUCTION_ENVIRONMENTS = {"production", "prod"}
+
 RUNTIME_ASSETS = (
     RuntimeAssetSpec(
         "mobilenet_ssd_config",
@@ -170,6 +172,8 @@ def install_runtime_assets(*, root: Optional[Path] = None, download_missing: boo
     No network access occurs unless ``download_missing`` is explicitly true.
     """
     root = root or _project_root()
+    environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+    allow_download = bool(download_missing) and environment not in PRODUCTION_ENVIRONMENTS
     result: Dict[str, Dict[str, object]] = {}
     for spec in RUNTIME_ASSETS:
         path = runtime_asset_path(spec, root)
@@ -182,7 +186,7 @@ def install_runtime_assets(*, root: Optional[Path] = None, download_missing: boo
                 "error": "runtime asset integrity hash is not configured",
             }
             continue
-        if not verify_runtime_asset(spec, root) and download_missing:
+        if not verify_runtime_asset(spec, root) and allow_download:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".part")
             request = urllib.request.Request(spec.url, headers={"User-Agent": "edit-factory-v3"})
@@ -199,6 +203,7 @@ def install_runtime_assets(*, root: Optional[Path] = None, download_missing: boo
             "path": str(path),
             "url": spec.url,
             "verified": verified,
+            "production_policy": "preinstalled-only" if environment in PRODUCTION_ENVIRONMENTS else "explicit-download-only",
         }
     return result
 
