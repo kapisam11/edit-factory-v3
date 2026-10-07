@@ -1,7 +1,8 @@
-"""SQLite and artifact backup/restore helpers for single-host deployments."""
+"""Verified SQLite and artifact backup/restore helpers for single-host deployments."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import argparse
 import json
 from pathlib import Path
 import shutil
@@ -9,7 +10,13 @@ import sqlite3
 from typing import Any
 
 
+ARCHIVE_SUFFIX = ".tar.gz"
+BACKUP_VERSION = 2
+
+
 def _copy_sqlite(source: Path, target: Path) -> None:
+    if not source.is_file():
+        raise ValueError(f"database file not found: {source}")
     target.parent.mkdir(parents=True, exist_ok=True)
     src = sqlite3.connect(str(source), timeout=30)
     try:
@@ -23,13 +30,29 @@ def _copy_sqlite(source: Path, target: Path) -> None:
         src.close()
 
 
-def _copy_tree(source: Path, target: Path) -> None:
-    if not source.exists():
-        target.mkdir(parents=True, exist_ok=True)
-        return
+def _copy_tree(source: Path, target: Path) -> bool:
+    if not source.is_dir():
+        return False
     if target.exists():
         shutil.rmtree(target)
     shutil.copytree(source, target)
+    return True
+
+
+def _archive_base(path: Path) -> Path:
+    raw = str(path)
+    if not raw.endswith(ARCHIVE_SUFFIX):
+        return Path(raw)
+    return Path(raw[: -len(ARCHIVE_SUFFIX)])
+
+
+def _find_backup_root(root: Path) -> Path:
+    candidates = [p.parent for p in root.rglob("backup_manifest.json") if p.is_file()]
+    if not candidates:
+        raise ValueError("backup archive contains no backup_manifest.json")
+    if len(candidates) != 1:
+        raise ValueError("backup archive contains multiple backup manifests")
+    return candidates[0]
 
 
 def create_backup(
@@ -39,10 +62,12 @@ def create_backup(
     output_dir: str | Path,
     destination: str | Path,
     include_output: bool = True,
+    database_path: str | Path | None = None,
 ) -> dict[str, Any]:
     state = Path(state_dir)
     knowledge = Path(knowledge_dir)
     output = Path(output_dir)
+    database = Path(database_path) if database_path is not None else state / "jobs.db"
     target_root = Path(destination)
     target_root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -53,58 +78,29 @@ def create_backup(
         suffix += 1
     target.mkdir(parents=True, exist_ok=False)
 
-    db = state / "jobs.db"
-    if db.is_file():
-        _copy_sqlite(db, target / "state" / "jobs.db")
-    _copy_tree(knowledge, target / "knowledge")
-    if include_output:
-        _copy_tree(output, target / "output")
+    try:
+        _copy_sqlite(database, target / "state" / database.name)
+        knowledge_ok = _copy_tree(knowledge, target / "knowledge")
+        output_ok = True
+        if include_output:
+            output_ok = _copy_tree(output, target / "output")
 
-    manifest = {
-        "version": 1,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "database": (target / "state" / "jobs.db").is_file(),
-        "knowledge": (target / "knowledge").is_dir(),
-        "output": bool(include_output),
-    }
-    (target / "backup_manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return {"path": str(target), "manifest": manifest}
-
-
-def restore_backup(
-    *,
-    backup_dir: str | Path,
-    state_dir: str | Path,
-    knowledge_dir: str | Path,
-    output_dir: str | Path,
-    restore_output: bool = True,
-) -> dict[str, Any]:
-    source = Path(backup_dir)
-    manifest_path = source / "backup_manifest.json"
-    if not manifest_path.is_file():
-        raise ValueError("backup manifest is missing")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("version") != 1:
-        raise ValueError("unsupported backup version")
-
-    state = Path(state_dir)
-    state.mkdir(parents=True, exist_ok=True)
-    db_source = source / "state" / "jobs.db"
-    if db_source.is_file():
-        _copy_sqlite(db_source, state / "jobs.db")
-    _copy_tree(source / "knowledge", Path(knowledge_dir))
-    if restore_output and (source / "output").is_dir():
-        _copy_tree(source / "output", Path(output_dir))
-
-    return {
-        "ok": True,
-        "database": (state / "jobs.db").is_file(),
-        "knowledge": Path(knowledge_dir).is_dir(),
-        "output": Path(output_dir).is_dir() if restore_output else None,
-    }
+        manifest = {
+            "version": BACKUP_VERSION,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "database": True,
+            "database_filename": database.name,
+            "knowledge": knowledge_ok,
+            "output": bool(include_output and output_ok),
+        }
+        (target / "backup_manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return {"path": str(target), "manifest": manifest}
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
 
 
 def verify_backup(backup_dir: str | Path) -> dict[str, Any]:
@@ -116,22 +112,92 @@ def verify_backup(backup_dir: str | Path) -> dict[str, Any]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return {"ok": False, "error": "backup manifest is invalid"}
-    if manifest.get("version") != 1:
+    if manifest.get("version") != BACKUP_VERSION:
         return {"ok": False, "error": "unsupported backup version"}
-    db_ok = not manifest.get("database") or (root / "state" / "jobs.db").is_file()
-    knowledge_ok = (root / "knowledge").is_dir()
+
+    database_filename = str(manifest.get("database_filename") or "jobs.db")
+    database_ok = not manifest.get("database") or (root / "state" / database_filename).is_file()
+    knowledge_ok = not manifest.get("knowledge") or (root / "knowledge").is_dir()
     output_ok = not manifest.get("output") or (root / "output").is_dir()
+    ok = bool(database_ok and knowledge_ok and output_ok)
     return {
-        "ok": bool(db_ok and knowledge_ok and output_ok),
-        "database": db_ok,
+        "ok": ok,
+        "database": database_ok,
         "knowledge": knowledge_ok,
         "output": output_ok,
     }
 
 
+def restore_backup(
+    *,
+    backup_dir: str | Path,
+    state_dir: str | Path,
+    knowledge_dir: str | Path,
+    output_dir: str | Path,
+    restore_output: bool = True,
+) -> dict[str, Any]:
+    source = Path(backup_dir)
+    verification = verify_backup(source)
+    if not verification["ok"]:
+        raise ValueError(
+            "backup is incomplete or corrupt: "
+            + ", ".join(k for k, value in verification.items() if k != "ok" and not value)
+        )
+
+    manifest = json.loads((source / "backup_manifest.json").read_text(encoding="utf-8"))
+    database_filename = str(manifest.get("database_filename") or "jobs.db")
+
+    state = Path(state_dir)
+    knowledge = Path(knowledge_dir)
+    output = Path(output_dir)
+    state.mkdir(parents=True, exist_ok=True)
+    knowledge.parent.mkdir(parents=True, exist_ok=True)
+    if restore_output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+    database_source = source / "state" / database_filename
+    if manifest.get("database"):
+        _copy_sqlite(database_source, state / database_filename)
+    if manifest.get("knowledge"):
+        if not _copy_tree(source / "knowledge", knowledge):
+            raise ValueError("backup knowledge tree disappeared during restore")
+    if restore_output and manifest.get("output"):
+        if not _copy_tree(source / "output", output):
+            raise ValueError("backup output tree disappeared during restore")
+
+    result = {
+        "ok": True,
+        "database": not manifest.get("database") or (state / database_filename).is_file(),
+        "knowledge": not manifest.get("knowledge") or knowledge.is_dir(),
+        "output": (
+            not restore_output
+            or not manifest.get("output")
+            or output.is_dir()
+        ),
+    }
+    if not all(result.values()):
+        raise ValueError(f"restore verification failed: {result}")
+    return result
+
+
+def _pack_snapshot(snapshot: Path, archive: Path) -> Path:
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    base = _archive_base(archive)
+    written = Path(
+        shutil.make_archive(
+            str(base),
+            "gztar",
+            root_dir=str(snapshot.parent),
+            base_dir=snapshot.name,
+        )
+    )
+    if archive.suffixes[-2:] == [".tar", ".gz"] and written != archive:
+        written.replace(archive)
+        written = archive
+    return written
+
+
 def main(argv: list[str] | None = None) -> int:
-    import argparse
-    import os
     parser = argparse.ArgumentParser(prog="aivf-backup")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -140,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     backup.add_argument("--knowledge", required=True)
     backup.add_argument("--output", required=True)
     backup.add_argument("--backup", required=True)
+    backup.add_argument("--staging", default=None)
 
     verify = sub.add_parser("verify")
     verify.add_argument("--backup", required=True)
@@ -151,38 +218,42 @@ def main(argv: list[str] | None = None) -> int:
     restore.add_argument("--knowledge", required=True)
     restore.add_argument("--output", required=True)
 
-    args = parser.parse_args(list(argv or []))
+    args = parser.parse_args(argv)
 
     if args.command == "backup":
-        destination = Path(args.backup)
-        if destination.suffix == ".tar.gz":
-            destination_dir = destination.parent / (destination.stem + ".snapshot")
-        else:
-            destination_dir = destination
+        archive = Path(args.backup)
+        staging = Path(args.staging) if args.staging else archive.parent / ".aivf-backup-staging"
+        staging.mkdir(parents=True, exist_ok=True)
         result = create_backup(
             state_dir=Path(args.db).parent,
+            database_path=args.db,
             knowledge_dir=args.knowledge,
             output_dir=args.output,
-            destination=destination_dir.parent,
+            destination=staging,
             include_output=True,
         )
-        archive = destination
-        archive.parent.mkdir(parents=True, exist_ok=True)
-        base = Path(result["path"])
-        shutil.make_archive(str(archive.with_suffix("")), "gztar", root_dir=str(base.parent), base_dir=base.name)
-        return 0 if archive.is_file() else 1
+        snapshot = Path(result["path"])
+        try:
+            written = _pack_snapshot(snapshot, archive)
+            verified = verify_backup(snapshot)
+            if not verified["ok"] or not written.is_file():
+                raise SystemExit("backup archive failed verification")
+            return 0
+        finally:
+            shutil.rmtree(snapshot, ignore_errors=True)
+            try:
+                staging.rmdir()
+            except OSError:
+                pass
 
     if args.command == "verify":
         archive = Path(args.backup)
         if not archive.is_file():
             raise SystemExit(f"backup archive not found: {archive}")
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix="aivf-backup-verify-") as temp:
+        with __import__("tempfile").TemporaryDirectory(prefix="aivf-backup-verify-") as temp:
             shutil.unpack_archive(str(archive), temp)
-            roots = [item for item in Path(temp).iterdir() if item.is_dir()]
-            if not roots:
-                raise SystemExit("backup archive contains no snapshot directory")
-            report = verify_backup(roots[0])
+            root = _find_backup_root(Path(temp))
+            report = verify_backup(root)
             if not report["ok"]:
                 raise SystemExit(json.dumps(report, sort_keys=True))
         marker = Path(args.marker)
@@ -192,14 +263,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "restore":
         archive = Path(args.backup)
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix="aivf-backup-restore-") as temp:
+        if not archive.is_file():
+            raise SystemExit(f"backup archive not found: {archive}")
+        with __import__("tempfile").TemporaryDirectory(prefix="aivf-backup-restore-") as temp:
             shutil.unpack_archive(str(archive), temp)
-            roots = [item for item in Path(temp).iterdir() if item.is_dir()]
-            if not roots:
-                raise SystemExit("backup archive contains no snapshot directory")
+            root = _find_backup_root(Path(temp))
             report = restore_backup(
-                backup_dir=roots[0],
+                backup_dir=root,
                 state_dir=args.state,
                 knowledge_dir=args.knowledge,
                 output_dir=args.output,
@@ -211,4 +281,4 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
-__all__ = ["create_backup", "restore_backup", "verify_backup", "main"]
+__all__ = ["ARCHIVE_SUFFIX", "BACKUP_VERSION", "create_backup", "restore_backup", "verify_backup", "main"]
