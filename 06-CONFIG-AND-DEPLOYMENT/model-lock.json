@@ -6,12 +6,15 @@
     {
       "name": "mobilenet_ssd_config",
       "url": "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/97406996b1eee2d40eb0a00ae567cf41e23369f9/deploy.prototxt",
-      "sha256_env": "AIVF_MOBILENET_CONFIG_SHA256"
+      "sha256_env": "AIVF_MOBILENET_CONFIG_SHA256",
+      "relative_path": ".models/mobilenet_ssd/deploy.prototxt"
     },
     {
       "name": "mobilenet_ssd_weights",
       "url": "https://github.com/chuanqi305/MobileNet-SSD/raw/97406996b1eee2d40eb0a00ae567cf41e23369f9/mobilenet_iter_73000.caffemodel",
-      "sha256_env": "AIVF_MOBILENET_WEIGHTS_SHA256"
+      "sha256_env": "AIVF_MOBILENET_WEIGHTS_SHA256",
+      "relative_path": ".models/mobilenet_ssd/mobilenet.caffemodel"
     }
-  ]
+  ],
+  "verification": "Production requires preinstalled bytes whose SHA-256 values are supplied through the named environment variables; runtime downloads are disabled."
 }
