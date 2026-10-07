@@ -102,6 +102,7 @@ _MAX_QUEUED_JOBS = RUNTIME_CONFIG.max_queued_jobs
 _MIN_FREE_DISK_BYTES = max(
     256 * 1024 * 1024,
     RUNTIME_CONFIG.min_free_disk_mb * 1024 * 1024,
+    MEDIA_LIMITS.min_free_disk_bytes,
 )
 
 
@@ -831,7 +832,7 @@ def _watch_job_process(job_id: str, process: multiprocessing.Process) -> None:
     # Never leave a job permanently stuck in RUNNING/CANCELLING.
     try:
         row = db_get_job(job_id)
-        if row and row.get("status") in {"queued", "running", "cancelling"}:
+        if row and row.get("status") in {"running", "cancelling"}:
             reason = (
                 f"Worker process exited unexpectedly with code {exitcode}"
                 if exitcode not in (0, None)
