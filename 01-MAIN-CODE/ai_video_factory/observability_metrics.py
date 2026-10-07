@@ -17,8 +17,8 @@ class MetricSnapshot:
 class MetricsRegistry:
     def __init__(self,state_dir:str|Path|None=None)->None:
         self._lock=threading.RLock()
-        self._counters={}
-        self._timings={}
+        self._counters: dict[str, int] = {}
+        self._timings: dict[str, list[float]] = {}
         self._state_dir=Path(state_dir or os.environ.get("AIVF_STATE_DIR","state"))
         self._db=self._state_dir/"metrics.db"
         self._init_db()
