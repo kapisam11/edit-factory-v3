@@ -12,14 +12,12 @@ from __future__ import annotations
 
 import argparse
 import csv
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from pathlib import Path
 import time
 from typing import Any
-import urllib.request
-
 import requests
 
 
