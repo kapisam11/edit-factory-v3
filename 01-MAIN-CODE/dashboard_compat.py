@@ -242,14 +242,18 @@ def register_dashboard_compat(app):
         process,
         attempt_id=None,
         lease_token=None,
+        worker_id=None,
     ):
-        with _LIFECYCLE_LOCK:
-            return original_watch_job_process(
-                job_id,
-                process,
-                attempt_id,
-                lease_token,
-            )
+        # Never hold the lifecycle lock while waiting for a worker render.
+        # The watcher owns its own durable attempt fence and only takes
+        # short-lived locks for bookkeeping.
+        return original_watch_job_process(
+            job_id,
+            process,
+            attempt_id,
+            lease_token,
+            worker_id,
+        )
 
     web_app_v3._watch_job_process = locked_watch_job_process
     original_start_job = web_app_v3._start_job
