@@ -80,7 +80,7 @@ def test_output_codec_allowlist(tmp_path):
     path = tmp_path / "output.mp4"
     path.write_bytes(b"x")
     payload = _payload()
-    payload["streams"][0]["codec_name"] = "vp8"
+    payload["streams"][0]["codec_name"] = "unsupported_codec"
     with pytest.raises(Exception, match="video codec"):
         validate_output_probe(path, payload)
 
