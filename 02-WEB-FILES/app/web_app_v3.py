@@ -611,7 +611,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
     attempt_id = str(params.get("_attempt_id") or "")
 
     def update(**kwargs: Any) -> bool:
-        allowed = {"status", "step", "params", "pkg_dir", "error"}
+        allowed = {"status", "step", "params", "pkg_dir", "error", "error_code"}
         if set(kwargs) - allowed:
             raise ValueError("Invalid worker update")
         fields = ", ".join(f"{key}=?" for key in kwargs)
