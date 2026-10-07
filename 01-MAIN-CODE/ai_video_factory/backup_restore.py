@@ -81,17 +81,19 @@ def create_backup(
     try:
         _copy_sqlite(database, target / "state" / database.name)
         knowledge_ok = _copy_tree(knowledge, target / "knowledge")
-        output_ok = True
-        if include_output:
-            output_ok = _copy_tree(output, target / "output")
+        if not knowledge_ok:
+            raise ValueError("knowledge base is missing; refusing incomplete backup")
+        output_ok = _copy_tree(output, target / "output") if include_output else True
+        if include_output and not output_ok:
+            raise ValueError("published output directory is missing; refusing incomplete backup")
 
         manifest = {
             "version": BACKUP_VERSION,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "database": True,
             "database_filename": database.name,
-            "knowledge": knowledge_ok,
-            "output": bool(include_output and output_ok),
+            "knowledge": True,
+            "output": bool(include_output),
         }
         (target / "backup_manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -116,9 +118,9 @@ def verify_backup(backup_dir: str | Path) -> dict[str, Any]:
         return {"ok": False, "error": "unsupported backup version"}
 
     database_filename = str(manifest.get("database_filename") or "jobs.db")
-    database_ok = not manifest.get("database") or (root / "state" / database_filename).is_file()
-    knowledge_ok = not manifest.get("knowledge") or (root / "knowledge").is_dir()
-    output_ok = not manifest.get("output") or (root / "output").is_dir()
+    database_ok = bool(manifest.get("database")) and (root / "state" / database_filename).is_file()
+    knowledge_ok = bool(manifest.get("knowledge")) and (root / "knowledge").is_dir()
+    output_ok = bool(manifest.get("output")) and (root / "output").is_dir()
     ok = bool(database_ok and knowledge_ok and output_ok)
     return {
         "ok": ok,
@@ -161,18 +163,19 @@ def restore_backup(
     if manifest.get("knowledge"):
         if not _copy_tree(source / "knowledge", knowledge):
             raise ValueError("backup knowledge tree disappeared during restore")
-    if restore_output and manifest.get("output"):
+    if restore_output:
+        if not manifest.get("output"):
+            raise ValueError("backup does not contain the required published output tree")
         if not _copy_tree(source / "output", output):
             raise ValueError("backup output tree disappeared during restore")
 
     result = {
         "ok": True,
-        "database": not manifest.get("database") or (state / database_filename).is_file(),
-        "knowledge": not manifest.get("knowledge") or knowledge.is_dir(),
+        "database": bool(manifest.get("database")) and (state / database_filename).is_file(),
+        "knowledge": bool(manifest.get("knowledge")) and knowledge.is_dir(),
         "output": (
             not restore_output
-            or not manifest.get("output")
-            or output.is_dir()
+            or (bool(manifest.get("output")) and output.is_dir())
         ),
     }
     if not all(result.values()):
