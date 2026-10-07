@@ -72,6 +72,8 @@ _LAZY_PERFORMANCE = None
 
 def __getattr__(name):
     if name == "VideoDirector":
+        if os.environ.get("AIVF_ENV", "development").strip().lower() in {"production", "prod"}:
+            raise RuntimeError("VideoDirector is a legacy API disabled in production; use run_v3_pipeline")
         return _LazyVideoDirector._class()
     if name in {"ChannelPerformanceModel", "LearningRecommendation", "PerformanceObservation"}:
         global _LAZY_PERFORMANCE
