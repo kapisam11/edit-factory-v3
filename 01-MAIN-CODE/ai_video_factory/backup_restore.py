@@ -185,6 +185,49 @@ def verify_backup(
         return result
 
 
+def restore_backup(
+    backup_path: str | Path,
+    destination_root: str | Path,
+    *,
+    replace: bool = False,
+) -> Path:
+    """Restore a verified backup into an isolated destination root.
+
+    The destination is never written until the archive passes full manifest and
+    SQLite integrity verification. Production deployments should restore into a
+    fresh directory/volume and switch over atomically.
+    """
+    archive_path = Path(backup_path)
+    destination = Path(destination_root).resolve()
+    verify_backup(archive_path)
+    if destination.exists() and any(destination.iterdir()) and not replace:
+        raise ValueError(f"restore destination is not empty: {destination}")
+    destination.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="aivf-restore-stage-") as temp:
+        stage = Path(temp)
+        with tarfile.open(archive_path, "r:gz") as archive:
+            _safe_extract(archive, stage)
+        for child in stage.iterdir():
+            target = destination / child.name
+            if target.exists():
+                if target.is_dir() and child.is_dir():
+                    shutil.copytree(child, target, dirs_exist_ok=True, symlinks=False)
+                else:
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+                    if child.is_dir():
+                        shutil.copytree(child, target, symlinks=False)
+                    else:
+                        shutil.copy2(child, target)
+            elif child.is_dir():
+                shutil.copytree(child, target, symlinks=False)
+            else:
+                shutil.copy2(child, target)
+    return destination
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Edit Factory backup and restore verification")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -199,6 +242,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     verify.add_argument("--backup", required=True)
     verify.add_argument("--marker", default="state/backup-restore-verified")
 
+    restore = sub.add_parser("restore")
+    restore.add_argument("--backup", required=True)
+    restore.add_argument("--destination", required=True)
+    restore.add_argument("--replace", action="store_true")
+
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "backup":
         result = create_backup(
@@ -210,12 +258,21 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"backup created: {result}")
         return 0
 
+    if args.command == "restore":
+        destination = restore_backup(
+            args.backup,
+            args.destination,
+            replace=bool(args.replace),
+        )
+        print(f"backup restored to: {destination}")
+        return 0
+
     result = verify_backup(args.backup, marker_path=args.marker)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
-__all__ = ["backup_database", "create_backup", "verify_backup", "main"]
+__all__ = ["backup_database", "create_backup", "verify_backup", "restore_backup", "main"]
 
 
 if __name__ == "__main__":
