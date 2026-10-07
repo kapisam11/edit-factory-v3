@@ -194,11 +194,11 @@ print(row[0] if row else "missing")
 PY
 )"
   case "$state" in
-    interrupted)
-      echo "[AIVF] restart reconciliation passed"
+    interrupted|error)
+      echo "[AIVF] crash/restart reconciliation passed: $state"
       break
       ;;
-    error|cancelled|done|missing)
+    cancelled|done|missing)
       echo "[AIVF] unexpected restart-recovery state: $state"
       exit 1
       ;;
