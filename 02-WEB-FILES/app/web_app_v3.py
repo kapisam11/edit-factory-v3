@@ -979,6 +979,11 @@ def _pump_queued_jobs() -> int:
     started = 0
     with _queue_pump_lock:
         store = DashboardStore(DB_PATH)
+        try:
+            GLOBAL_METRICS.set_gauge("queue_depth", store.queued_count())
+            GLOBAL_METRICS.set_gauge("disk_free_bytes", float(shutil.disk_usage(OUTPUT_FOLDER).free))
+        except Exception:
+            logger.debug("Unable to update queue/resource gauges", exc_info=True)
         rows = store.list_queued_jobs(limit=_MAX_QUEUED_JOBS)
         for row in rows:
             if str(row.get("status")) != "queued":
