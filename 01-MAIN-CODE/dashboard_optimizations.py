@@ -191,7 +191,13 @@ def install_dashboard_optimizations(app_module: Any) -> None:
     def _watch_resource_budget(job_id: str, process: Any) -> None:
         clock = __import__("time")
         started = clock.monotonic()
-        deadline = started + MAX_RENDER_WALLCLOCK_SECONDS
+        try:
+            from ai_video_factory.media_limits import MediaLimits
+            wallclock_limit = MediaLimits.from_environment().max_job_seconds
+        except (TypeError, ValueError):
+            wallclock_limit = float(MAX_RENDER_WALLCLOCK_SECONDS)
+        wallclock_limit = max(1.0, float(wallclock_limit))
+        deadline = started + wallclock_limit
         last_total_storage_scan = 0.0
         while process.is_alive():
             now = clock.monotonic()
@@ -210,7 +216,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                         job_id,
                         status="error",
                         step="resource_limit",
-                        error=f"Render wall-clock budget exceeded ({MAX_RENDER_WALLCLOCK_SECONDS}s)",
+                        error=f"Render wall-clock budget exceeded ({wallclock_limit:g}s)",
                     )
                     app_module.db_append_log(job_id, "ERROR", "Render wall-clock budget exceeded")
                 return
@@ -255,7 +261,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                     )
                     app_module.db_append_log(job_id, "ERROR", "Per-job storage quota exceeded")
                 return
-            clock.sleep(RESOURCE_CHECK_INTERVAL_SECONDS)
+            clock.sleep(min(RESOURCE_CHECK_INTERVAL_SECONDS, max(0.25, deadline - clock.monotonic())))
 
     def governed_start_job(job_id, params, secrets):
         started = original_start_job(job_id, params, secrets)
