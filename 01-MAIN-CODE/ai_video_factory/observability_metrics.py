@@ -126,9 +126,11 @@ class MetricsRegistry:
                 _,method,endpoint=raw_name.split(":",2)
                 method=re.sub(r"[^A-Za-z0-9_]","_",method)
                 endpoint=endpoint.replace("\\","\\\\").replace('"','\"')
+                lines.append("# TYPE aivf_http_requests_total counter")
                 lines.append(f'aivf_http_requests_total{{method="{method}",endpoint="{endpoint}"}} {int(count)}')
             else:
                 metric=re.sub(r"[^A-Za-z0-9_:]","_",raw_name)
+                lines.append(f"# TYPE aivf_{metric} counter")
                 lines.append(f"aivf_{metric} {int(count)}")
         for raw_name,value in gauges.items():
             metric=re.sub(r"[^A-Za-z0-9_:]","_",raw_name)
@@ -140,6 +142,7 @@ class MetricsRegistry:
         except sqlite3.Error: pass
         for name in sorted(names):
             metric=re.sub(r"[^A-Za-z0-9_:]","_",name); values=self._samples(name); hist=self._histogram(values)
+            lines.append(f"# TYPE aivf_{metric}_milliseconds histogram")
             for bucket in DEFAULT_BUCKETS_MS:
                 lines.append(f'aivf_{metric}_milliseconds_bucket{{le="{bucket}"}} {sum(1 for value in values if value<=bucket)}')
             lines.append(f'aivf_{metric}_milliseconds_bucket{{le="+Inf"}} {int(hist["count"])}')
