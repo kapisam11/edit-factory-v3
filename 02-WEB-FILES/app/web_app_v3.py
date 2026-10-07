@@ -543,8 +543,16 @@ def _publish_attempt_package(
     from dashboard_store import DashboardStore
 
     store = DashboardStore(db_path)
-    if not store.attempt_can_publish(job_id, attempt_id, lease_token):
-        raise RuntimeError("stale worker cannot publish artifacts")
+    if attempt_id or lease_token:
+        if not store.attempt_can_publish(job_id, attempt_id, lease_token):
+            raise RuntimeError("stale worker cannot publish artifacts")
+    else:
+        # Jobs created before attempt fencing must remain executable. A legacy
+        # worker may publish only while the database still says RUNNING; this
+        # deliberately has weaker fencing than modern attempts.
+        job = store.get_job(job_id)
+        if not job or str(job.get("status")) != "running":
+            raise RuntimeError("legacy worker cannot publish a non-running job")
 
     root = Path(output_root).resolve()
     package = package_dir.resolve()
