@@ -25,6 +25,39 @@ COPY 06-CONFIG-AND-DEPLOYMENT ./06-CONFIG-AND-DEPLOYMENT
 RUN python -m pip install --no-cache-dir --upgrade pip uv==0.12.17 \
     && uv sync --frozen --no-dev --extra web --extra ocr
 
+# Production ML assets are baked into the immutable image from an immutable source
+# commit. Runtime network downloads remain disabled by asset_manager.py.
+ARG MOBILENET_COMMIT=97406996b1eee2d40eb0a00ae567cf41e23369f9
+RUN mkdir -p /app/.models/mobilenet_ssd \
+    && curl --fail --location --retry 5 --retry-all-errors --connect-timeout 15 --max-time 300 \
+       "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/$MOBILENET_COMMIT/deploy.prototxt" \
+       -o /app/.models/mobilenet_ssd/deploy.prototxt \
+    && curl --fail --location --retry 5 --retry-all-errors --connect-timeout 15 --max-time 600 \
+       "https://github.com/chuanqi305/MobileNet-SSD/raw/$MOBILENET_COMMIT/mobilenet_iter_73000.caffemodel" \
+       -o /app/.models/mobilenet_ssd/mobilenet.caffemodel \
+    && test -s /app/.models/mobilenet_ssd/deploy.prototxt \
+    && test -s /app/.models/mobilenet_ssd/mobilenet.caffemodel \
+    && sha256sum /app/.models/mobilenet_ssd/deploy.prototxt /app/.models/mobilenet_ssd/mobilenet.caffemodel \
+       > /app/.models/mobilenet_ssd/SHA256SUMS \
+    && export MOBILENET_COMMIT \
+    && python - <<'PY' \
+import hashlib, json, os
+from pathlib import Path
+root = Path('/app/.models/mobilenet_ssd')
+assets = []
+for path in (root / 'deploy.prototxt', root / 'mobilenet.caffemodel'):
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assets.append({'name': path.name, 'sha256': digest, 'size_bytes': path.stat().st_size})
+(root / 'model-manifest.json').write_text(
+    json.dumps({
+        'format_version': 1,
+        'source': 'MobileNet-SSD',
+        'immutable_commit': os.environ['MOBILENET_COMMIT'],
+        'assets': assets,
+    }, indent=2, sort_keys=True) + '\n',
+    encoding='utf-8',
+)
+PY
 RUN groupadd --system aivf \
     && useradd --system --gid aivf --create-home aivf \
     && mkdir -p /app/output /app/uploads /app/knowledge_base_v3 /app/state \
