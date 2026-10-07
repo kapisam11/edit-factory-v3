@@ -77,17 +77,20 @@ def run_level(base_url: str, token: str, fixture: Path, concurrency: int) -> dic
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
-    parser.add_argument("--token", required=True)
+    parser.add_argument("--token", default=None)
     parser.add_argument("--fixture", required=True, type=Path)
     parser.add_argument("--levels", default="1,2,5,10,20")
     args = parser.parse_args()
     if not args.fixture.is_file():
         raise SystemExit(f"fixture does not exist: {args.fixture}")
+    token = args.token or __import__("os").environ.get("AIVF_DASHBOARD_TOKEN", "")
+    if not token:
+        raise SystemExit("provide --token or AIVF_DASHBOARD_TOKEN")
     levels = [int(item) for item in args.levels.split(",") if item.strip()]
     if any(level < 1 or level > 20 for level in levels):
         raise SystemExit("load levels must be between 1 and 20")
     report = [
-        run_level(args.base_url.rstrip("/"), args.token, args.fixture, level)
+        run_level(args.base_url.rstrip("/"), token, args.fixture, level)
         for level in levels
     ]
     print(json.dumps(report, indent=2, sort_keys=True))
