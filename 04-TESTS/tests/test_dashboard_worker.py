@@ -96,7 +96,14 @@ def test_run_job_executes_worker_and_cleans_up(monkeypatch):
     assert calls["joined_timeout"] == 5.0
     assert calls["worker"] == (
         "job-123",
-        {"workflow": "fast", "target_seconds": 60.0},
+        {
+            "workflow": "fast",
+            "target_seconds": 60.0,
+            "_attempt_id": "attempt-1",
+            "_lease_token": "lease-1",
+            "_worker_id": calls["attempt"][1],
+            "_workspace_root": "/tmp/output/.work/job-123/attempt-1",
+        },
         {"API_KEY": "secret"},
         "/tmp/output",
         "/tmp/jobs.db",
