@@ -32,6 +32,26 @@ class JobRetryNotAllowed(RuntimeError):
     """Raised when a retry is exhausted or the recorded failure is deterministic."""
 
 
+JOB_EVENT_NAMES = frozenset({
+    "created",
+    "status_change",
+    "job_claimed",
+    "job_started",
+    "job_heartbeat",
+    "job_cancel_requested",
+    "job_cancelled",
+    "job_failed",
+    "job_retry_scheduled",
+    "job_completed",
+    "artifact_published",
+    "resource_reserved",
+    "resource_released",
+    "attempt_started",
+    "attempt_finished",
+    "retry",
+})
+
+
 
 class DashboardStore:
     """Small, dependency-free SQLite storage service used by the dashboard."""
@@ -272,8 +292,8 @@ class DashboardStore:
             )
         """)
         event_name = str(event).strip()[:120]
-        if not event_name:
-            raise ValueError("job event name is required")
+        if event_name not in JOB_EVENT_NAMES:
+            raise ValueError(f"unsupported job event: {event_name}")
         structured = details
         if not isinstance(details, str):
             structured = json.dumps(details, sort_keys=True, separators=(",", ":"))
