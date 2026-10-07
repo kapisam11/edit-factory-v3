@@ -43,6 +43,7 @@ jobs:
         uv run python -m py_compile 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py 06-CONFIG-AND-DEPLOYMENT/verify_human_acceptance.py
         bash -n 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh
         bash -n 06-CONFIG-AND-DEPLOYMENT/target_recovery_smoke.sh
+        bash -n 06-CONFIG-AND-DEPLOYMENT/backup_offhost.sh
     - name: Lint production Python for correctness
       run: uv run ruff check 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE --select E9,F --ignore F401,F811,F841
     - name: Run repository security audit
@@ -62,6 +63,13 @@ jobs:
         uv run python 01-MAIN-CODE/cli.py --help
         uv run python 01-MAIN-CODE/cli_v3.py --help
         uv run aivf --help
+    - name: Run admission/idempotency load smoke
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: |
+        uv run python 03-SIDE-CODE/tools/load_test_admission.py --requests 50
+        uv run python 03-SIDE-CODE/tools/load_test_admission.py --requests 50 --identical
+
     - name: Verify roadmap runtime contracts
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
