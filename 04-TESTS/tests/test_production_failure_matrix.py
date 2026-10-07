@@ -63,7 +63,7 @@ def test_disk_admission_preserves_required_headroom(tmp_path):
             "job-1",
             "disk",
             {},
-            reserved_disk_bytes=90,
+            reserved_disk_bytes=110,
             available_disk_bytes=100,
             resource_units=1,
         )
