@@ -37,7 +37,7 @@ def test_import_asset_sanitizes_filename(tmp_path: Path) -> None:
 def test_runtime_asset_verification_requires_sha256(tmp_path):
     from ai_video_factory.asset_manager import RuntimeAssetSpec, runtime_asset_path, verify_runtime_asset
 
-    spec = RuntimeAssetSpec("demo_asset", "https://example.invalid/demo", ".models/demo.bin")
+    spec = RuntimeAssetSpec("demo_asset", "https://example.invalid/demo", ".models/demo.bin", "")
     target = runtime_asset_path(spec, tmp_path)
     target.parent.mkdir(parents=True)
     target.write_bytes(b"demo")
