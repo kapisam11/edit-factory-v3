@@ -55,6 +55,31 @@ def _find_backup_root(root: Path) -> Path:
     return candidates[0]
 
 
+def create_database_backup(
+    *,
+    database_path: str | Path,
+    destination: str | Path,
+) -> dict[str, Any]:
+    """Create a WAL-safe SQLite backup and verify its integrity."""
+    source = Path(database_path)
+    target_root = Path(destination)
+    target_root.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = target_root / f"jobs-{stamp}.db"
+    suffix = 1
+    while target.exists():
+        target = target_root / f"jobs-{stamp}-{suffix}.db"
+        suffix += 1
+    _copy_sqlite(source, target)
+    with sqlite3.connect(str(target), timeout=30) as conn:
+        result = str(conn.execute("PRAGMA quick_check").fetchone()[0] or "").lower()
+    if result != "ok":
+        target.unlink(missing_ok=True)
+        raise ValueError(f"database backup integrity check failed: {result}")
+    return {"path": str(target), "integrity": result}
+
+
+
 def create_backup(
     *,
     state_dir: str | Path,
@@ -221,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
     restore.add_argument("--knowledge", required=True)
     restore.add_argument("--output", required=True)
 
+    db_backup = sub.add_parser("db-backup")
+    db_backup.add_argument("--db", required=True)
+    db_backup.add_argument("--output", required=True)
+
     args = parser.parse_args(argv)
 
     if args.command == "backup":
@@ -264,6 +293,11 @@ def main(argv: list[str] | None = None) -> int:
         marker.write_text(datetime.now(timezone.utc).isoformat() + "\n", encoding="utf-8")
         return 0
 
+    if args.command == "db-backup":
+        result = create_database_backup(database_path=args.db, destination=args.output)
+        print(json.dumps(result, sort_keys=True))
+        return 0
+
     if args.command == "restore":
         archive = Path(args.backup)
         if not archive.is_file():
@@ -284,4 +318,4 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
-__all__ = ["ARCHIVE_SUFFIX", "BACKUP_VERSION", "create_backup", "restore_backup", "verify_backup", "main"]
+__all__ = ["ARCHIVE_SUFFIX", "BACKUP_VERSION", "create_backup", "create_database_backup", "restore_backup", "verify_backup", "main"]
