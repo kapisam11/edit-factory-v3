@@ -205,7 +205,7 @@ jobs:
           AIVF_RELEASE_PROCESS_APPROVED: "${{ vars.AIVF_RELEASE_PROCESS_APPROVED || 'false' }}"
         run: |
           set -euo pipefail
-          PYTHONPATH=01-MAIN-CODE:02-WEB-FILES python 01-MAIN-CODE/ai_video_factory/production_readiness.py --strict --json .
+          PYTHONPATH=01-MAIN-CODE:02-WEB-FILES python -m ai_video_factory.production_readiness --strict --json .
 
       - name: Log in to GHCR on remote host
         env:
