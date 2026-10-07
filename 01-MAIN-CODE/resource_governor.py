@@ -118,28 +118,37 @@ def principal_queued_jobs(db_connect, principal: str) -> int:
             str(row["name"] if hasattr(row, "keys") else row[1])
             for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
         }
+        # Current schemas store principal as a first-class indexed column. Keep
+        # the legacy JSON fallback only for old databases that have not been
+        # migrated yet; never scan/parse every active job while enforcing the
+        # production quota on the current schema.
         if "principal" in columns:
-            rows = conn.execute(
-                "SELECT principal, params FROM jobs WHERE status IN ('queued','running')"
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT params FROM jobs WHERE status IN ('queued','running')"
-            ).fetchall()
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM jobs "
+                "WHERE principal=? AND status IN ('queued','running')",
+                (str(principal).strip(),),
+            ).fetchone()
+            if row is None:
+                return 0
+            try:
+                return int(row["count"] if hasattr(row, "keys") else row[0])
+            except (TypeError, ValueError, IndexError, KeyError):
+                return 0
 
+        rows = conn.execute(
+            "SELECT params FROM jobs WHERE status IN ('queued','running')"
+        ).fetchall()
+
+    # Compatibility path for pre-principal schemas only. This can be removed
+    # after all supported deployments have migrated to schema version 5.
     count = 0
     for row in rows:
         try:
-            if hasattr(row, "keys"):
-                raw_params = row["params"]
-                row_principal = str(row["principal"] if "principal" in row.keys() else "").strip()
-            else:
-                raw_params = row[1] if "principal" in columns else row[0]
-                row_principal = str(row[0] if "principal" in columns else "").strip()
+            raw_params = row["params"] if hasattr(row, "keys") else row[0]
             params = json.loads(raw_params or "{}")
         except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             continue
-        if row_principal == principal or str(params.get("_principal", "")).strip() == principal:
+        if str(params.get("_principal", "")).strip() == str(principal).strip():
             count += 1
     return count
 
