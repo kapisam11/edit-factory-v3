@@ -192,21 +192,6 @@ jobs:
           echo "AIVF_RELEASE_SECURITY_GREEN=1" >> "$GITHUB_ENV"
           echo "AIVF_RELEASE_E2E_GREEN=1" >> "$GITHUB_ENV"
 
-      - name: Run strict production release gate
-        env:
-          AIVF_RELEASE_CI_GREEN: "${{ env.AIVF_RELEASE_CI_GREEN }}"
-          AIVF_RELEASE_SECURITY_GREEN: "${{ env.AIVF_RELEASE_SECURITY_GREEN }}"
-          AIVF_RELEASE_E2E_GREEN: "${{ env.AIVF_RELEASE_E2E_GREEN }}"
-          AIVF_RELEASE_ENVIRONMENT_GREEN: "${{ vars.AIVF_RELEASE_ENVIRONMENT_GREEN || 'false' }}"
-          AIVF_RELEASE_BACKUP_VERIFIED: "1"
-          AIVF_RELEASE_MODEL_DIGESTS_PRESENT: "${{ vars.AIVF_RELEASE_MODEL_DIGESTS_PRESENT || 'false' }}"
-          AIVF_RELEASE_HUMAN_APPROVED: "${{ vars.AIVF_RELEASE_HUMAN_APPROVED || 'false' }}"
-          AIVF_RELEASE_EXTERNAL_CONTROLS_GREEN: "${{ vars.AIVF_RELEASE_EXTERNAL_CONTROLS_GREEN || 'false' }}"
-          AIVF_RELEASE_PROCESS_APPROVED: "${{ vars.AIVF_RELEASE_PROCESS_APPROVED || 'false' }}"
-        run: |
-          set -euo pipefail
-          PYTHONPATH=01-MAIN-CODE:02-WEB-FILES python -m ai_video_factory.production_readiness --strict --json .
-
       - name: Log in to GHCR on remote host
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -280,6 +265,7 @@ jobs:
             --staging /app/state/.backup-staging
           test -s "$DEPLOY_PATH/backups/aivf-backup-pre-${BACKUP_SHA}.tar.gz"
           REMOTE
+          echo "AIVF_RELEASE_BACKUP_VERIFIED=1" >> "$GITHUB_ENV"
       - name: Migrate and verify production database
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -294,6 +280,21 @@ jobs:
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           printf -v q_image '%q' "$IMAGE"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && AIVF_IMAGE=${q_image} docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml run --rm -T web aivf-db-migrate"
+      - name: Run strict production release gate
+        env:
+          AIVF_RELEASE_CI_GREEN: "${{ env.AIVF_RELEASE_CI_GREEN }}"
+          AIVF_RELEASE_SECURITY_GREEN: "${{ env.AIVF_RELEASE_SECURITY_GREEN }}"
+          AIVF_RELEASE_E2E_GREEN: "${{ env.AIVF_RELEASE_E2E_GREEN }}"
+          AIVF_RELEASE_ENVIRONMENT_GREEN: "${{ vars.AIVF_RELEASE_ENVIRONMENT_GREEN || 'false' }}"
+          AIVF_RELEASE_BACKUP_VERIFIED: "${{ env.AIVF_RELEASE_BACKUP_VERIFIED || 'false' }}"
+          AIVF_RELEASE_MODEL_DIGESTS_PRESENT: "${{ vars.AIVF_RELEASE_MODEL_DIGESTS_PRESENT || 'false' }}"
+          AIVF_RELEASE_HUMAN_APPROVED: "${{ vars.AIVF_RELEASE_HUMAN_APPROVED || 'false' }}"
+          AIVF_RELEASE_EXTERNAL_CONTROLS_GREEN: "${{ vars.AIVF_RELEASE_EXTERNAL_CONTROLS_GREEN || 'false' }}"
+          AIVF_RELEASE_PROCESS_APPROVED: "${{ vars.AIVF_RELEASE_PROCESS_APPROVED || 'false' }}"
+        run: |
+          set -euo pipefail
+          PYTHONPATH=01-MAIN-CODE:02-WEB-FILES python -m ai_video_factory.production_readiness --strict --json .
+
       - name: Pull exact built image and restart service
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
