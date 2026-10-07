@@ -37,27 +37,8 @@ RUN mkdir -p /app/.models/mobilenet_ssd \
        -o /app/.models/mobilenet_ssd/mobilenet.caffemodel \
     && test -s /app/.models/mobilenet_ssd/deploy.prototxt \
     && test -s /app/.models/mobilenet_ssd/mobilenet.caffemodel \
-    && sha256sum /app/.models/mobilenet_ssd/deploy.prototxt /app/.models/mobilenet_ssd/mobilenet.caffemodel \
-       > /app/.models/mobilenet_ssd/SHA256SUMS \
-    && export MOBILENET_COMMIT \
-    && python - <<'PY' \
-import hashlib, json, os
-from pathlib import Path
-root = Path('/app/.models/mobilenet_ssd')
-assets = []
-for path in (root / 'deploy.prototxt', root / 'mobilenet.caffemodel'):
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    assets.append({'name': path.name, 'sha256': digest, 'size_bytes': path.stat().st_size})
-(root / 'model-manifest.json').write_text(
-    json.dumps({
-        'format_version': 1,
-        'source': 'MobileNet-SSD',
-        'immutable_commit': os.environ['MOBILENET_COMMIT'],
-        'assets': assets,
-    }, indent=2, sort_keys=True) + '\n',
-    encoding='utf-8',
-)
-PY
+    && sha256sum /app/.models/mobilenet_ssd/deploy.prototxt /app/.models/mobilenet_ssd/mobilenet.caffemodel > /app/.models/mobilenet_ssd/SHA256SUMS \
+    && python 03-SIDE-CODE/tools/generate_model_manifest.py /app/.models/mobilenet_ssd $MOBILENET_COMMIT
 RUN groupadd --system aivf \
     && useradd --system --gid aivf --create-home aivf \
     && mkdir -p /app/output /app/uploads /app/knowledge_base_v3 /app/state \
