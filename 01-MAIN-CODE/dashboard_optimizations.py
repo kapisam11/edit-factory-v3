@@ -362,6 +362,10 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                     if cursor.rowcount:
                         recovered += 1
                         conn.execute(
+                            "DELETE FROM resource_reservations WHERE job_id=?",
+                            (job_id,),
+                        )
+                        conn.execute(
                             "INSERT INTO job_logs (job_id, level, message) VALUES (?, ?, ?)",
                             (job_id, "ERROR", "Recovered stale worker job after heartbeat timeout"),
                         )
