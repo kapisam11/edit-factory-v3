@@ -161,7 +161,7 @@ def _reconcile_worker_exit(web_app_v3, job_id, process):
         exit_code = process.exitcode
         with web_app_v3.get_db() as conn:
             cursor = conn.execute(
-                "UPDATE jobs SET status='interrupted', step='interrupted', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('queued','running')",
+                "UPDATE jobs SET status='interrupted', step='interrupted', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
                 (f"Worker exited unexpectedly with code {exit_code}", job_id),
             )
             cancelled_cursor = conn.execute(
