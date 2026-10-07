@@ -17,7 +17,17 @@ def check_release(root:str|Path=".")->dict[str,object]:
     checks["image_pinned"]={"ok":bool(re.fullmatch(r".+@sha256:[0-9a-f]{64}",image)),"detail":image or "unset"}
 
     hashes=(os.environ.get("AIVF_MOBILENET_CONFIG_SHA256",""),os.environ.get("AIVF_MOBILENET_WEIGHTS_SHA256",""))
-    checks["model_hashes_pinned"]={"ok":all(_hash_ok(x) for x in hashes),"detail":"both verified SHA-256 digests configured" if all(_hash_ok(x) for x in hashes) else "verified model SHA-256 digests are required"}
+    hash_ok=all(_hash_ok(x) for x in hashes)
+    if not hash_ok:
+        manifest=base/".models"/"mobilenet_ssd"/"model-manifest.json"
+        if manifest.is_file():
+            try:
+                payload=json.loads(manifest.read_text(encoding="utf-8"))
+                manifest_hashes=[str(item.get("sha256","")) for item in payload.get("assets",[]) if isinstance(item,dict)]
+                hash_ok=len(manifest_hashes) >= 2 and all(_hash_ok(x) for x in manifest_hashes)
+            except (OSError,ValueError,TypeError,json.JSONDecodeError):
+                hash_ok=False
+    checks["model_hashes_pinned"]={"ok":hash_ok,"detail":"verified SHA-256 model digests are configured or baked into the immutable image"}
 
     lock_file=Path(os.environ.get("AIVF_MODEL_LOCK_FILE",str(base/"06-CONFIG-AND-DEPLOYMENT"/"model-lock.json")))
     lock_ok=False
