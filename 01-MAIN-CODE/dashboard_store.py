@@ -290,6 +290,9 @@ class DashboardStore:
         principal_value = str(principal).strip() or "unknown"
 
         def write(conn: sqlite3.Connection) -> None:
+            # Some legacy callers create only the original jobs table before
+            # inserting. Bring its lifecycle columns up to date before admission.
+            self._ensure_job_columns(conn)
             # Serialize admission with all other writers so quota checks and the
             # subsequent INSERT cannot race across concurrent dashboard requests.
             conn.execute("BEGIN IMMEDIATE")
