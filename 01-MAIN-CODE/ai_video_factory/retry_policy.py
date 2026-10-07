@@ -7,6 +7,8 @@ import sqlite3
 import time
 from typing import Any, Mapping
 
+from .structured_errors import ErrorCode, JobError, classify_exception
+
 NON_RETRYABLE_TEXT = (
     "invalid blueprint",
     "schema validation",
@@ -18,31 +20,48 @@ NON_RETRYABLE_TEXT = (
     "invalid credentials",
 )
 
-def is_retryable_error(error: Exception) -> bool:
-    if isinstance(error, (TimeoutError, ConnectionError)):
-        return True
+def classify_job_error(error: Exception) -> JobError:
+    message = str(error).strip() or type(error).__name__
+    lowered = message.lower()
+    if isinstance(error, TimeoutError):
+        return JobError(ErrorCode.TOOL_TIMEOUT, message, True)
+    if isinstance(error, ConnectionError):
+        return JobError(ErrorCode.TOOL_FAILED, message, True)
     if isinstance(error, sqlite3.OperationalError):
-        return any(marker in str(error).lower() for marker in ("locked", "busy"))
+        if "locked" in lowered or "busy" in lowered:
+            return JobError(ErrorCode.DATABASE_BUSY, message, True)
     if isinstance(error, PermissionError):
-        return False
-    if isinstance(error, OSError) and not isinstance(error, FileNotFoundError):
-        return True
-    text = str(error).lower()
-    if any(marker in text for marker in NON_RETRYABLE_TEXT):
-        return False
-    if any(marker in text for marker in ("429", "temporarily unavailable", "timeout", "timed out", "rate limit", "connection reset", "502", "503", "504")):
-        return True
-    # Unknown RuntimeError instances are not safe to retry. The caller may
-    # explicitly classify known transient runtime failures using the markers above.
-    return False
+        return JobError(ErrorCode.INTERNAL, message, False)
+    if isinstance(error, FileNotFoundError):
+        return JobError(ErrorCode.TOOL_MISSING, message, False)
+    if isinstance(error, OSError):
+        return JobError(ErrorCode.TOOL_FAILED, message, True)
+
+    structured = classify_exception(error)
+    if structured.code != ErrorCode.INTERNAL:
+        return structured
+    if any(marker in lowered for marker in NON_RETRYABLE_TEXT):
+        return JobError(ErrorCode.INTERNAL, message, False)
+    if any(marker in lowered for marker in (
+        "429", "temporarily unavailable", "temporary failure", "rate limit",
+        "connection reset", "connection aborted", "502", "503", "504",
+        "provider timeout", "provider unavailable",
+    )):
+        return JobError(ErrorCode.TOOL_FAILED, message, True)
+    return structured
+
+
+def is_retryable_error(error: Exception) -> bool:
+    return bool(classify_job_error(error).retryable)
+
 
 def classify_failure(error: Exception) -> str:
-    text = str(error).lower()
-    if any(marker in text for marker in NON_RETRYABLE_TEXT):
-        return "permanent"
-    if is_retryable_error(error):
+    job_error = classify_job_error(error)
+    if job_error.retryable:
         return "transient"
-    return "unknown"
+    if job_error.code == ErrorCode.INTERNAL:
+        return "unknown"
+    return "permanent"
 
 def backoff_seconds(attempt: int, *, base: float = 0.5, cap: float = 8.0) -> float:
     if attempt < 1:

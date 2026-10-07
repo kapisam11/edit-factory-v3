@@ -58,6 +58,7 @@ mkdir -p "$BACKUP_DIR"
 docker pull "$IMAGE"
 AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-backup backup   --db /app/state/jobs.db   --backup "$BACKUP_ARCHIVE"   --knowledge /app/knowledge_base_v3   --output /app/output
 AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-backup verify   --backup "$BACKUP_ARCHIVE"   --marker /app/state/backup-restore-verified
+AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-backup restore  --backup "$BACKUP_ARCHIVE" --destination /tmp/aivf-restore-drill
 
 AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-db-migrate /app/state/jobs.db
 AIVF_IMAGE="$IMAGE" AIVF_COOKIE_SECURE=1 docker compose -f "$COMPOSE_FILE" up -d --no-build --remove-orphans

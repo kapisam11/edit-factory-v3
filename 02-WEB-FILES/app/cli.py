@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 from uuid import uuid4
 
+from ai_video_factory import bootstrap_runtime
+bootstrap_runtime()
 from ai_video_factory.config import AIVFConfig
 from ai_video_factory.nle_export_v3 import export_all_nle_formats
 from ai_video_factory.pipeline import PipelineContext, build_director_pipeline

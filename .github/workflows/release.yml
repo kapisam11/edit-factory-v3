@@ -16,6 +16,11 @@ on:
         required: false
         default: false
         type: boolean
+      load_test:
+        description: "Run the 1/2/5/10/20 real-render load test on the target host"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 
@@ -117,6 +122,18 @@ jobs:
           chmod 600 "$HOME/.ssh/known_hosts"
           ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
 
+      - name: Validate least-privilege deployment identity
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_PATH"
+          test "$DEPLOY_USER" != "root"
+          test "$DEPLOY_PATH" != "/"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'test "$(id -u)" -ne 0'
       - name: Prepare remote deployment directory
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -199,6 +216,16 @@ jobs:
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && bash 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh"
 
+      - name: Run target-host real-render load test
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.load_test == true }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml exec -T web python /app/03-SIDE-CODE/tools/load_test_real_render.py --base-url http://127.0.0.1:5000 --fixture /tmp/aivf-recovery-smoke.mp4"
       - name: Run target-host cancellation/restart recovery smoke
         if: >-
           ${{ github.event_name == 'workflow_dispatch' && inputs.recovery_smoke == true }}

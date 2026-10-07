@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional
 from ai_video_factory.job_state import validate_transition
 from ai_video_factory.retry_policy import backoff_seconds, is_retryable_error
 from ai_video_factory.db_migrations import migrate_database, verify_database_schema
+from ai_video_factory.job_class import budget_for
 
 
 class JobAdmissionError(RuntimeError):
@@ -29,6 +30,26 @@ class IdempotencyConflict(JobAdmissionError):
 
 class JobRetryNotAllowed(RuntimeError):
     """Raised when a retry is exhausted or the recorded failure is deterministic."""
+
+
+JOB_EVENT_NAMES = frozenset({
+    "created",
+    "status_change",
+    "job_claimed",
+    "job_started",
+    "job_heartbeat",
+    "job_cancel_requested",
+    "job_cancelled",
+    "job_failed",
+    "job_retry_scheduled",
+    "job_completed",
+    "artifact_published",
+    "resource_reserved",
+    "resource_released",
+    "attempt_started",
+    "attempt_finished",
+    "retry",
+})
 
 
 
@@ -270,9 +291,17 @@ class DashboardStore:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        event_name = str(event).strip()[:120]
+        if event_name not in JOB_EVENT_NAMES:
+            raise ValueError(f"unsupported job event: {event_name}")
+        structured = details
+        if not isinstance(details, str):
+            structured = json.dumps(details, sort_keys=True, separators=(",", ":"))
+        elif details and not details.lstrip().startswith(("{", "[")):
+            structured = json.dumps({"message": details[:3900]}, sort_keys=True)
         conn.execute(
             "INSERT INTO job_events(job_id, from_status, to_status, event, details) VALUES (?,?,?,?,?)",
-            (job_id, from_status, to_status, str(event)[:120], str(details)[:4000]),
+            (job_id, from_status, to_status, event_name, str(structured)[:4000]),
         )
 
     def insert_job(
@@ -526,8 +555,11 @@ class DashboardStore:
         max_reserved_disk_bytes: int,
         max_cpu_weight: float,
         max_memory_bytes: int,
+        resource_class: str = "cpu_render",
     ) -> bool:
-        """Atomically reserve finite host capacity for a queued/running job."""
+        """Atomically reserve host capacity and a class-specific execution slot."""
+        class_name = str(resource_class or "cpu_render").strip()
+        class_budget = budget_for(class_name)
         values = (
             max(0, int(input_bytes)),
             max(0, int(reserved_bytes)),
@@ -546,28 +578,40 @@ class DashboardStore:
             disk = int(conn.execute("SELECT COALESCE(SUM(reserved_bytes),0) FROM resource_reservations").fetchone()[0])
             cpu = float(conn.execute("SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations").fetchone()[0])
             memory = int(conn.execute("SELECT COALESCE(SUM(memory_bytes),0) FROM resource_reservations").fetchone()[0])
+            class_count = int(conn.execute(
+                "SELECT COUNT(*) FROM resource_reservations WHERE resource_class=?",
+                (class_name,),
+            ).fetchone()[0])
+            class_cpu = float(conn.execute(
+                "SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations WHERE resource_class=?",
+                (class_name,),
+            ).fetchone()[0])
             if (
                 disk + values[1] > int(max_reserved_disk_bytes)
                 or cpu + values[2] > float(max_cpu_weight)
                 or memory + values[3] > int(max_memory_bytes)
+                or class_count >= int(class_budget.max_active)
+                or class_cpu + values[2] > float(class_budget.max_cpu_weight)
             ):
                 return False
             conn.execute(
                 """
                 INSERT INTO resource_reservations(
-                    job_id,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
-                ) VALUES (?,?,?,?,?,?)
+                    job_id,resource_class,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
+                ) VALUES (?,?,?,?,?,?,?)
                 """,
-                (job_id, *values, time.time()),
+                (job_id, class_name, *values, time.time()),
             )
             self._record_event(
                 conn,
                 job_id,
                 "resource_reserved",
-                details=(
-                    f"disk={values[1]};cpu={values[2]:.3f};"
-                    f"memory={values[3]}"
-                ),
+                details=json.dumps({
+                    "resource_class": class_name,
+                    "disk_bytes": values[1],
+                    "cpu_weight": round(values[2], 3),
+                    "memory_bytes": values[3],
+                }, sort_keys=True),
             )
             return True
 
@@ -869,6 +913,9 @@ class DashboardStore:
                     reserved_bytes = max(0, int(budget.get("reserved_bytes", 0)))
                     cpu_weight = max(0.01, float(budget.get("cpu_weight", 0.01)))
                     memory_bytes = max(0, int(budget.get("memory_bytes", 0)))
+                    from ai_video_factory.job_class import budget_for
+                    resource_class = str(budget.get("job_class") or params.get("_resource_class") or "cpu_render")
+                    class_budget = budget_for(resource_class)
                     disk_used = int(conn.execute(
                         "SELECT COALESCE(SUM(reserved_bytes),0) FROM resource_reservations"
                     ).fetchone()[0])
@@ -878,20 +925,31 @@ class DashboardStore:
                     memory_used = int(conn.execute(
                         "SELECT COALESCE(SUM(memory_bytes),0) FROM resource_reservations"
                     ).fetchone()[0])
+                    class_count = int(conn.execute(
+                        "SELECT COUNT(*) FROM resource_reservations WHERE resource_class=?",
+                        (resource_class,),
+                    ).fetchone()[0])
+                    class_cpu = float(conn.execute(
+                        "SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations WHERE resource_class=?",
+                        (resource_class,),
+                    ).fetchone()[0])
                     if (
                         disk_used + reserved_bytes > MAX_RESERVED_DISK_BYTES
                         or cpu_used + cpu_weight > MAX_CPU_WEIGHT
                         or memory_used + memory_bytes > MAX_RESERVED_MEMORY_BYTES
+                        or class_count >= class_budget.max_active
+                        or class_cpu + cpu_weight > class_budget.max_cpu_weight
                     ):
                         raise JobRetryNotAllowed("retry resource capacity reached")
                     conn.execute(
                         """
                         INSERT INTO resource_reservations(
-                            job_id,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
-                        ) VALUES (?,?,?,?,?,?)
+                            job_id,resource_class,input_bytes,reserved_bytes,cpu_weight,memory_bytes,created_at
+                        ) VALUES (?,?,?,?,?,?,?)
                         """,
                         (
                             job_id,
+                            resource_class,
                             max(0, int(budget.get("input_bytes", 0))),
                             reserved_bytes,
                             cpu_weight,

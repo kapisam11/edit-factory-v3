@@ -144,9 +144,42 @@ if response.status_code not in (200, 202, 409):
 PY
 wait_for_status "$CANCEL_JOB_ID" "cancelled"
 
-echo "[AIVF] restart/reconciliation path"
+echo "[AIVF] worker/FFmpeg crash + restart reconciliation path"
 RESTART_JOB_ID="$(create_job)"
-sleep 1
+for _ in $(seq 1 30); do
+  state="$(docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" env JOB_ID="$RESTART_JOB_ID" python - <<'PY'
+import os
+import sqlite3
+with sqlite3.connect("/app/state/jobs.db") as conn:
+    row = conn.execute("SELECT status FROM jobs WHERE id=?", (os.environ["JOB_ID"],)).fetchone()
+print(row[0] if row else "missing")
+PY
+)"
+  [ "$state" = "running" ] && break
+  case "$state" in error|cancelled|done|missing) echo "[AIVF] job never reached running: $state"; exit 1;; esac
+  sleep 1
+done
+docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" python - <<'PY'
+from pathlib import Path
+import os
+import signal
+
+killed = 0
+for proc in Path("/proc").glob("[0-9]*"):
+    try:
+        pid = int(proc.name)
+        command = (proc / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace").strip().lower()
+    except (OSError, ValueError, UnicodeDecodeError):
+        continue
+    if "ffmpeg" in command and pid != os.getpid():
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed += 1
+        except OSError:
+            pass
+if not killed:
+    raise SystemExit("no active ffmpeg process was found to crash-test")
+PY
 docker compose -f "$COMPOSE_FILE" restart "$SERVICE"
 for attempt in $(seq 1 30); do
   state="$(docker compose -f "$COMPOSE_FILE" exec -T "$SERVICE" env JOB_ID="$RESTART_JOB_ID" python - <<'PY'
@@ -161,11 +194,11 @@ print(row[0] if row else "missing")
 PY
 )"
   case "$state" in
-    interrupted)
-      echo "[AIVF] restart reconciliation passed"
+    interrupted|error)
+      echo "[AIVF] crash/restart reconciliation passed: $state"
       break
       ;;
-    error|cancelled|done|missing)
+    cancelled|done|missing)
       echo "[AIVF] unexpected restart-recovery state: $state"
       exit 1
       ;;

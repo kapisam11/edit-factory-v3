@@ -38,6 +38,18 @@ def install_observability(app: Flask) -> None:
         GLOBAL_METRICS.increment(f"http_requests_total:{request.method}:{request.endpoint or 'unknown'}")
         GLOBAL_METRICS.increment(f"http_response_total:{response.status_code}")
         GLOBAL_METRICS.observe_ms("http_request", (time.perf_counter() - started) * 1000.0)
+        try:
+            from dashboard_store import DashboardStore
+            db_path = Path(str(app.config.get("AIVF_STATE_DIR"))) / "jobs.db"
+            with DashboardStore(db_path).connect() as conn:
+                queued = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
+                running = int(conn.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('running','cancelling')").fetchone()[0])
+            GLOBAL_METRICS.set_gauge("queue_depth", queued)
+            GLOBAL_METRICS.set_gauge("jobs_queued", queued)
+            GLOBAL_METRICS.set_gauge("jobs_running", running)
+            GLOBAL_METRICS.set_gauge("disk_free_bytes", float(__import__("shutil").disk_usage(app.config["AIVF_STATE_DIR"]).free))
+        except Exception:
+            GLOBAL_METRICS.increment("metrics_collection_errors_total")
         response.headers[REQUEST_ID_HEADER] = getattr(g, "request_id", "")
         return response
 

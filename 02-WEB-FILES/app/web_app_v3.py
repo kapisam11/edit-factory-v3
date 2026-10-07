@@ -74,7 +74,7 @@ logger = logging.getLogger("web_app_v3")
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
-INTERNAL_PARAM_KEYS = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir"}
+INTERNAL_PARAM_KEYS = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir", "_resource_class", "_resource_budget"}
 RUNTIME_SECRET_TTL_SECONDS = RUNTIME_CONFIG.retry_secret_ttl_seconds
 TERMINAL_STATUSES = {"done", "error", "cancelled", "interrupted"}
 SETTINGS_SCHEMA = {
@@ -1105,6 +1105,8 @@ def create_job():
     secrets = get_runtime_default_secrets()
     secrets.update({key: str(data.get(key, "")).strip() for key in SECRET_PARAM_KEYS if data.get(key)})
     params["_retry_secret_keys"] = [key for key in SECRET_PARAM_KEYS if data.get(key)]
+    from ai_video_factory.job_class import classify_job_class
+    params["_resource_class"] = classify_job_class(params)
 
     if workflow == "v3":
         capabilities = _runtime_capabilities()
@@ -1285,7 +1287,7 @@ def create_job():
                 MAX_RESERVED_MEMORY_BYTES,
             )
             budget = estimate_resource_budget(
-                media_contract,
+                {**media_contract, "job_class": params.get("_resource_class", "cpu_render")},
                 target_seconds=float(target_seconds),
                 limits=MEDIA_LIMITS,
             )
@@ -1298,6 +1300,7 @@ def create_job():
                 max_reserved_disk_bytes=MAX_RESERVED_DISK_BYTES,
                 max_cpu_weight=MAX_CPU_WEIGHT,
                 max_memory_bytes=MAX_RESERVED_MEMORY_BYTES,
+                resource_class=str(budget.get("job_class") or params.get("_resource_class") or "cpu_render"),
             ):
                 if upload_path is not None:
                     upload_path.unlink(missing_ok=True)
