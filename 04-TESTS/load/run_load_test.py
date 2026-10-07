@@ -33,6 +33,14 @@ class JobResult:
     error: str = ""
 
 
+def _percentile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, int(round((len(ordered) - 1) * fraction))))
+    return round(ordered[index], 3)
+
+
 def _login(base_url: str, token: str) -> requests.Session:
     session = requests.Session()
     response = session.post(
@@ -173,19 +181,28 @@ def run(base_url: str, token: str, fixture: Path, levels: list[int]) -> dict[str
         elapsed = max(0.001, time.perf_counter() - started)
         failures = sum(result.status not in {"done"} for result in results)
         submission_failures = sum(not result.submitted for result in results)
+        submit_values = [r.submit_latency_ms for r in results]
+        total_values = [r.total_latency_ms for r in results]
+        queue_values = [r.queue_latency_ms for r in results if r.queue_latency_ms is not None]
+        metrics = _metrics(base_url, token)
         rows.append({
             "concurrency": concurrency,
             "elapsed_seconds": round(elapsed, 3),
             "throughput_jobs_per_minute": round(len(results) / elapsed * 60.0, 3),
             "failure_rate": round(failures / max(1, len(results)), 4),
             "submission_failure_rate": round(submission_failures / max(1, len(results)), 4),
-            "submit_latency_p50_ms": round(sorted(r.submit_latency_ms for r in results)[len(results)//2], 3),
-            "total_latency_p50_ms": round(sorted(r.total_latency_ms for r in results)[len(results)//2], 3),
-            "queue_latency_p50_ms": round(
-                sorted(r.queue_latency_ms for r in results if r.queue_latency_ms is not None)[
-                    len([r for r in results if r.queue_latency_ms is not None]) // 2
-                ], 3
-            ) if any(r.queue_latency_ms is not None for r in results) else None,
+            "submit_latency_p50_ms": _percentile(submit_values, 0.50),
+            "submit_latency_p95_ms": _percentile(submit_values, 0.95),
+            "submit_latency_p99_ms": _percentile(submit_values, 0.99),
+            "total_latency_p50_ms": _percentile(total_values, 0.50),
+            "total_latency_p95_ms": _percentile(total_values, 0.95),
+            "total_latency_p99_ms": _percentile(total_values, 0.99),
+            "queue_latency_p50_ms": _percentile(queue_values, 0.50),
+            "queue_latency_p95_ms": _percentile(queue_values, 0.95),
+            "queue_latency_p99_ms": _percentile(queue_values, 0.99),
+            "db_lock_retries": metrics.get("counters", {}).get("sqlite_lock_retries", 0),
+            "queue_depth": metrics.get("gauges", {}).get("queue_depth"),
+            "disk_free_bytes": metrics.get("gauges", {}).get("disk_free_bytes"),
             "statuses": {status: sum(r.status == status for r in results) for status in sorted({r.status for r in results})},
             "errors": [r.error for r in results if r.error][:10],
         })
@@ -217,7 +234,10 @@ def main(argv: list[str] | None = None) -> int:
         fieldnames = [
             "concurrency", "elapsed_seconds", "throughput_jobs_per_minute",
             "failure_rate", "submission_failure_rate",
-            "submit_latency_p50_ms", "total_latency_p50_ms", "queue_latency_p50_ms",
+            "submit_latency_p50_ms", "submit_latency_p95_ms", "submit_latency_p99_ms",
+            "total_latency_p50_ms", "total_latency_p95_ms", "total_latency_p99_ms",
+            "queue_latency_p50_ms", "queue_latency_p95_ms", "queue_latency_p99_ms",
+            "db_lock_retries", "queue_depth", "disk_free_bytes",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
