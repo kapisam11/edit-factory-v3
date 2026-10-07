@@ -1,9 +1,10 @@
 """Explicit SQLite schema migrations for the dashboard store."""
 from __future__ import annotations
 
+import json
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 
 def _table_columns(conn: sqlite3.Connection) -> set[str]:
@@ -241,6 +242,11 @@ def migrate(conn: sqlite3.Connection) -> int:
 
     # Version 8: job lookup indexes for priority and lifecycle timestamps.
     if 8 not in applied:
+        columns = _table_columns(conn)
+        if "priority" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+        if "finished_at" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN finished_at TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_priority_status "
             "ON jobs(priority DESC, status, created_at)"
@@ -277,6 +283,58 @@ def migrate(conn: sqlite3.Connection) -> int:
         )
         conn.execute("INSERT INTO schema_migrations(version) VALUES (10)")
 
+
+    # Version 11: repair/backfill for deployments that recorded older migrations
+    # before all lifecycle columns were introduced.
+    if 11 not in applied:
+        columns = _table_columns(conn)
+        repair_columns = {
+            "priority": "INTEGER NOT NULL DEFAULT 0",
+            "finished_at": "TEXT",
+            "principal": "TEXT NOT NULL DEFAULT 'unknown'",
+            "attempt_id": "TEXT",
+            "worker_token": "TEXT",
+            "workspace_dir": "TEXT",
+            "current_attempt": "TEXT",
+            "error_code": "TEXT",
+            "resource_units": "INTEGER NOT NULL DEFAULT 1",
+            "reserved_disk_bytes": "INTEGER NOT NULL DEFAULT 0",
+            "reserved_memory_bytes": "INTEGER NOT NULL DEFAULT 0",
+            "resource_class": "TEXT NOT NULL DEFAULT 'STANDARD'",
+        }
+        for name, definition in repair_columns.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+
+        # Preserve ownership recorded by pre-migration request parameters.
+        rows = conn.execute(
+            "SELECT id, params, principal FROM jobs WHERE principal IS NULL OR principal='' OR principal='unknown'"
+        ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["params"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            principal = str(payload.get("_principal") or "").strip()
+            if principal:
+                conn.execute(
+                    "UPDATE jobs SET principal=? WHERE id=?",
+                    (principal, row["id"]),
+                )
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_priority_status "
+            "ON jobs(priority DESC, status, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_finished "
+            "ON jobs(finished_at, status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_resource_class_status "
+            "ON jobs(resource_class, status)"
+        )
+        conn.execute("INSERT INTO schema_migrations(version) VALUES (11)")
 
     conn.commit()
     return CURRENT_SCHEMA_VERSION
