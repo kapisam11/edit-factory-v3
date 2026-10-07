@@ -39,8 +39,20 @@ def run_janitor(*,db_path,upload_root,output_root,workspace_root=None,now=None,m
     db=Path(db_path).resolve(); uploads=Path(upload_root).resolve(); output=Path(output_root).resolve(); work=Path(workspace_root or (output/".work")).resolve()
     counts={k:0 for k in ("logs","events","audit_events","idempotency_keys","rate_limits","uploads","failed_workspaces","terminal_jobs")}
     active=set()
+    referenced_uploads=set()
     with _connect(db) as conn:
         try:
+            upload_root=Path(upload_root).resolve()
+            for row in conn.execute("SELECT params FROM jobs"):
+                try:
+                    payload=json.loads(row["params"] or "{}")
+                    raw=payload.get("raw_video")
+                    if raw:
+                        candidate=Path(str(raw)).resolve()
+                        if upload_root in candidate.parents and not candidate.is_symlink():
+                            referenced_uploads.add(candidate)
+                except (TypeError, ValueError, OSError, json.JSONDecodeError):
+                    continue
             rows=conn.execute("SELECT id FROM jobs WHERE status IN ('queued','running','cancelling')").fetchall()
             for row in rows:
                 a=conn.execute("SELECT workspace FROM job_attempts WHERE job_id=? AND status='running' ORDER BY started_at DESC LIMIT 1",(row["id"],)).fetchone()
@@ -68,6 +80,8 @@ def run_janitor(*,db_path,upload_root,output_root,workspace_root=None,now=None,m
         cutoff=_cutoff_days(upload_days,now)
         for path in uploads.iterdir():
             try:
+                if path.resolve() in referenced_uploads:
+                    continue
                 if path.is_file() and path.stat().st_mtime<cutoff:
                     path.unlink(missing_ok=True); counts["uploads"]+=1
             except OSError: pass
