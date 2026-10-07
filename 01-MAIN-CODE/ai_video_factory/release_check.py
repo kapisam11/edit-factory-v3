@@ -37,8 +37,16 @@ def check_release(root:str|Path=".")->dict[str,object]:
 
     marker=Path(os.environ.get("AIVF_BACKUP_RESTORE_MARKER",str(base/"state"/"backup-restore-verified")))
     checks["backup_restore_verified"]={"ok":marker.is_file(),"detail":str(marker)}
-    required=(base/"06-CONFIG-AND-DEPLOYMENT"/"deploy_with_rollback.sh",base/"06-CONFIG-AND-DEPLOYMENT"/"target_recovery_smoke.sh",base/"03-SIDE-CODE"/"tools"/"load_test_admission.py",base/"01-MAIN-CODE"/"ai_video_factory"/"retention_janitor.py")
-    checks["operational_tooling_present"]={"ok":all(p.is_file() for p in required),"detail":"rollback/recovery/load/retention tooling present"}
+    required=(
+        base/"06-CONFIG-AND-DEPLOYMENT"/"deploy_with_rollback.sh",
+        base/"06-CONFIG-AND-DEPLOYMENT"/"target_recovery_smoke.sh",
+        base/"03-SIDE-CODE"/"tools"/"load_test_admission.py",
+        base/"03-SIDE-CODE"/"tools"/"load_test_real_render.py",
+        base/"03-SIDE-CODE"/"tools"/"verify_model_lock.py",
+        base/"01-MAIN-CODE"/"ai_video_factory"/"retention_janitor.py",
+        base/"01-MAIN-CODE"/"ai_video_factory"/"backup_restore.py",
+    )
+    checks["operational_tooling_present"]={"ok":all(p.is_file() for p in required),"detail":"rollback/recovery/load/model-verification/retention/backup tooling present"}
 
     failures=[name for name,value in checks.items() if not bool(value["ok"])]
     return {"ok":not failures,"failures":failures,"checks":checks}
