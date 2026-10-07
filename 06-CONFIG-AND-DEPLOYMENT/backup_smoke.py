@@ -1,32 +1,51 @@
 #!/usr/bin/env python3
-from pathlib import Path
 import argparse
 import os
+from pathlib import Path
 import shutil
 import sys
 
 sys.path.insert(0, "/app/01-MAIN-CODE")
-from ai_video_factory.backup_restore import create_backup, verify_backup
+from ai_video_factory.backup_restore import create_backup, verify_backup, _pack_snapshot
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--archive", required=True)
-args = parser.parse_args()
 
-source_root = Path("/tmp/aivf-backup-source")
-shutil.rmtree(source_root, ignore_errors=True)
-source_root.mkdir(parents=True)
-created = create_backup(
-    state_dir=os.environ.get("AIVF_STATE_DIR", "/app/state"),
-    knowledge_dir=os.environ.get("AIVF_KNOWLEDGE_DIR", "/app/knowledge_base_v3"),
-    output_dir=os.environ.get("AIVF_OUTPUT_DIR", "/app/output"),
-    destination=source_root,
-    include_output=True,
-)
-verified = verify_backup(created["path"])
-if not verified["ok"]:
-    raise SystemExit(f"backup verification failed: {verified}")
-archive = Path(args.archive)
-archive.parent.mkdir(parents=True, exist_ok=True)
-base_name = str(archive)[:-7] if str(archive).endswith(".tar.gz") else str(archive)
-shutil.make_archive(base_name, "gztar", root_dir=created["path"])
-print(archive)
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--archive", required=True)
+    parser.add_argument(
+        "--staging",
+        default=os.environ.get("AIVF_BACKUP_STAGING_DIR", "/app/state/.backup-staging"),
+    )
+    args = parser.parse_args(argv)
+
+    archive = Path(args.archive)
+    staging = Path(args.staging)
+    staging.mkdir(parents=True, exist_ok=True)
+    created = create_backup(
+        state_dir=os.environ.get("AIVF_STATE_DIR", "/app/state"),
+        database_path=os.environ.get("AIVF_DB_PATH", str(Path(os.environ.get("AIVF_STATE_DIR", "/app/state")) / "jobs.db")),
+        knowledge_dir=os.environ.get("AIVF_KNOWLEDGE_DIR", "/app/knowledge_base_v3"),
+        output_dir=os.environ.get("AIVF_OUTPUT_DIR", "/app/output"),
+        destination=staging,
+        include_output=True,
+    )
+    snapshot = Path(created["path"])
+    try:
+        verified = verify_backup(snapshot)
+        if not verified["ok"]:
+            raise SystemExit(f"backup verification failed: {verified}")
+        written = _pack_snapshot(snapshot, archive)
+        if not written.is_file():
+            raise SystemExit(f"backup archive was not created: {written}")
+        print(written)
+        return 0
+    finally:
+        shutil.rmtree(snapshot, ignore_errors=True)
+        try:
+            staging.rmdir()
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
