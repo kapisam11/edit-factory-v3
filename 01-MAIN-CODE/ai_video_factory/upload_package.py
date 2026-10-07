@@ -635,7 +635,8 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         ),
         "artifacts": _collect_artifacts(root),
     }
-    (upload_dir / "metadata.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    metadata_text = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+    (upload_dir / "metadata.json").write_text(metadata_text, encoding="utf-8")
     (upload_dir / "README-UPLOAD.md").write_text(
         "# Upload package\n\n"
         f"Platform profile: `{profile.name}`\n\n"
@@ -645,6 +646,14 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "6. Do not publish while `media_rights.publish_blocked` is true.\n",
         encoding="utf-8",
     )
+    if legacy_upload_dir != upload_dir:
+        (legacy_upload_dir / "metadata.json").write_text(metadata_text, encoding="utf-8")
+        (legacy_upload_dir / "README-UPLOAD.md").write_text(
+            "# Upload package\n\n"
+            "Use title.txt, description.txt, tags.txt, and metadata.json from this directory.\n"
+            "Review AI/altered-content disclosure and rights status before publishing.\n",
+            encoding="utf-8",
+        )
     root_manifest = root / "upload_package.json"
     existing = {}
     if root_manifest.exists():
