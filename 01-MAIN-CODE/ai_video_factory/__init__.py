@@ -87,12 +87,20 @@ def __getattr__(name):
     raise AttributeError(name)
 
 
-from .roadmap_runtime import install as _install_roadmap_runtime
+_BOOTSTRAPPED = False
 
-_install_roadmap_runtime()
-from .roadmap_runtime_bindings import install as _install_roadmap_bindings
 
-_install_roadmap_bindings()
+def bootstrap_runtime() -> None:
+    """Explicitly install optional roadmap/runtime bindings once at application startup."""
+    global _BOOTSTRAPPED
+    if _BOOTSTRAPPED:
+        return
+    from .roadmap_runtime import install as install_roadmap_runtime
+    from .roadmap_runtime_bindings import install as install_roadmap_bindings
+    install_roadmap_runtime()
+    install_roadmap_bindings()
+    _BOOTSTRAPPED = True
+
 
 __version__ = "3.0.0"
 __all__ = [
@@ -115,4 +123,5 @@ __all__ = [
     "ChannelPerformanceModel",
     "LearningRecommendation",
     "PerformanceObservation",
+    "bootstrap_runtime",
 ]
