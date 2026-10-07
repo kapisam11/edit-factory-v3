@@ -262,19 +262,24 @@ jobs:
           test -n "$DEPLOY_DIGEST"
           [[ "$DEPLOY_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
           IMAGE="${REGISTRY}/${IMAGE_NAME}@${DEPLOY_DIGEST}"
-          printf -v q_deploy_path '%q' "$DEPLOY_PATH"
-          printf -v q_image '%q' "$IMAGE"
-          printf -v q_sha '%q' "${GITHUB_SHA}"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "
-            set -euo pipefail
-            cd ${q_deploy_path}
-            CONTAINER_ID=$(docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml ps -q web)
-            test -n "$CONTAINER_ID"
-            ARCHIVE="/backups/aivf-backup-pre-${GITHUB_SHA}.tar.gz"
-            docker run --rm --user 0:0 --network none --volumes-from "$CONTAINER_ID" -v "${DEPLOY_PATH}/backups:/backups" ${q_image} python /app/06-CONFIG-AND-DEPLOYMENT/backup_smoke.py --archive "$ARCHIVE" --staging /app/state/.backup-staging
-            test -s "${DEPLOY_PATH}/backups/aivf-backup-pre-${GITHUB_SHA}.tar.gz"
-          "
-
+          BACKUP_SHA="${GITHUB_SHA}"
+          export DEPLOY_PATH IMAGE BACKUP_SHA
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          CONTAINER_ID="$(docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml ps -q web)"
+          test -n "$CONTAINER_ID"
+          mkdir -p "$DEPLOY_PATH/backups"
+          ARCHIVE="/backups/aivf-backup-pre-${BACKUP_SHA}.tar.gz"
+          docker run --rm --user 0:0 --network none \
+            --volumes-from "$CONTAINER_ID" \
+            -v "$DEPLOY_PATH/backups:/backups" \
+            "$IMAGE" \
+            python /app/06-CONFIG-AND-DEPLOYMENT/backup_smoke.py \
+            --archive "$ARCHIVE" \
+            --staging /app/state/.backup-staging
+          test -s "$DEPLOY_PATH/backups/aivf-backup-pre-${BACKUP_SHA}.tar.gz"
+          REMOTE
       - name: Migrate and verify production database
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
