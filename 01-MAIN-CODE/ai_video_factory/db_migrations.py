@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 _REQUIRED_COLUMNS = {
     "jobs": {
@@ -28,7 +28,7 @@ _REQUIRED_COLUMNS = {
         "remote_addr", "user_agent", "result", "metadata",
     },
     "resource_reservations": {
-        "job_id", "input_bytes", "reserved_bytes", "cpu_weight", "memory_bytes", "created_at",
+        "job_id", "resource_class", "input_bytes", "reserved_bytes", "cpu_weight", "memory_bytes", "created_at",
     },
     "idempotency_keys": {"principal", "idem_key", "request_hash", "job_id", "created_at"},
     "settings": {"key", "value"},
@@ -173,6 +173,7 @@ def migrate_database(path: str | Path) -> int:
             """
             CREATE TABLE IF NOT EXISTS resource_reservations (
                 job_id TEXT PRIMARY KEY,
+                resource_class TEXT NOT NULL DEFAULT 'cpu_render',
                 input_bytes INTEGER NOT NULL DEFAULT 0,
                 reserved_bytes INTEGER NOT NULL DEFAULT 0,
                 cpu_weight REAL NOT NULL DEFAULT 1.0,
@@ -202,6 +203,9 @@ def migrate_database(path: str | Path) -> int:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_principal_status ON jobs(principal, status)"
         )
+        if "resource_class" not in _columns(conn, "resource_reservations"):
+            conn.execute("ALTER TABLE resource_reservations ADD COLUMN resource_class TEXT NOT NULL DEFAULT 'cpu_render'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_resource_reservations_class ON resource_reservations(resource_class)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_job_logs_job_id_id ON job_logs(job_id, id)"
         )
@@ -247,6 +251,8 @@ def migrate_database(path: str | Path) -> int:
             current = 4
         if current < 5:
             current = 5
+        if current < 6:
+            current = 6
         conn.execute("DELETE FROM schema_version")
         conn.execute("INSERT INTO schema_version(version) VALUES (?)", (CURRENT_SCHEMA_VERSION,))
         return CURRENT_SCHEMA_VERSION
