@@ -770,7 +770,10 @@ def _run_job_worker_impl(
                 logger.exception("Could not finalize resource telemetry for %s", job_id)
         try:
             final_row = store.get_job(job_id)
-            if final_row and owned():
+            if final_row and (
+                not (attempt_id and lease_token)
+                or store.has_attempt_ownership(job_id, attempt_id, lease_token)
+            ):
                 final_status = str(final_row.get("status") or "")
                 if final_status == "done":
                     GLOBAL_METRICS.increment("jobs_completed_total")
@@ -783,6 +786,8 @@ def _run_job_worker_impl(
                     try:
                         from datetime import datetime, timezone
                         started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                        if started.tzinfo is None:
+                            started = started.replace(tzinfo=timezone.utc)
                         GLOBAL_METRICS.observe_ms(
                             "job_duration",
                             max(0.0, (datetime.now(timezone.utc) - started).total_seconds() * 1000.0),
@@ -927,7 +932,7 @@ def _start_job(job_id: str, params: dict, secrets: dict) -> bool:
                 lease_token=lease_token,
                 workspace_dir=str(workspace_dir),
             ):
-                shutil.rmtree(workspace_root, ignore_errors=True)
+                shutil.rmtree(workspace_dir, ignore_errors=True)
                 return False
 
             from dashboard_worker import run_job
@@ -974,7 +979,7 @@ def _pump_queued_jobs() -> int:
     started = 0
     with _queue_pump_lock:
         store = DashboardStore(DB_PATH)
-        rows = store.list_jobs(limit=_MAX_QUEUED_JOBS)
+        rows = store.list_queued_jobs(limit=_MAX_QUEUED_JOBS)
         for row in rows:
             if str(row.get("status")) != "queued":
                 continue
@@ -989,6 +994,23 @@ def _pump_queued_jobs() -> int:
             if not isinstance(params, dict):
                 continue
             secrets_payload = dict(_runtime_secrets.get(job_id) or _runtime_default_secrets)
+            required_secrets = {
+                str(name).strip()
+                for name in (params.get("_retry_secret_keys") or [])
+                if str(name).strip()
+            }
+            missing_secrets = sorted(
+                name for name in required_secrets if not secrets_payload.get(name)
+            )
+            if missing_secrets:
+                store.update_job(
+                    job_id,
+                    status="interrupted",
+                    step="credentials_required",
+                    error="Required credentials are unavailable after restart: " + ", ".join(missing_secrets),
+                    error_code="credentials_required",
+                )
+                continue
             try:
                 if _start_job(job_id, params, secrets_payload):
                     started += 1
@@ -1078,7 +1100,7 @@ def settings():
                 user_agent=request.headers.get("User-Agent"),
             )
         except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
+            return jsonify({"error": "Invalid settings payload"}), 400
     return jsonify(get_settings())
 
 
@@ -1275,6 +1297,7 @@ def create_job():
                 params["_media_summary"] = media_summary
                 params["_resource_budget"] = {
                     "resource_units": resource_budget.resource_units,
+                    "resource_class": resource_budget.resource_class,
                     "reserved_disk_bytes": resource_budget.reserved_disk_bytes,
                     "reserved_memory_bytes": resource_budget.reserved_memory_bytes,
                     "estimated_job_seconds": resource_budget.estimated_job_seconds,
@@ -1285,8 +1308,8 @@ def create_job():
                 return jsonify({"error": "Server disk space is too low after upload"}), 503
         except (OSError, ValueError):
             return jsonify({"error": "Upload is too large or is not a valid supported video stream"}), 400
-        except GuardrailError as exc:
-            return jsonify({"error": str(exc)}), 400
+        except GuardrailError:
+            return jsonify({"error": "Media validation failed"}), 400
         params["raw_video"] = str(upload_path)
 
     request_hash = ""
@@ -1446,6 +1469,7 @@ def create_job():
                 principal=principal,
                 principal_limit=MAX_QUEUED_PER_PRINCIPAL,
                 resource_units=params.get("_resource_budget", {}).get("resource_units"),
+                resource_class=params.get("_resource_budget", {}).get("resource_class"),
                 reserved_disk_bytes=params.get("_resource_budget", {}).get("reserved_disk_bytes"),
                 reserved_memory_bytes=params.get("_resource_budget", {}).get("reserved_memory_bytes"),
                 available_disk_bytes=max(
@@ -1549,12 +1573,14 @@ def job_logs_stream(job_id):
     if not authorized_job:
         return jsonify({"error": "Job not found"}), 404
 
+    raw_last_id = request.headers.get("Last-Event-ID", "0").strip()
+    try:
+        initial_last_id = max(0, int(raw_last_id))
+    except ValueError:
+        initial_last_id = 0
+
     def stream():
-        raw_last_id = request.headers.get("Last-Event-ID", "0").strip()
-        try:
-            last_id = max(0, int(raw_last_id))
-        except ValueError:
-            last_id = 0
+        last_id = initial_last_id
         job = dict(authorized_job)
         while True:
             current = db_get_job(job_id)
