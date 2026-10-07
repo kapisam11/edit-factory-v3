@@ -902,6 +902,7 @@ class DashboardStore:
 
             changed = int(conn.execute(
                 "UPDATE jobs SET status='queued', step='waiting', error=NULL, error_code=NULL, pkg_dir=NULL, "
+                "worker_id=NULL, lease_token=NULL, worker_heartbeat_at=NULL, "
                 "retry_count=retry_count+1, updated_at=CURRENT_TIMESTAMP "
                 "WHERE id=? AND status IN ('error','interrupted') AND retry_count<?",
                 (job_id, max_attempts),
