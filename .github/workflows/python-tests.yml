@@ -280,7 +280,45 @@ jobs:
     - name: Install FFmpeg
       shell: pwsh
       run: |
-        choco install ffmpeg -y --no-progress
+        $ErrorActionPreference = 'Stop'
+        $installed = $false
+
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+          try {
+            choco install ffmpeg -y --no-progress --execution-timeout 1200
+            $installed = $true
+            break
+          } catch {
+            if ($attempt -lt 3) {
+              Write-Warning "Chocolatey FFmpeg install failed on attempt $attempt: $($_.Exception.Message)"
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+        }
+
+        if (-not $installed) {
+          Write-Warning "Chocolatey FFmpeg install failed; falling back to Winget."
+          winget install --exact --id Gyan.FFmpeg --accept-source-agreements --accept-package-agreements --disable-interactivity
+        }
+
+        $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+        $ffprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
+        if (-not $ffmpeg -or -not $ffprobe) {
+          $wingetRoots = @(
+            "$env:LOCALAPPDATA\Microsoft\WinGet\Packages",
+            "$env:ProgramFiles\WinGet\Packages"
+          ) | Where-Object { Test-Path $_ }
+
+          foreach ($root in $wingetRoots) {
+            $ffmpegCandidate = Get-ChildItem -Path $root -Filter ffmpeg.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            $ffprobeCandidate = Get-ChildItem -Path $root -Filter ffprobe.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($ffmpegCandidate -and $ffprobeCandidate) {
+              $env:PATH = "$($ffmpegCandidate.Directory.FullName);$env:PATH"
+              break
+            }
+          }
+        }
+
         ffmpeg -version
         ffprobe -version
     - name: Verify locked environment
