@@ -112,19 +112,34 @@ def total_storage_bytes(*roots: str | Path, limit: int | None = None) -> int:
 
 
 def principal_queued_jobs(db_connect, principal: str) -> int:
+    """Count queued/running jobs for a principal across current and legacy schemas."""
     with db_connect() as conn:
-        rows = conn.execute(
-            "SELECT principal, params FROM jobs WHERE status IN ('queued','running')"
-        ).fetchall()
+        columns = {
+            str(row["name"] if hasattr(row, "keys") else row[1])
+            for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "principal" in columns:
+            rows = conn.execute(
+                "SELECT principal, params FROM jobs WHERE status IN ('queued','running')"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT params FROM jobs WHERE status IN ('queued','running')"
+            ).fetchall()
+
     count = 0
     for row in rows:
         try:
-            raw_params = row["params"] if hasattr(row, "keys") else row[0]
+            if hasattr(row, "keys"):
+                raw_params = row["params"]
+                row_principal = str(row["principal"] if "principal" in row.keys() else "").strip()
+            else:
+                raw_params = row[1] if "principal" in columns else row[0]
+                row_principal = str(row[0] if "principal" in columns else "").strip()
             params = json.loads(raw_params or "{}")
         except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             continue
-        row_principal = str(row["principal"] if hasattr(row, "keys") else "").strip()
-        if row_principal == principal or str(params.get("_principal", "")) == principal:
+        if row_principal == principal or str(params.get("_principal", "")).strip() == principal:
             count += 1
     return count
 
