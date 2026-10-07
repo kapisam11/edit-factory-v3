@@ -29,6 +29,7 @@ class MetricsRegistry:
             with sqlite3.connect(self._db) as conn:
                 conn.execute("CREATE TABLE IF NOT EXISTS metric_counters(name TEXT PRIMARY KEY,value INTEGER NOT NULL)")
                 conn.execute("CREATE TABLE IF NOT EXISTS metric_timings(name TEXT PRIMARY KEY,count INTEGER NOT NULL,total REAL NOT NULL,samples TEXT NOT NULL DEFAULT '[]')")
+                conn.execute("CREATE TABLE IF NOT EXISTS metric_gauges(name TEXT PRIMARY KEY,value REAL NOT NULL)")
         except (OSError,sqlite3.Error):
             pass
 
@@ -58,6 +59,29 @@ class MetricsRegistry:
                     conn.execute("INSERT INTO metric_timings(name,count,total,samples) VALUES(?,?,?,?) ON CONFLICT(name) DO UPDATE SET count=count+1,total=total+excluded.total,samples=excluded.samples",(name,1,value,json.dumps(samples)))
             except sqlite3.Error:
                 pass
+
+    def set_gauge(self,name:str,value:float)->None:
+        metric=str(name).strip()
+        if not metric:
+            raise ValueError("metric name is required")
+        numeric=float(value)
+        with self._lock:
+            try:
+                with sqlite3.connect(self._db,timeout=2) as conn:
+                    conn.execute(
+                        "INSERT INTO metric_gauges(name,value) VALUES(?,?) "
+                        "ON CONFLICT(name) DO UPDATE SET value=excluded.value",
+                        (metric,numeric),
+                    )
+            except sqlite3.Error:
+                pass
+
+    def gauges(self)->dict[str,float]:
+        try:
+            with sqlite3.connect(self._db,timeout=2) as conn:
+                return {str(name):float(value) for name,value in conn.execute("SELECT name,value FROM metric_gauges")}
+        except (sqlite3.Error,ValueError,TypeError):
+            return {}
 
     def _samples(self,name:str)->list[float]:
         values=list(self._timings.get(name,[]))
@@ -96,6 +120,7 @@ class MetricsRegistry:
 
     def to_prometheus(self)->str:
         snap=self.snapshot(); lines=[]
+        gauges=self.gauges()
         for raw_name,count in snap.counters.items():
             if raw_name.startswith("http_requests_total:"):
                 _,method,endpoint=raw_name.split(":",2)
@@ -105,6 +130,10 @@ class MetricsRegistry:
             else:
                 metric=re.sub(r"[^A-Za-z0-9_:]","_",raw_name)
                 lines.append(f"aivf_{metric} {int(count)}")
+        for raw_name,value in gauges.items():
+            metric=re.sub(r"[^A-Za-z0-9_:]","_",raw_name)
+            lines.append(f"# TYPE aivf_{metric} gauge")
+            lines.append(f"aivf_{metric} {value}")
         names=set(self._timings)
         try:
             with sqlite3.connect(self._db) as conn: names |= {str(row[0]) for row in conn.execute("SELECT name FROM metric_timings")}
