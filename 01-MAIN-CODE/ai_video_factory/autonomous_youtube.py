@@ -150,6 +150,9 @@ class AutonomousStore:
                     retry_stage TEXT NOT NULL DEFAULT '',
                     platform TEXT NOT NULL DEFAULT 'youtube_shorts',
                     options_json TEXT NOT NULL DEFAULT '{}',
+                    experiment_family TEXT NOT NULL DEFAULT '',
+                    title_variant INTEGER NOT NULL DEFAULT 1,
+                    thumbnail_variant INTEGER NOT NULL DEFAULT 1,
                     next_attempt_at TEXT,
                     approval TEXT NOT NULL DEFAULT 'pending',
                     publish_requested INTEGER NOT NULL DEFAULT 0,
@@ -199,6 +202,9 @@ class AutonomousStore:
                 "retry_stage": "TEXT NOT NULL DEFAULT ''",
                 "platform": "TEXT NOT NULL DEFAULT 'youtube_shorts'",
                 "options_json": "TEXT NOT NULL DEFAULT '{}'",
+                "experiment_family": "TEXT NOT NULL DEFAULT ''",
+                "title_variant": "INTEGER NOT NULL DEFAULT 1",
+                "thumbnail_variant": "INTEGER NOT NULL DEFAULT 1",
                 "published_at": "TEXT",
             }
             for column, definition in additions.items():
@@ -288,7 +294,14 @@ class AutonomousStore:
                     json.dumps(dict(options or {}), sort_keys=True),
                 ),
             )
-            self._event(conn, job_id, "queued", {"topic": clean_topic, "platform": platform})
+            experiment_family = hashlib.sha256(clean_topic.casefold().encode("utf-8")).hexdigest()[:12]
+            title_variant = (int(job_id[-2:], 16) % 3) + 1
+            thumbnail_variant = (int(job_id[-4:-2], 16) % 3) + 1
+            conn.execute(
+                "UPDATE autonomous_jobs SET experiment_family=?,title_variant=?,thumbnail_variant=? WHERE id=?",
+                (experiment_family, title_variant, thumbnail_variant, job_id),
+            )
+            self._event(conn, job_id, "queued", {"topic": clean_topic, "platform": platform, "experiment_family": experiment_family, "title_variant": title_variant, "thumbnail_variant": thumbnail_variant})
         return job_id
 
     def get(self, job_id: str) -> Optional[dict[str, Any]]:
@@ -368,6 +381,9 @@ class AutonomousStore:
             "retry_stage",
             "platform",
             "options_json",
+            "experiment_family",
+            "title_variant",
+            "thumbnail_variant",
             "next_attempt_at",
             "approval",
             "publish_requested",
@@ -743,8 +759,16 @@ class AutonomousManager:
                     primary_meta = {}
             pipeline_ai_generated = bool(primary_meta.get("model_backed", False))
             pipeline_realistic_alteration = bool(primary_meta.get("altered_media", False))
+            title_candidates_value = metadata.get("title_candidates")
+            title_candidates: list[str] = (
+                [str(value).strip() for value in title_candidates_value if str(value).strip()]
+                if isinstance(title_candidates_value, Sequence) and not isinstance(title_candidates_value, (str, bytes))
+                else []
+            )
+            title_variant = max(1, int(job.get("title_variant") or 1))
+            raw_selected_title = title_candidates[(title_variant - 1) % len(title_candidates)] if title_candidates else str(metadata.get("selected_title") or job.get("topic") or "")
             sanitized = sanitize_public_metadata(
-                str(metadata.get("selected_title") or job.get("topic") or ""),
+                raw_selected_title,
                 str(metadata.get("description") or ""),
                 metadata.get("tags") or [],
             )
@@ -789,6 +813,8 @@ class AutonomousManager:
                 estimated_cost_usd=self.config.estimated_cost_per_video_usd,
                 approval=approval,
                 scheduled_at=scheduled,
+                experiment_family=str(job.get("experiment_family") or ""),
+                title_variant=title_variant,
                 ai_generated=int(ai_generated),
                 realistic_alteration=int(realistic_alteration),
                 rights_json=json.dumps(rights, sort_keys=True),
@@ -796,7 +822,7 @@ class AutonomousManager:
                 error="",
             )
             self.store.set_setting("consecutive_failures", "0")
-            self.store.event(job_id, "production_ready", {"style_score": style.score, "scheduled_at": scheduled})
+            self.store.event(job_id, "production_ready", {"style_score": style.score, "scheduled_at": scheduled, "experiment_family": str(job.get("experiment_family") or ""), "title_variant": title_variant})
             return job_id
         except Exception as exc:
             self._record_failure(job, exc, stage="production")
@@ -838,6 +864,11 @@ class AutonomousManager:
             files_value = metadata.get("files")
             package_files: Mapping[str, Any] = files_value if isinstance(files_value, Mapping) else {}
             thumbnail_rel = package_files.get("thumbnail")
+            requested_thumb_variant = max(1, int(job.get("thumbnail_variant") or 1))
+            thumbnail_candidates = sorted((package / "primary" / "thumbnails").glob("variant_*.png"))
+            if thumbnail_candidates:
+                selected_thumb = thumbnail_candidates[(requested_thumb_variant - 1) % len(thumbnail_candidates)]
+                thumbnail_rel = str(selected_thumb.relative_to(package))
             captions_rel = package_files.get("captions_srt")
             result = upload_video(
                 str(video_path),
@@ -864,7 +895,7 @@ class AutonomousManager:
                 error="",
             )
             self.store.set_setting("consecutive_failures", "0")
-            self.store.event(job_id, "published", {"video_id": video_id, "deduplicated": bool(result.get("deduplicated"))})
+            self.store.event(job_id, "published", {"video_id": video_id, "deduplicated": bool(result.get("deduplicated")), "experiment_family": str(job.get("experiment_family") or ""), "title_variant": int(job.get("title_variant") or 1), "thumbnail_variant": int(job.get("thumbnail_variant") or 1)})
             return video_id
         except Exception as exc:
             self._record_failure(job, exc, stage="publish")
@@ -908,6 +939,9 @@ class AutonomousManager:
                 "shares": shares,
                 "subscribersGained": subscribers,
                 "estimatedRevenue": revenue,
+                "experiment_family": str(claim.get("experiment_family") or ""),
+                "title_variant": int(claim.get("title_variant") or 1),
+                "thumbnail_variant": int(claim.get("thumbnail_variant") or 1),
                 "video_title": (stats.get("snippet") or {}).get("title"),
                 "analytics": analytics,
                 "video": stats,
@@ -976,10 +1010,23 @@ class AutonomousManager:
                 )
         model = ChannelPerformanceModel(observations)
         rec = model.recommend()
+        experiment_groups: dict[str, list[float]] = {}
+        with self.store._connect() as conn:
+            rows = conn.execute("SELECT analytics_json FROM autonomous_jobs WHERE state='ANALYZED' ORDER BY updated_at DESC LIMIT 500").fetchall()
+        for row in rows:
+            analytics = _parse_json(str(row["analytics_json"] or "{}"), {})
+            family = str(analytics.get("experiment_family") or "")
+            if not family:
+                continue
+            variant = f"title{int(analytics.get('title_variant') or 1)}-thumb{int(analytics.get('thumbnail_variant') or 1)}"
+            score = float(analytics.get("score") or 0.0)
+            experiment_groups.setdefault(f"{family}:{variant}", []).append(score)
+        experiment_summary = {key: {"samples": len(values), "mean_score": round(sum(values) / len(values), 4)} for key, values in experiment_groups.items() if values}
         result = {
             "sample_size": model.sample_size,
             "baseline": dict(model.baseline()),
             "edit_type_lift": model.edit_type_lift(),
+            "experiments": experiment_summary,
             "recommendation": {
                 "priority": rec.priority,
                 "confidence": rec.confidence,
