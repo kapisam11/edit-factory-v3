@@ -118,40 +118,109 @@ class MetricsRegistry:
                     if values: timings[name]=round(sum(values)/len(values),3)
             return MetricSnapshot(counters,timings,time.time())
 
-    def to_prometheus(self)->str:
-        snap=self.snapshot(); lines=[]
-        gauges=self.gauges()
-        for raw_name,count in snap.counters.items():
-            if raw_name.startswith("http_requests_total:"):
-                _,method,endpoint=raw_name.split(":",2)
-                method=re.sub(r"[^A-Za-z0-9_]","_",method)
-                endpoint=endpoint.replace("\\","\\\\").replace('"','\"')
-                lines.append("# TYPE aivf_http_requests_total counter")
-                lines.append(f'aivf_http_requests_total{{method="{method}",endpoint="{endpoint}"}} {int(count)}')
-            else:
-                metric=re.sub(r"[^A-Za-z0-9_:]","_",raw_name)
-                lines.append(f"# TYPE aivf_{metric} counter")
-                lines.append(f"aivf_{metric} {int(count)}")
-        for raw_name,value in gauges.items():
-            metric=re.sub(r"[^A-Za-z0-9_:]","_",raw_name)
-            lines.append(f"# TYPE aivf_{metric} gauge")
-            lines.append(f"aivf_{metric} {value}")
-        names=set(self._timings)
-        try:
-            with sqlite3.connect(self._db) as conn: names |= {str(row[0]) for row in conn.execute("SELECT name FROM metric_timings")}
-        except sqlite3.Error: pass
-        for name in sorted(names):
-            metric=re.sub(r"[^A-Za-z0-9_:]","_",name); values=self._samples(name); hist=self._histogram(values)
-            lines.append(f"# TYPE aivf_{metric}_milliseconds histogram")
-            for bucket in DEFAULT_BUCKETS_MS:
-                lines.append(f'aivf_{metric}_milliseconds_bucket{{le="{bucket}"}} {sum(1 for value in values if value<=bucket)}')
-            lines.append(f'aivf_{metric}_milliseconds_bucket{{le="+Inf"}} {int(hist["count"])}')
-            lines.append(f"aivf_{metric}_milliseconds_count {int(hist['count'])}")
-            lines.append(f"aivf_{metric}_milliseconds_sum {hist['sum']}")
-            lines.append(f"aivf_{metric}_milliseconds_avg {hist['sum'] / hist['count'] if hist['count'] else 0.0}")
-        return "\n".join(lines)+("\n" if lines else "")
+    def to_prometheus(self) -> str:
+        """Serialize durable snapshots through the standard prometheus-client library."""
+        from prometheus_client import CollectorRegistry, CounterMetricFamily, GaugeMetricFamily, HistogramMetricFamily, generate_latest
 
-    def prometheus(self)->str: return self.to_prometheus()
+        snap = self.snapshot()
+        registry = CollectorRegistry()
+
+        http_family = CounterMetricFamily(
+            "aivf_http_requests_total",
+            "HTTP requests handled by the dashboard.",
+            labels=["method", "endpoint"],
+        )
+        generic_counters: list[tuple[str, int]] = []
+        for raw_name, count in snap.counters.items():
+            if raw_name.startswith("http_requests_total:"):
+                _, method, endpoint = raw_name.split(":", 2)
+                http_family.add_metric([method, endpoint], float(count))
+            else:
+                generic_counters.append((raw_name, int(count)))
+        registry.register(http_family)
+
+        for raw_name, count in generic_counters:
+            metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name).strip("_") or "counter"
+            registry.register(
+                CounterMetricFamily(
+                    f"aivf_{metric}",
+                    f"Edit Factory counter: {raw_name}.",
+                    value=float(count),
+                )
+            )
+
+        for raw_name, value in self.gauges().items():
+            metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name).strip("_") or "gauge"
+            registry.register(
+                GaugeMetricFamily(
+                    f"aivf_{metric}",
+                    f"Edit Factory gauge: {raw_name}.",
+                    value=float(value),
+                )
+            )
+
+        names = set(self._timings)
+        try:
+            with sqlite3.connect(self._db) as conn:
+                names |= {str(row[0]) for row in conn.execute("SELECT name FROM metric_timings")}
+        except sqlite3.Error:
+            pass
+        for name in sorted(names):
+            metric = re.sub(r"[^A-Za-z0-9_:]", "_", name).strip("_") or "duration"
+            values = self._samples(name)
+            hist = self._histogram(values)
+            family = HistogramMetricFamily(
+                f"aivf_{metric}_milliseconds",
+                f"Edit Factory duration histogram: {name}.",
+                buckets=DEFAULT_BUCKETS_MS,
+            )
+            for bucket in DEFAULT_BUCKETS_MS:
+                family.add_metric([], hist=None, value=None)
+            # HistogramMetricFamily accepts one sample containing the bucket
+            # map, sum, and count; prometheus-client handles text exposition.
+            family.samples = []
+            running = 0
+            for bucket in DEFAULT_BUCKETS_MS:
+                running += sum(1 for value in values if value <= bucket) - running
+                family.add_metric([], labels=None, value=0) if False else None
+            # Reconstruct bucket samples explicitly because this registry is
+            # sourced from durable SQLite samples rather than live collectors.
+            family.samples = [
+                type(family.samples).__args__[0]() if False else s
+                for s in []
+            ]
+            from prometheus_client.core import Sample
+            family.samples = [
+                Sample(
+                    f"aivf_{metric}_milliseconds_bucket",
+                    {"le": str(bucket)},
+                    float(sum(1 for value in values if value <= bucket)),
+                    None,
+                    None,
+                )
+                for bucket in DEFAULT_BUCKETS_MS
+            ]
+            family.samples.append(
+                Sample(
+                    f"aivf_{metric}_milliseconds_bucket",
+                    {"le": "+Inf"},
+                    float(hist["count"]),
+                    None,
+                    None,
+                )
+            )
+            family.samples.append(
+                Sample(f"aivf_{metric}_milliseconds_count", {}, float(hist["count"]), None, None)
+            )
+            family.samples.append(
+                Sample(f"aivf_{metric}_milliseconds_sum", {}, float(hist["sum"]), None, None)
+            )
+            registry.register(family)
+
+        return generate_latest(registry).decode("utf-8")
+
+    def prometheus(self) -> str:
+        return self.to_prometheus()
 
     def to_json(self)->str:
         snap=self.snapshot(); payload={"counters":snap.counters,"timings_ms_avg":snap.timings_ms,"generated_at":snap.generated_at}
