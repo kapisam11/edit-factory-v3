@@ -94,66 +94,58 @@ class DashboardStore:
 
     @staticmethod
     def _ensure_job_columns(conn: sqlite3.Connection) -> None:
-        """Apply lightweight job-table migrations required by lifecycle features."""
+        """Ensure lifecycle columns exist without ever mutating production schema at request time."""
         columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
         }
-        if not columns:
+        required = {
+            "error_code",
+            "retry_count",
+            "principal",
+            "current_attempt",
+            "worker_id",
+            "lease_token",
+            "worker_heartbeat_at",
+        }
+        missing = required - columns
+        environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+        allow_runtime = os.environ.get("AIVF_ALLOW_RUNTIME_MIGRATIONS", "0").strip() == "1"
+
+        if environment == "production" and not allow_runtime:
+            if missing:
+                raise SchemaMismatch(
+                    "production database schema is missing lifecycle columns: "
+                    + ", ".join(sorted(missing))
+                    + "; run aivf-db-migrate before serving requests"
+                )
             return
+
         if "error_code" not in columns:
-            try:
-                conn.execute("ALTER TABLE jobs ADD COLUMN error_code TEXT")
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
+            conn.execute("ALTER TABLE jobs ADD COLUMN error_code TEXT")
         if "retry_count" not in columns:
-            try:
-                conn.execute(
-                    "ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
-                )
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
+            )
         if "principal" not in columns:
-            try:
-                conn.execute("ALTER TABLE jobs ADD COLUMN principal TEXT NOT NULL DEFAULT 'unknown'")
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN principal TEXT NOT NULL DEFAULT 'unknown'"
+            )
         if "current_attempt" not in columns:
-            try:
-                conn.execute("ALTER TABLE jobs ADD COLUMN current_attempt INTEGER NOT NULL DEFAULT 0")
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN current_attempt INTEGER NOT NULL DEFAULT 0"
+            )
         if "worker_id" not in columns:
-            try:
-                conn.execute("ALTER TABLE jobs ADD COLUMN worker_id TEXT")
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
+            conn.execute("ALTER TABLE jobs ADD COLUMN worker_id TEXT")
         if "lease_token" not in columns:
-            try:
-                conn.execute("ALTER TABLE jobs ADD COLUMN lease_token TEXT")
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
+            conn.execute("ALTER TABLE jobs ADD COLUMN lease_token TEXT")
         if "worker_heartbeat_at" not in columns:
-            try:
-                conn.execute(
-                    "ALTER TABLE jobs ADD COLUMN worker_heartbeat_at TEXT"
-                )
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
-            try:
-                conn.execute(
-                    "UPDATE jobs SET worker_heartbeat_at=updated_at "
-                    "WHERE worker_heartbeat_at IS NULL"
-                )
-            except sqlite3.OperationalError as exc:
-                if "no such column" not in str(exc).lower():
-                    raise
+            conn.execute(
+                "ALTER TABLE jobs ADD COLUMN worker_heartbeat_at TEXT"
+            )
+            conn.execute(
+                "UPDATE jobs SET worker_heartbeat_at=updated_at "
+                "WHERE worker_heartbeat_at IS NULL"
+            )
 
     def ensure_indexes(self) -> None:
         """Ensure the storage boundary is ready without mutating production schema."""
@@ -678,7 +670,7 @@ class DashboardStore:
                 "SELECT status, current_attempt FROM jobs WHERE id=?",
                 (job_id,),
             ).fetchone()
-            if row is None or str(row["status"]) not in {"running", "cancelling"}:
+            if row is None or str(row["status"]) != "running":
                 return None
             attempt_number = int(row["current_attempt"] or 0) + 1
             attempt_workspace = str(Path(workspace) / attempt_id)
@@ -759,13 +751,126 @@ class DashboardStore:
                 SELECT 1
                 FROM jobs j
                 JOIN job_attempts a ON a.job_id=j.id
-                WHERE j.id=? AND j.status IN ('running','cancelling')
+                WHERE j.id=? AND j.status='running'
                   AND j.lease_token=? AND a.id=? AND a.lease_token=?
                   AND a.status='running'
                 """,
                 (job_id, lease_token, attempt_id, lease_token),
             ).fetchone()
         return row is not None
+
+    def finalize_attempt_publish(
+        self,
+        job_id: str,
+        attempt_id: str,
+        lease_token: str,
+        *,
+        package_path: str | Path,
+        artifact_path: str | Path | None = None,
+        artifact_sha256: str | None = None,
+        artifact_size_bytes: int | None = None,
+    ) -> bool:
+        """Fence publication and the DONE transition in one SQLite transaction.
+
+        The filesystem move happens before this call. If the worker lost its lease,
+        the transaction commits nothing and the caller must remove the unpublished
+        package. This prevents stale workers from finalizing jobs after cancellation
+        or a newer retry attempt.
+        """
+        package_value = str(Path(package_path).resolve())
+        artifact_value = None if artifact_path is None else str(Path(artifact_path).resolve())
+        digest = None if artifact_sha256 is None else str(artifact_sha256).strip().lower()
+        size = None if artifact_size_bytes is None else max(0, int(artifact_size_bytes))
+
+        def write(conn: sqlite3.Connection) -> bool:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT j.status, j.lease_token, a.status AS attempt_status
+                FROM jobs j
+                JOIN job_attempts a ON a.job_id=j.id
+                WHERE j.id=? AND j.lease_token=? AND a.id=? AND a.lease_token=?
+                """,
+                (job_id, lease_token, attempt_id, lease_token),
+            ).fetchone()
+            if row is None or str(row["status"]) != "running" or str(row["attempt_status"]) != "running":
+                return False
+
+            changed = int(
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status='done',
+                        step='complete',
+                        pkg_dir=?,
+                        error=NULL,
+                        error_code=NULL,
+                        worker_id=NULL,
+                        lease_token=NULL,
+                        worker_heartbeat_at=NULL,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND status='running' AND lease_token=?
+                    """,
+                    (package_value, job_id, lease_token),
+                ).rowcount
+            )
+            if changed != 1:
+                return False
+
+            if artifact_value is not None:
+                conn.execute(
+                    """
+                    INSERT INTO job_artifacts(
+                        job_id, attempt_id, kind, path, sha256, size_bytes
+                    ) VALUES (?,?,?,?,?,?)
+                    """,
+                    (
+                        job_id,
+                        attempt_id,
+                        "final_video",
+                        artifact_value,
+                        digest,
+                        size,
+                    ),
+                )
+
+            self._record_event(
+                conn,
+                job_id,
+                "status_change",
+                from_status="running",
+                to_status="done",
+                details=json.dumps(
+                    {
+                        "attempt_id": attempt_id,
+                        "package_path": package_value,
+                    },
+                    sort_keys=True,
+                ),
+            )
+            self._record_event(
+                conn,
+                job_id,
+                "artifact_published",
+                details=json.dumps(
+                    {
+                        "attempt_id": attempt_id,
+                        "path": artifact_value,
+                        "sha256": digest,
+                        "size_bytes": size,
+                    },
+                    sort_keys=True,
+                ),
+            )
+            self._record_event(
+                conn,
+                job_id,
+                "job_completed",
+                details=json.dumps({"attempt_id": attempt_id}, sort_keys=True),
+            )
+            return True
+
+        return bool(self.write(write))
 
     def finish_attempt(
         self,
