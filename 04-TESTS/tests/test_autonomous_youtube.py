@@ -103,3 +103,16 @@ def test_emergency_stop_is_persistent(tmp_path: Path):
     assert manager.status()["emergency_stop"] is True
     with pytest.raises(RuntimeError, match="emergency stop"):
         manager._guard_limits()
+
+
+def test_queue_assigns_stable_experiment_variants(tmp_path: Path):
+    store = AutonomousStore(_config(tmp_path))
+    first = store.enqueue("A topic with a concrete angle")
+    second = store.enqueue("A different concrete angle")
+    one = store.get(first)
+    two = store.get(second)
+    assert one is not None and two is not None
+    assert one["experiment_family"]
+    assert int(one["title_variant"]) in {1, 2, 3}
+    assert int(one["thumbnail_variant"]) in {1, 2, 3}
+    assert one["experiment_family"] != two["experiment_family"]
