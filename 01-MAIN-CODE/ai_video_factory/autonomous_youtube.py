@@ -1224,7 +1224,7 @@ class AutonomousManager:
         return result
 
     def _write_config_snapshot(self) -> str:
-        target = self.config.state_dir / "autonomous-config.json"
+        target = self.config.output_dir / "autonomous-config.json"
         payload = {
             "version": 1,
             "captured_at": _utc_now(),
