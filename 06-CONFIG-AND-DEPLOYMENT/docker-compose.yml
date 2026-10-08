@@ -1,7 +1,8 @@
 services:
   web:
     restart: unless-stopped
-    image: ${AIVF_IMAGE:?AIVF_IMAGE must be pinned to an immutable image digest}    ports:
+    image: ${AIVF_IMAGE:?AIVF_IMAGE must be pinned to an immutable image digest}
+    ports:
       - "5000:5000"
     cpus: "${AIVF_CONTAINER_CPUS:-4}"
     mem_limit: "${AIVF_CONTAINER_MEMORY:-8g}"
@@ -50,6 +51,8 @@ services:
       AIVF_IDEMPOTENCY_RETENTION_HOURS: ${AIVF_IDEMPOTENCY_RETENTION_HOURS:-24}
       AIVF_UPLOAD_RETENTION_DAYS: ${AIVF_UPLOAD_RETENTION_DAYS:-7}
       AIVF_FAILED_WORKSPACE_RETENTION_HOURS: ${AIVF_FAILED_WORKSPACE_RETENTION_HOURS:-24}
+      AIVF_BACKUP_REMOTE: ${AIVF_BACKUP_REMOTE:-}
+      AIVF_BACKUP_REMOTE_DIR: ${AIVF_BACKUP_REMOTE_DIR:-}
     volumes:
       - aivf-output:/app/output
       - aivf-uploads:/app/uploads
