@@ -358,7 +358,10 @@ OUTPUT FORMAT — return ONLY valid JSON, no markdown:
         conflict = str(brief.get("main_conflict") or "").strip()
         why_care = str(brief.get("why_care") or "").strip()
 
-        lines = [value.rstrip(".!?") for value in (hook, topic, angle, conflict, why_care) if value]
+        # Template fallback must still satisfy the same sentence-ending
+        # invariant as the LLM path; otherwise a temporary provider outage would
+        # turn a usable fallback into a hard production failure.
+        lines = [value.rstrip(".!?") + "." for value in (hook, topic, angle, conflict, why_care) if value]
         return "\n".join(lines)
 
     def build_script(self, analysis: Dict) -> str:
