@@ -297,6 +297,47 @@ class AutonomousStore:
             (job_id, event, json.dumps(details, sort_keys=True, default=str) if not isinstance(details, str) else details, _utc_now()),
         )
 
+    def _select_experiment_variants(self, family: str, requested_title: int, requested_thumbnail: int) -> tuple[int, int]:
+        """Prefer evidence-backed title/thumbnail variants while preserving exploration."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT title_variant, thumbnail_variant, analytics_json "
+                "FROM autonomous_jobs WHERE experiment_family=? AND analytics_json<>'' "
+                "ORDER BY updated_at DESC LIMIT 200",
+                (family,),
+            ).fetchall()
+        title_stats: dict[int, list[float]] = {1: [], 2: [], 3: []}
+        thumb_stats: dict[int, list[float]] = {1: [], 2: [], 3: []}
+        for row in rows:
+            try:
+                payload = json.loads(str(row["analytics_json"] or "{}"))
+                score = float(payload.get("score") or 0.0)
+                title = int(row["title_variant"] or 1)
+                thumb = int(row["thumbnail_variant"] or 1)
+                if title in title_stats:
+                    title_stats[title].append(score)
+                if thumb in thumb_stats:
+                    thumb_stats[thumb].append(score)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+
+        def choose(stats: dict[int, list[float]], fallback: int) -> int:
+            unexplored = [variant for variant, values in stats.items() if not values]
+            if unexplored:
+                # Deterministic exploration prevents repeatedly picking the same
+                # variant before there is enough evidence to optimize.
+                return unexplored[(fallback - 1) % len(unexplored)]
+            return max(
+                stats,
+                key=lambda variant: (
+                    sum(stats[variant]) / max(1, len(stats[variant])),
+                    len(stats[variant]),
+                    -variant,
+                ),
+            )
+
+        return choose(title_stats, requested_title), choose(thumb_stats, requested_thumbnail)
+
     def enqueue(
         self,
         topic: str,
@@ -352,8 +393,13 @@ class AutonomousStore:
                 ),
             )
             experiment_family = hashlib.sha256(clean_topic.casefold().encode("utf-8")).hexdigest()[:12]
-            title_variant = (int(job_id[-2:], 16) % 3) + 1
-            thumbnail_variant = (int(job_id[-4:-2], 16) % 3) + 1
+            requested_title_variant = (int(job_id[-2:], 16) % 3) + 1
+            requested_thumbnail_variant = (int(job_id[-4:-2], 16) % 3) + 1
+            title_variant, thumbnail_variant = self._select_experiment_variants(
+                experiment_family,
+                requested_title_variant,
+                requested_thumbnail_variant,
+            )
             conn.execute(
                 "UPDATE autonomous_jobs SET experiment_family=?,title_variant=?,thumbnail_variant=? WHERE id=?",
                 (experiment_family, title_variant, thumbnail_variant, job_id),
@@ -832,6 +878,12 @@ class AutonomousManager:
     def enqueue(self, topic: str, **kwargs: Any) -> str:
         return self.store.enqueue(topic, **kwargs)
 
+    def _raise_if_halted(self) -> None:
+        if self.store.setting("emergency_stop", "0") == "1":
+            raise RuntimeError("autonomous publisher emergency stop is active")
+        if self.store.setting("paused", "0") == "1":
+            raise RuntimeError("autonomous publisher is paused")
+
     def _guard_limits(self) -> None:
         if self.store.setting("emergency_stop", "0") == "1":
             raise RuntimeError("autonomous publisher emergency stop is active")
@@ -975,6 +1027,7 @@ class AutonomousManager:
             )
             if result.get("status") != "complete":
                 raise RuntimeError("; ".join(str(x) for x in result.get("errors") or ["production failed"]))
+            self._raise_if_halted()
             metadata, script, video_path = _extract_package(package_dir)
             complete_manifest: dict[str, Any] = {}
             manifest_path = package_dir / "complete_factory_manifest.json"
@@ -1092,6 +1145,7 @@ class AutonomousManager:
 
     def publish_one(self) -> Optional[str]:
         self._guard_limits()
+        self._raise_if_halted()
         privacy_status = os.environ.get("AIVF_YOUTUBE_PRIVACY", "private").strip().lower()
         if privacy_status not in {"private", "unlisted", "public"}:
             raise RuntimeError("invalid AIVF_YOUTUBE_PRIVACY value")
@@ -1104,6 +1158,20 @@ class AutonomousManager:
         if not job:
             return None
         job_id = str(job["id"])
+        try:
+            self._raise_if_halted()
+        except Exception:
+            # Return a claimed job to a safe review state instead of uploading
+            # after an operator emergency stop was activated mid-cycle.
+            self.store.update(
+                job_id,
+                state="POLICY_REVIEW",
+                approval="pending",
+                next_attempt_at=None,
+                error="publication halted by operator stop",
+            )
+            self.store.event(job_id, "publish_halted")
+            raise
         try:
             package = Path(str(job["package_dir"]))
             metadata, _script, video_path = _extract_package(package)
