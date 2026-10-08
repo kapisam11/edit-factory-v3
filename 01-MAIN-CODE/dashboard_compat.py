@@ -56,14 +56,13 @@ def _package_access_allowed(web_app_v3, package) -> bool:
         return True
     try:
         with web_app_v3.get_db() as conn:
-            rows = conn.execute("SELECT params, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL").fetchall()
+            rows = conn.execute("SELECT principal, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL").fetchall()
         from resource_governor import principal_for_request
         principal = principal_for_request(request)
         for row in rows:
             if str(Path(str(row["pkg_dir"])).resolve()) != str(package.resolve()):
                 continue
-            payload = json.loads(row["params"] or "{}")
-            return str(payload.get("_principal") or "") == principal
+            return str(row["principal"] or "") == principal
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
     return False
@@ -131,6 +130,20 @@ def cancel_process(job_id):
             web_app_v3.logger.exception("Could not release resources for cancelled job %s", job_id)
         web_app_v3.db_update_job(job_id, status="cancelled", step="cancelled")
         web_app_v3.db_append_log(job_id, "INFO", "Job cancelled")
+        try:
+            from dashboard_store import DashboardStore
+            from resource_governor import principal_for_request
+            DashboardStore(web_app_v3.DB_PATH).record_audit_event(
+                principal=principal_for_request(request),
+                action="JOB_CANCEL",
+                resource="job",
+                resource_id=job_id,
+                remote_addr=request.remote_addr,
+                user_agent=request.headers.get("User-Agent"),
+                result="success",
+            )
+        except Exception:
+            web_app_v3.logger.exception("Could not persist cancellation audit event for %s", job_id)
         return jsonify({"job_id": job_id, "status": "cancelled"})
 
 
@@ -281,6 +294,37 @@ def register_dashboard_compat(app):
             for key, value in data.items():
                 if key not in SECRET_KEYS:
                     web_app_v3.set_setting(key, value)
+                    try:
+                        from dashboard_store import DashboardStore
+                        from resource_governor import principal_for_request
+                        DashboardStore(web_app_v3.DB_PATH).record_audit_event(
+                            principal=principal_for_request(request),
+                            action="SETTINGS_CHANGED",
+                            resource="settings",
+                            resource_id=str(key),
+                            remote_addr=request.remote_addr,
+                            user_agent=request.headers.get("User-Agent"),
+                            result="success",
+                            metadata={"key": str(key)},
+                        )
+                    except Exception:
+                        web_app_v3.logger.exception("Could not persist settings audit event")
+                else:
+                    try:
+                        from dashboard_store import DashboardStore
+                        from resource_governor import principal_for_request
+                        DashboardStore(web_app_v3.DB_PATH).record_audit_event(
+                            principal=principal_for_request(request),
+                            action="SECRET_CONFIGURED",
+                            resource="settings",
+                            resource_id=str(key),
+                            remote_addr=request.remote_addr,
+                            user_agent=request.headers.get("User-Agent"),
+                            result="success",
+                            metadata={"key": str(key), "configured": bool(value)},
+                        )
+                    except Exception:
+                        web_app_v3.logger.exception("Could not persist secret-settings audit event")
         result = dict(web_app_v3.get_settings())
         result.update({f"{key}_configured": bool(value) for key, value in _DASHBOARD_SECRETS.items()})
         for key in SECRET_KEYS:
