@@ -38,7 +38,20 @@ class JobError:
 
 
 def classify_exception(exc: BaseException) -> JobError:
+    explicit_code = getattr(exc, "error_code", None)
+    explicit_retryable = getattr(exc, "retryable", None)
     message = str(exc).strip() or type(exc).__name__
+    if explicit_code is not None:
+        try:
+            code = ErrorCode(str(explicit_code))
+        except ValueError:
+            code = ErrorCode.INTERNAL
+        retryable = (
+            bool(explicit_retryable)
+            if explicit_retryable is not None
+            else code in {ErrorCode.TOOL_TIMEOUT, ErrorCode.DATABASE_BUSY, ErrorCode.WORKER_CRASH}
+        )
+        return JobError(code, message, retryable)
     lowered = message.lower()
     if "timed out" in lowered or "timeout" in lowered:
         return JobError(ErrorCode.TOOL_TIMEOUT, message, True)
