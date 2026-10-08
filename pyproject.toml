@@ -19,6 +19,7 @@ aivf-db-migrate = "ai_video_factory.db_migrations:main"
 aivf-release-check = "ai_video_factory.release_check:main"
 aivf-backup = "ai_video_factory.backup_restore:main"
 aivf-janitor = "ai_video_factory.retention_janitor:main"
+aivf-autopublish = "ai_video_factory.autonomous_youtube:main"
 aivf-hardware-smoke = "ai_video_factory.hardware_smoke:main"
 aivf-compat = "ai_video_factory.compatibility_cli:main"
 aivf-content = "app.content_factory_cli:main"
@@ -90,6 +91,8 @@ files = [
   "01-MAIN-CODE/ai_video_factory/benchmark.py",
   "01-MAIN-CODE/ai_video_factory/compatibility_matrix.py",
   "01-MAIN-CODE/ai_video_factory/reproducible_build.py",
+  "01-MAIN-CODE/ai_video_factory/autonomous_youtube.py",
+  "01-MAIN-CODE/ai_video_factory/human_style_guard.py",
   "01-MAIN-CODE/ai_video_factory/production_readiness.py",
   "01-MAIN-CODE/ai_video_factory/observability_metrics.py",
   "01-MAIN-CODE/ai_video_factory/production_assurance.py",
