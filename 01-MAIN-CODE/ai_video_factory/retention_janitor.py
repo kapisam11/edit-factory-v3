@@ -61,21 +61,44 @@ def run_janitor(*,db_path,upload_root,output_root,workspace_root=None,now=None,m
                     if p: active.add(p)
         except sqlite3.Error:
             pass
-        counts["logs"]=max(0,conn.execute("DELETE FROM job_logs WHERE created_at < datetime(?, 'unixepoch')",(_cutoff_days(logs_days,now),)).rowcount)
-        counts["events"]=max(0,conn.execute("DELETE FROM job_events WHERE created_at < datetime(?, 'unixepoch')",(_cutoff_days(events_days,now),)).rowcount)
+        counts["logs"]=max(0,conn.execute(
+            "DELETE FROM job_logs WHERE created_at < datetime(?, 'unixepoch') "
+            "AND job_id NOT IN (SELECT id FROM jobs WHERE status IN ('queued','running','cancelling'))",
+            (_cutoff_days(logs_days,now),),
+        ).rowcount)
+        counts["events"]=max(0,conn.execute(
+            "DELETE FROM job_events WHERE created_at < datetime(?, 'unixepoch') "
+            "AND job_id NOT IN (SELECT id FROM jobs WHERE status IN ('queued','running','cancelling'))",
+            (_cutoff_days(events_days,now),),
+        ).rowcount)
         counts["audit_events"]=max(0,conn.execute("DELETE FROM audit_events WHERE created_at < datetime(?, 'unixepoch')",(_cutoff_days(events_days,now),)).rowcount)
         counts["idempotency_keys"]=max(0,conn.execute("DELETE FROM idempotency_keys WHERE created_at < ?",(_cutoff_days(idempotency_hours/24.0,now),)).rowcount)
         counts["rate_limits"]=max(0,conn.execute("DELETE FROM rate_limits WHERE ts < ?",(_cutoff_days(1,now),)).rowcount)
         if prune_terminal_jobs:
-            rows=conn.execute("SELECT id FROM jobs WHERE status IN ('done','error','cancelled','interrupted') AND updated_at < datetime(?, 'unixepoch')",(_cutoff_days(metadata_days,now),)).fetchall()
+            rows=conn.execute(
+                "SELECT id,pkg_dir FROM jobs WHERE status IN ('done','error','cancelled','interrupted') "
+                "AND updated_at < datetime(?, 'unixepoch')",
+                (_cutoff_days(metadata_days,now),),
+            ).fetchall()
+            removable_packages=[]
+            output_root=output.resolve()
             for row in rows:
                 jid=str(row["id"])
+                package_value=str(row["pkg_dir"] or "").strip()
+                package=_safe_child(output_root,package_value)
+                if package is not None and package != output_root and package.is_dir():
+                    removable_packages.append(package)
                 conn.execute("DELETE FROM job_artifacts WHERE job_id=?",(jid,))
                 conn.execute("DELETE FROM job_attempts WHERE job_id=?",(jid,))
                 conn.execute("DELETE FROM job_events WHERE job_id=?",(jid,))
                 conn.execute("DELETE FROM job_logs WHERE job_id=?",(jid,))
                 conn.execute("DELETE FROM jobs WHERE id=? AND status IN ('done','error','cancelled','interrupted')",(jid,))
                 counts["terminal_jobs"]+=1
+            for package in removable_packages:
+                try:
+                    shutil.rmtree(package)
+                except OSError:
+                    pass
     if uploads.is_dir():
         cutoff=_cutoff_days(upload_days,now)
         for path in uploads.iterdir():
