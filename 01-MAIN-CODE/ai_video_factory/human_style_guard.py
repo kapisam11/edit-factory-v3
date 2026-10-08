@@ -47,9 +47,9 @@ FILLER_PHRASES = (
 )
 
 BRANDING_PATTERNS = (
-    r"\b(?:edit\s*factory|ai\s*video\s*factory)\b",
-    r"\b(?:chatgpt|openai|claude|gemini|elevenlabs|midjourney)\b",
-    r"\b(?:generated|created|written)\s+with\s+(?:ai|artificial intelligence)\b",
+    r"(?i)#?(?:edit\s*factory|editfactory|ai\s*video\s*factory|aivf)\b",
+    r"(?i)\b(?:chatgpt|openai|claude|gemini|elevenlabs|midjourney)\b",
+    r"(?i)\b(?:generated|created|written)\s+with\s+(?:ai|artificial intelligence)\b",
 )
 
 CLICKBAIT_PATTERNS = (
@@ -127,19 +127,19 @@ def sanitize_public_metadata(title: str, description: str, tags: Sequence[str]) 
     """
     def clean(value: str) -> str:
         result = str(value or "")
-        lines: list[str] = []
-        for line in result.splitlines():
-            if any(re.search(pattern, line, flags=re.I) for pattern in BRANDING_PATTERNS):
-                continue
-            lines.append(line.rstrip())
-        return "\n".join(lines).strip()
+        for pattern in BRANDING_PATTERNS:
+            result = re.sub(pattern, "", result)
+        result = re.sub(r"\s{2,}", " ", result)
+        result = re.sub(r"\n[ \t]*\n[ \t]*\n+", "\n\n", result)
+        return result.strip()
 
     clean_title = clean(title)
     clean_description = clean(description)
     clean_tags = [
-        str(tag).strip()
-        for tag in tags
-        if not any(re.search(pattern, str(tag), flags=re.I) for pattern in BRANDING_PATTERNS)
+        clean_tag = re.sub(r"\s{2,}", " ", str(tag).strip())
+        for pattern in BRANDING_PATTERNS:
+            clean_tag = re.sub(pattern, "", clean_tag)
+        if clean_tag.strip()
     ]
     return {
         "title": clean_title,
