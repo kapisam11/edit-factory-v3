@@ -16,7 +16,7 @@ from typing import Any, Callable, Optional
 
 from ai_video_factory.job_state import validate_transition
 from ai_video_factory.retry_policy import backoff_seconds, is_retryable_error
-from ai_video_factory.db_migrations import migrate_database, verify_database_schema
+from ai_video_factory.db_migrations import SchemaMismatch, migrate_database, verify_database_schema
 from ai_video_factory.job_class import budget_for
 
 
