@@ -43,6 +43,7 @@ JOB_EVENT_NAMES = frozenset({
     "job_failed",
     "job_retry_scheduled",
     "job_completed",
+    "job_recovered",
     "artifact_published",
     "resource_reserved",
     "resource_released",
