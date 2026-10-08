@@ -40,3 +40,11 @@ docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.dev.yml up --build -d
 ```
 
 Never use the development Compose file on the production host.
+
+## Resource policy
+
+The production container has bounded CPU, PID, disk, and memory limits. The default media worker ceiling is 12 GiB per job inside a 16 GiB container, while the global reservation ceiling prevents multiple maximum-sized AI jobs from being admitted simultaneously. Tune `AIVF_MAX_JOB_MEMORY_MB`, `AIVF_MAX_RESERVED_MEMORY_MB`, `AIVF_CONTAINER_MEMORY`, and the other `AIVF_*` resource variables for the actual host rather than removing the limits.
+
+## Off-host backup
+
+For a deployment that requires off-host backups, configure the production environment with `AIVF_BACKUP_REMOTE`, `AIVF_BACKUP_REMOTE_DIR`, and `AIVF_BACKUP_ENCRYPTION_KEY`. The deployment helper encrypts the backup before upload and verifies the remote SHA-256 and HMAC sidecars. Set `AIVF_REQUIRE_OFFHOST_BACKUP=1` to make the rollout fail closed when off-host backup is not configured. The encryption key must be supplied through the host's secret environment/secret manager; never commit it or put it on a command line.
