@@ -350,7 +350,10 @@ class AutonomousStore:
         return self._claim(("IDEA", "FAILED"))
 
     def claim_analysis(self) -> Optional[dict[str, Any]]:
+        now_dt = datetime.now(timezone.utc)
+        cutoff = now_dt - timedelta(hours=self.config.analytics_after_hours)
         now = _utc_now()
+        cutoff_iso = cutoff.replace(microsecond=0).isoformat().replace("+00:00", "Z")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -358,7 +361,7 @@ class AutonomousStore:
                 "AND published_at IS NOT NULL "
                 "AND (next_attempt_at IS NULL OR next_attempt_at<=?) "
                 "AND published_at<=? ORDER BY published_at LIMIT 1",
-                (now, now),
+                (now, cutoff_iso),
             ).fetchone()
             if not row:
                 conn.commit()
