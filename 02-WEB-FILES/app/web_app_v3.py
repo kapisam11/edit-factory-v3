@@ -1322,7 +1322,13 @@ def create_job():
                 MAX_RESERVED_MEMORY_BYTES,
             )
             budget = estimate_resource_budget(
-                {**media_contract, "job_class": params.get("_resource_class", "cpu_render")},
+                {
+                    **media_contract,
+                    "job_class": params.get("_resource_class", "cpu_render"),
+                    "enable_ocr": bool(params.get("enable_ocr")),
+                    "enable_object_detection": bool(params.get("enable_object_detection")),
+                    "enable_diarization": bool(params.get("enable_diarization")),
+                },
                 target_seconds=float(target_seconds),
                 limits=MEDIA_LIMITS,
             )
