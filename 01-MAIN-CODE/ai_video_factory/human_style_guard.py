@@ -135,12 +135,15 @@ def sanitize_public_metadata(title: str, description: str, tags: Sequence[str]) 
 
     clean_title = clean(title)
     clean_description = clean(description)
-    clean_tags = [
+    clean_tags: list[str] = []
+    for tag in tags:
         clean_tag = re.sub(r"\s{2,}", " ", str(tag).strip())
         for pattern in BRANDING_PATTERNS:
             clean_tag = re.sub(pattern, "", clean_tag)
-        if clean_tag.strip()
-    ]
+        clean_tag = re.sub(r"\s{2,}", " ", clean_tag).strip()
+        if clean_tag:
+            clean_tags.append(clean_tag)
+
     return {
         "title": clean_title,
         "description": clean_description,
