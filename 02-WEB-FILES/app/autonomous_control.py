@@ -49,8 +49,12 @@ def register_autonomous_routes(app) -> None:
                 publish_requested=bool(payload.get("publish_requested", True)),
                 options=payload.get("options") if isinstance(payload.get("options"), dict) else {},
             )
-        except (ValueError, RuntimeError) as exc:
-            return jsonify({"error": str(exc)}), 400
+        except (ValueError, RuntimeError, TypeError) as exc:
+            app.logger.warning("autonomous enqueue rejected: %s", exc)
+            return jsonify({
+                "error": "unable to enqueue autonomous job",
+                "code": "AUTONOMY_ENQUEUE_FAILED",
+            }), 400
         return jsonify({"job_id": job_id, "job": manager.store.get(job_id)}), 201
 
     @app.post("/api/autonomous/approve/<job_id>")
