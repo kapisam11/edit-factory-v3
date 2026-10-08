@@ -9,7 +9,7 @@ description = "Emotion-first AI short-form video planning, production, retention
 requires-python = ">=3.10"
 license = "LicenseRef-Edit-Factory-Source-Available"
 license-files = ["LICENSE"]
-dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "urllib3>=2.8.0", "edge-tts>=6.1.0", "numpy>=1.23.0", "pydantic>=2.7.0", "multidict>=6.9.1,<7", "werkzeug>=3.1.9"]
+dependencies = ["pillow>=9.0.0", "requests>=2.28.0", "urllib3>=2.8.0", "edge-tts>=6.1.0", "numpy>=1.23.0", "pydantic>=2.7.0", "multidict>=6.9.1,<7", "werkzeug>=3.1.9", "prometheus-client>=0.20.0", "psutil>=6.0.0"]
 
 [project.scripts]
 aivf = "app.cli:main"

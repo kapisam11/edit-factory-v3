@@ -39,7 +39,7 @@ def test_resource_budget_is_bounded():
     )
     assert budget["reserved_bytes"] <= limits.max_output_bytes
     assert 0.5 <= budget["cpu_weight"] <= 4.0
-    assert 512 * 1024**2 <= budget["memory_bytes"] <= 8 * 1024**3
+    assert 3 * 1024**3 <= budget["memory_bytes"] <= 12 * 1024**3
 
 
 def test_resource_reservations_never_exceed_capacity(tmp_path):

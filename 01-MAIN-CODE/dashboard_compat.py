@@ -56,14 +56,13 @@ def _package_access_allowed(web_app_v3, package) -> bool:
         return True
     try:
         with web_app_v3.get_db() as conn:
-            rows = conn.execute("SELECT params, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL").fetchall()
+            rows = conn.execute("SELECT principal, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL").fetchall()
         from resource_governor import principal_for_request
         principal = principal_for_request(request)
         for row in rows:
             if str(Path(str(row["pkg_dir"])).resolve()) != str(package.resolve()):
                 continue
-            payload = json.loads(row["params"] or "{}")
-            return str(payload.get("_principal") or "") == principal
+            return str(row["principal"] or "") == principal
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
     return False
@@ -131,6 +130,20 @@ def cancel_process(job_id):
             web_app_v3.logger.exception("Could not release resources for cancelled job %s", job_id)
         web_app_v3.db_update_job(job_id, status="cancelled", step="cancelled")
         web_app_v3.db_append_log(job_id, "INFO", "Job cancelled")
+        try:
+            from dashboard_store import DashboardStore
+            from resource_governor import principal_for_request
+            DashboardStore(web_app_v3.DB_PATH).record_audit_event(
+                principal=principal_for_request(request),
+                action="JOB_CANCEL",
+                resource="job",
+                resource_id=job_id,
+                remote_addr=request.remote_addr,
+                user_agent=request.headers.get("User-Agent"),
+                result="success",
+            )
+        except Exception:
+            web_app_v3.logger.exception("Could not persist cancellation audit event for %s", job_id)
         return jsonify({"job_id": job_id, "status": "cancelled"})
 
 
@@ -161,7 +174,7 @@ def _reconcile_worker_exit(web_app_v3, job_id, process):
         exit_code = process.exitcode
         with web_app_v3.get_db() as conn:
             cursor = conn.execute(
-                "UPDATE jobs SET status='interrupted', step='interrupted', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
+                "UPDATE jobs SET status='interrupted', step='interrupted', error=?, error_code='worker_crash', updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'",
                 (f"Worker exited unexpectedly with code {exit_code}", job_id),
             )
             cancelled_cursor = conn.execute(
@@ -281,6 +294,37 @@ def register_dashboard_compat(app):
             for key, value in data.items():
                 if key not in SECRET_KEYS:
                     web_app_v3.set_setting(key, value)
+                    try:
+                        from dashboard_store import DashboardStore
+                        from resource_governor import principal_for_request
+                        DashboardStore(web_app_v3.DB_PATH).record_audit_event(
+                            principal=principal_for_request(request),
+                            action="SETTINGS_CHANGED",
+                            resource="settings",
+                            resource_id=str(key),
+                            remote_addr=request.remote_addr,
+                            user_agent=request.headers.get("User-Agent"),
+                            result="success",
+                            metadata={"key": str(key)},
+                        )
+                    except Exception:
+                        web_app_v3.logger.exception("Could not persist settings audit event")
+                else:
+                    try:
+                        from dashboard_store import DashboardStore
+                        from resource_governor import principal_for_request
+                        DashboardStore(web_app_v3.DB_PATH).record_audit_event(
+                            principal=principal_for_request(request),
+                            action="SECRET_CONFIGURED",
+                            resource="settings",
+                            resource_id=str(key),
+                            remote_addr=request.remote_addr,
+                            user_agent=request.headers.get("User-Agent"),
+                            result="success",
+                            metadata={"key": str(key), "configured": bool(value)},
+                        )
+                    except Exception:
+                        web_app_v3.logger.exception("Could not persist secret-settings audit event")
         result = dict(web_app_v3.get_settings())
         result.update({f"{key}_configured": bool(value) for key, value in _DASHBOARD_SECRETS.items()})
         for key in SECRET_KEYS:
@@ -354,6 +398,24 @@ def register_dashboard_compat(app):
             return jsonify({"error": "Package not found"}), 404
         return send_file(resolved)
 
+    @app.route("/api/admin/audit", methods=["GET"])
+    def audit_events_admin():
+        if _request_role() != "admin":
+            return jsonify({"error": "Admin role required"}), 403
+        raw_last_id = request.args.get("last_id", "0")
+        raw_limit = request.args.get("limit", "200")
+        try:
+            last_id = max(0, int(raw_last_id))
+            limit = max(1, min(1000, int(raw_limit)))
+        except (TypeError, ValueError):
+            return jsonify({"error": "last_id and limit must be integers"}), 400
+        from dashboard_store import DashboardStore
+        events = DashboardStore(web_app_v3.DB_PATH).audit_events_since(last_id=last_id, limit=limit)
+        return jsonify({
+            "events": events,
+            "last_id": int(events[-1]["id"]) if events else last_id,
+        })
+
     @app.route("/api/admin/cleanup", methods=["POST"])
     def cleanup_packages_admin():
         if _request_role() != "admin":
@@ -364,14 +426,7 @@ def register_dashboard_compat(app):
 
     @app.before_request
     def lifecycle_maintenance():
-        global _LAST_CLEANUP
         if request.path.endswith("/preview") or request.path.startswith("/api/package/") or request.path.startswith("/api/packages/"):
             return
         _reap_and_dispatch(web_app_v3)
-        if os.environ.get("AIVF_DISABLE_AUTO_CLEANUP", "0") != "1":
-            with _LIFECYCLE_LOCK:
-                now = time.monotonic()
-                interval = max(60.0, float(os.environ.get("AIVF_CLEANUP_INTERVAL_SECONDS", "21600")))
-                if now - _LAST_CLEANUP >= interval:
-                    _LAST_CLEANUP = now
-                    _cleanup_old_packages(web_app_v3, os.environ.get("AIVF_RETENTION_DAYS", "7"))
+

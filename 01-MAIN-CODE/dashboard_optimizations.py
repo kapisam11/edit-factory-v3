@@ -20,6 +20,7 @@ from resource_governor import (
     RESOURCE_CHECK_INTERVAL_SECONDS,
     RESOURCE_RECONCILE_INTERVAL_SECONDS,
     MAX_SSE_LIFETIME_SECONDS,
+    MAX_JOB_MEMORY_BYTES,
     ResourceLimitExceeded,
     acquire_sse,
     check_job_creation_limits,
@@ -107,11 +108,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
             return True
         if not authenticated or role not in {"viewer", "editor"}:
             return False
-        try:
-            payload = json.loads(job.get("params") or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return False
-        return str(payload.get("_principal") or "") == principal_for_request(request)
+        return str(job.get("principal") or "") == principal_for_request(request)
 
     def db_get_job(job_id: str) -> dict | None:
         """Raw internal job lookup used by workers and lifecycle code."""
@@ -146,15 +143,7 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         except Exception:
             return []
         principal = principal_for_request(request)
-        filtered = []
-        for job in value:
-            try:
-                payload = json.loads(job.get("params") or "{}")
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-            if str(payload.get("_principal") or "") == principal:
-                filtered.append(job)
-        return filtered
+        return [job for job in value if str(job.get("principal") or "") == principal]
 
     def get_settings() -> dict:
         cached = cache.get_json("settings")
@@ -199,36 +188,51 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         wallclock_limit = max(1.0, float(wallclock_limit))
         deadline = started + wallclock_limit
         last_total_storage_scan = 0.0
+
+        def _memory_limit_bytes(job: dict) -> int:
+            limit = int(MAX_JOB_MEMORY_BYTES)
+            try:
+                raw = json.loads(job.get("params") or "{}")
+                budget = raw.get("_resource_budget") if isinstance(raw, dict) else None
+                if isinstance(budget, dict) and budget.get("memory_bytes") is not None:
+                    limit = min(limit, max(128 * 1024 * 1024, int(budget["memory_bytes"])))
+            except (TypeError, ValueError, json.JSONDecodeError, OverflowError):
+                pass
+            return limit
+
+        def _process_tree_rss_bytes(pid: int) -> int:
+            try:
+                import psutil
+                root_proc = psutil.Process(pid)
+                processes = [root_proc, *root_proc.children(recursive=True)]
+            except Exception:
+                return 0
+            total = 0
+            for proc in processes:
+                try:
+                    if proc.is_running():
+                        total += int(proc.memory_info().rss)
+                except Exception:
+                    continue
+            return total
         while process.is_alive():
             now = clock.monotonic()
             if now >= deadline:
+                reason = f"Render wall-clock budget exceeded ({wallclock_limit:g}s)"
                 try:
-                    from dashboard_compat import _terminate_process_tree
-                    _terminate_process_tree(process)
+                    current = app_module.db_get_job(job_id) or {}
+                    if current.get("status") in {"queued", "running", "cancelling"}:
+                        app_module.db_update_job(
+                            job_id,
+                            status="error",
+                            step="resource_limit",
+                            error=reason,
+                            error_code="tool_timeout",
+                        )
+                        app_module.db_append_log(job_id, "ERROR", reason)
                 except Exception:
-                    try:
-                        process.terminate()
-                    except Exception:
-                        pass
-                current = app_module.db_get_job(job_id) or {}
-                if current.get("status") in {"queued", "running", "cancelling"}:
-                    app_module.db_update_job(
-                        job_id,
-                        status="error",
-                        step="resource_limit",
-                        error=f"Render wall-clock budget exceeded ({wallclock_limit:g}s)",
-                    )
-                    app_module.db_append_log(job_id, "ERROR", "Render wall-clock budget exceeded")
-                return
-            current = app_module.db_get_job(job_id) or {}
-            package_dir = current.get("pkg_dir")
-            if now - last_total_storage_scan >= RESOURCE_RECONCILE_INTERVAL_SECONDS:
-                last_total_storage_scan = now
-                if total_storage_bytes(
-                    app_module.UPLOAD_FOLDER,
-                    app_module.OUTPUT_FOLDER,
-                    limit=__import__("resource_governor").MAX_TOTAL_STORAGE_BYTES,
-                ) > __import__("resource_governor").MAX_TOTAL_STORAGE_BYTES:
+                    app_module.logger.exception("Could not record wall-clock resource breach for %s", job_id)
+                finally:
                     try:
                         from dashboard_compat import _terminate_process_tree
                         _terminate_process_tree(process)
@@ -237,29 +241,92 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                             process.terminate()
                         except Exception:
                             pass
-                    current = app_module.db_get_job(job_id) or {}
-                    if current.get("status") in {"queued", "running", "cancelling"}:
-                        app_module.db_update_job(job_id, status="error", step="resource_limit", error="Total storage quota exceeded")
-                        app_module.db_append_log(job_id, "ERROR", "Total storage quota exceeded")
+                return
+            current = app_module.db_get_job(job_id) or {}
+            package_dir = current.get("pkg_dir")
+            memory_limit = _memory_limit_bytes(current)
+            if memory_limit > 0:
+                rss_bytes = _process_tree_rss_bytes(int(process.pid))
+                if rss_bytes > memory_limit:
+                    reason = f"Worker memory budget exceeded ({rss_bytes} > {memory_limit} bytes)"
+                    try:
+                        current = app_module.db_get_job(job_id) or {}
+                        if current.get("status") in {"queued", "running", "cancelling"}:
+                            app_module.db_update_job(
+                                job_id,
+                                status="error",
+                                step="resource_limit",
+                                error=reason,
+                                error_code="resource_limit",
+                            )
+                            app_module.db_append_log(job_id, "ERROR", reason)
+                    except Exception:
+                        app_module.logger.exception("Could not record memory resource breach for %s", job_id)
+                    finally:
+                        try:
+                            from dashboard_compat import _terminate_process_tree
+                            _terminate_process_tree(process)
+                        except Exception:
+                            try:
+                                process.terminate()
+                            except Exception:
+                                pass
+                    return
+            if now - last_total_storage_scan >= RESOURCE_RECONCILE_INTERVAL_SECONDS:
+                last_total_storage_scan = now
+                if total_storage_bytes(
+                    app_module.UPLOAD_FOLDER,
+                    app_module.OUTPUT_FOLDER,
+                    limit=__import__("resource_governor").MAX_TOTAL_STORAGE_BYTES,
+                ) > __import__("resource_governor").MAX_TOTAL_STORAGE_BYTES:
+                    reason = "Total storage quota exceeded"
+                    try:
+                        current = app_module.db_get_job(job_id) or {}
+                        if current.get("status") in {"queued", "running", "cancelling"}:
+                            app_module.db_update_job(
+                                job_id,
+                                status="error",
+                                step="resource_limit",
+                                error=reason,
+                                error_code="resource_limit",
+                            )
+                            app_module.db_append_log(job_id, "ERROR", reason)
+                    except Exception:
+                        app_module.logger.exception("Could not record total storage breach for %s", job_id)
+                    finally:
+                        try:
+                            from dashboard_compat import _terminate_process_tree
+                            _terminate_process_tree(process)
+                        except Exception:
+                            try:
+                                process.terminate()
+                            except Exception:
+                                pass
                     return
             if package_dir and not job_storage_ok(package_dir):
+                reason = f"Per-job storage quota exceeded ({MAX_JOB_STORAGE_BYTES // (1024 * 1024)} MiB)"
                 try:
-                    from dashboard_compat import _terminate_process_tree
-                    _terminate_process_tree(process)
+                    current = app_module.db_get_job(job_id) or {}
+                    if current.get("status") in {"queued", "running", "cancelling"}:
+                        app_module.db_update_job(
+                            job_id,
+                            status="error",
+                            step="resource_limit",
+                            error=reason,
+                            error_code="resource_limit",
+                        )
+                        app_module.db_append_log(job_id, "ERROR", reason)
                 except Exception:
+                    app_module.logger.exception("Could not record per-job storage breach for %s", job_id)
+                finally:
                     try:
-                        process.terminate()
+                        from dashboard_compat import _terminate_process_tree
+                        _terminate_process_tree(process)
                     except Exception:
-                        pass
-                current = app_module.db_get_job(job_id) or {}
-                if current.get("status") in {"queued", "running", "cancelling"}:
-                    app_module.db_update_job(
-                        job_id,
-                        status="error",
-                        step="resource_limit",
-                        error=f"Per-job storage quota exceeded ({MAX_JOB_STORAGE_BYTES // (1024 * 1024)} MiB)",
-                    )
-                    app_module.db_append_log(job_id, "ERROR", "Per-job storage quota exceeded")
+                        try:
+                            process.terminate()
+                        except Exception:
+                            pass
                 return
             clock.sleep(min(RESOURCE_CHECK_INTERVAL_SECONDS, max(0.25, deadline - clock.monotonic())))
 
@@ -382,8 +449,11 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                                 job_id,
                                 str(row["status"]),
                                 "interrupted",
-                                "recovery",
-                                "Worker heartbeat expired and worker process was not running",
+                                "job_recovered",
+                                json.dumps({
+                                    "reason": "worker_heartbeat_expired",
+                                    "message": "Worker heartbeat expired and worker process was not running",
+                                }, sort_keys=True),
                             ),
                         )
         except Exception:
@@ -452,7 +522,6 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         if _is_media_request():
             return
         _reconcile_stale_jobs()
-        _database_cleanup()
 
     @app_module.app.get("/api/jobs/<job_id>/preview")
     def job_preview(job_id: str):
@@ -559,6 +628,20 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         if not changed:
             return jsonify({"error": "Job changed before retry could start"}), 409
 
+        try:
+            principal = principal_for_request(request)
+            store.record_audit_event(
+                principal=principal,
+                action="JOB_RETRY",
+                resource="job",
+                resource_id=job_id,
+                remote_addr=request.remote_addr,
+                user_agent=request.headers.get("User-Agent"),
+                result="success",
+                metadata={"previous_status": previous_status, "previous_step": previous_step},
+            )
+        except Exception:
+            app_module.logger.exception("Could not persist retry audit event for %s", job_id)
 
         app_module._runtime_secrets[job_id] = secrets
         cache.delete("jobs:list")

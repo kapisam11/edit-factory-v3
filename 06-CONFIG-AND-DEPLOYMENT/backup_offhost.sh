@@ -9,6 +9,7 @@ MAC_KEY="$(printf 'aivf-backup-mac:%s' "$KEY" | sha256sum | awk '{print $1}')"
 
 command -v openssl >/dev/null
 command -v scp >/dev/null
+command -v ssh >/dev/null
 test -f "$ARCHIVE"
 
 umask 077
@@ -21,4 +22,12 @@ scp "$encrypted" "$REMOTE:$REMOTE_DIR/"
 scp "${encrypted}.sha256" "$REMOTE:$REMOTE_DIR/"
 scp "${encrypted}.hmac" "$REMOTE:$REMOTE_DIR/"
 
-echo "off-host encrypted backup uploaded with SHA-256 and HMAC verification sidecars: $REMOTE:$REMOTE_DIR/$(basename "$encrypted")"
+remote_sha="$(ssh "$REMOTE" "sha256sum '$REMOTE_DIR/$(basename "$encrypted")' | awk '{print $1}'")"
+local_sha="$(cut -d' ' -f1 "${encrypted}.sha256")"
+test "$remote_sha" = "$local_sha"
+
+remote_hmac="$(ssh "$REMOTE" "cat '$REMOTE_DIR/$(basename "$encrypted").hmac'")"
+local_hmac="$(cat "${encrypted}.hmac")"
+test "$remote_hmac" = "$local_hmac"
+
+echo "off-host encrypted backup uploaded and remotely integrity-verified: $REMOTE:$REMOTE_DIR/$(basename "$encrypted")"

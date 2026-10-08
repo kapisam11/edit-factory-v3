@@ -89,7 +89,12 @@ def test_prometheus_export_has_valid_metric_name():
     assert "aivf_http_requests_total" in text
     assert 'method="GET"' in text
     assert 'endpoint="/api/health"' in text
-    assert "aivf_http_request_milliseconds_avg 12.5" in text
+    assert (
+        "aivf_http_request_milliseconds_count 1.0" in text
+        or "aivf_http_request_milliseconds_count 1" in text
+    )
+    assert "aivf_http_request_milliseconds_sum 12.5" in text
+    assert "aivf_http_request_milliseconds_bucket" in text
 
 
 def test_vaapi_preset_is_explicit():

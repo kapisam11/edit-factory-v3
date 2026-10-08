@@ -510,9 +510,10 @@ def _cleanup_runtime_secrets() -> None:
 
 def _redact_job(job: dict, include_logs: bool = False) -> dict:
     result = dict(job)
+    result.pop("principal", None)
     try:
         params = json.loads(result.get("params") or "{}")
-    except json.JSONDecodeError:
+    except (TypeError, ValueError, json.JSONDecodeError):
         params = {}
     for key in SECRET_PARAM_KEYS | INTERNAL_PARAM_KEYS:
         params.pop(key, None)
@@ -571,6 +572,22 @@ def _publish_attempt_package(
             raise RuntimeError("unable to allocate publish destination")
 
     os.replace(package, destination)
+    try:
+        from ai_video_factory.artifact_readiness import resolve_final_video
+        final_video = resolve_final_video(destination)
+        if final_video is not None and final_video.is_file():
+            store.record_artifact(
+                job_id=job_id,
+                attempt_id=attempt_id or None,
+                kind="final_video",
+                path=final_video,
+                sha256=sha256_file(final_video),
+                size_bytes=final_video.stat().st_size,
+            )
+    except Exception as exc:
+        # Publishing remains successful, but the audit trail must not silently
+        # break the job. The artifact itself was already atomically published.
+        logger.warning("Could not persist final artifact metadata for %s: %s", job_id, exc)
     return destination
 
 
@@ -627,7 +644,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
 
         def write(conn):
             where = (
-                "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted') "
+                "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted','error','done') "
                 "AND lease_token=?"
                 if attempt_lease
                 else "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted') "
@@ -952,8 +969,26 @@ def settings():
         if not isinstance(data, dict):
             return jsonify({"error": "Settings payload must be a JSON object"}), 400
         try:
+            principal = "unknown"
+            try:
+                from resource_governor import principal_for_request
+                principal = principal_for_request(request)
+            except Exception:
+                pass
             for key, value in data.items():
                 set_setting(key, value)
+                if key not in SECRET_PARAM_KEYS:
+                    store = globals().get("dashboard_store")
+                    if store is not None:
+                        store.record_audit_event(
+                            principal=principal,
+                            action="SETTINGS_CHANGED",
+                            resource="settings",
+                            resource_id=str(key),
+                            remote_addr=request.remote_addr,
+                            user_agent=request.headers.get("User-Agent"),
+                            metadata={"key": str(key)},
+                        )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
     return jsonify(get_settings())
@@ -1287,7 +1322,13 @@ def create_job():
                 MAX_RESERVED_MEMORY_BYTES,
             )
             budget = estimate_resource_budget(
-                {**media_contract, "job_class": params.get("_resource_class", "cpu_render")},
+                {
+                    **media_contract,
+                    "job_class": params.get("_resource_class", "cpu_render"),
+                    "enable_ocr": bool(params.get("enable_ocr")),
+                    "enable_object_detection": bool(params.get("enable_object_detection")),
+                    "enable_diarization": bool(params.get("enable_diarization")),
+                },
                 target_seconds=float(target_seconds),
                 limits=MEDIA_LIMITS,
             )
@@ -1301,6 +1342,8 @@ def create_job():
                 max_cpu_weight=MAX_CPU_WEIGHT,
                 max_memory_bytes=MAX_RESERVED_MEMORY_BYTES,
                 resource_class=str(budget.get("job_class") or params.get("_resource_class") or "cpu_render"),
+                storage_paths=(UPLOAD_FOLDER, OUTPUT_FOLDER),
+                min_free_disk_bytes=_MIN_FREE_DISK_BYTES,
             ):
                 if upload_path is not None:
                     upload_path.unlink(missing_ok=True)

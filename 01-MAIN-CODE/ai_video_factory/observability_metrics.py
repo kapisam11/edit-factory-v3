@@ -118,40 +118,100 @@ class MetricsRegistry:
                     if values: timings[name]=round(sum(values)/len(values),3)
             return MetricSnapshot(counters,timings,time.time())
 
-    def to_prometheus(self)->str:
-        snap=self.snapshot(); lines=[]
-        gauges=self.gauges()
-        for raw_name,count in snap.counters.items():
-            if raw_name.startswith("http_requests_total:"):
-                _,method,endpoint=raw_name.split(":",2)
-                method=re.sub(r"[^A-Za-z0-9_]","_",method)
-                endpoint=endpoint.replace("\\","\\\\").replace('"','\"')
-                lines.append("# TYPE aivf_http_requests_total counter")
-                lines.append(f'aivf_http_requests_total{{method="{method}",endpoint="{endpoint}"}} {int(count)}')
-            else:
-                metric=re.sub(r"[^A-Za-z0-9_:]","_",raw_name)
-                lines.append(f"# TYPE aivf_{metric} counter")
-                lines.append(f"aivf_{metric} {int(count)}")
-        for raw_name,value in gauges.items():
-            metric=re.sub(r"[^A-Za-z0-9_:]","_",raw_name)
-            lines.append(f"# TYPE aivf_{metric} gauge")
-            lines.append(f"aivf_{metric} {value}")
-        names=set(self._timings)
-        try:
-            with sqlite3.connect(self._db) as conn: names |= {str(row[0]) for row in conn.execute("SELECT name FROM metric_timings")}
-        except sqlite3.Error: pass
-        for name in sorted(names):
-            metric=re.sub(r"[^A-Za-z0-9_:]","_",name); values=self._samples(name); hist=self._histogram(values)
-            lines.append(f"# TYPE aivf_{metric}_milliseconds histogram")
-            for bucket in DEFAULT_BUCKETS_MS:
-                lines.append(f'aivf_{metric}_milliseconds_bucket{{le="{bucket}"}} {sum(1 for value in values if value<=bucket)}')
-            lines.append(f'aivf_{metric}_milliseconds_bucket{{le="+Inf"}} {int(hist["count"])}')
-            lines.append(f"aivf_{metric}_milliseconds_count {int(hist['count'])}")
-            lines.append(f"aivf_{metric}_milliseconds_sum {hist['sum']}")
-            lines.append(f"aivf_{metric}_milliseconds_avg {hist['sum'] / hist['count'] if hist['count'] else 0.0}")
-        return "\n".join(lines)+("\n" if lines else "")
+    def to_prometheus(self) -> str:
+        """Serialize durable snapshots through the standard prometheus-client library."""
+        from prometheus_client import CollectorRegistry, generate_latest
+        from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily, Metric
 
-    def prometheus(self)->str: return self.to_prometheus()
+        snap = self.snapshot()
+        registry = CollectorRegistry()
+
+        class _DurableMetricsCollector:
+            def collect(self):
+                http_family = CounterMetricFamily(
+                    "aivf_http_requests_total",
+                    "HTTP requests handled by the dashboard.",
+                    labels=["method", "endpoint"],
+                )
+                generic_counters: list[tuple[str, int]] = []
+                for raw_name, count in snap.counters.items():
+                    if raw_name.startswith("http_requests_total:"):
+                        _, method, endpoint = raw_name.split(":", 2)
+                        http_family.add_metric([method, endpoint], float(count))
+                    else:
+                        generic_counters.append((raw_name, int(count)))
+                yield http_family
+
+                for raw_name, count in generic_counters:
+                    metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name).strip("_") or "counter"
+                    yield CounterMetricFamily(
+                        f"aivf_{metric}",
+                        f"Edit Factory counter: {raw_name}.",
+                        value=float(count),
+                    )
+
+                for raw_name, value in self._gauges.items():
+                    metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name).strip("_") or "gauge"
+                    yield GaugeMetricFamily(
+                        f"aivf_{metric}",
+                        f"Edit Factory gauge: {raw_name}.",
+                        value=float(value),
+                    )
+
+                for name, values in self._timing_values.items():
+                    metric_name = re.sub(r"[^A-Za-z0-9_:]", "_", name).strip("_") or "duration"
+                    hist = self._histogram(values)
+                    metric = Metric(
+                        f"aivf_{metric_name}_milliseconds",
+                        f"Edit Factory duration histogram: {name}.",
+                        "histogram",
+                    )
+                    for bucket in DEFAULT_BUCKETS_MS:
+                        metric.add_sample(
+                            f"aivf_{metric_name}_milliseconds_bucket",
+                            {"le": str(bucket)},
+                            float(sum(1 for value in values if value <= bucket)),
+                        )
+                    metric.add_sample(
+                        f"aivf_{metric_name}_milliseconds_bucket",
+                        {"le": "+Inf"},
+                        float(hist["count"]),
+                    )
+                    metric.add_sample(
+                        f"aivf_{metric_name}_milliseconds_count",
+                        {},
+                        float(hist["count"]),
+                    )
+                    metric.add_sample(
+                        f"aivf_{metric_name}_milliseconds_sum",
+                        {},
+                        float(hist["sum"]),
+                    )
+                    yield metric
+
+            _histogram = staticmethod(MetricsRegistry._histogram)
+
+            def __init__(self, gauges, timing_values):
+                self._gauges = gauges
+                self._timing_values = timing_values
+
+        names = set(self._timings)
+        try:
+            with sqlite3.connect(self._db) as conn:
+                names |= {
+                    str(row[0])
+                    for row in conn.execute("SELECT name FROM metric_timings")
+                }
+        except sqlite3.Error:
+            pass
+
+        gauges = self.gauges()
+        timing_values = {name: self._samples(name) for name in names}
+        registry.register(_DurableMetricsCollector(gauges, timing_values))
+        return generate_latest(registry).decode("utf-8")
+
+    def prometheus(self) -> str:
+        return self.to_prometheus()
 
     def to_json(self)->str:
         snap=self.snapshot(); payload={"counters":snap.counters,"timings_ms_avg":snap.timings_ms,"generated_at":snap.generated_at}

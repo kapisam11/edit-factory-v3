@@ -16,28 +16,40 @@ def check_release(root:str|Path=".")->dict[str,object]:
     image=os.environ.get("AIVF_IMAGE","").strip()
     checks["image_pinned"]={"ok":bool(re.fullmatch(r".+@sha256:[0-9a-f]{64}",image)),"detail":image or "unset"}
 
-    hashes=(os.environ.get("AIVF_MOBILENET_CONFIG_SHA256",""),os.environ.get("AIVF_MOBILENET_WEIGHTS_SHA256",""))
-    hash_ok=all(_hash_ok(x) for x in hashes)
-    if not hash_ok:
-        manifest=base/".models"/"mobilenet_ssd"/"model-manifest.json"
-        if manifest.is_file():
-            try:
-                payload=json.loads(manifest.read_text(encoding="utf-8"))
-                manifest_hashes=[str(item.get("sha256","")) for item in payload.get("assets",[]) if isinstance(item,dict)]
-                hash_ok=len(manifest_hashes) >= 2 and all(_hash_ok(x) for x in manifest_hashes)
-            except (OSError,ValueError,TypeError,json.JSONDecodeError):
-                hash_ok=False
-    checks["model_hashes_pinned"]={"ok":hash_ok,"detail":"verified SHA-256 model digests are configured or baked into the immutable image"}
-
     lock_file=Path(os.environ.get("AIVF_MODEL_LOCK_FILE",str(base/"06-CONFIG-AND-DEPLOYMENT"/"model-lock.json")))
     lock_ok=False
+    lock_detail=str(lock_file)
     if lock_file.is_file():
         try:
-            payload=json.loads(lock_file.read_text(encoding="utf-8")); assets=payload.get("assets",[])
+            payload=json.loads(lock_file.read_text(encoding="utf-8"))
+            assets=payload.get("assets",[])
             immutable=str(payload.get("immutable_commit",""))
-            lock_ok=bool(re.fullmatch(r"[0-9a-f]{40}",immutable)) and isinstance(assets,list) and len(assets)>=2 and all(isinstance(x,dict) and str(x.get("sha256_env","")).startswith("AIVF_") for x in assets)
-        except (OSError,ValueError,TypeError,json.JSONDecodeError): lock_ok=False
-    checks["model_lock_file"]={"ok":lock_ok,"detail":str(lock_file)}
+            lock_ok=(
+                bool(re.fullmatch(r"[0-9a-f]{40}",immutable))
+                and isinstance(assets,list)
+                and len(assets)>=2
+                and all(
+                    isinstance(x,dict)
+                    and _hash_ok(str(x.get("sha256","")))
+                    and str(x.get("relative_path","")).strip()
+                    and str(x.get("url","")).strip()
+                    for x in assets
+                )
+            )
+        except (OSError,ValueError,TypeError,json.JSONDecodeError) as exc:
+            lock_detail=str(exc)
+            lock_ok=False
+    checks["model_lock_file"]={"ok":lock_ok,"detail":lock_detail}
+
+    try:
+        from .asset_manager import verify_runtime_asset, RUNTIME_ASSETS
+        actual_results=[verify_runtime_asset(spec, base) for spec in RUNTIME_ASSETS]
+        hash_ok=lock_ok and all(actual_results)
+        detail="runtime model bytes match the locked SHA-256 digests"
+    except Exception as exc:
+        hash_ok=False
+        detail=f"runtime model verification unavailable: {exc}"
+    checks["model_hashes_pinned"]={"ok":hash_ok,"detail":detail}
 
     db=Path(os.environ.get("AIVF_DB_PATH",str(base/"state"/"jobs.db")))
     try:
@@ -47,6 +59,8 @@ def check_release(root:str|Path=".")->dict[str,object]:
 
     marker=Path(os.environ.get("AIVF_BACKUP_RESTORE_MARKER",str(base/"state"/"backup-restore-verified")))
     checks["backup_restore_verified"]={"ok":marker.is_file(),"detail":str(marker)}
+    offhost_marker=Path(os.environ.get("AIVF_BACKUP_OFFHOST_MARKER",str(base/"state"/"backups"/"offhost-verified")))
+    checks["backup_offhost_marker"]={"ok":offhost_marker.is_file(),"detail":str(offhost_marker)}
     required=(
         base/"06-CONFIG-AND-DEPLOYMENT"/"deploy_with_rollback.sh",
         base/"06-CONFIG-AND-DEPLOYMENT"/"target_recovery_smoke.sh",
