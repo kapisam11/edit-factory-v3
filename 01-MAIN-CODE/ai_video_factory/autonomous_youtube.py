@@ -754,7 +754,8 @@ class AutonomousManager:
                 description=sanitized["description"],
                 recent_texts=self.store.recent_scripts(),
             )
-            rights = metadata.get("media_rights") if isinstance(metadata.get("media_rights"), Mapping) else {}
+            rights_value = metadata.get("media_rights")
+            rights: Mapping[str, Any] = rights_value if isinstance(rights_value, Mapping) else {}
             if style.publish_blocked:
                 raise RuntimeError("human-quality guard blocked package: " + "; ".join(style.reasons[:6]))
             if rights.get("publish_blocked"):
@@ -820,27 +821,32 @@ class AutonomousManager:
             metadata, _script, video_path = _extract_package(package)
             if not video_path.exists():
                 raise FileNotFoundError(video_path)
+            selected_title = metadata.get("selected_title")
+            description_value = metadata.get("description")
+            tags_value = metadata.get("tags")
+            public_tags: Sequence[str] = (
+                [str(tag) for tag in tags_value]
+                if isinstance(tags_value, Sequence) and not isinstance(tags_value, (str, bytes))
+                else []
+            )
             public = sanitize_public_metadata(
-                str(metadata.get("selected_title") or job["title"] or job["topic"]),
-                str(metadata.get("description") or ""),
-                metadata.get("tags") or [],
+                str(selected_title or job.get("title") or job.get("topic") or ""),
+                str(description_value or ""),
+                public_tags,
             )
             local_hash = str(job.get("video_sha256") or _file_sha256(video_path))
-            package_files = metadata.get("files") if isinstance(metadata.get("files"), Mapping) else {}
+            files_value = metadata.get("files")
+            package_files: Mapping[str, Any] = files_value if isinstance(files_value, Mapping) else {}
+            thumbnail_rel = package_files.get("thumbnail")
+            captions_rel = package_files.get("captions_srt")
             result = upload_video(
                 str(video_path),
                 title=public["title"],
                 description=public["description"],
                 tags=public["tags"],
                 privacy_status=os.environ.get("AIVF_YOUTUBE_PRIVACY", "private"),
-                thumbnail_path=(
-                    str(package / str(package_files.get("thumbnail")))
-                    if package_files.get("thumbnail") else None
-                ),
-                caption_path=(
-                    str(package / str(package_files.get("captions_srt")))
-                    if package_files.get("captions_srt") else None
-                ),
+                thumbnail_path=str(package / str(thumbnail_rel)) if thumbnail_rel else None,
+                caption_path=str(package / str(captions_rel)) if captions_rel else None,
                 client_secrets_path=os.environ.get("YOUTUBE_CLIENT_SECRETS"),
                 token_path=os.environ.get("YOUTUBE_TOKEN_PATH"),
                 ai_generated=bool(job.get("ai_generated")),
