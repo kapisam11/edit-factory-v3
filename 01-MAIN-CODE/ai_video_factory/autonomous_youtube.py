@@ -744,7 +744,7 @@ class AutonomousManager:
             pipeline_ai_generated = bool(primary_meta.get("model_backed", False))
             pipeline_realistic_alteration = bool(primary_meta.get("altered_media", False))
             sanitized = sanitize_public_metadata(
-                str(metadata.get("selected_title") or job["topic"]),
+                str(metadata.get("selected_title") or job.get("topic") or ""),
                 str(metadata.get("description") or ""),
                 metadata.get("tags") or [],
             )
@@ -826,19 +826,20 @@ class AutonomousManager:
                 metadata.get("tags") or [],
             )
             local_hash = str(job.get("video_sha256") or _file_sha256(video_path))
+            package_files = metadata.get("files") if isinstance(metadata.get("files"), Mapping) else {}
             result = upload_video(
                 str(video_path),
                 title=public["title"],
                 description=public["description"],
                 tags=public["tags"],
-                privacy_status=os.environ.get("AIVF_YOUTUBE_PRIVACY", "public"),
+                privacy_status=os.environ.get("AIVF_YOUTUBE_PRIVACY", "private"),
                 thumbnail_path=(
-                    str(package / (metadata.get("files") or {}).get("thumbnail"))
-                    if (metadata.get("files") or {}).get("thumbnail") else None
+                    str(package / str(package_files.get("thumbnail")))
+                    if package_files.get("thumbnail") else None
                 ),
                 caption_path=(
-                    str(package / (metadata.get("files") or {}).get("captions_srt"))
-                    if (metadata.get("files") or {}).get("captions_srt") else None
+                    str(package / str(package_files.get("captions_srt")))
+                    if package_files.get("captions_srt") else None
                 ),
                 client_secrets_path=os.environ.get("YOUTUBE_CLIENT_SECRETS"),
                 token_path=os.environ.get("YOUTUBE_TOKEN_PATH"),
