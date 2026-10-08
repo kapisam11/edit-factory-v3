@@ -1,7 +1,7 @@
 """Dashboard controls for the autonomous YouTube operating loop."""
 from __future__ import annotations
 
-from flask import jsonify, request
+from flask import jsonify, render_template, request
 
 from ai_video_factory.autonomous_youtube import AutonomousManager
 
@@ -16,6 +16,11 @@ def register_autonomous_routes(app) -> None:
         checker = app.extensions.get("aivf_require_role")
         if callable(checker):
             checker("admin")
+
+    @app.get("/autonomous")
+    def autonomous_page():
+        require_admin()
+        return render_template("autonomous.html")
 
     @app.get("/api/autonomous/status")
     def autonomous_status():
