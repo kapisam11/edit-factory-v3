@@ -260,8 +260,8 @@ class AutonomousStore:
                 """
                 INSERT INTO autonomous_jobs(
                     id,topic,state,created_at,updated_at,priority,scheduled_at,
-                    estimated_cost_usd,publish_requested
-                ) VALUES(?,?,?,?,?,?,?,?,?)
+                    estimated_cost_usd,publish_requested,platform,options_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                     priority=excluded.priority,
                     scheduled_at=excluded.scheduled_at,
@@ -280,6 +280,8 @@ class AutonomousStore:
                     scheduled_at,
                     self.config.estimated_cost_per_video_usd,
                     1 if publish_requested else 0,
+                    platform,
+                    json.dumps(dict(options or {}), sort_keys=True),
                 ),
             )
             self._event(conn, job_id, "queued", {"topic": clean_topic, "platform": platform})
