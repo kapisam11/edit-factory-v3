@@ -837,36 +837,41 @@ class DashboardStore:
 
         def write(conn: sqlite3.Connection) -> bool:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                """
-                SELECT j.status, j.lease_token, a.status AS attempt_status
-                FROM jobs j
-                JOIN job_attempts a ON a.job_id=j.id
-                WHERE j.id=? AND j.lease_token=? AND a.id=? AND a.lease_token=?
-                """,
-                (job_id, lease_token, attempt_id, lease_token),
-            ).fetchone()
-            if row is None or str(row["status"]) != "running" or str(row["attempt_status"]) != "running":
-                return False
-
-            changed = int(
-                conn.execute(
+            if attempt_id or lease_token:
+                row = conn.execute(
                     """
-                    UPDATE jobs
-                    SET status='done',
-                        step='complete',
-                        pkg_dir=?,
-                        error=NULL,
-                        error_code=NULL,
-                        worker_id=NULL,
-                        lease_token=NULL,
-                        worker_heartbeat_at=NULL,
-                        updated_at=CURRENT_TIMESTAMP
-                    WHERE id=? AND status='running' AND lease_token=?
+                    SELECT j.status, j.lease_token, a.status AS attempt_status
+                    FROM jobs j
+                    JOIN job_attempts a ON a.job_id=j.id
+                    WHERE j.id=? AND j.lease_token=? AND a.id=? AND a.lease_token=?
                     """,
+                    (job_id, lease_token, attempt_id, lease_token),
+                ).fetchone()
+                if row is None or str(row["status"]) != "running" or str(row["attempt_status"]) != "running":
+                    return False
+                update_sql = (
+                    "UPDATE jobs SET status='done', step='complete', pkg_dir=?, error=NULL, "
+                    "error_code=NULL, worker_id=NULL, lease_token=NULL, worker_heartbeat_at=NULL, "
+                    "updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='running' AND lease_token=?",
                     (package_value, job_id, lease_token),
-                ).rowcount
-            )
+                )
+            else:
+                row = conn.execute(
+                    "SELECT status, lease_token FROM jobs WHERE id=?",
+                    (job_id,),
+                ).fetchone()
+                if row is None or str(row["status"]) != "running" or row["lease_token"] not in (None, ""):
+                    return False
+                update_sql = (
+                    "UPDATE jobs SET status='done', step='complete', pkg_dir=?, error=NULL, "
+                    "error_code=NULL, worker_id=NULL, lease_token=NULL, worker_heartbeat_at=NULL, "
+                    "updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=? AND status='running' AND lease_token IS NULL",
+                    (package_value, job_id),
+                )
+
+            changed = int(conn.execute(update_sql[0], update_sql[1]).rowcount)
             if changed != 1:
                 return False
 
@@ -879,7 +884,7 @@ class DashboardStore:
                     """,
                     (
                         job_id,
-                        attempt_id,
+                        attempt_id or None,
                         "final_video",
                         artifact_value,
                         digest,
@@ -895,7 +900,7 @@ class DashboardStore:
                 to_status="done",
                 details=json.dumps(
                     {
-                        "attempt_id": attempt_id,
+                        "attempt_id": attempt_id or None,
                         "package_path": package_value,
                     },
                     sort_keys=True,
@@ -907,7 +912,7 @@ class DashboardStore:
                 "artifact_published",
                 details=json.dumps(
                     {
-                        "attempt_id": attempt_id,
+                        "attempt_id": attempt_id or None,
                         "path": artifact_value,
                         "sha256": digest,
                         "size_bytes": size,
@@ -919,7 +924,7 @@ class DashboardStore:
                 conn,
                 job_id,
                 "job_completed",
-                details=json.dumps({"attempt_id": attempt_id}, sort_keys=True),
+                details=json.dumps({"attempt_id": attempt_id or None}, sort_keys=True),
             )
             return True
 
