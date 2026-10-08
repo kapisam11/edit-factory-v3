@@ -259,16 +259,6 @@ def _reap_and_dispatch(web_app_v3):
 
 def register_dashboard_compat(app):
     import web_app_v3
-    with web_app_v3.get_db() as conn:
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS prevent_post_cancel_finalization
-            BEFORE UPDATE OF status ON jobs
-            WHEN OLD.status IN ('cancelling','cancelled')
-                 AND NEW.status IN ('running','done','error','queued')
-            BEGIN
-                SELECT RAISE(ABORT, 'job cancellation already requested');
-            END
-        """)
     web_app_v3._watch_job_process = lambda job_id, process: _watch_job_process(web_app_v3, job_id, process)
     original_start_job = web_app_v3._start_job
 
