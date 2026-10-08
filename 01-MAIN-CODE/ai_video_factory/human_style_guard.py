@@ -108,7 +108,7 @@ def _specificity_score(text: str) -> float:
         return 0.0
     numeric = sum(any(ch.isdigit() for ch in token) for token in TOKEN_RE.findall(text))
     long_tokens = sum(len(token) >= 8 for token in tokens)
-    quoted = len(re.findall(r"["“”][^"“”]{8,}["“”]", text))
+    quoted = len(re.findall(r'["“”][^"“”]{8,}["“”]', text))
     proper_names = sum(1 for token in re.findall(r"\b[A-Z][a-z]{2,}\b", text))
     raw = (numeric * 1.5 + long_tokens * 0.25 + quoted * 1.5 + proper_names * 0.75) / max(1, len(tokens))
     return round(min(1.0, raw), 4)
