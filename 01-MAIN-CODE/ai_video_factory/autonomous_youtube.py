@@ -184,12 +184,16 @@ class AutonomousStore:
                     video_id TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     metrics TEXT NOT NULL,
-                    score REAL NOT NULL DEFAULT 0
+                    score REAL NOT NULL DEFAULT 0,
+                    revenue_usd REAL NOT NULL DEFAULT 0
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_auto_analytics_video_time
                     ON autonomous_analytics(video_id, observed_at);
                 """
             )
+            analytics_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(autonomous_analytics)").fetchall()}
+            if "revenue_usd" not in analytics_columns:
+                conn.execute("ALTER TABLE autonomous_analytics ADD COLUMN revenue_usd REAL NOT NULL DEFAULT 0")
             existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(autonomous_jobs)").fetchall()}
             additions = {
                 "retry_stage": "TEXT NOT NULL DEFAULT ''",
@@ -451,6 +455,15 @@ class AutonomousStore:
             ).fetchone()
         return float(row["cost"] or 0.0)
 
+    def daily_revenue(self) -> float:
+        start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(revenue_usd),0) AS revenue FROM autonomous_analytics WHERE observed_at>=?",
+                (start.isoformat().replace("+00:00", "Z"),),
+            ).fetchone()
+        return float(row["revenue"] or 0.0)
+
     def recent_scripts(self, limit: int = 20) -> list[str]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -585,12 +598,16 @@ class AutonomousManager:
         counts: dict[str, int] = {}
         for job in jobs:
             counts[str(job["state"])] = counts.get(str(job["state"]), 0) + 1
+        revenue = self.store.daily_revenue()
+        cost = self.store.daily_cost()
         return {
             "paused": self.store.setting("paused", "0") == "1",
             "emergency_stop": self.store.setting("emergency_stop", "0") == "1",
             "consecutive_failures": int(self.store.setting("consecutive_failures", "0") or 0),
             "published_today": self.store.published_today(),
-            "daily_cost_usd": round(self.store.daily_cost(), 4),
+            "daily_cost_usd": round(cost, 4),
+            "daily_estimated_revenue_usd": round(revenue, 4),
+            "daily_roi": round((revenue - cost) / cost, 4) if cost > 0 else None,
             "queue_counts": counts,
             "config": {
                 "max_videos_per_day": self.config.max_videos_per_day,
@@ -848,6 +865,7 @@ class AutonomousManager:
             avg_pct = float(raw.get("averageViewPercentage", 0.0) or 0.0)
             shares = float(raw.get("shares", 0.0) or 0.0)
             subscribers = float(raw.get("subscribersGained", 0.0) or 0.0)
+            revenue = float(raw.get("estimatedRevenue", 0.0) or 0.0)
             score = round(
                 min(1.0, avg_pct / 100.0) * 0.50
                 + min(1.0, likes / max(1.0, views) * 12.0) * 0.15
@@ -863,15 +881,16 @@ class AutonomousManager:
                 "averageViewPercentage": avg_pct,
                 "shares": shares,
                 "subscribersGained": subscribers,
+                "estimatedRevenue": revenue,
                 "video_title": (stats.get("snippet") or {}).get("title"),
                 "analytics": analytics,
                 "video": stats,
             }
             with self.store._connect() as conn:
                 conn.execute(
-                    "INSERT OR REPLACE INTO autonomous_analytics(job_id,video_id,observed_at,metrics,score) "
-                    "VALUES(?,?,?,?,?)",
-                    (job_id, video_id, _utc_now(), json.dumps(payload, sort_keys=True, default=str), score),
+                    "INSERT OR REPLACE INTO autonomous_analytics(job_id,video_id,observed_at,metrics,score,revenue_usd) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (job_id, video_id, _utc_now(), json.dumps(payload, sort_keys=True, default=str), score, revenue),
                 )
             feedback = FeedbackStore(self.config.state_dir / "feedback.sqlite")
             feedback.add(
