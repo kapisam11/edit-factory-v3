@@ -28,6 +28,8 @@ from .youtube_publisher import fetch_video_analytics, fetch_video_statistics, up
 
 logger = logging.getLogger(__name__)
 
+AUTONOMOUS_SCHEMA_VERSION = 2
+
 
 STATES = {
     "IDEA",
@@ -142,6 +144,13 @@ class AutonomousStore:
 
     def _init_db(self) -> None:
         with self._connect() as conn:
+            current = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+            if current > AUTONOMOUS_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"unsupported autonomous queue schema {current}; "
+                    f"maximum supported is {AUTONOMOUS_SCHEMA_VERSION}"
+                )
+
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS autonomous_jobs (
@@ -208,22 +217,55 @@ class AutonomousStore:
                     ON autonomous_analytics(video_id, observed_at);
                 """
             )
-            analytics_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(autonomous_analytics)").fetchall()}
-            if "revenue_usd" not in analytics_columns:
-                conn.execute("ALTER TABLE autonomous_analytics ADD COLUMN revenue_usd REAL NOT NULL DEFAULT 0")
-            existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(autonomous_jobs)").fetchall()}
-            additions = {
-                "retry_stage": "TEXT NOT NULL DEFAULT ''",
-                "platform": "TEXT NOT NULL DEFAULT 'youtube_shorts'",
-                "options_json": "TEXT NOT NULL DEFAULT '{}'",
-                "experiment_family": "TEXT NOT NULL DEFAULT ''",
-                "title_variant": "INTEGER NOT NULL DEFAULT 1",
-                "thumbnail_variant": "INTEGER NOT NULL DEFAULT 1",
-                "published_at": "TEXT",
-            }
-            for column, definition in additions.items():
-                if column not in existing:
-                    conn.execute(f"ALTER TABLE autonomous_jobs ADD COLUMN {column} {definition}")
+
+            # Version 0 was used by the first autonomous loop build.  Treat it
+            # as an upgradeable legacy schema and bring it forward through one
+            # explicit, named migration rather than scattering ALTER TABLE calls
+            # across normal startup logic.
+            if current == 0:
+                job_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(autonomous_jobs)").fetchall()}
+                analytics_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(autonomous_analytics)").fetchall()}
+                migrations: tuple[tuple[str, str, set[str]], ...] = (
+                    (
+                        "autonomous_jobs_v2",
+                        "autonomous_jobs",
+                        {"retry_stage", "platform", "options_json", "experiment_family", "title_variant", "thumbnail_variant", "published_at"},
+                    ),
+                    ("autonomous_analytics_v2", "autonomous_analytics", {"revenue_usd"}),
+                )
+                for migration_name, table_name, required in migrations:
+                    existing = job_columns if table_name == "autonomous_jobs" else analytics_columns
+                    definitions = {
+                        "retry_stage": "TEXT NOT NULL DEFAULT ''",
+                        "platform": "TEXT NOT NULL DEFAULT 'youtube_shorts'",
+                        "options_json": "TEXT NOT NULL DEFAULT '{}'",
+                        "experiment_family": "TEXT NOT NULL DEFAULT ''",
+                        "title_variant": "INTEGER NOT NULL DEFAULT 1",
+                        "thumbnail_variant": "INTEGER NOT NULL DEFAULT 1",
+                        "published_at": "TEXT",
+                        "revenue_usd": "REAL NOT NULL DEFAULT 0",
+                    }
+                    for column in sorted(required - existing):
+                        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column} {definitions[column]}")
+                current = 1
+
+            if current < 2:
+                # v2 formalizes the analytics revenue column and the publication
+                # experiment metadata used by the learning loop.
+                job_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(autonomous_jobs)").fetchall()}
+                analytics_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(autonomous_analytics)").fetchall()}
+                for column, definition in {
+                    "experiment_family": "TEXT NOT NULL DEFAULT ''",
+                    "title_variant": "INTEGER NOT NULL DEFAULT 1",
+                    "thumbnail_variant": "INTEGER NOT NULL DEFAULT 1",
+                    "published_at": "TEXT",
+                }.items():
+                    if column not in job_columns:
+                        conn.execute(f"ALTER TABLE autonomous_jobs ADD COLUMN {column} {definition}")
+                if "revenue_usd" not in analytics_columns:
+                    conn.execute("ALTER TABLE autonomous_analytics ADD COLUMN revenue_usd REAL NOT NULL DEFAULT 0")
+                current = 2
+
             for key, value in {
                 "paused": "0",
                 "emergency_stop": "0",
@@ -234,6 +276,7 @@ class AutonomousStore:
                     "ON CONFLICT(key) DO NOTHING",
                     (key, value),
                 )
+            conn.execute(f"PRAGMA user_version={AUTONOMOUS_SCHEMA_VERSION}")
 
     def setting(self, key: str, default: str = "") -> str:
         with self._connect() as conn:
@@ -269,17 +312,17 @@ class AutonomousStore:
             raise ValueError("topic is required")
         if platform not in PLATFORM_LAYOUTS:
             raise ValueError(f"unsupported platform: {platform}")
+        seed = f"{clean_topic}|{platform}|{scheduled_at or ''}|{json.dumps(dict(options or {}), sort_keys=True)}"
+        job_id = "yt-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+        now = _utc_now()
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             active = conn.execute(
                 "SELECT COUNT(*) AS n FROM autonomous_jobs "
                 "WHERE state IN ('IDEA','PRODUCING','READY','POLICY_REVIEW','SCHEDULED','UPLOADING','ANALYZING')"
             ).fetchone()["n"]
             if int(active) >= self.config.max_queue_size:
                 raise RuntimeError("autonomous queue is full")
-        seed = f"{clean_topic}|{platform}|{scheduled_at or ''}|{json.dumps(dict(options or {}), sort_keys=True)}"
-        job_id = "yt-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
-        now = _utc_now()
-        with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO autonomous_jobs(
@@ -449,6 +492,32 @@ class AutonomousStore:
             )
             self._event(conn, job_id, "scheduled", {"scheduled_at": target})
         return target
+
+    def claim_publish(self, now: Optional[str] = None) -> Optional[dict[str, Any]]:
+        """Claim one due upload atomically so two daemons cannot publish it twice."""
+        current = now or _utc_now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM autonomous_jobs WHERE state='SCHEDULED' "
+                "AND approval='approved' AND publish_requested=1 AND scheduled_at<=? "
+                "ORDER BY priority DESC, scheduled_at, created_at LIMIT 1",
+                (current,),
+            ).fetchone()
+            if not row:
+                conn.commit()
+                return None
+            conn.execute(
+                "UPDATE autonomous_jobs SET state='UPLOADING',updated_at=? WHERE id=? AND state='SCHEDULED'",
+                (current, row["id"]),
+            )
+            if conn.total_changes != 1:
+                conn.rollback()
+                return None
+            self._event(conn, row["id"], "upload_claimed", {"scheduled_at": row["scheduled_at"]})
+            conn.commit()
+            claimed = conn.execute("SELECT * FROM autonomous_jobs WHERE id=?", (row["id"],)).fetchone()
+        return dict(claimed) if claimed else None
 
     def next_publish_slot(self, *, after: Optional[datetime] = None) -> str:
         start = after or datetime.now(timezone.utc)
@@ -761,8 +830,11 @@ class AutonomousManager:
             raise RuntimeError("autonomous publisher is paused")
         if self.config.max_videos_per_day > 0 and self.store.published_today() >= self.config.max_videos_per_day:
             raise RuntimeError("daily upload limit reached")
-        if self.config.max_daily_cost_usd > 0 and self.store.daily_cost() >= self.config.max_daily_cost_usd:
-            raise RuntimeError("daily cost limit reached")
+        if self.config.max_daily_cost_usd > 0:
+            daily_cost = self.store.daily_cost()
+            projected = daily_cost + self.config.estimated_cost_per_video_usd
+            if daily_cost >= self.config.max_daily_cost_usd or projected > self.config.max_daily_cost_usd:
+                raise RuntimeError("daily cost limit reached")
         if int(self.store.setting("consecutive_failures", "0") or 0) >= self.config.max_consecutive_failures:
             self.pause("automatic pause after repeated failures")
             raise RuntimeError("automatic failure circuit breaker is active")
@@ -807,6 +879,14 @@ class AutonomousManager:
             retry_stage=stage,
             next_attempt_at=next_attempt,
             error=f"{stage}: {exc}",
+            actual_cost_usd=(
+                float(job.get("actual_cost_usd") or 0.0)
+                if stage != "production"
+                else max(
+                    float(job.get("actual_cost_usd") or 0.0),
+                    self.config.estimated_cost_per_video_usd,
+                )
+            ),
         )
         self.store.event(str(job["id"]), "failed", {"stage": stage, "error": str(exc), "retry_count": retry_count})
         _notify(
@@ -975,6 +1055,7 @@ class AutonomousManager:
                 fingerprint=fingerprint,
                 video_sha256=video_hash,
                 estimated_cost_usd=self.config.estimated_cost_per_video_usd,
+                actual_cost_usd=self.config.estimated_cost_per_video_usd,
                 approval=approval,
                 scheduled_at=scheduled,
                 experiment_family=str(job.get("experiment_family") or ""),
@@ -1009,24 +1090,27 @@ class AutonomousManager:
                 "public autonomous publishing is disabled; set "
                 "AIVF_AUTONOMOUS_ALLOW_PUBLIC=1 after proving the pipeline"
             )
-        now = _utc_now()
-        with self.store._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM autonomous_jobs WHERE state='SCHEDULED' "
-                "AND approval='approved' AND publish_requested=1 AND scheduled_at<=? ORDER BY scheduled_at LIMIT 1",
-                (now,),
-            ).fetchone()
-        if not row:
+        job = self.store.claim_publish()
+        if not job:
             return None
-        job = dict(row)
         job_id = str(job["id"])
-        self.store.update(job_id, state="UPLOADING")
         try:
             package = Path(str(job["package_dir"]))
             metadata, _script, video_path = _extract_package(package)
             if not video_path.exists():
                 raise FileNotFoundError(video_path)
-            selected_title = metadata.get("selected_title")
+            title_candidates_value = metadata.get("title_candidates")
+            title_candidates: list[str] = (
+                [str(value).strip() for value in title_candidates_value if str(value).strip()]
+                if isinstance(title_candidates_value, Sequence) and not isinstance(title_candidates_value, (str, bytes))
+                else []
+            )
+            title_variant = max(1, int(job.get("title_variant") or 1))
+            selected_title = (
+                title_candidates[(title_variant - 1) % len(title_candidates)]
+                if title_candidates
+                else metadata.get("selected_title")
+            )
             description_value = metadata.get("description")
             tags_value = metadata.get("tags")
             public_tags: Sequence[str] = (
