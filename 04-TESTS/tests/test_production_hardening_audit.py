@@ -53,3 +53,104 @@ def test_janitor_prunes_terminal_db_state(tmp_path):
     result=run_janitor(db_path=db,upload_root=tmp_path/"uploads",output_root=tmp_path/"output",now=90*86400,prune_terminal_jobs=True,metadata_days=30)
     assert result["terminal_jobs"]==1
     with store.connect() as conn: assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]==0
+
+
+def test_cancelled_attempt_lease_is_revoked(tmp_path):
+    store = DashboardStore(tmp_path / "jobs.db")
+    store.ensure_indexes()
+    store.insert_job("job-cancel", "topic", {}, principal="owner")
+    assert store.claim_job("job-cancel")
+    attempt = store.begin_attempt("job-cancel", "worker-a", str(tmp_path / "work"))
+    assert attempt
+    with store.connect() as conn:
+        conn.execute("UPDATE jobs SET status='cancelling' WHERE id='job-cancel'")
+    assert store.revoke_attempt_lease("job-cancel")
+    assert not store.attempt_can_publish(
+        "job-cancel", attempt["attempt_id"], attempt["lease_token"]
+    )
+    job = store.get_job("job-cancel")
+    assert job["lease_token"] is None
+
+
+def test_fenced_publish_commits_done_and_artifact_atomically(tmp_path):
+    store = DashboardStore(tmp_path / "jobs.db")
+    store.ensure_indexes()
+    store.insert_job("job-publish", "topic", {}, principal="owner")
+    assert store.claim_job("job-publish")
+    attempt = store.begin_attempt("job-publish", "worker-a", str(tmp_path / "work"))
+    assert attempt
+    package = tmp_path / "output" / "package"
+    artifact = package / "final.mp4"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"fixture")
+
+    assert store.finalize_attempt_publish(
+        "job-publish",
+        attempt["attempt_id"],
+        attempt["lease_token"],
+        package_path=package,
+        artifact_path=artifact,
+        artifact_sha256="a" * 64,
+        artifact_size_bytes=artifact.stat().st_size,
+    )
+    job = store.get_job("job-publish")
+    assert job["status"] == "done"
+    assert str(job["pkg_dir"]) == str(package.resolve())
+    with store.connect() as conn:
+        row = conn.execute(
+            "SELECT kind, attempt_id, path, sha256, size_bytes FROM job_artifacts WHERE job_id=?",
+            ("job-publish",),
+        ).fetchone()
+    assert row["kind"] == "final_video"
+    assert row["attempt_id"] == attempt["attempt_id"]
+    assert row["sha256"] == "a" * 64
+
+
+def test_production_claim_refuses_runtime_schema_mutation(monkeypatch, tmp_path):
+    db = tmp_path / "legacy.db"
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE jobs(id TEXT PRIMARY KEY, topic TEXT, status TEXT, step TEXT, params TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO jobs(id,topic,status,step,params) VALUES('legacy','t','queued','waiting','{}')"
+        )
+
+    monkeypatch.setenv("AIVF_ENV", "production")
+    monkeypatch.delenv("AIVF_ALLOW_RUNTIME_MIGRATIONS", raising=False)
+    store = DashboardStore(db)
+    with pytest.raises(Exception, match="production database schema is missing lifecycle columns"):
+        store.claim_job("legacy")
+
+    with sqlite3.connect(db) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    assert "lease_token" not in columns
+    assert "principal" not in columns
+
+
+def test_production_janitor_prunes_terminal_metadata_by_default(monkeypatch, tmp_path):
+    db = tmp_path / "jobs.db"
+    store = DashboardStore(db)
+    store.ensure_indexes()
+    with store.connect() as conn:
+        conn.execute(
+            "INSERT INTO jobs(id,topic,status,step,params,principal,created_at,updated_at) "
+            "VALUES('old','t','done','done','{}','p','1970-01-01','1970-01-01')"
+        )
+
+    monkeypatch.setenv("AIVF_ENV", "production")
+    monkeypatch.delenv("AIVF_PRUNE_TERMINAL_JOBS", raising=False)
+    result = run_janitor(
+        db_path=db,
+        upload_root=tmp_path / "uploads",
+        output_root=tmp_path / "output",
+        now=90 * 86400,
+        metadata_days=30,
+        prune_terminal_jobs=None,
+    )
+    assert result["terminal_jobs"] == 1
+    assert result["analyzed"] == 1
+    with store.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
