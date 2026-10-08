@@ -146,6 +146,48 @@ def test_public_metadata_removes_generator_credit_only():
     assert "AI history" in cleaned["tags"]
 
 
+
+def test_template_fallback_is_sentence_valid():
+    from ai_video_factory.director import _validate_script_against_rules, VideoDirector
+
+    director = VideoDirector(model_key=None)
+    director.creative_brief = {
+        "topic": "Test Topic",
+        "hook": "A concrete hook",
+        "strongest_angle": "A specific angle",
+        "main_conflict": "A real conflict",
+        "why_care": "A concrete consequence",
+    }
+    script = director.build_script({})
+    assert _validate_script_against_rules(script, "A concrete hook") == []
+
+
+def test_publish_claim_atomically_moves_one_job_to_uploading(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path, autonomous_publish=True, require_human_approval=False))
+    job_id = manager.enqueue("A concrete topic", publish_requested=True)
+    manager.store.update(
+        job_id,
+        state="SCHEDULED",
+        approval="approved",
+        scheduled_at="2000-01-01T00:00:00Z",
+        package_dir=str(tmp_path / "package"),
+    )
+    claimed = manager.store.claim_publish(now="2026-10-08T12:00:00Z")
+    assert claimed is not None
+    assert claimed["id"] == job_id
+    assert claimed["state"] == "UPLOADING"
+    assert manager.store.get(job_id)["state"] == "UPLOADING"
+    assert manager.store.claim_publish(now="2026-10-08T12:00:00Z") is None
+
+
+def test_daily_cost_limit_accounts_for_generation_before_publish(tmp_path: Path):
+    manager = AutonomousManager(
+        _config(tmp_path, max_daily_cost_usd=1.0, estimated_cost_per_video_usd=1.0)
+    )
+    with pytest.raises(RuntimeError, match="daily cost limit"):
+        manager._guard_limits()
+
+
 def test_stale_schedule_is_moved_to_policy_review(tmp_path: Path):
     manager = AutonomousManager(_config(tmp_path, stale_schedule_days=1))
     job_id = manager.enqueue("Old scheduled topic")
