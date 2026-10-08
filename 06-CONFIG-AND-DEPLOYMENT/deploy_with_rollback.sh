@@ -5,6 +5,8 @@ IMAGE="${1:?usage: deploy_with_rollback.sh <registry/image@sha256:digest>}"
 COMPOSE_FILE="${COMPOSE_FILE:-06-CONFIG-AND-DEPLOYMENT/docker-compose.yml}"
 BACKUP_DIR="${AIVF_BACKUP_DIR:-/app/state/backups}"
 PREVIOUS_FILE=".aivf-previous-image"
+CURRENT_FILE=".aivf-current-image"
+OFFHOST_MARKER="${AIVF_BACKUP_OFFHOST_MARKER:-${BACKUP_DIR}/offhost-verified}"
 BACKUP_ID="${AIVF_DEPLOYMENT_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BACKUP_ARCHIVE="${BACKUP_DIR}/predeploy-${BACKUP_ID}.tar.gz"
 ROLLBACK_FAILED=0
@@ -30,6 +32,7 @@ rollback() {
   echo "Deployment failed; rolling back to $previous" >&2
   docker pull "$previous"
   AIVF_IMAGE="$previous" AIVF_COOKIE_SECURE=1 docker compose -f "$COMPOSE_FILE" up -d --no-build --remove-orphans
+  printf "%s\n" "$previous" > "$CURRENT_FILE"
   for _ in $(seq 1 10); do
     if curl -fsS http://127.0.0.1:5000/api/health >/dev/null; then
       return 0
@@ -60,6 +63,19 @@ AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web 
 AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-backup verify   --backup "$BACKUP_ARCHIVE"   --marker /app/state/backup-restore-verified
 AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-backup restore  --backup "$BACKUP_ARCHIVE" --destination /tmp/aivf-restore-drill
 
+if [ -n "${AIVF_BACKUP_REMOTE:-}" ] || [ -n "${AIVF_BACKUP_REMOTE_DIR:-}" ]; then
+  test -n "${AIVF_BACKUP_REMOTE:-}" || { echo "AIVF_BACKUP_REMOTE must be set with AIVF_BACKUP_REMOTE_DIR" >&2; exit 4; }
+  test -n "${AIVF_BACKUP_REMOTE_DIR:-}" || { echo "AIVF_BACKUP_REMOTE_DIR must be set with AIVF_BACKUP_REMOTE" >&2; exit 4; }
+  test -n "${AIVF_BACKUP_ENCRYPTION_KEY:-}" || { echo "AIVF_BACKUP_ENCRYPTION_KEY is required for off-host backup" >&2; exit 4; }
+  bash "$(dirname "$0")/backup_offhost.sh" "$BACKUP_ARCHIVE" "$AIVF_BACKUP_REMOTE" "$AIVF_BACKUP_REMOTE_DIR"
+  printf "%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OFFHOST_MARKER"
+elif [ "${AIVF_REQUIRE_OFFHOST_BACKUP:-0}" = "1" ]; then
+  echo "Off-host backup is required but AIVF_BACKUP_REMOTE/AIVF_BACKUP_REMOTE_DIR are not configured." >&2
+  exit 4
+fi
+
+AIVF_IMAGE="$IMAGE" docker compose
+
 AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-db-migrate /app/state/jobs.db
 AIVF_IMAGE="$IMAGE" AIVF_COOKIE_SECURE=1 docker compose -f "$COMPOSE_FILE" up -d --no-build --remove-orphans
 
@@ -75,5 +91,6 @@ if [ -x 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh ]; then
   bash 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh
 fi
 
+printf "%s\n" "$IMAGE" > "$CURRENT_FILE"
 trap - EXIT
 echo "deployment succeeded: $IMAGE"
