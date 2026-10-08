@@ -166,6 +166,7 @@ jobs:
           scp 06-CONFIG-AND-DEPLOYMENT/target_v3_smoke.sh \
             06-CONFIG-AND-DEPLOYMENT/target_recovery_smoke.sh \
             06-CONFIG-AND-DEPLOYMENT/deploy_with_rollback.sh \
+            06-CONFIG-AND-DEPLOYMENT/backup_offhost.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/06-CONFIG-AND-DEPLOYMENT/"
 
       - name: Log in to GHCR on remote host
@@ -250,4 +251,4 @@ jobs:
           IMAGE="${REGISTRY}/${IMAGE_NAME}@${DEPLOY_DIGEST}"
           printf -v q_deploy_path '%q' "$DEPLOY_PATH"
           printf -v q_image '%q' "$IMAGE"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml exec -T -e AIVF_CI_STATUS=green -e AIVF_SECURITY_STATUS=green -e AIVF_E2E_STATUS=green -e AIVF_TARGET_HOST_SMOKE=green -e AIVF_HUMAN_APPROVAL=approved -e AIVF_IMAGE=${q_image} -e AIVF_BACKUP_RESTORE_MARKER=/app/state/backup-restore-verified -e AIVF_BACKUP_OFFHOST_MARKER=/app/state/backups/offhost-verified web aivf-release-check /app"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd ${q_deploy_path} && docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.yml exec -T -e AIVF_CI_STATUS=green -e AIVF_SECURITY_STATUS=green -e AIVF_E2E_STATUS=green -e AIVF_TARGET_HOST_SMOKE=green -e AIVF_BACKUP_OFFHOST_VERIFIED=green -e AIVF_HUMAN_APPROVAL=approved -e AIVF_IMAGE=${q_image} -e AIVF_BACKUP_RESTORE_MARKER=/app/state/backup-restore-verified -e AIVF_BACKUP_OFFHOST_MARKER=/app/state/backups/offhost-verified web aivf-release-check /app"
