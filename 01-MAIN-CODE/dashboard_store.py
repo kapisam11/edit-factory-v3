@@ -759,6 +759,49 @@ class DashboardStore:
             ).fetchone()
         return row is not None
 
+    def revoke_attempt_lease(self, job_id: str) -> bool:
+        """Invalidate the active worker lease when cancellation is requested."""
+        def write(conn: sqlite3.Connection) -> bool:
+            conn.execute("BEGIN IMMEDIATE")
+            attempt = conn.execute(
+                "SELECT id FROM job_attempts WHERE job_id=? AND status='running' ORDER BY started_at DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+            changed = int(
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET worker_id=NULL,
+                        lease_token=NULL,
+                        worker_heartbeat_at=NULL,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND status='cancelling'
+                    """,
+                    (job_id,),
+                ).rowcount
+            )
+            if attempt is not None:
+                conn.execute(
+                    """
+                    UPDATE job_attempts
+                    SET status='cancelled', finished_at=CURRENT_TIMESTAMP
+                    WHERE id=? AND status='running'
+                    """,
+                    (str(attempt["id"]),),
+                )
+                self._record_event(
+                    conn,
+                    job_id,
+                    "attempt_finished",
+                    details=json.dumps(
+                        {"attempt_id": str(attempt["id"]), "status": "cancelled"},
+                        sort_keys=True,
+                    ),
+                )
+            return changed == 1
+
+        return bool(self.write(write))
+
     def finalize_attempt_publish(
         self,
         job_id: str,
