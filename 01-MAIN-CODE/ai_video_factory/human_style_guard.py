@@ -90,6 +90,11 @@ CLICKBAIT_PATTERNS = (
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’-]*")
 SENTENCE_RE = re.compile(r"[^.!?]+[.!?]?", re.UNICODE)
+TITLE_STRUCTURE_STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "why", "how", "what", "when",
+    "where", "who", "which", "still", "really", "actually", "matters",
+    "happened", "next", "part", "detail", "moment", "behind", "from",
+}
 
 
 @dataclass(frozen=True)
@@ -238,6 +243,22 @@ def _opening(text: str) -> str:
     return " ".join(_tokens(" ".join(sentences[:2])))
 
 
+def _title_structure(text: str) -> tuple[str, ...]:
+    """Map topic-specific words to placeholders so repeated title templates compare."""
+    return tuple(
+        token if token in TITLE_STRUCTURE_STOPWORDS else "<topic>"
+        for token in _tokens(text)
+    )
+
+
+def _title_structure_similarity(left: str, right: str) -> float:
+    a = _title_structure(left)
+    b = _title_structure(right)
+    if not a or not b:
+        return 0.0
+    return round(SequenceMatcher(None, a, b).ratio(), 4)
+
+
 def sanitize_public_metadata(title: str, description: str, tags: Sequence[str]) -> dict[str, Any]:
     """Remove explicit factory/vendor credits without rewriting topic meaning."""
     def clean(value: str) -> str:
@@ -370,6 +391,7 @@ def assess_package(
     title: str,
     description: str,
     recent_texts: Iterable[str] = (),
+    recent_titles: Iterable[str] = (),
     min_score: float = 0.72,
 ) -> StyleAssessment:
     script_assessment = assess_text(script, recent_texts=recent_texts)
@@ -377,11 +399,23 @@ def assess_package(
     desc_assessment = assess_text(description, recent_texts=(), min_words=12)
 
     generic_title = any(re.search(pattern, title, flags=re.I) for pattern in CLICKBAIT_PATTERNS)
+    recent_title_values = [str(item).strip() for item in recent_titles if str(item).strip()]
+    title_overlaps = [token_jaccard(title, item) for item in recent_title_values]
+    title_structures = [_title_structure_similarity(title, item) for item in recent_title_values]
+    max_title_overlap = max(title_overlaps, default=0.0)
+    max_title_structure_similarity = max(title_structures, default=0.0)
     reasons = list(script_assessment.reasons)
     if generic_title:
         reasons.append("title uses a generic/clickbait template")
     if desc_assessment.metrics.get("cliche_count", 0.0) >= 2:
         reasons.append("description contains too much template filler")
+    if max_title_overlap >= 0.82:
+        reasons.append(f"title is too similar to a recent upload ({max_title_overlap:.2f})")
+    if max_title_structure_similarity >= 0.92 and recent_title_values:
+        reasons.append(
+            "title repeats a recent template structure "
+            f"({max_title_structure_similarity:.2f})"
+        )
 
     combined = round(
         0.68 * script_assessment.score
@@ -400,6 +434,8 @@ def assess_package(
             **{f"script_{key}": value for key, value in script_assessment.metrics.items()},
             "title_score": title_assessment.score,
             "description_score": desc_assessment.score,
+            "max_recent_title_overlap": round(max_title_overlap, 4),
+            "max_recent_title_structure_similarity": round(max_title_structure_similarity, 4),
             "combined_score": combined,
         },
     )
