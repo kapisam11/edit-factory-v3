@@ -1,0 +1,43 @@
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
+    image: edit-factory-v3:dev
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    cpus: "${AIVF_CONTAINER_CPUS:-4}"
+    mem_limit: "${AIVF_CONTAINER_MEMORY:-8g}"
+    pids_limit: ${AIVF_CONTAINER_PIDS:-512}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g
+    env_file:
+      - .env
+    environment:
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-dev-secret-change-me}
+      AIVF_DASHBOARD_TOKEN: ${AIVF_DASHBOARD_TOKEN:-dev-token-change-me}
+      AIVF_COOKIE_SECURE: ${AIVF_COOKIE_SECURE:-0}
+      AIVF_STATE_DIR: /app/state
+      AIVF_UPLOAD_DIR: /app/uploads
+      AIVF_OUTPUT_DIR: /app/output
+      AIVF_ENV: ${AIVF_ENV:-development}
+      AIVF_ALLOW_RUNTIME_MIGRATIONS: "1"
+      AIVF_MAX_CONCURRENT_JOBS: ${AIVF_MAX_CONCURRENT_JOBS:-2}
+      AIVF_MAX_SSE_CONNECTIONS: ${AIVF_MAX_SSE_CONNECTIONS:-2}
+      AIVF_V3_SEMANTIC_QC: ${AIVF_V3_SEMANTIC_QC:-1}
+    volumes:
+      - aivf-dev-output:/app/output
+      - aivf-dev-uploads:/app/uploads
+      - aivf-dev-knowledge:/app/knowledge_base_v3
+      - aivf-dev-state:/app/state
+
+volumes:
+  aivf-dev-output:
+  aivf-dev-uploads:
+  aivf-dev-knowledge:
+  aivf-dev-state:
