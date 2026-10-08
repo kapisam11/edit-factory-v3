@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from ai_video_factory.autonomous_youtube import AutonomousConfig, AutonomousManager, AutonomousStore
-from ai_video_factory.human_style_guard import assess_package, sanitize_public_metadata
+from ai_video_factory.human_style_guard import (
+    assess_package,
+    assess_topic_diversity,
+    sanitize_public_metadata,
+)
 
 
 def _config(tmp_path: Path, **overrides):
@@ -118,3 +122,53 @@ def test_queue_assigns_stable_experiment_variants(tmp_path: Path):
     assert int(one["title_variant"]) in {1, 2, 3}
     assert int(one["thumbnail_variant"]) in {1, 2, 3}
     assert one["experiment_family"] != two["experiment_family"]
+
+
+def test_topic_diversity_blocks_near_duplicate_topics():
+    assessment = assess_topic_diversity(
+        "The hidden history of the Apollo 11 mission",
+        ["A hidden history of Apollo 11", "Cooking tips for pasta"],
+        min_similarity=0.65,
+    )
+    assert assessment["blocked"] is True
+    assert assessment["max_recent_topic_similarity"] >= 0.65
+
+
+def test_public_metadata_removes_generator_credit_only():
+    cleaned = sanitize_public_metadata(
+        "The history of AI",
+        "A documentary about early AI. Powered by AI Video Factory.",
+        ["AI history", "AIVF"],
+    )
+    assert cleaned["title"] == "The history of AI"
+    assert "AI Video Factory" not in cleaned["description"]
+    assert "AIVF" not in cleaned["tags"]
+    assert "AI history" in cleaned["tags"]
+
+
+def test_stale_schedule_is_moved_to_policy_review(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path, stale_schedule_days=1))
+    job_id = manager.enqueue("Old scheduled topic")
+    manager.store.update(
+        job_id,
+        state="SCHEDULED",
+        approval="approved",
+        scheduled_at="2000-01-01T00:00:00Z",
+        updated_at="2000-01-01T00:00:00Z",
+    )
+    manager.store.prune()
+    job = manager.store.get(job_id)
+    assert job is not None
+    assert job["state"] == "POLICY_REVIEW"
+    assert job["approval"] == "pending"
+
+
+def test_automatic_backup_writes_a_non_secret_config_snapshot(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path))
+    archive = manager._maybe_backup()
+    assert archive
+    snapshot = manager.config.state_dir / "autonomous-config.json"
+    assert snapshot.exists()
+    payload = snapshot.read_text(encoding="utf-8")
+    assert "max_videos_per_day" in payload
+    assert "YOUTUBE_TOKEN_PATH" not in payload
