@@ -4,6 +4,7 @@ from ai_video_factory.asset_manager import RUNTIME_ASSETS, verify_runtime_asset
 from ai_video_factory.media_limits import MediaLimits, probe_media_contract
 from ai_video_factory.retention_janitor import run_janitor
 from dashboard_store import DashboardStore
+from ai_video_factory.db_migrations import SchemaMismatch
 
 def test_resource_reservation_is_atomic(tmp_path):
     store=DashboardStore(tmp_path/"jobs.db"); store.ensure_indexes()
@@ -121,7 +122,7 @@ def test_production_claim_refuses_runtime_schema_mutation(monkeypatch, tmp_path)
     monkeypatch.setenv("AIVF_ENV", "production")
     monkeypatch.delenv("AIVF_ALLOW_RUNTIME_MIGRATIONS", raising=False)
     store = DashboardStore(db)
-    with pytest.raises(Exception, match="production database schema is missing lifecycle columns"):
+    with pytest.raises(SchemaMismatch, match="production database schema is missing lifecycle columns"):
         store.claim_job("legacy")
 
     with sqlite3.connect(db) as conn:
@@ -154,3 +155,45 @@ def test_production_janitor_prunes_terminal_metadata_by_default(monkeypatch, tmp
     assert result["analyzed"] == 1
     with store.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+
+
+def test_total_storage_quota_is_atomic_with_resource_reservation(tmp_path):
+    store = DashboardStore(tmp_path / "jobs.db")
+    store.ensure_indexes()
+    uploads = tmp_path / "uploads"
+    output = tmp_path / "output"
+    uploads.mkdir()
+    output.mkdir()
+
+    (uploads / "existing.bin").write_bytes(b"x" * 100)
+    with store.connect() as conn:
+        for jid in ("quota-1", "quota-2"):
+            conn.execute(
+                "INSERT INTO jobs(id,topic,status,step,params,principal) VALUES(?,?,?,?,?,?)",
+                (jid, "t", "queued", "waiting", "{}", "p"),
+            )
+
+    assert store.reserve_resources(
+        "quota-1",
+        input_bytes=1,
+        reserved_bytes=40,
+        cpu_weight=1,
+        memory_bytes=1,
+        max_reserved_disk_bytes=1000,
+        max_cpu_weight=8,
+        max_memory_bytes=1000,
+        storage_paths=(uploads, output),
+        max_total_storage_bytes=150,
+    )
+    assert not store.reserve_resources(
+        "quota-2",
+        input_bytes=1,
+        reserved_bytes=40,
+        cpu_weight=1,
+        memory_bytes=1,
+        max_reserved_disk_bytes=1000,
+        max_cpu_weight=8,
+        max_memory_bytes=1000,
+        storage_paths=(uploads, output),
+        max_total_storage_bytes=150,
+    )
