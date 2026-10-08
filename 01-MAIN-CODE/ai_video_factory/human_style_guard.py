@@ -135,8 +135,31 @@ def token_jaccard(left: str, right: str) -> float:
 
 
 def topic_similarity(left: str, right: str) -> float:
-    """Conservative lexical similarity for queue diversity decisions."""
-    return round(max(ngram_overlap(left, right, n=2), token_jaccard(left, right)), 4)
+    """Conservative lexical similarity for queue diversity decisions.
+
+    Token containment/dice similarity catches paraphrases that reorder or add
+    only a small number of words, while the n-gram score still catches near
+    verbatim phrasing.  The guard intentionally prefers false positives over
+    allowing a queue of near-duplicate topics.
+    """
+    left_tokens = _tokens(left)
+    right_tokens = _tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    left_set = set(left_tokens)
+    right_set = set(right_tokens)
+    overlap = len(left_set.intersection(right_set))
+    dice = (2.0 * overlap) / max(1, len(left_set) + len(right_set))
+    containment = overlap / max(1, min(len(left_set), len(right_set)))
+    return round(
+        max(
+            ngram_overlap(left, right, n=2),
+            token_jaccard(left, right),
+            dice,
+            containment,
+        ),
+        4,
+    )
 
 
 def assess_topic_diversity(
