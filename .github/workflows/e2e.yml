@@ -39,7 +39,7 @@ jobs:
           AIVF_UPLOAD_DIR: ${{ runner.temp }}/aivf-uploads
           AIVF_OUTPUT_DIR: ${{ runner.temp }}/aivf-output
           AIVF_MAX_JOB_SECONDS: "1800"
-          AIVF_MAX_JOB_MEMORY_MB: "8192"
+          AIVF_MAX_JOB_MEMORY_MB: "12288"
           AIVF_MAX_TOTAL_STORAGE_MB: "20000"
           AIVF_MAX_JOB_DISK_MB: "4096"
           AIVF_MIN_FREE_DISK_BYTES: "1073741824"
