@@ -72,3 +72,41 @@ The queue has explicit IDEA -> PRODUCING -> READY -> SCHEDULED -> UPLOADING -> P
 The loop tracks estimated provider cost, YouTube analytics, estimated revenue when the YouTube Analytics API permits it, daily ROI, and channel-level performance recommendations. Analytics failures are retried independently rather than regenerating the video.
 
 No system can guarantee monetization, growth, or revenue. The engineering goal is to maximize the quality of videos produced per hour of human attention while keeping the system bounded and stoppable.
+
+## Anti-slop and unattended safety defaults
+
+The autonomous loop rejects repeated openings, repeated n-gram phrasing, canned/filler narration, repetitive vocabulary, excessive CTA language, low specificity, clickbait patterns, and near-duplicate topics. Future topic discovery also uses measured topic performance.
+
+Set a narrow channel niche with:
+
+    AIVF_CHANNEL_NICHE="your narrow topic area"
+
+Topic-diversity protection defaults to:
+
+    AIVF_MIN_TOPIC_VARIATION=0.72
+
+Claims needing factual review stay in POLICY_REVIEW instead of being silently auto-approved:
+
+    AIVF_AUTONOMOUS_REQUIRE_FACT_REVIEW=1
+
+Stale scheduled items are moved to POLICY_REVIEW:
+
+    AIVF_STALE_SCHEDULE_DAYS=14
+
+Public autonomous publishing is disabled by default:
+
+    AIVF_AUTONOMOUS_ALLOW_PUBLIC=0
+
+The factory does not add its own product/vendor/AI-generator credit to public title, description, or tags, and does not add a factory watermark. This removes accidental factory boilerplate only; it does not remove source/rights information or suppress a YouTube-required altered/synthetic-media disclosure.
+
+## YouTube authentication
+
+The daemon never opens a browser unexpectedly. For first-time/manual authorization only:
+
+    YOUTUBE_AUTH_INTERACTIVE=1
+
+After a valid refresh token has been saved, keep the daemon setting at:
+
+    YOUTUBE_AUTH_INTERACTIVE=0
+
+Authentication refresh failures and YouTube quota/auth failures pause autonomous publishing and require operator action.
