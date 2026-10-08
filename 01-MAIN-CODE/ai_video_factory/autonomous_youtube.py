@@ -330,7 +330,7 @@ class AutonomousStore:
         return dict(updated) if updated else None
 
     def claim_production(self) -> Optional[dict[str, Any]]:
-        return self._claim(("IDEA",))
+        return self._claim(("IDEA", "FAILED"))
 
     def claim_analysis(self) -> Optional[dict[str, Any]]:
         now = _utc_now()
@@ -403,7 +403,7 @@ class AutonomousStore:
             )
             self._event(conn, job_id, "approved", {"actor": actor})
         updated = self.get(job_id)
-        if updated and updated["state"] == "READY":
+        if updated and updated["state"] in {"READY", "POLICY_REVIEW"}:
             self.schedule(job_id)
 
     def schedule(self, job_id: str, publish_at: Optional[str] = None) -> str:
@@ -757,7 +757,13 @@ class AutonomousManager:
             ai_generated, realistic_alteration = _disclosure_from_package(metadata)
             approval = "approved" if self.config.autonomous_publish and not self.config.require_human_approval else "pending"
             state = "SCHEDULED" if approval == "approved" else "READY"
-            scheduled = self.store.next_publish_slot() if state == "SCHEDULED" else None
+            scheduled = None
+            if state == "SCHEDULED":
+                requested_slot = str(job.get("scheduled_at") or "").strip()
+                try:
+                    scheduled = requested_slot if requested_slot and _parse_time(requested_slot) > datetime.now(timezone.utc) else self.store.next_publish_slot()
+                except ValueError:
+                    scheduled = self.store.next_publish_slot()
             self.store.update(
                 job_id,
                 state=state,
@@ -788,7 +794,7 @@ class AutonomousManager:
         with self.store._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM autonomous_jobs WHERE state='SCHEDULED' "
-                "AND approval='approved' AND scheduled_at<=? ORDER BY scheduled_at LIMIT 1",
+                "AND approval='approved' AND publish_requested=1 AND scheduled_at<=? ORDER BY scheduled_at LIMIT 1",
                 (now,),
             ).fetchone()
         if not row:
