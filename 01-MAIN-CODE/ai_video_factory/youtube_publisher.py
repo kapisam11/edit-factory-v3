@@ -5,6 +5,8 @@ import json
 import mimetypes
 import os
 import stat
+import time
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
@@ -56,6 +58,66 @@ def _paths(client_secrets_path: Optional[str], token_path: Optional[str]) -> tup
     return client, token
 
 
+
+def _idempotency_path(idempotency_key: str) -> Path:
+    root = Path(os.environ.get("YOUTUBE_IDEMPOTENCY_DIR", os.path.expanduser("~/.config/edit-factory/youtube-idempotency")))
+    root.mkdir(parents=True, exist_ok=True)
+    return root / (re.sub(r"[^a-zA-Z0-9_.-]", "_", idempotency_key) + ".json")
+
+
+def _parse_duration_seconds(value: str) -> float:
+    match = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?", str(value or ""))
+    if not match:
+        return 0.0
+    hours, minutes, seconds = match.groups()
+    return float(hours or 0) * 3600.0 + float(minutes or 0) * 60.0 + float(seconds or 0.0)
+
+
+def _find_existing_video(youtube: Any, *, title: str, duration_seconds: float, tolerance_seconds: float = 2.5) -> Optional[Dict[str, Any]]:
+    """Find an existing upload owned by this account with the same title/duration."""
+    channel_response = youtube.channels().list(part="id", mine=True).execute()
+    channels = channel_response.get("items") or []
+    if not channels:
+        return None
+    channel_id = channels[0].get("id")
+    if not channel_id:
+        return None
+    search_response = youtube.search().list(
+        part="id,snippet",
+        channelId=channel_id,
+        q=title[:100],
+        type="video",
+        maxResults=50,
+    ).execute()
+    ids = [str(item.get("id", {}).get("videoId") or "") for item in search_response.get("items") or []]
+    ids = [item for item in ids if item]
+    if not ids:
+        return None
+    videos_response = youtube.videos().list(part="snippet,contentDetails,status", id=",".join(ids)).execute()
+    wanted = str(title).strip().casefold()
+    for item in videos_response.get("items") or []:
+        item_title = str((item.get("snippet") or {}).get("title") or "").strip().casefold()
+        if item_title != wanted:
+            continue
+        actual_duration = _parse_duration_seconds(str((item.get("contentDetails") or {}).get("duration") or ""))
+        if duration_seconds <= 0 or abs(actual_duration - duration_seconds) <= tolerance_seconds:
+            return item
+    return None
+
+
+def _read_idempotency_record(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _write_idempotency_record(path: Path, payload: Dict[str, Any]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
 def disclosure_setting(*, ai_generated: bool, realistic_alteration: bool) -> Dict[str, Any]:
     """Return the disclosure decision and the YouTube API value to apply."""
     review = bool(ai_generated or realistic_alteration)
@@ -84,6 +146,8 @@ def upload_video(
     ai_generated: bool = False,
     realistic_alteration: bool = False,
     disclosure_reviewed: bool = False,
+    idempotency_key: Optional[str] = None,
+    max_upload_attempts: int = 4,
 ) -> Dict[str, Any]:
     """Upload one video with optional thumbnail/captions; upload is always explicit."""
     client_secrets_path, token_path = _paths(client_secrets_path, token_path)
@@ -98,6 +162,49 @@ def upload_video(
     if not video.is_file():
         raise FileNotFoundError(video)
     youtube = _service("youtube", "v3", client_secrets_path, token_path, UPLOAD_SCOPES)
+    duration_seconds = 0.0
+    try:
+        probe = __import__("subprocess").run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
+            check=True, capture_output=True, text=True, timeout=20,
+        )
+        duration_seconds = float((probe.stdout or "0").strip() or 0.0)
+    except Exception:
+        duration_seconds = 0.0
+
+    idem_path = _idempotency_path(str(idempotency_key)) if idempotency_key else None
+    if idem_path:
+        previous = _read_idempotency_record(idem_path)
+        if previous and previous.get("video_id"):
+            try:
+                existing = fetch_video_statistics(str(previous["video_id"]), client_secrets_path=client_secrets_path, token_path=token_path)
+                return {
+                    "video_id": str(previous["video_id"]),
+                    "url": f"https://www.youtube.com/watch?v={previous['video_id']}",
+                    "response": existing,
+                    "disclosure": disclosure,
+                    "youtube_status": existing.get("status") or {},
+                    "deduplicated": True,
+                }
+            except Exception:
+                pass
+        try:
+            existing = _find_existing_video(youtube, title=title, duration_seconds=duration_seconds)
+        except Exception:
+            existing = None
+        if existing:
+            existing_id = str(existing.get("id") or "")
+            if existing_id:
+                _write_idempotency_record(idem_path, {"video_id": existing_id, "created_at": time.time()})
+                return {
+                    "video_id": existing_id,
+                    "url": f"https://www.youtube.com/watch?v={existing_id}",
+                    "response": existing,
+                    "disclosure": disclosure,
+                    "youtube_status": existing.get("status") or {},
+                    "deduplicated": True,
+                }
+
     status = {
         "privacyStatus": privacy_status,
         "selfDeclaredMadeForKids": False,
@@ -112,11 +219,42 @@ def upload_video(
         },
         "status": status,
     }
-    request = youtube.videos().insert(part="snippet,status", body=body, media_body=MediaFileUpload(str(video), chunksize=8 * 1024 * 1024, resumable=True))
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body=body,
+        media_body=MediaFileUpload(str(video), chunksize=8 * 1024 * 1024, resumable=True),
+    )
     response = None
+    upload_error: Optional[Exception] = None
+    attempts = 0
     while response is None:
-        _, response = request.next_chunk()
-    video_id = response.get("id")
+        try:
+            attempts += 1
+            _, response = request.next_chunk()
+            upload_error = None
+        except Exception as exc:
+            upload_error = exc
+            if attempts >= max(1, int(max_upload_attempts)):
+                break
+            time.sleep(min(30.0, 2.0 ** max(0, attempts - 1)))
+    if response is None and idem_path:
+        try:
+            existing = _find_existing_video(youtube, title=title, duration_seconds=duration_seconds)
+        except Exception:
+            existing = None
+        if existing and existing.get("id"):
+            existing_id = str(existing["id"])
+            _write_idempotency_record(idem_path, {"video_id": existing_id, "created_at": time.time(), "recovered_after_error": True})
+            return {
+                "video_id": existing_id,
+                "url": f"https://www.youtube.com/watch?v={existing_id}",
+                "response": existing,
+                "disclosure": disclosure,
+                "youtube_status": existing.get("status") or {},
+                "deduplicated": True,
+            }
+    if response is None:
+        raise RuntimeError(f"YouTube upload failed after {attempts} attempts: {upload_error}")
     if not video_id:
         raise RuntimeError(f"YouTube upload returned no video id: {response}")
     result: Dict[str, Any] = {
@@ -125,7 +263,10 @@ def upload_video(
         "response": response,
         "disclosure": disclosure,
         "youtube_status": status,
+        "deduplicated": False,
     }
+    if idem_path:
+        _write_idempotency_record(idem_path, {"video_id": str(video_id), "created_at": time.time()})
     if thumbnail_path:
         thumb = Path(thumbnail_path)
         if not thumb.is_file():
@@ -137,7 +278,7 @@ def upload_video(
             raise FileNotFoundError(caption)
         result["captions"] = youtube.captions().insert(
             part="snippet",
-            body={"snippet": {"videoId": video_id, "language": caption_language, "name": "Edit Factory captions", "isDraft": False}},
+            body={"snippet": {"videoId": video_id, "language": caption_language, "name": "Captions", "isDraft": False}},
             media_body=MediaFileUpload(str(caption), mimetype=mimetypes.guess_type(str(caption))[0] or "text/vtt"),
         ).execute()
     return result
@@ -181,7 +322,25 @@ def fetch_video_analytics(video_id: str, *, start_date: str, end_date: str, clie
     date.fromisoformat(start_date)
     date.fromisoformat(end_date)
     service = _service("youtubeAnalytics", "v2", client_secrets_path, token_path, ANALYTICS_SCOPES)
-    return service.reports().query(ids="channel==MINE", startDate=start_date, endDate=end_date, metrics="views,likes,comments,averageViewDuration,averageViewPercentage,subscribersGained,shares", dimensions="video", filters=f"video=={video_id}").execute()
+    base_metrics = "views,likes,comments,averageViewDuration,averageViewPercentage,subscribersGained,shares"
+    try:
+        return service.reports().query(
+            ids="channel==MINE",
+            startDate=start_date,
+            endDate=end_date,
+            metrics=base_metrics + ",estimatedRevenue",
+            dimensions="video",
+            filters=f"video=={video_id}",
+        ).execute()
+    except Exception:
+        return service.reports().query(
+            ids="channel==MINE",
+            startDate=start_date,
+            endDate=end_date,
+            metrics=base_metrics,
+            dimensions="video",
+            filters=f"video=={video_id}",
+        ).execute()
 
 
 def save_json(path: str, payload: Any) -> str:
