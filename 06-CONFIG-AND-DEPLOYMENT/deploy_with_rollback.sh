@@ -74,8 +74,6 @@ elif [ "${AIVF_REQUIRE_OFFHOST_BACKUP:-0}" = "1" ]; then
   exit 4
 fi
 
-AIVF_IMAGE="$IMAGE" docker compose
-
 AIVF_IMAGE="$IMAGE" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T web aivf-db-migrate /app/state/jobs.db
 AIVF_IMAGE="$IMAGE" AIVF_COOKIE_SECURE=1 docker compose -f "$COMPOSE_FILE" up -d --no-build --remove-orphans
 
