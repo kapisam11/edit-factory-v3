@@ -167,7 +167,7 @@ def test_automatic_backup_writes_a_non_secret_config_snapshot(tmp_path: Path):
     manager = AutonomousManager(_config(tmp_path))
     archive = manager._maybe_backup()
     assert archive
-    snapshot = manager.config.state_dir / "autonomous-config.json"
+    snapshot = manager.config.output_dir / "autonomous-config.json"
     assert snapshot.exists()
     payload = snapshot.read_text(encoding="utf-8")
     assert "max_videos_per_day" in payload
