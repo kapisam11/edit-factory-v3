@@ -119,87 +119,73 @@ class MetricsRegistry:
             return MetricSnapshot(counters,timings,time.time())
 
     def to_prometheus(self) -> str:
-        """Serialize durable snapshots through the standard prometheus-client library."""
+        """Serialize durable snapshots with the standard prometheus-client encoder."""
         from prometheus_client import CollectorRegistry, generate_latest
-        from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily, Metric
+        from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily, HistogramMetricFamily
 
         snap = self.snapshot()
         registry = CollectorRegistry()
 
-        http_family = CounterMetricFamily(
-            "aivf_http_requests_total",
-            "HTTP requests handled by the dashboard.",
-            labels=["method", "endpoint"],
-        )
-        generic_counters: list[tuple[str, int]] = []
-        for raw_name, count in snap.counters.items():
-            if raw_name.startswith("http_requests_total:"):
-                _, method, endpoint = raw_name.split(":", 2)
-                http_family.add_metric([method, endpoint], float(count))
-            else:
-                generic_counters.append((raw_name, int(count)))
-        registry.register(http_family)
-
-        for raw_name, count in generic_counters:
-            metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name).strip("_") or "counter"
-            registry.register(
-                CounterMetricFamily(
-                    f"aivf_{metric}",
-                    f"Edit Factory counter: {raw_name}.",
-                    value=float(count),
+        # CollectorRegistry stores collectors as dictionary keys, while MetricFamily
+        # instances are intentionally unhashable. Expose one small hashable collector
+        # object whose collect() yields all MetricFamily instances.
+        class _DurableCollector:
+            def collect(_self):
+                http_family = CounterMetricFamily(
+                    "aivf_http_requests_total",
+                    "HTTP requests handled by the dashboard.",
+                    labels=["method", "endpoint"],
                 )
-            )
+                generic_counters: list[tuple[str, int]] = []
+                for raw_name, count in snap.counters.items():
+                    if raw_name.startswith("http_requests_total:"):
+                        _, method, endpoint = raw_name.split(":", 2)
+                        http_family.add_metric([method, endpoint], float(count))
+                    else:
+                        generic_counters.append((raw_name, int(count)))
+                yield http_family
 
-        for raw_name, value in self.gauges().items():
-            metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name).strip("_") or "gauge"
-            registry.register(
-                GaugeMetricFamily(
-                    f"aivf_{metric}",
-                    f"Edit Factory gauge: {raw_name}.",
-                    value=float(value),
-                )
-            )
+                for raw_name, count in generic_counters:
+                    metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name).strip("_") or "counter"
+                    yield CounterMetricFamily(
+                        f"aivf_{metric}",
+                        f"Edit Factory counter: {raw_name}.",
+                        value=float(count),
+                    )
 
-        names = set(self._timings)
-        try:
-            with sqlite3.connect(self._db) as conn:
-                names |= {str(row[0]) for row in conn.execute("SELECT name FROM metric_timings")}
-        except sqlite3.Error:
-            pass
-        for name in sorted(names):
-            metric_name = re.sub(r"[^A-Za-z0-9_:]", "_", name).strip("_") or "duration"
-            values = self._samples(name)
-            hist = self._histogram(values)
-            metric = Metric(
-                f"aivf_{metric_name}_milliseconds",
-                f"Edit Factory duration histogram: {name}.",
-                "histogram",
-            )
-            for bucket in DEFAULT_BUCKETS_MS:
-                metric.add_sample(
-                    f"aivf_{metric_name}_milliseconds_bucket",
-                    {"le": str(bucket)},
-                    float(sum(1 for value in values if value <= bucket)),
-                )
-            metric.add_sample(
-                f"aivf_{metric_name}_milliseconds_bucket",
-                {"le": "+Inf"},
-                float(hist["count"]),
-            )
-            metric.add_sample(
-                f"aivf_{metric_name}_milliseconds_count",
-                {},
-                float(hist["count"]),
-            )
-            metric.add_sample(
-                f"aivf_{metric_name}_milliseconds_sum",
-                {},
-                float(hist["sum"]),
-            )
-            registry.register(metric)
+                for raw_name, value in self.gauges().items():
+                    metric = re.sub(r"[^A-Za-z0-9_:]", "_", raw_name).strip("_") or "gauge"
+                    yield GaugeMetricFamily(
+                        f"aivf_{metric}",
+                        f"Edit Factory gauge: {raw_name}.",
+                        value=float(value),
+                    )
 
+                names = set(self._timings)
+                try:
+                    with sqlite3.connect(self._db) as conn:
+                        names |= {str(row[0]) for row in conn.execute("SELECT name FROM metric_timings")}
+                except sqlite3.Error:
+                    pass
+
+                for name in sorted(names):
+                    metric_name = re.sub(r"[^A-Za-z0-9_:]", "_", name).strip("_") or "duration"
+                    values = self._samples(name)
+                    hist = self._histogram(values)
+                    buckets = {
+                        str(bucket): float(sum(1 for value in values if value <= bucket))
+                        for bucket in DEFAULT_BUCKETS_MS
+                    }
+                    buckets["+Inf"] = float(hist["count"])
+                    yield HistogramMetricFamily(
+                        f"aivf_{metric_name}_milliseconds",
+                        f"Edit Factory duration histogram: {name}.",
+                        buckets=buckets,
+                        sum_value=float(hist["sum"]),
+                    )
+
+        registry.register(_DurableCollector())
         return generate_latest(registry).decode("utf-8")
-
     def prometheus(self) -> str:
         return self.to_prometheus()
 
