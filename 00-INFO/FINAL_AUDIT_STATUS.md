@@ -1,3 +1,17 @@
+## 2026-10-08 final gap-closure pass
+
+The repository-level hardening pass after the second review added the remaining architectural boundaries that were still too permissive:
+
+- Production request paths now fail closed on missing schema columns instead of issuing runtime ALTER TABLE statements.
+- Lifecycle status triggers are owned by the explicit schema migration (schema version 7) and are verified before production startup.
+- Worker cancellation revokes the active lease before process teardown, so a cancelled worker cannot publish or finalize artifacts.
+- Artifact publication now uses a second transactional lease check when transitioning the job to DONE; stale workers must remove any package that lost the publication fence.
+- Total storage quota is now enforced as part of the SQLite resource reservation transaction, including retry re-admission.
+- Terminal job metadata retention is enabled by default in the production janitor, with SQLite ANALYZE/WAL checkpoint maintenance and optional VACUUM support.
+- Package ownership checks use the first-class jobs.principal column rather than reparsing _principal from JSON.
+
+The existing model-locking, media admission, resource classes, durable metrics, backups/restore drill, digest-only deployment, rollback, audit logging, SSE replay, load tests, and strict release gate remain in place.
+
 # Final Audit Status
 
 This document records the current evidence state of Edit Factory v3. It intentionally does not certify the repository as 10/10 from source inspection alone.
