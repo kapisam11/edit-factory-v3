@@ -38,9 +38,16 @@ jobs:
           AIVF_STATE_DIR: ${{ runner.temp }}/aivf-state
           AIVF_UPLOAD_DIR: ${{ runner.temp }}/aivf-uploads
           AIVF_OUTPUT_DIR: ${{ runner.temp }}/aivf-output
+          AIVF_MAX_JOB_SECONDS: "1800"
+          AIVF_MAX_JOB_MEMORY_MB: "8192"
+          AIVF_MAX_TOTAL_STORAGE_MB: "20000"
+          AIVF_MAX_JOB_DISK_MB: "4096"
+          AIVF_MIN_FREE_DISK_BYTES: "1073741824"
           PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
         run: |
           mkdir -p "$AIVF_STATE_DIR" "$AIVF_UPLOAD_DIR" "$AIVF_OUTPUT_DIR"
+          echo "AIVF_MAX_JOB_SECONDS=$AIVF_MAX_JOB_SECONDS"
+          echo "AIVF_MAX_JOB_MEMORY_MB=$AIVF_MAX_JOB_MEMORY_MB"
           nohup uv run gunicorn -c 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py app.wsgi:app > "$RUNNER_TEMP/aivf-gunicorn.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/aivf-gunicorn.pid"
           for i in $(seq 1 30); do
