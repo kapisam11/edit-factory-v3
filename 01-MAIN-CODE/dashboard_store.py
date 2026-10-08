@@ -568,6 +568,7 @@ class DashboardStore:
         resource_class: str = "cpu_render",
         storage_paths: tuple[str | Path, ...] = (),
         min_free_disk_bytes: int = 0,
+        max_total_storage_bytes: int | None = None,
     ) -> bool:
         """Atomically reserve host capacity and a class-specific execution slot."""
         class_name = str(resource_class or "cpu_render").strip()
@@ -609,14 +610,23 @@ class DashboardStore:
             # Couple the logical reservation with a physical free-space budget.
             # The SQLite write lock serializes this calculation so concurrent
             # submissions cannot reserve the same remaining disk headroom.
-            if storage_paths and int(min_free_disk_bytes) > 0:
+            if storage_paths:
                 try:
-                    import shutil
-                    roots = [Path(p).resolve() for p in storage_paths]
-                    usage = shutil.disk_usage(str(roots[0]))
-                    if usage.free < int(min_free_disk_bytes) + disk + values[1]:
-                        return False
-                except (OSError, ValueError, IndexError):
+                    from resource_governor import total_storage_bytes
+                    roots = tuple(Path(p).resolve() for p in storage_paths)
+                    if max_total_storage_bytes is not None:
+                        actual = total_storage_bytes(
+                            *roots,
+                            limit=int(max_total_storage_bytes),
+                        )
+                        if actual + disk + values[1] > int(max_total_storage_bytes):
+                            return False
+                    if int(min_free_disk_bytes) > 0:
+                        import shutil
+                        usage = shutil.disk_usage(str(roots[0]))
+                        if usage.free < int(min_free_disk_bytes) + disk + values[1]:
+                            return False
+                except (OSError, ValueError, IndexError, TypeError):
                     return False
             conn.execute(
                 """
@@ -1113,12 +1123,30 @@ class DashboardStore:
                         "SELECT COALESCE(SUM(cpu_weight),0) FROM resource_reservations WHERE resource_class=?",
                         (resource_class,),
                     ).fetchone()[0])
+                    try:
+                        from resource_governor import (
+                            MAX_TOTAL_STORAGE_BYTES,
+                            total_storage_bytes,
+                        )
+                        upload_root = os.environ.get("AIVF_UPLOAD_DIR", "uploads")
+                        output_root = os.environ.get("AIVF_OUTPUT_DIR", "output")
+                        actual_storage = total_storage_bytes(
+                            upload_root,
+                            output_root,
+                            limit=MAX_TOTAL_STORAGE_BYTES,
+                        )
+                        total_storage_ok = (
+                            actual_storage + disk_used + reserved_bytes <= MAX_TOTAL_STORAGE_BYTES
+                        )
+                    except (OSError, ValueError, TypeError):
+                        total_storage_ok = False
                     if (
                         disk_used + reserved_bytes > MAX_RESERVED_DISK_BYTES
                         or cpu_used + cpu_weight > MAX_CPU_WEIGHT
                         or memory_used + memory_bytes > MAX_RESERVED_MEMORY_BYTES
                         or class_count >= class_budget.max_active
                         or class_cpu + cpu_weight > class_budget.max_cpu_weight
+                        or not total_storage_ok
                     ):
                         raise JobRetryNotAllowed("retry resource capacity reached")
                     conn.execute(
