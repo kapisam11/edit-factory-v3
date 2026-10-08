@@ -732,6 +732,17 @@ class AutonomousManager:
             if result.get("status") != "complete":
                 raise RuntimeError("; ".join(str(x) for x in result.get("errors") or ["production failed"]))
             metadata, script, video_path = _extract_package(package_dir)
+            primary_meta: dict[str, Any] = {}
+            primary_metadata_path = package_dir / "primary" / "metadata.json"
+            if primary_metadata_path.exists():
+                try:
+                    loaded = json.loads(primary_metadata_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        primary_meta = loaded
+                except (OSError, ValueError):
+                    primary_meta = {}
+            pipeline_ai_generated = bool(primary_meta.get("model_backed", False))
+            pipeline_realistic_alteration = bool(primary_meta.get("altered_media", False))
             sanitized = sanitize_public_metadata(
                 str(metadata.get("selected_title") or job["topic"]),
                 str(metadata.get("description") or ""),
@@ -754,7 +765,9 @@ class AutonomousManager:
             fingerprint = hashlib.sha256(
                 (script + "\n" + sanitized["title"] + "\n" + video_hash).encode("utf-8")
             ).hexdigest()
-            ai_generated, realistic_alteration = _disclosure_from_package(metadata)
+            package_ai_generated, package_realistic_alteration = _disclosure_from_package(metadata)
+            ai_generated = pipeline_ai_generated or package_ai_generated
+            realistic_alteration = pipeline_realistic_alteration or package_realistic_alteration
             approval = "approved" if self.config.autonomous_publish and not self.config.require_human_approval else "pending"
             state = "SCHEDULED" if approval == "approved" else "READY"
             scheduled = None
