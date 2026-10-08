@@ -110,12 +110,29 @@ def estimate_resource_budget(
     )
     baseline = 1920.0 * 1080.0 * 30.0
     cpu_weight = max(0.5, min(4.0, pixels_per_second / baseline))
-    memory_bytes = int(
-        max(
-            512 * 1024**2,
-            min(8 * 1024**3, float(media["width"]) * float(media["height"]) * 4.0),
-        )
-    )
+    gib = 1024**3
+    width = max(1.0, float(media.get("width", 0)))
+    height = max(1.0, float(media.get("height", 0)))
+    fps = max(1.0, float(media.get("fps", 0)))
+    pixels_scale = max(1.0, (width * height) / (1920.0 * 1080.0))
+    # Rendering/AI memory is dominated by frame buffers, codec surfaces, Python/ML
+    # state, and subprocess trees rather than raw file dimensions alone. Reserve
+    # explicit headroom for the requested AI-heavy features so admission reflects
+    # the actual process shape instead of under-counting a 1080p render as ~8 MB.
+    memory_bytes = 2 * gib
+    memory_bytes += int(min(2 * gib, pixels_scale * gib))
+    job_class = str(media.get("job_class") or "cpu_render").strip().lower()
+    if job_class == "ai_heavy":
+        memory_bytes += 4 * gib
+    if bool(media.get("enable_ocr")):
+        memory_bytes += 2 * gib
+    if bool(media.get("enable_object_detection")):
+        memory_bytes += 1 * gib
+    if bool(media.get("enable_diarization")):
+        memory_bytes += 4 * gib
+    if fps > 60:
+        memory_bytes += 1 * gib
+    memory_bytes = int(max(512 * 1024**2, min(12 * gib, memory_bytes)))
     input_bytes = int(media["size_bytes"])
     reserved_bytes = int(
         min(
