@@ -1364,6 +1364,7 @@ def create_job():
                 MAX_CPU_WEIGHT,
                 MAX_RESERVED_DISK_BYTES,
                 MAX_RESERVED_MEMORY_BYTES,
+                MAX_TOTAL_STORAGE_BYTES,
             )
             budget = estimate_resource_budget(
                 {
@@ -1388,6 +1389,7 @@ def create_job():
                 resource_class=str(budget.get("job_class") or params.get("_resource_class") or "cpu_render"),
                 storage_paths=(UPLOAD_FOLDER, OUTPUT_FOLDER),
                 min_free_disk_bytes=_MIN_FREE_DISK_BYTES,
+                max_total_storage_bytes=MAX_TOTAL_STORAGE_BYTES,
             ):
                 if upload_path is not None:
                     upload_path.unlink(missing_ok=True)
