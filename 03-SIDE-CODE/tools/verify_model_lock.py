@@ -30,27 +30,25 @@ def verify(root: str | Path = ".") -> dict[str, object]:
         relative = str(asset["relative_path"])
         env_name = str(asset["sha256_env"])
         path = base / relative
-        expected = os.environ.get(env_name, "").strip().lower()
-        manifest = path.parent / "model-manifest.json"
-        if not expected and manifest.is_file():
-            try:
-                payload = json.loads(manifest.read_text(encoding="utf-8"))
-                expected = next(
-                    (str(item.get("sha256", "")).strip().lower()
-                     for item in payload.get("assets", [])
-                     if str(item.get("name")) == path.name),
-                    "",
-                )
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                expected = ""
+        locked_expected = str(asset.get("sha256", "")).strip().lower()
+        env_expected = os.environ.get(env_name, "").strip().lower()
+        expected = locked_expected or env_expected
+        source = "model-lock.json" if locked_expected else ("environment" if env_expected else "")
         actual = sha256(path) if path.is_file() else ""
+        lock_ok = len(locked_expected) == 64 and all(ch in "0123456789abcdef" for ch in locked_expected)
+        immutable_commit = str(payload.get("immutable_commit", "")).strip().lower()
+        url = str(asset.get("url", "")).strip()
+        immutable_url_ok = bool(immutable_commit) and immutable_commit in url
         results.append({
             "name": name,
             "path": str(path),
             "sha256_env": env_name,
             "expected": expected,
+            "expected_source": source,
             "actual": actual,
-            "ok": bool(expected) and actual == expected,
+            "lock_sha256_present": lock_ok,
+            "immutable_url": immutable_url_ok,
+            "ok": lock_ok and immutable_url_ok and bool(actual) and actual == expected,
         })
     return {"ok": all(item["ok"] for item in results), "assets": results}
 
