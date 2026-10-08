@@ -205,14 +205,14 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 import psutil
                 root_proc = psutil.Process(pid)
                 processes = [root_proc, *root_proc.children(recursive=True)]
-            except (ImportError, OSError):
+            except Exception:
                 return 0
             total = 0
             for proc in processes:
                 try:
                     if proc.is_running():
                         total += int(proc.memory_info().rss)
-                except (OSError, ValueError):
+                except Exception:
                     continue
             return total
         while process.is_alive():
