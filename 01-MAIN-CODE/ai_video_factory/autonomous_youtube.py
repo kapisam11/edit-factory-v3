@@ -22,7 +22,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from .complete_factory import PLATFORM_LAYOUTS, run_complete_factory
 from .feedback_store import FeedbackStore
-from .human_style_guard import assess_package, sanitize_public_metadata
+from .human_style_guard import assess_package, assess_topic_diversity, sanitize_public_metadata
 from .performance_learning import ChannelPerformanceModel, PerformanceObservation
 from .youtube_publisher import fetch_video_analytics, fetch_video_statistics, upload_video
 
@@ -65,6 +65,11 @@ class AutonomousConfig:
     retention_days: int = 30
     backup_interval_hours: float = 24.0
     backup_retention_count: int = 7
+    channel_niche: str = ""
+    min_topic_variation: float = 0.72
+    stale_schedule_days: int = 14
+    require_factual_review: bool = True
+    allow_public_autopublish: bool = False
 
     @classmethod
     def from_environment(cls) -> "AutonomousConfig":
@@ -98,6 +103,11 @@ class AutonomousConfig:
             retention_days=max(1, int(os.environ.get("AIVF_AUTOMATION_RETENTION_DAYS", "30"))),
             backup_interval_hours=max(1.0, float(os.environ.get("AIVF_AUTOMATION_BACKUP_INTERVAL_HOURS", "24"))),
             backup_retention_count=max(1, int(os.environ.get("AIVF_AUTOMATION_BACKUP_RETENTION_COUNT", "7"))),
+            channel_niche=os.environ.get("AIVF_CHANNEL_NICHE", "").strip(),
+            min_topic_variation=max(0.5, min(0.95, float(os.environ.get("AIVF_MIN_TOPIC_VARIATION", "0.72")))),
+            stale_schedule_days=max(1, int(os.environ.get("AIVF_STALE_SCHEDULE_DAYS", "14"))),
+            require_factual_review=os.environ.get("AIVF_AUTONOMOUS_REQUIRE_FACT_REVIEW", "1").strip() == "1",
+            allow_public_autopublish=os.environ.get("AIVF_AUTONOMOUS_ALLOW_PUBLIC", "0").strip() == "1",
         )
 
 
@@ -496,13 +506,71 @@ class AutonomousStore:
             ).fetchall()
         return [str(row["script"]) for row in rows if str(row["script"]).strip()]
 
+    def recent_topics(self, limit: int = 30, *, exclude_job_id: str = "") -> list[str]:
+        with self._connect() as conn:
+            if exclude_job_id:
+                rows = conn.execute(
+                    "SELECT topic FROM autonomous_jobs WHERE id<>? ORDER BY created_at DESC LIMIT ?",
+                    (exclude_job_id, max(1, min(200, int(limit)))),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT topic FROM autonomous_jobs ORDER BY created_at DESC LIMIT ?",
+                    (max(1, min(200, int(limit))),),
+                ).fetchall()
+        return [str(row["topic"]) for row in rows if str(row["topic"]).strip()]
+
+    def topic_performance(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT j.topic,
+                       COUNT(a.id) AS samples,
+                       AVG(a.score) AS mean_score,
+                       AVG(a.revenue_usd) AS mean_revenue
+                FROM autonomous_jobs j
+                JOIN autonomous_analytics a ON a.job_id=j.id
+                GROUP BY j.topic
+                ORDER BY mean_score DESC, samples DESC
+                LIMIT ?
+                """,
+                (max(1, min(200, int(limit))),),
+            ).fetchall()
+        return [
+            {
+                "topic": str(row["topic"]),
+                "samples": int(row["samples"] or 0),
+                "mean_score": round(float(row["mean_score"] or 0.0), 4),
+                "mean_revenue_usd": round(float(row["mean_revenue"] or 0.0), 4),
+            }
+            for row in rows
+        ]
+
     def event(self, job_id: Optional[str], name: str, details: Any = "") -> None:
         with self._connect() as conn:
             self._event(conn, job_id, name, details)
 
     def prune(self) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.config.retention_days)
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=self.config.stale_schedule_days)
         with self._connect() as conn:
+            stale = conn.execute(
+                "SELECT id FROM autonomous_jobs "
+                "WHERE state='SCHEDULED' AND updated_at<?",
+                (stale_cutoff.isoformat().replace("+00:00", "Z"),),
+            ).fetchall()
+            for row in stale:
+                conn.execute(
+                    "UPDATE autonomous_jobs SET state='POLICY_REVIEW',approval='pending',"
+                    "next_attempt_at=NULL,error=?,updated_at=? WHERE id=?",
+                    (
+                        "scheduled content expired and requires review before publishing",
+                        _utc_now(),
+                        row["id"],
+                    ),
+                )
+                self._event(conn, row["id"], "stale_schedule_review_required")
+
             rows = conn.execute(
                 "SELECT id,package_dir FROM autonomous_jobs "
                 "WHERE state IN ('ANALYZED','FAILED') AND updated_at<?",
@@ -639,6 +707,11 @@ class AutonomousManager:
                 "max_daily_cost_usd": self.config.max_daily_cost_usd,
                 "autonomous_publish": self.config.autonomous_publish,
                 "require_human_approval": self.config.require_human_approval,
+                "channel_niche": self.config.channel_niche,
+                "min_topic_variation": self.config.min_topic_variation,
+                "stale_schedule_days": self.config.stale_schedule_days,
+                "require_factual_review": self.config.require_factual_review,
+                "allow_public_autopublish": self.config.allow_public_autopublish,
             },
         }
 
@@ -678,9 +751,25 @@ class AutonomousManager:
             raise RuntimeError("automatic failure circuit breaker is active")
 
     def _record_failure(self, job: Mapping[str, Any], exc: Exception, *, stage: str) -> None:
+        error_text = str(exc)
+        normalized_error = error_text.lower()
+        auth_or_quota_failure = any(
+            marker in normalized_error
+            for marker in (
+                "invalid_grant",
+                "unauthorized",
+                "authentication",
+                "credentials",
+                "quotaexceeded",
+                "dailylimitexceeded",
+                "quota exceeded",
+            )
+        )
         retry_count = int(job.get("retry_count") or 0) + 1
         next_attempt: Optional[str] = None
-        if retry_count <= self.config.max_retries:
+        if auth_or_quota_failure:
+            state = "POLICY_REVIEW"
+        elif retry_count <= self.config.max_retries:
             delay = min(
                 self.config.retry_max_seconds,
                 self.config.retry_base_seconds * (2 ** max(0, retry_count - 1)),
@@ -689,6 +778,9 @@ class AutonomousManager:
             state = "FAILED" if stage == "production" else "SCHEDULED"
         else:
             state = "POLICY_REVIEW"
+
+        if auth_or_quota_failure:
+            next_attempt = None
         failures = int(self.store.setting("consecutive_failures", "0") or 0) + 1
         self.store.set_setting("consecutive_failures", str(failures))
         self.store.update(
@@ -711,6 +803,18 @@ class AutonomousManager:
                 "retry_count": retry_count,
             },
         )
+        if auth_or_quota_failure:
+            self.pause("YouTube authentication or quota failure requires operator action")
+            _notify(
+                self.config,
+                {
+                    "event": "autonomous_publish_blocked",
+                    "reason": "youtube authentication or quota failure",
+                    "job_id": job["id"],
+                    "stage": stage,
+                    "error": error_text[:500],
+                },
+            )
         if failures >= self.config.max_consecutive_failures:
             self.pause("automatic pause after repeated failures")
             _notify(
@@ -740,6 +844,17 @@ class AutonomousManager:
         job_id = str(job["id"])
         package_dir = self.config.output_dir / "autonomous" / job_id
         try:
+            topic_guard = assess_topic_diversity(
+                str(job["topic"]),
+                self.store.recent_topics(exclude_job_id=job_id),
+                min_similarity=self.config.min_topic_variation,
+            )
+            if topic_guard["blocked"]:
+                raise RuntimeError(
+                    "topic diversity guard blocked candidate: "
+                    f"similarity {topic_guard['max_recent_topic_similarity']:.2f} "
+                    f">= {topic_guard['threshold']:.2f}"
+                )
             options = self._production_options(job)
             result = run_complete_factory(
                 None,
@@ -755,6 +870,18 @@ class AutonomousManager:
             if result.get("status") != "complete":
                 raise RuntimeError("; ".join(str(x) for x in result.get("errors") or ["production failed"]))
             metadata, script, video_path = _extract_package(package_dir)
+            complete_manifest: dict[str, Any] = {}
+            manifest_path = package_dir / "complete_factory_manifest.json"
+            if manifest_path.exists():
+                try:
+                    manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    if isinstance(manifest_value, dict):
+                        complete_manifest = manifest_value
+                except (OSError, ValueError):
+                    complete_manifest = {}
+            fact_review = complete_manifest.get("fact_check_review")
+            if not isinstance(fact_review, Mapping):
+                fact_review = {}
             primary_meta: dict[str, Any] = {}
             primary_metadata_path = package_dir / "primary" / "metadata.json"
             if primary_metadata_path.exists():
@@ -791,6 +918,14 @@ class AutonomousManager:
                 raise RuntimeError("human-quality guard blocked package: " + "; ".join(style.reasons[:6]))
             if rights.get("publish_blocked"):
                 raise RuntimeError("rights gate blocked package; explicit evidence is required")
+            if (
+                self.config.require_factual_review
+                and fact_review.get("claims_to_verify")
+            ):
+                raise RuntimeError(
+                    "factuality gate requires review for "
+                    f"{len(fact_review.get('claims_to_verify') or [])} claim(s)"
+                )
             if not video_path.exists():
                 raise FileNotFoundError("final YouTube video missing")
             video_hash = _file_sha256(video_path)
@@ -800,8 +935,19 @@ class AutonomousManager:
             package_ai_generated, package_realistic_alteration = _disclosure_from_package(metadata)
             ai_generated = pipeline_ai_generated or package_ai_generated
             realistic_alteration = pipeline_realistic_alteration or package_realistic_alteration
-            approval = "approved" if self.config.autonomous_publish and not self.config.require_human_approval else "pending"
-            state = "SCHEDULED" if approval == "approved" else "READY"
+            fact_review_pending = bool(fact_review.get("claims_to_verify")) and self.config.require_factual_review
+            approval = (
+                "approved"
+                if self.config.autonomous_publish
+                and not self.config.require_human_approval
+                and not fact_review_pending
+                else "pending"
+            )
+            state = (
+                "SCHEDULED"
+                if approval == "approved"
+                else ("POLICY_REVIEW" if fact_review_pending else "READY")
+            )
             scheduled = None
             if state == "SCHEDULED":
                 requested_slot = str(job.get("scheduled_at") or "").strip()
@@ -825,7 +971,14 @@ class AutonomousManager:
                 ai_generated=int(ai_generated),
                 realistic_alteration=int(realistic_alteration),
                 rights_json=json.dumps(rights, sort_keys=True),
-                quality_json=json.dumps(style.to_dict(), sort_keys=True),
+                quality_json=json.dumps(
+                    {
+                        **style.to_dict(),
+                        "topic_diversity": topic_guard,
+                        "factuality_review": fact_review,
+                    },
+                    sort_keys=True,
+                ),
                 error="",
             )
             self.store.set_setting("consecutive_failures", "0")
@@ -837,6 +990,14 @@ class AutonomousManager:
 
     def publish_one(self) -> Optional[str]:
         self._guard_limits()
+        privacy_status = os.environ.get("AIVF_YOUTUBE_PRIVACY", "private").strip().lower()
+        if privacy_status not in {"private", "unlisted", "public"}:
+            raise RuntimeError("invalid AIVF_YOUTUBE_PRIVACY value")
+        if privacy_status == "public" and not self.config.allow_public_autopublish:
+            raise RuntimeError(
+                "public autonomous publishing is disabled; set "
+                "AIVF_AUTONOMOUS_ALLOW_PUBLIC=1 after proving the pipeline"
+            )
         now = _utc_now()
         with self.store._connect() as conn:
             row = conn.execute(
@@ -882,7 +1043,7 @@ class AutonomousManager:
                 title=public["title"],
                 description=public["description"],
                 tags=public["tags"],
-                privacy_status=os.environ.get("AIVF_YOUTUBE_PRIVACY", "private"),
+                privacy_status=privacy_status,
                 thumbnail_path=str(package / str(thumbnail_rel)) if thumbnail_rel else None,
                 caption_path=str(package / str(captions_rel)) if captions_rel else None,
                 client_secrets_path=os.environ.get("YOUTUBE_CLIENT_SECRETS"),
@@ -1029,11 +1190,15 @@ class AutonomousManager:
             score = float(analytics.get("score") or 0.0)
             experiment_groups.setdefault(f"{family}:{variant}", []).append(score)
         experiment_summary = {key: {"samples": len(values), "mean_score": round(sum(values) / len(values), 4)} for key, values in experiment_groups.items() if values}
+        topic_performance = self.store.topic_performance(limit=50)
+        top_topics = topic_performance[:10]
         result = {
             "sample_size": model.sample_size,
             "baseline": dict(model.baseline()),
             "edit_type_lift": model.edit_type_lift(),
             "experiments": experiment_summary,
+            "topic_performance": topic_performance,
+            "top_topics": top_topics,
             "recommendation": {
                 "priority": rec.priority,
                 "confidence": rec.confidence,
@@ -1047,12 +1212,44 @@ class AutonomousManager:
         target.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         return result
 
+    def _write_config_snapshot(self) -> str:
+        target = self.config.state_dir / "autonomous-config.json"
+        payload = {
+            "version": 1,
+            "captured_at": _utc_now(),
+            "limits": {
+                "max_videos_per_day": self.config.max_videos_per_day,
+                "max_queue_size": self.config.max_queue_size,
+                "max_consecutive_failures": self.config.max_consecutive_failures,
+                "max_daily_cost_usd": self.config.max_daily_cost_usd,
+                "estimated_cost_per_video_usd": self.config.estimated_cost_per_video_usd,
+                "max_retries": self.config.max_retries,
+                "retry_base_seconds": self.config.retry_base_seconds,
+                "retry_max_seconds": self.config.retry_max_seconds,
+            },
+            "publishing": {
+                "publish_times_utc": list(self.config.publish_times_utc),
+                "autonomous_publish": self.config.autonomous_publish,
+                "require_human_approval": self.config.require_human_approval,
+                "require_factual_review": self.config.require_factual_review,
+                "allow_public_autopublish": self.config.allow_public_autopublish,
+            },
+            "editorial": {
+                "channel_niche": self.config.channel_niche,
+                "min_topic_variation": self.config.min_topic_variation,
+                "stale_schedule_days": self.config.stale_schedule_days,
+            },
+        }
+        target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return str(target)
+
     def _maybe_backup(self) -> Optional[str]:
         last = float(self.store.setting("last_backup_epoch", "0") or 0)
         now_epoch = time.time()
         if now_epoch - last < self.config.backup_interval_hours * 3600.0:
             return None
         from .backup_restore import create_backup, verify_backup
+        self._write_config_snapshot()
         backup_dir = self.config.state_dir / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1086,9 +1283,12 @@ class AutonomousManager:
         if self.store.setting("emergency_stop", "0") == "1" or self.store.setting("paused", "0") == "1":
             result["paused"] = True
             return result
-        if seed_topics:
+        effective_seeds = [str(item).strip() for item in (seed_topics or []) if str(item).strip()]
+        if not effective_seeds and self.config.channel_niche:
+            effective_seeds = [self.config.channel_niche]
+        if effective_seeds:
             try:
-                result["discovered"] = _discover_seed_topics(self.store, seed_topics)
+                result["discovered"] = _discover_seed_topics(self.store, effective_seeds)
             except Exception as exc:
                 _notify(self.config, {"event": "topic_discovery_failed", "error": str(exc)})
         try:
