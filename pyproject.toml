@@ -45,7 +45,7 @@ packages = ["ai_video_factory", "ai_video_factory.v3", "app", "tools"]
 py-modules = ["cli", "dashboard_auth", "dashboard_cache", "dashboard_compat", "dashboard_optimizations", "dashboard_shutdown", "dashboard_store", "dashboard_worker", "resource_governor", "wsgi"]
 
 [tool.setuptools.data-files]
-"share/ai-video-factory/templates" = ["02-WEB-FILES/templates/index.html", "02-WEB-FILES/templates/login.html", "02-WEB-FILES/templates/minecraft_betrayal.json"]
+"share/ai-video-factory/templates" = ["02-WEB-FILES/templates/index.html", "02-WEB-FILES/templates/login.html", "02-WEB-FILES/templates/autonomous.html", "02-WEB-FILES/templates/minecraft_betrayal.json"]
 "share/ai-video-factory/static/css" = ["02-WEB-FILES/static/css/style.css", "02-WEB-FILES/static/css/enhancements.css"]
 "share/ai-video-factory/static/js" = ["02-WEB-FILES/static/js/dashboard_enhancements.js"]
 
