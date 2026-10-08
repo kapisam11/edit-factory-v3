@@ -644,7 +644,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
 
         def write(conn):
             where = (
-                "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted') "
+                "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted','error','done') "
                 "AND lease_token=?"
                 if attempt_lease
                 else "WHERE id=? AND status NOT IN ('cancelling','cancelled','interrupted') "
