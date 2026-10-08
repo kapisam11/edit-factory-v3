@@ -408,14 +408,7 @@ def register_dashboard_compat(app):
 
     @app.before_request
     def lifecycle_maintenance():
-        global _LAST_CLEANUP
         if request.path.endswith("/preview") or request.path.startswith("/api/package/") or request.path.startswith("/api/packages/"):
             return
         _reap_and_dispatch(web_app_v3)
-        if os.environ.get("AIVF_DISABLE_AUTO_CLEANUP", "0") != "1":
-            with _LIFECYCLE_LOCK:
-                now = time.monotonic()
-                interval = max(60.0, float(os.environ.get("AIVF_CLEANUP_INTERVAL_SECONDS", "21600")))
-                if now - _LAST_CLEANUP >= interval:
-                    _LAST_CLEANUP = now
-                    _cleanup_old_packages(web_app_v3, os.environ.get("AIVF_RETENTION_DAYS", "7"))
+
