@@ -849,12 +849,14 @@ class DashboardStore:
                 ).fetchone()
                 if row is None or str(row["status"]) != "running" or str(row["attempt_status"]) != "running":
                     return False
-                update_sql = (
-                    "UPDATE jobs SET status='done', step='complete', pkg_dir=?, error=NULL, "
-                    "error_code=NULL, worker_id=NULL, lease_token=NULL, worker_heartbeat_at=NULL, "
-                    "updated_at=CURRENT_TIMESTAMP "
-                    "WHERE id=? AND status='running' AND lease_token=?",
-                    (package_value, job_id, lease_token),
+                changed = int(
+                    conn.execute(
+                        "UPDATE jobs SET status='done', step='complete', pkg_dir=?, error=NULL, "
+                        "error_code=NULL, worker_id=NULL, lease_token=NULL, worker_heartbeat_at=NULL, "
+                        "updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=? AND status='running' AND lease_token=?",
+                        (package_value, job_id, lease_token),
+                    ).rowcount
                 )
             else:
                 row = conn.execute(
@@ -863,15 +865,15 @@ class DashboardStore:
                 ).fetchone()
                 if row is None or str(row["status"]) != "running" or row["lease_token"] not in (None, ""):
                     return False
-                update_sql = (
-                    "UPDATE jobs SET status='done', step='complete', pkg_dir=?, error=NULL, "
-                    "error_code=NULL, worker_id=NULL, lease_token=NULL, worker_heartbeat_at=NULL, "
-                    "updated_at=CURRENT_TIMESTAMP "
-                    "WHERE id=? AND status='running' AND lease_token IS NULL",
-                    (package_value, job_id),
+                changed = int(
+                    conn.execute(
+                        "UPDATE jobs SET status='done', step='complete', pkg_dir=?, error=NULL, "
+                        "error_code=NULL, worker_id=NULL, lease_token=NULL, worker_heartbeat_at=NULL, "
+                        "updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=? AND status='running' AND lease_token IS NULL",
+                        (package_value, job_id),
+                    ).rowcount
                 )
-
-            changed = int(conn.execute(update_sql[0], update_sql[1]).rowcount)
             if changed != 1:
                 return False
 
