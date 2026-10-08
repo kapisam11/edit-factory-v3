@@ -120,8 +120,8 @@ class MetricsRegistry:
 
     def to_prometheus(self) -> str:
         """Serialize durable snapshots through the standard prometheus-client library."""
-        from prometheus_client import CollectorRegistry, CounterMetricFamily, GaugeMetricFamily, generate_latest
-        from prometheus_client.core import Metric
+        from prometheus_client import CollectorRegistry, generate_latest
+        from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily, Metric
 
         snap = self.snapshot()
         registry = CollectorRegistry()
