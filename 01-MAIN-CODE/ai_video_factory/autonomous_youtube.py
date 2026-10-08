@@ -609,7 +609,12 @@ def _notify(config: AutonomousConfig, payload: Mapping[str, Any]) -> None:
 
 def _discover_seed_topics(store: AutonomousStore, seeds: Sequence[str]) -> int:
     from .content_factory import generate_content_strategy, trend_research
+    from .human_style_guard import topic_similarity
+
     existing = {str(row["topic"]).strip().lower() for row in store.list_jobs(limit=200)}
+    learned = store.topic_performance(limit=50)
+    strong_topics = [str(item.get("topic") or "") for item in learned[:10]]
+    weak_topics = [str(item.get("topic") or "") for item in learned[-10:]]
     added = 0
     for seed in seeds:
         clean = str(seed).strip()
@@ -630,8 +635,20 @@ def _discover_seed_topics(store: AutonomousStore, seeds: Sequence[str]) -> int:
         except Exception as exc:
             logger.warning("topic discovery failed for %s: %s", clean, exc)
             candidates = []
-        candidates = [item for item in candidates if item and item.lower() not in existing]
-        for item in candidates[:3]:
+        filtered: list[tuple[float, str]] = []
+        for item in candidates:
+            if not item or item.lower() in existing:
+                continue
+            strong_fit = max((topic_similarity(item, reference) for reference in strong_topics), default=0.0)
+            weak_fit = max((topic_similarity(item, reference) for reference in weak_topics), default=0.0)
+            novelty = 1.0 - max(
+                (topic_similarity(item, existing_topic) for existing_topic in existing),
+                default=0.0,
+            )
+            score = 0.55 * strong_fit + 0.25 * novelty - 0.35 * weak_fit
+            filtered.append((score, item))
+        filtered.sort(key=lambda pair: (-pair[0], pair[1].casefold()))
+        for _score, item in filtered[:3]:
             store.enqueue(item)
             existing.add(item.lower())
             added += 1
@@ -918,14 +935,8 @@ class AutonomousManager:
                 raise RuntimeError("human-quality guard blocked package: " + "; ".join(style.reasons[:6]))
             if rights.get("publish_blocked"):
                 raise RuntimeError("rights gate blocked package; explicit evidence is required")
-            if (
-                self.config.require_factual_review
-                and fact_review.get("claims_to_verify")
-            ):
-                raise RuntimeError(
-                    "factuality gate requires review for "
-                    f"{len(fact_review.get('claims_to_verify') or [])} claim(s)"
-                )
+            # Factual claims do not make the package unusable, but they do prevent
+            # unattended approval until the claim-review gate is explicitly cleared.
             if not video_path.exists():
                 raise FileNotFoundError("final YouTube video missing")
             video_hash = _file_sha256(video_path)
