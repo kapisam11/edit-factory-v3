@@ -24,15 +24,31 @@ def _require_google() -> None:
 
 
 def _credentials(client_secrets_path: str, token_path: str, scopes: Sequence[str]) -> Any:
+    """Load/refresh OAuth credentials without opening an interactive browser by default."""
     _require_google()
     from google.auth.transport.requests import Request  # type: ignore
     from google.oauth2.credentials import Credentials  # type: ignore
     from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore
     token_file = Path(token_path)
-    creds = Credentials.from_authorized_user_file(str(token_file), scopes=list(scopes)) if token_file.exists() else None
+    creds = (
+        Credentials.from_authorized_user_file(str(token_file), scopes=list(scopes))
+        if token_file.exists()
+        else None
+    )
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    elif not creds or not creds.valid:
+        try:
+            creds.refresh(Request())
+        except Exception as exc:
+            raise RuntimeError(
+                "YouTube OAuth refresh failed; re-authorize the saved token before publishing."
+            ) from exc
+    if not creds or not creds.valid:
+        interactive = os.environ.get("YOUTUBE_AUTH_INTERACTIVE", "0").strip() == "1"
+        if not interactive:
+            raise RuntimeError(
+                "YouTube OAuth credentials are unavailable or invalid and interactive auth is disabled. "
+                "Authorize once with YOUTUBE_AUTH_INTERACTIVE=1, then run unattended."
+            )
         flow = InstalledAppFlow.from_client_secrets_file(client_secrets_path, scopes=list(scopes))
         creds = flow.run_local_server(port=0)
     token_file.parent.mkdir(parents=True, exist_ok=True)
@@ -149,7 +165,11 @@ def upload_video(
     idempotency_key: Optional[str] = None,
     max_upload_attempts: int = 4,
 ) -> Dict[str, Any]:
-    """Upload one video with optional thumbnail/captions; upload is always explicit."""
+    """Upload one video with optional thumbnail/captions; upload is always explicit.
+
+    Unattended callers must have an already-authorized token.  The library will
+    never open a browser unexpectedly from a daemon.
+    """
     client_secrets_path, token_path = _paths(client_secrets_path, token_path)
     if privacy_status not in {"private", "public", "unlisted"}:
         raise ValueError("privacy_status must be private, public, or unlisted")
