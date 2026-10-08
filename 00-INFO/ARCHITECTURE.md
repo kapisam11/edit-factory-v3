@@ -81,3 +81,11 @@ High-value execution settings such as media/provider timeouts are represented by
 ## Media safety
 
 Production FFmpeg/FFprobe work is routed through validated argv-based helpers with bounded timeouts. Temporary artifacts use atomic/finalization patterns where practical, and failure paths remove known partial outputs before reporting failure.
+
+### Final hardening boundary (2026-10-08)
+
+Production schema mutation is deployment-owned: aivf-db-migrate creates and verifies lifecycle tables, indexes, and status triggers before the application starts. Request and worker paths fail closed when the schema is incomplete.
+
+Each worker execution receives an attempt ID and lease token and writes only inside an attempt workspace. Publication performs a filesystem move followed by a second transactional SQLite fence check. Cancellation clears the lease before terminating the worker, so a stale worker cannot promote an attempt to DONE.
+
+Resource admission accounts for input/output budgets, CPU/memory classes, disk reservations, physical free space, and the total storage quota. The janitor owns retention and SQLite maintenance independently of request traffic.

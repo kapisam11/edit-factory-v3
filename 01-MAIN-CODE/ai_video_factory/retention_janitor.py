@@ -35,9 +35,18 @@ def run_janitor(*,db_path,upload_root,output_root,workspace_root=None,now=None,m
     idempotency_hours=idempotency_hours or _int_env("AIVF_IDEMPOTENCY_RETENTION_HOURS",24)
     upload_days=upload_days or _int_env("AIVF_UPLOAD_RETENTION_DAYS",7)
     failed_workspace_hours=failed_workspace_hours or _int_env("AIVF_FAILED_WORKSPACE_RETENTION_HOURS",24)
-    prune_terminal_jobs = (os.environ.get("AIVF_PRUNE_TERMINAL_JOBS","0")=="1") if prune_terminal_jobs is None else bool(prune_terminal_jobs)
+    if prune_terminal_jobs is None:
+        env_name = os.environ.get("AIVF_ENV", "development").strip().lower()
+        configured_prune = os.environ.get("AIVF_PRUNE_TERMINAL_JOBS")
+        if configured_prune is None:
+            prune_terminal_jobs = env_name in {"production", "prod"}
+        else:
+            prune_terminal_jobs = configured_prune.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        prune_terminal_jobs = bool(prune_terminal_jobs)
     db=Path(db_path).resolve(); uploads=Path(upload_root).resolve(); output=Path(output_root).resolve(); work=Path(workspace_root or (output/".work")).resolve()
     counts={k:0 for k in ("logs","events","audit_events","idempotency_keys","rate_limits","uploads","failed_workspaces","terminal_jobs")}
+    counts.update({"analyzed": 0, "wal_checkpointed": 0, "vacuumed": 0})
     active=set()
     referenced_uploads=set()
     with _connect(db) as conn:
@@ -99,6 +108,27 @@ def run_janitor(*,db_path,upload_root,output_root,workspace_root=None,now=None,m
                     shutil.rmtree(package)
                 except OSError:
                     pass
+    # Keep SQLite query planning/current statistics healthy after retention deletes.
+    try:
+        with _connect(db) as maintenance_conn:
+            maintenance_conn.execute("ANALYZE")
+            counts["analyzed"] = 1
+            maintenance_conn.commit()
+            checkpoint = maintenance_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint is not None and int(checkpoint[0]) == 0:
+                counts["wal_checkpointed"] = 1
+    except sqlite3.Error:
+        pass
+
+    vacuum_enabled = os.environ.get("AIVF_JANITOR_VACUUM", "0").strip().lower() in {"1", "true", "yes", "on"}
+    if vacuum_enabled and not active:
+        try:
+            with _connect(db) as vacuum_conn:
+                vacuum_conn.execute("VACUUM")
+                counts["vacuumed"] = 1
+        except sqlite3.Error:
+            pass
+
     if uploads.is_dir():
         cutoff=_cutoff_days(upload_days,now)
         for path in uploads.iterdir():
@@ -125,7 +155,12 @@ def main(argv: Iterable[str] | None=None) -> int:
     parser.add_argument("--uploads",default=os.environ.get("AIVF_UPLOAD_DIR","uploads"))
     parser.add_argument("--output",default=os.environ.get("AIVF_OUTPUT_DIR","output"))
     parser.add_argument("--workspace",default=None)
-    parser.add_argument("--prune-terminal-jobs",action="store_true")
+    parser.add_argument(
+        "--prune-terminal-jobs",
+        action="store_true",
+        default=None,
+        help="Prune terminal job metadata according to the configured retention policy.",
+    )
     args=parser.parse_args(list(argv) if argv is not None else None)
     print(json.dumps(run_janitor(db_path=args.db,upload_root=args.uploads,output_root=args.output,workspace_root=args.workspace,prune_terminal_jobs=args.prune_terminal_jobs),sort_keys=True))
     return 0

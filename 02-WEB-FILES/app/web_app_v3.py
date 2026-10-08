@@ -533,6 +533,19 @@ def _redact_job(job: dict, include_logs: bool = False) -> dict:
     return result
 
 
+def _atomic_json_write(path: Path, payload: Any) -> None:
+    """Persist JSON atomically so a restart cannot expose a partial artifact."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".partial")
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, target)
+
+
 def _publish_attempt_package(
     package_dir: Path,
     output_root: str,
@@ -541,7 +554,12 @@ def _publish_attempt_package(
     attempt_id: str,
     lease_token: str,
 ) -> Path:
-    """Atomically publish an attempt workspace only while its fence is valid."""
+    """Move an attempt workspace into the output root after initial fence validation.
+
+    The caller must finish the publication through DashboardStore.finalize_attempt_publish().
+    That second, transactional fence check closes the race between validation and the
+    filesystem move. A stale/cancelled worker can therefore never transition the job to DONE.
+    """
     from dashboard_store import DashboardStore
 
     store = DashboardStore(db_path)
@@ -549,11 +567,15 @@ def _publish_attempt_package(
         if not store.attempt_can_publish(job_id, attempt_id, lease_token):
             raise RuntimeError("stale worker cannot publish artifacts")
     else:
-        # Jobs created before attempt fencing must remain executable. A legacy
-        # worker may publish only while the database still says RUNNING; this
-        # deliberately has weaker fencing than modern attempts.
-        job = store.get_job(job_id)
-        if not job or str(job.get("status")) != "running":
+        # Historical worker entry points do not have an attempt fence yet. Keep
+        # their compatibility path until the legacy API is removed, but require
+        # the database to still be RUNNING with no lease before publishing.
+        with store.connect() as conn:
+            row = conn.execute(
+                "SELECT status, lease_token FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+        if row is None or str(row["status"]) != "running" or row["lease_token"] not in (None, ""):
             raise RuntimeError("legacy worker cannot publish a non-running job")
 
     root = Path(output_root).resolve()
@@ -572,23 +594,55 @@ def _publish_attempt_package(
             raise RuntimeError("unable to allocate publish destination")
 
     os.replace(package, destination)
-    try:
-        from ai_video_factory.artifact_readiness import resolve_final_video
-        final_video = resolve_final_video(destination)
-        if final_video is not None and final_video.is_file():
-            store.record_artifact(
-                job_id=job_id,
-                attempt_id=attempt_id or None,
-                kind="final_video",
-                path=final_video,
-                sha256=sha256_file(final_video),
-                size_bytes=final_video.stat().st_size,
-            )
-    except Exception as exc:
-        # Publishing remains successful, but the audit trail must not silently
-        # break the job. The artifact itself was already atomically published.
-        logger.warning("Could not persist final artifact metadata for %s: %s", job_id, exc)
     return destination
+
+
+def _finalize_published_attempt(
+    *,
+    job_id: str,
+    attempt_id: str,
+    lease_token: str,
+    published: Path,
+    db_path: str,
+    artifact_candidate: Any = None,
+) -> bool:
+    """Commit the fenced DONE state and artifact record, or remove a stale publish."""
+    from dashboard_store import DashboardStore
+    from ai_video_factory.artifact_readiness import resolve_final_video
+
+    if artifact_candidate:
+        final_video = Path(str(artifact_candidate)).resolve()
+    else:
+        final_video = resolve_final_video(published)
+    try:
+        final_video.relative_to(published.resolve())
+    except (OSError, ValueError):
+        shutil.rmtree(published, ignore_errors=True)
+        raise RuntimeError("final video artifact escaped the published package")
+    if not _artifact_is_valid(final_video):
+        shutil.rmtree(published, ignore_errors=True)
+        raise RuntimeError("published package failed final artifact validation")
+
+    artifact_hash = sha256_file(final_video) if final_video.is_file() else None
+    artifact_size = final_video.stat().st_size if final_video.is_file() else None
+    store = DashboardStore(db_path)
+    committed = store.finalize_attempt_publish(
+        job_id,
+        attempt_id,
+        lease_token,
+        package_path=published,
+        artifact_path=final_video,
+        artifact_sha256=artifact_hash,
+        artifact_size_bytes=artifact_size,
+    )
+    if not committed:
+        # The worker lost the lease (cancellation, restart recovery, or newer retry).
+        # The package was never made authoritative, so remove it rather than leave a
+        # stale output that looks successful.
+        shutil.rmtree(published, ignore_errors=True)
+        raise RuntimeError("stale worker lost the publication fence")
+
+    return True
 
 
 def _rewrite_published_paths(value: Any, old_root: Path, new_root: Path) -> Any:
@@ -758,9 +812,15 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                     old_package,
                     published.resolve(),
                 )
-                with open(published / "v3_job_result.json", "w", encoding="utf-8") as handle:
-                    json.dump(result_payload, handle, indent=2, ensure_ascii=False)
-                if update(status="done", step="Complete (V3)", pkg_dir=str(published)):
+                _atomic_json_write(published / "v3_job_result.json", result_payload)
+                if _finalize_published_attempt(
+                    job_id=job_id,
+                    attempt_id=attempt_id,
+                    lease_token=attempt_lease,
+                    published=published,
+                    db_path=db_path,
+                    artifact_candidate=result_payload.get("final_video"),
+                ):
                     log("INFO", "V3 job complete!")
                     for warning in result_payload["warnings"]:
                         log("WARNING", str(warning))
@@ -797,7 +857,14 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 attempt_id,
                 attempt_lease,
             )
-            if update(status="done", step="Complete", pkg_dir=str(published)):
+            if _finalize_published_attempt(
+                job_id=job_id,
+                attempt_id=attempt_id,
+                lease_token=attempt_lease,
+                published=published,
+                db_path=db_path,
+                artifact_candidate=ctx.final_video,
+            ):
                 log("INFO", "Job complete!")
     except Exception as exc:
         try:
@@ -1320,6 +1387,7 @@ def create_job():
                 MAX_CPU_WEIGHT,
                 MAX_RESERVED_DISK_BYTES,
                 MAX_RESERVED_MEMORY_BYTES,
+                MAX_TOTAL_STORAGE_BYTES,
             )
             budget = estimate_resource_budget(
                 {
@@ -1344,6 +1412,7 @@ def create_job():
                 resource_class=str(budget.get("job_class") or params.get("_resource_class") or "cpu_render"),
                 storage_paths=(UPLOAD_FOLDER, OUTPUT_FOLDER),
                 min_free_disk_bytes=_MIN_FREE_DISK_BYTES,
+                max_total_storage_bytes=MAX_TOTAL_STORAGE_BYTES,
             ):
                 if upload_path is not None:
                     upload_path.unlink(missing_ok=True)
@@ -1509,15 +1578,12 @@ def _package_access_allowed(pkg_dir: Optional[Path]) -> bool:
         from resource_governor import principal_for_request
         principal = principal_for_request(request)
         with get_db() as conn:
-            rows = conn.execute(
-                "SELECT params, pkg_dir FROM jobs WHERE pkg_dir IS NOT NULL"
-            ).fetchall()
-        for row in rows:
-            if str(Path(str(row["pkg_dir"])).resolve()) != str(pkg_dir.resolve()):
-                continue
-            payload = json.loads(row["params"] or "{}")
-            return str(payload.get("_principal") or "") == principal
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            row = conn.execute(
+                "SELECT principal FROM jobs WHERE pkg_dir=? LIMIT 1",
+                (str(pkg_dir.resolve()),),
+            ).fetchone()
+        return bool(row is not None and str(row["principal"] or "") == principal)
+    except (OSError, TypeError, ValueError):
         return False
     return False
 

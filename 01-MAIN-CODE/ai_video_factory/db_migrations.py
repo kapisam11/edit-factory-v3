@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 _REQUIRED_COLUMNS = {
     "jobs": {
@@ -33,6 +33,12 @@ _REQUIRED_COLUMNS = {
     "idempotency_keys": {"principal", "idem_key", "request_hash", "job_id", "created_at"},
     "settings": {"key", "value"},
     "rate_limits": {"client_ip", "ts"},
+}
+
+
+_REQUIRED_TRIGGERS = {
+    "validate_job_status_transition_store",
+    "prevent_post_cancel_finalization",
 }
 
 
@@ -225,6 +231,35 @@ def migrate_database(path: str | Path) -> int:
 
         conn.execute(
             """
+            CREATE TRIGGER IF NOT EXISTS validate_job_status_transition_store
+            BEFORE UPDATE OF status ON jobs
+            WHEN NOT (
+                NEW.status = OLD.status OR
+                (OLD.status = 'queued' AND NEW.status IN ('running','cancelling','cancelled','error','interrupted')) OR
+                (OLD.status = 'running' AND NEW.status IN ('cancelling','cancelled','done','error','interrupted')) OR
+                (OLD.status = 'cancelling' AND NEW.status IN ('cancelled','error','interrupted')) OR
+                (OLD.status IN ('done','cancelled')) OR
+                (OLD.status IN ('error','interrupted') AND NEW.status = 'queued')
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'invalid job status transition');
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS prevent_post_cancel_finalization
+            BEFORE UPDATE OF status ON jobs
+            WHEN OLD.status IN ('cancelling','cancelled')
+                 AND NEW.status IN ('running','done','error','queued')
+            BEGIN
+                SELECT RAISE(ABORT, 'job cancellation already requested');
+            END
+            """
+        )
+
+        conn.execute(
+            """
             UPDATE jobs
             SET principal=COALESCE(
                 NULLIF(
@@ -253,6 +288,8 @@ def migrate_database(path: str | Path) -> int:
             current = 5
         if current < 6:
             current = 6
+        if current < 7:
+            current = 7
         conn.execute("DELETE FROM schema_version")
         conn.execute("INSERT INTO schema_version(version) VALUES (?)", (CURRENT_SCHEMA_VERSION,))
         return CURRENT_SCHEMA_VERSION
@@ -270,6 +307,16 @@ def verify_database_schema(path: str | Path) -> None:
                 f"database schema version {actual} != required {CURRENT_SCHEMA_VERSION}; "
                 "run aivf-db-migrate before starting production"
             )
+        for trigger_name in _REQUIRED_TRIGGERS:
+            found = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?",
+                (trigger_name,),
+            ).fetchone()
+            if found is None:
+                raise SchemaMismatch(
+                    f"database is missing required trigger: {trigger_name}; "
+                    "run aivf-db-migrate before starting production"
+                )
         for table, required in _REQUIRED_COLUMNS.items():
             actual_columns = _columns(conn, table)
             missing = sorted(required - actual_columns)
