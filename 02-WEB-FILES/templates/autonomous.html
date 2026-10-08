@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autonomous YouTube Control</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/enhancements.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>AUTONOMOUS YOUTUBE</h1>
+      <p class="subtitle">Queue, schedule, approve, pause, and stop the publishing loop.</p>
+    </header>
+
+    <div class="main-layout">
+      <aside class="sidebar">
+        <div class="panel">
+          <h2>Safety</h2>
+          <div id="state" class="queue-badge">Loading…</div>
+          <div id="limits" class="log-status"></div>
+          <button class="btn-secondary w-full" onclick="pauseLoop()">Pause</button>
+          <button class="btn-secondary w-full" onclick="resumeLoop()">Resume</button>
+          <button class="btn-secondary w-full" onclick="emergencyStop()">Emergency Stop</button>
+          <button class="btn-secondary w-full" onclick="clearEmergencyStop()">Clear Emergency Stop</button>
+        </div>
+
+        <div class="panel">
+          <h2>Quick Run</h2>
+          <button class="btn-primary w-full" onclick="runOnce()">Run one automation cycle</button>
+          <div id="message" class="log-status" aria-live="polite"></div>
+        </div>
+      </aside>
+
+      <main class="center-content">
+        <div class="grid">
+          <section class="panel">
+            <h2>Queue new video</h2>
+            <div class="form-group">
+              <label for="topic">Topic</label>
+              <input id="topic" maxlength="500" placeholder="A specific topic or story angle">
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="platform">Platform</label>
+                <select id="platform">
+                  <option value="youtube_shorts">YouTube Shorts</option>
+                  <option value="youtube">YouTube</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="publishAt">Optional publish time (UTC)</label>
+                <input id="publishAt" placeholder="2026-10-09T12:00:00Z">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="targetSeconds">Target seconds</label>
+              <input id="targetSeconds" type="number" min="15" max="120" value="45">
+            </div>
+            <button class="btn-primary" onclick="enqueue()">Queue video</button>
+          </section>
+
+          <section class="panel">
+            <h2>Performance</h2>
+            <div id="performance"></div>
+          </section>
+        </div>
+
+        <section class="panel packages-panel">
+          <div class="panel-header">
+            <h2>Autonomous Queue</h2>
+            <button class="btn-sm" onclick="refresh()">Refresh</button>
+          </div>
+          <div id="queueList"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script nonce="{{ g.aivf_csp_nonce }}">
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    async function requestJson(url, options={}) {
+      const res = await fetch(url, {cache:'no-store', ...options});
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      return data;
+    }
+    function show(message, kind='') {
+      const el = document.getElementById('message');
+      el.textContent = message;
+      el.className = 'log-status ' + kind;
+    }
+    async function refresh() {
+      try {
+        const data = await requestJson('/api/autonomous/status');
+        const state = data.emergency_stop ? 'EMERGENCY STOP' : (data.paused ? 'PAUSED' : 'RUNNING');
+        document.getElementById('state').textContent = state;
+        document.getElementById('limits').textContent =
+          `Published today: ${data.published_today} · Cost: $${data.daily_cost_usd} · Revenue: $${data.daily_estimated_revenue_usd} · ROI: ${data.daily_roi == null ? 'n/a' : (data.daily_roi * 100).toFixed(1) + '%'}`;
+        document.getElementById('performance').innerHTML =
+          `<div>Queue: ${esc(JSON.stringify(data.queue_counts))}</div>` +
+          `<div>Daily video cap: ${esc(data.config.max_videos_per_day)}</div>` +
+          `<div>Failure circuit breaker: ${esc(data.config.max_consecutive_failures)}</div>` +
+          `<div>Human approval required: ${esc(data.config.require_human_approval)}</div>`;
+        const queue = await requestJson('/api/autonomous/queue?limit=100');
+        document.getElementById('queueList').innerHTML = queue.map(job =>
+          `<div class="panel" style="margin-bottom:8px"><strong>${esc(job.topic)}</strong><br>` +
+          `<small>${esc(job.id)} · ${esc(job.state)} · approval=${esc(job.approval)} · scheduled=${esc(job.scheduled_at || 'auto')}</small>` +
+          (job.state === 'READY' || job.state === 'POLICY_REVIEW' ? `<br><button class="btn-sm" onclick="approve('${esc(job.id)}')">Approve & schedule</button>` : '') +
+          `</div>`
+        ).join('') || '<div class="empty-state">Queue is empty.</div>';
+      } catch (err) {
+        show(err.message, 'error');
+      }
+    }
+    async function enqueue() {
+      const topic = document.getElementById('topic').value.trim();
+      if (!topic) return show('Enter a topic first.', 'error');
+      try {
+        await requestJson('/api/autonomous/enqueue', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            topic,
+            platform:document.getElementById('platform').value,
+            publish_at:document.getElementById('publishAt').value.trim() || null,
+            options:{target_seconds:Number(document.getElementById('targetSeconds').value || 45)}
+          })
+        });
+        document.getElementById('topic').value = '';
+        show('Queued.', 'done');
+        refresh();
+      } catch (err) { show(err.message, 'error'); }
+    }
+    async function approve(id) {
+      try { await requestJson('/api/autonomous/approve/' + encodeURIComponent(id), {method:'POST'}); show('Approved and scheduled.', 'done'); refresh(); }
+      catch (err) { show(err.message, 'error'); }
+    }
+    async function pauseLoop() {
+      try { await requestJson('/api/autonomous/pause', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason:'dashboard pause'})}); show('Paused.'); refresh(); }
+      catch (err) { show(err.message, 'error'); }
+    }
+    async function resumeLoop() {
+      try { await requestJson('/api/autonomous/resume', {method:'POST'}); show('Resumed.', 'done'); refresh(); }
+      catch (err) { show(err.message, 'error'); }
+    }
+    async function emergencyStop() {
+      if (!confirm('Stop all autonomous production/publishing?')) return;
+      try { await requestJson('/api/autonomous/emergency-stop', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason:'dashboard emergency stop'})}); show('Emergency stop active.', 'error'); refresh(); }
+      catch (err) { show(err.message, 'error'); }
+    }
+    async function clearEmergencyStop() {
+      try { await requestJson('/api/autonomous/clear-emergency-stop', {method:'POST'}); show('Emergency stop cleared.', 'done'); refresh(); }
+      catch (err) { show(err.message, 'error'); }
+    }
+    async function runOnce() {
+      try { const data = await requestJson('/api/autonomous/run-once', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}); show('Cycle complete: ' + JSON.stringify(data)); refresh(); }
+      catch (err) { show(err.message, 'error'); }
+    }
+    document.addEventListener('DOMContentLoaded', () => { refresh(); setInterval(refresh, 5000); });
+  </script>
+</body>
+</html>
