@@ -592,18 +592,27 @@ def _finalize_published_attempt(
     lease_token: str,
     published: Path,
     db_path: str,
+    artifact_candidate: Any = None,
 ) -> bool:
     """Commit the fenced DONE state and artifact record, or remove a stale publish."""
     from dashboard_store import DashboardStore
     from ai_video_factory.artifact_readiness import resolve_final_video
 
-    final_video = resolve_final_video(published)
-    if final_video is None or not final_video.is_file():
+    if artifact_candidate:
+        final_video = Path(str(artifact_candidate)).resolve()
+    else:
+        final_video = resolve_final_video(published)
+    try:
+        final_video.relative_to(published.resolve())
+    except (OSError, ValueError):
         shutil.rmtree(published, ignore_errors=True)
-        raise RuntimeError("published package is missing a final video artifact")
+        raise RuntimeError("final video artifact escaped the published package")
+    if not _artifact_is_valid(final_video):
+        shutil.rmtree(published, ignore_errors=True)
+        raise RuntimeError("published package failed final artifact validation")
 
-    artifact_hash = sha256_file(final_video)
-    artifact_size = final_video.stat().st_size
+    artifact_hash = sha256_file(final_video) if final_video.is_file() else None
+    artifact_size = final_video.stat().st_size if final_video.is_file() else None
     store = DashboardStore(db_path)
     committed = store.finalize_attempt_publish(
         job_id,
@@ -798,6 +807,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                     lease_token=attempt_lease,
                     published=published,
                     db_path=db_path,
+                    artifact_candidate=result_payload.get("final_video"),
                 ):
                     log("INFO", "V3 job complete!")
                     for warning in result_payload["warnings"]:
@@ -841,6 +851,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 lease_token=attempt_lease,
                 published=published,
                 db_path=db_path,
+                artifact_candidate=ctx.final_video,
             ):
                 log("INFO", "Job complete!")
     except Exception as exc:
