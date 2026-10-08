@@ -108,7 +108,9 @@ def cancel_process(job_id):
     with web_app_v3._active_processes_lock:
         with web_app_v3.get_db() as conn:
             cursor = conn.execute(
-                "UPDATE jobs SET status='cancelling', step='cancelling', updated_at=CURRENT_TIMESTAMP "
+                "UPDATE jobs SET status='cancelling', step='cancelling', "
+                "worker_id=NULL, lease_token=NULL, worker_heartbeat_at=NULL, "
+                "updated_at=CURRENT_TIMESTAMP "
                 "WHERE id=? AND status NOT IN ('done','error','cancelled','interrupted','cancelling')", (job_id,),
             )
             if cursor.rowcount == 0:
@@ -116,6 +118,15 @@ def cancel_process(job_id):
                 if not row:
                     return jsonify({"error": "Job not found"}), 404
                 return jsonify({"job_id": job_id, "status": row["status"]}), 409
+        # Invalidate the attempt before terminating the process. This closes the
+        # race where a worker passes a pre-publish check and then publishes after
+        # cancellation has been requested.
+        try:
+            from dashboard_store import DashboardStore
+            DashboardStore(web_app_v3.DB_PATH).revoke_attempt_lease(job_id)
+        except Exception:
+            web_app_v3.logger.exception("Could not revoke worker lease for cancelled job %s", job_id)
+
         process = web_app_v3._active_processes.get(job_id)
         if process:
             _terminate_process_tree(process)
