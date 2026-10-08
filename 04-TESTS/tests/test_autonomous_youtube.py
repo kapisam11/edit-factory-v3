@@ -55,6 +55,8 @@ def test_public_metadata_removes_factory_vendor_credit_but_keeps_topic_text():
     assert "Created with AI" not in cleaned["description"]
     assert "AI history" in cleaned["description"]
     assert "Edit Factory" not in cleaned["tags"]
+    assert "#editfactory" not in cleaned["description"].lower()
+    assert "AI Video Factory" not in cleaned["description"]
 
 
 def test_autonomous_queue_persists_schedule_platform_and_options(tmp_path: Path):
