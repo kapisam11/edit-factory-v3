@@ -1,7 +1,7 @@
 """Dashboard controls for the autonomous YouTube operating loop."""
 from __future__ import annotations
 
-from flask import jsonify, render_template, request
+from flask import abort, jsonify, render_template, request
 
 from ai_video_factory.autonomous_youtube import AutonomousManager
 
@@ -14,8 +14,13 @@ def register_autonomous_routes(app) -> None:
 
     def require_admin() -> None:
         checker = app.extensions.get("aivf_require_role")
-        if callable(checker):
-            checker("admin")
+        if not callable(checker):
+            # Never expose autonomous controls if the host forgot to register
+            # the production authorization boundary.
+            abort(503, description="autonomous authorization is unavailable")
+        result = checker("admin")
+        if result is False:
+            abort(403)
 
     @app.get("/autonomous")
     def autonomous_page():
