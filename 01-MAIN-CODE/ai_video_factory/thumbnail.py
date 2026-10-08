@@ -362,14 +362,6 @@ def _draw_thumbnail_text(img: Image.Image, text: str, primary: tuple, accent: tu
     if horizontal:
         y = max(int(h * 0.16), y)
 
-    # Subtle top label gives the composition a deliberate editorial identity.
-    label_font = _get_font(max(24, min(34, int(h * 0.045))))
-    label = "EDIT FACTORY"
-    label_w = draw.textbbox((0, 0), label, font=label_font)[2]
-    draw.rounded_rectangle((x, max(20, y - label_font.size - 16), x + label_w + 28, max(50, y - 8)),
-                           radius=10, fill=(0, 0, 0))
-    draw.text((x + 14, max(20, y - label_font.size - 13)), label, font=label_font, fill=accent)
-
     for idx, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=font)
         line_y = y + idx * (font_size + line_gap)
