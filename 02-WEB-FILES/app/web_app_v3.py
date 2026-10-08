@@ -563,8 +563,20 @@ def _publish_attempt_package(
     from dashboard_store import DashboardStore
 
     store = DashboardStore(db_path)
-    if not store.attempt_can_publish(job_id, attempt_id, lease_token):
-        raise RuntimeError("stale worker cannot publish artifacts")
+    if attempt_id or lease_token:
+        if not store.attempt_can_publish(job_id, attempt_id, lease_token):
+            raise RuntimeError("stale worker cannot publish artifacts")
+    else:
+        # Historical worker entry points do not have an attempt fence yet. Keep
+        # their compatibility path until the legacy API is removed, but require
+        # the database to still be RUNNING with no lease before publishing.
+        with store.connect() as conn:
+            row = conn.execute(
+                "SELECT status, lease_token FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+        if row is None or str(row["status"]) != "running" or row["lease_token"] not in (None, ""):
+            raise RuntimeError("legacy worker cannot publish a non-running job")
 
     root = Path(output_root).resolve()
     package = package_dir.resolve()
