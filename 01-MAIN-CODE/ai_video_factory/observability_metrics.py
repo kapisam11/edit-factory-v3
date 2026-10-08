@@ -120,7 +120,8 @@ class MetricsRegistry:
 
     def to_prometheus(self) -> str:
         """Serialize durable snapshots through the standard prometheus-client library."""
-        from prometheus_client import CollectorRegistry, CounterMetricFamily, GaugeMetricFamily, HistogramMetricFamily, generate_latest
+        from prometheus_client import CollectorRegistry, CounterMetricFamily, GaugeMetricFamily, generate_latest
+        from prometheus_client.core import Metric
 
         snap = self.snapshot()
         registry = CollectorRegistry()
@@ -166,56 +167,36 @@ class MetricsRegistry:
         except sqlite3.Error:
             pass
         for name in sorted(names):
-            metric = re.sub(r"[^A-Za-z0-9_:]", "_", name).strip("_") or "duration"
+            metric_name = re.sub(r"[^A-Za-z0-9_:]", "_", name).strip("_") or "duration"
             values = self._samples(name)
             hist = self._histogram(values)
-            family = HistogramMetricFamily(
-                f"aivf_{metric}_milliseconds",
+            metric = Metric(
+                f"aivf_{metric_name}_milliseconds",
                 f"Edit Factory duration histogram: {name}.",
-                buckets=DEFAULT_BUCKETS_MS,
+                "histogram",
             )
             for bucket in DEFAULT_BUCKETS_MS:
-                family.add_metric([], hist=None, value=None)
-            # HistogramMetricFamily accepts one sample containing the bucket
-            # map, sum, and count; prometheus-client handles text exposition.
-            family.samples = []
-            running = 0
-            for bucket in DEFAULT_BUCKETS_MS:
-                running += sum(1 for value in values if value <= bucket) - running
-                family.add_metric([], labels=None, value=0) if False else None
-            # Reconstruct bucket samples explicitly because this registry is
-            # sourced from durable SQLite samples rather than live collectors.
-            family.samples = [
-                type(family.samples).__args__[0]() if False else s
-                for s in []
-            ]
-            from prometheus_client.core import Sample
-            family.samples = [
-                Sample(
-                    f"aivf_{metric}_milliseconds_bucket",
+                metric.add_sample(
+                    f"aivf_{metric_name}_milliseconds_bucket",
                     {"le": str(bucket)},
                     float(sum(1 for value in values if value <= bucket)),
-                    None,
-                    None,
                 )
-                for bucket in DEFAULT_BUCKETS_MS
-            ]
-            family.samples.append(
-                Sample(
-                    f"aivf_{metric}_milliseconds_bucket",
-                    {"le": "+Inf"},
-                    float(hist["count"]),
-                    None,
-                    None,
-                )
+            metric.add_sample(
+                f"aivf_{metric_name}_milliseconds_bucket",
+                {"le": "+Inf"},
+                float(hist["count"]),
             )
-            family.samples.append(
-                Sample(f"aivf_{metric}_milliseconds_count", {}, float(hist["count"]), None, None)
+            metric.add_sample(
+                f"aivf_{metric_name}_milliseconds_count",
+                {},
+                float(hist["count"]),
             )
-            family.samples.append(
-                Sample(f"aivf_{metric}_milliseconds_sum", {}, float(hist["sum"]), None, None)
+            metric.add_sample(
+                f"aivf_{metric_name}_milliseconds_sum",
+                {},
+                float(hist["sum"]),
             )
-            registry.register(family)
+            registry.register(metric)
 
         return generate_latest(registry).decode("utf-8")
 
