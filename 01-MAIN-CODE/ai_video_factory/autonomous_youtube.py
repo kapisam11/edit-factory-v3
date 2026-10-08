@@ -1191,8 +1191,8 @@ class AutonomousManager:
         rec = model.recommend()
         experiment_groups: dict[str, list[float]] = {}
         with self.store._connect() as conn:
-            rows = conn.execute("SELECT analytics_json FROM autonomous_jobs WHERE state='ANALYZED' ORDER BY updated_at DESC LIMIT 500").fetchall()
-        for row in rows:
+            db_rows = conn.execute("SELECT analytics_json FROM autonomous_jobs WHERE state='ANALYZED' ORDER BY updated_at DESC LIMIT 500").fetchall()
+        for row in db_rows:
             analytics = _parse_json(str(row["analytics_json"] or "{}"), {})
             family = str(analytics.get("experiment_family") or "")
             if not family:
