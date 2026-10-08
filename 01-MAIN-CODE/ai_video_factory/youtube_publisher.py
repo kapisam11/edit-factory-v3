@@ -255,6 +255,7 @@ def upload_video(
             }
     if response is None:
         raise RuntimeError(f"YouTube upload failed after {attempts} attempts: {upload_error}")
+    video_id = response.get("id")
     if not video_id:
         raise RuntimeError(f"YouTube upload returned no video id: {response}")
     result: Dict[str, Any] = {
