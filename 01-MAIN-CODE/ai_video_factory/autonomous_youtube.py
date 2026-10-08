@@ -63,6 +63,8 @@ class AutonomousConfig:
     require_human_approval: bool = True
     failure_webhook_url: str = ""
     retention_days: int = 30
+    backup_interval_hours: float = 24.0
+    backup_retention_count: int = 7
 
     @classmethod
     def from_environment(cls) -> "AutonomousConfig":
@@ -94,6 +96,8 @@ class AutonomousConfig:
             require_human_approval=require_human,
             failure_webhook_url=os.environ.get("AIVF_FAILURE_WEBHOOK_URL", "").strip(),
             retention_days=max(1, int(os.environ.get("AIVF_AUTOMATION_RETENTION_DAYS", "30"))),
+            backup_interval_hours=max(1.0, float(os.environ.get("AIVF_AUTOMATION_BACKUP_INTERVAL_HOURS", "24"))),
+            backup_retention_count=max(1, int(os.environ.get("AIVF_AUTOMATION_BACKUP_RETENTION_COUNT", "7"))),
         )
 
 
@@ -1040,9 +1044,42 @@ class AutonomousManager:
         target.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         return result
 
+    def _maybe_backup(self) -> Optional[str]:
+        last = float(self.store.setting("last_backup_epoch", "0") or 0)
+        now_epoch = time.time()
+        if now_epoch - last < self.config.backup_interval_hours * 3600.0:
+            return None
+        from .backup_restore import create_backup, verify_backup
+        backup_dir = self.config.state_dir / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        target = backup_dir / ("autonomous-" + stamp + ".tar.gz")
+        archive = create_backup(
+            db_path=self.config.queue_db,
+            backup_path=target,
+            knowledge_root=os.environ.get("AIVF_KNOWLEDGE_ROOT") or None,
+            output_root=self.config.output_dir,
+        )
+        verification = verify_backup(archive)
+        if not bool(verification.get("ok")):
+            raise RuntimeError("automatic automation-state backup verification failed")
+        self.store.set_setting("last_backup_epoch", str(now_epoch))
+        backups = sorted(backup_dir.glob("autonomous-*.tar.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for stale in backups[self.config.backup_retention_count:]:
+            try:
+                stale.unlink()
+            except OSError:
+                logger.warning("failed to prune stale automation backup %s", stale)
+        self.store.event(None, "backup_created", {"archive": str(archive), "verified_files": verification.get("verified_files")})
+        return str(archive)
     def run_once(self, *, seed_topics: Optional[Sequence[str]] = None) -> dict[str, Any]:
         started = time.time()
-        result: dict[str, Any] = {"produced": None, "published": None, "analyzed": None, "discovered": 0}
+        result: dict[str, Any] = {"produced": None, "published": None, "analyzed": None, "discovered": 0, "backup": None}
+        try:
+            result["backup"] = self._maybe_backup()
+        except Exception as exc:
+            logger.exception("automatic backup failed")
+            _notify(self.config, {"event": "autonomous_backup_failed", "error": str(exc)})
         if self.store.setting("emergency_stop", "0") == "1" or self.store.setting("paused", "0") == "1":
             result["paused"] = True
             return result
