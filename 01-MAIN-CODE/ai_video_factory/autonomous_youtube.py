@@ -147,6 +147,9 @@ class AutonomousStore:
                     estimated_cost_usd REAL NOT NULL DEFAULT 0,
                     actual_cost_usd REAL NOT NULL DEFAULT 0,
                     retry_count INTEGER NOT NULL DEFAULT 0,
+                    retry_stage TEXT NOT NULL DEFAULT '',
+                    platform TEXT NOT NULL DEFAULT 'youtube_shorts',
+                    options_json TEXT NOT NULL DEFAULT '{}',
                     next_attempt_at TEXT,
                     approval TEXT NOT NULL DEFAULT 'pending',
                     publish_requested INTEGER NOT NULL DEFAULT 0,
@@ -155,6 +158,7 @@ class AutonomousStore:
                     rights_json TEXT NOT NULL DEFAULT '{}',
                     quality_json TEXT NOT NULL DEFAULT '{}',
                     analytics_json TEXT NOT NULL DEFAULT '{}',
+                    published_at TEXT,
                     error TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_auto_state_schedule
@@ -186,6 +190,16 @@ class AutonomousStore:
                     ON autonomous_analytics(video_id, observed_at);
                 """
             )
+            existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(autonomous_jobs)").fetchall()}
+            additions = {
+                "retry_stage": "TEXT NOT NULL DEFAULT ''",
+                "platform": "TEXT NOT NULL DEFAULT 'youtube_shorts'",
+                "options_json": "TEXT NOT NULL DEFAULT '{}'",
+                "published_at": "TEXT",
+            }
+            for column, definition in additions.items():
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE autonomous_jobs ADD COLUMN {column} {definition}")
             for key, value in {
                 "paused": "0",
                 "emergency_stop": "0",
@@ -252,6 +266,8 @@ class AutonomousStore:
                     priority=excluded.priority,
                     scheduled_at=excluded.scheduled_at,
                     publish_requested=excluded.publish_requested,
+                    platform=excluded.platform,
+                    options_json=excluded.options_json,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -308,7 +324,7 @@ class AutonomousStore:
         return dict(updated) if updated else None
 
     def claim_production(self) -> Optional[dict[str, Any]]:
-        return self._claim(("IDEA", "FAILED"))
+        return self._claim(("IDEA",))
 
     def claim_analysis(self) -> Optional[dict[str, Any]]:
         now = _utc_now()
@@ -317,8 +333,9 @@ class AutonomousStore:
             row = conn.execute(
                 "SELECT * FROM autonomous_jobs WHERE state='PUBLISHED' "
                 "AND published_at IS NOT NULL "
+                "AND (next_attempt_at IS NULL OR next_attempt_at<=?) "
                 "AND published_at<=? ORDER BY published_at LIMIT 1",
-                (now,),
+                (now, now),
             ).fetchone()
             if not row:
                 conn.commit()
@@ -342,6 +359,9 @@ class AutonomousStore:
             "estimated_cost_usd",
             "actual_cost_usd",
             "retry_count",
+            "retry_stage",
+            "platform",
+            "options_json",
             "next_attempt_at",
             "approval",
             "publish_requested",
@@ -624,7 +644,7 @@ class AutonomousManager:
                 self.config.retry_base_seconds * (2 ** max(0, retry_count - 1)),
             )
             next_attempt = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat().replace("+00:00", "Z")
-            state = "FAILED"
+            state = "FAILED" if stage == "production" else "SCHEDULED"
         else:
             state = "POLICY_REVIEW"
         failures = int(self.store.setting("consecutive_failures", "0") or 0) + 1
@@ -633,6 +653,7 @@ class AutonomousManager:
             str(job["id"]),
             state=state,
             retry_count=retry_count,
+            retry_stage=stage,
             next_attempt_at=next_attempt,
             error=f"{stage}: {exc}",
         )
@@ -660,9 +681,13 @@ class AutonomousManager:
             )
 
     def _production_options(self, job: Mapping[str, Any]) -> dict[str, Any]:
+        options = _parse_json(str(job.get("options_json") or "{}"), {})
+        if not isinstance(options, Mapping):
+            options = {}
+        platform = str(job.get("platform") or options.get("platform") or "youtube_shorts")
         return {
-            "target_seconds": float(os.environ.get("AIVF_AUTONOMOUS_TARGET_SECONDS", "45")),
-            "platforms": ["youtube_shorts"],
+            "target_seconds": float(options.get("target_seconds") or os.environ.get("AIVF_AUTONOMOUS_TARGET_SECONDS", "45")),
+            "platforms": [platform] if platform in PLATFORM_LAYOUTS else ["youtube_shorts"],
         }
 
     def produce_one(self) -> Optional[str]:
@@ -869,7 +894,18 @@ class AutonomousManager:
             self.store.event(job_id, "analytics_recorded", {"score": score})
             return job_id
         except Exception as exc:
-            self._record_failure(claim, exc, stage="analytics")
+            retry = int(claim.get("retry_count") or 0) + 1
+            delay = min(self.config.retry_max_seconds, self.config.retry_base_seconds * (2 ** max(0, retry - 1)))
+            next_attempt = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat().replace("+00:00", "Z")
+            self.store.update(
+                job_id,
+                state="PUBLISHED",
+                retry_count=retry,
+                retry_stage="analytics",
+                next_attempt_at=next_attempt,
+                error=f"analytics: {exc}",
+            )
+            _notify(self.config, {"event": "autonomous_analytics_retry", "job_id": job_id, "error": str(exc), "retry_count": retry})
             return job_id
 
     def generate_learning_profile(self) -> dict[str, Any]:
