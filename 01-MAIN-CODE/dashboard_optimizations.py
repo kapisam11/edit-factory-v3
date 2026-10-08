@@ -218,31 +218,21 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         while process.is_alive():
             now = clock.monotonic()
             if now >= deadline:
+                reason = f"Render wall-clock budget exceeded ({wallclock_limit:g}s)"
                 try:
-                    from dashboard_compat import _terminate_process_tree
-                    _terminate_process_tree(process)
+                    current = app_module.db_get_job(job_id) or {}
+                    if current.get("status") in {"queued", "running", "cancelling"}:
+                        app_module.db_update_job(
+                            job_id,
+                            status="error",
+                            step="resource_limit",
+                            error=reason,
+                            error_code="tool_timeout",
+                        )
+                        app_module.db_append_log(job_id, "ERROR", reason)
                 except Exception:
-                    try:
-                        process.terminate()
-                    except Exception:
-                        pass
-                current = app_module.db_get_job(job_id) or {}
-                if current.get("status") in {"queued", "running", "cancelling"}:
-                    app_module.db_update_job(
-                        job_id,
-                        status="error",
-                        step="resource_limit",
-                        error=f"Render wall-clock budget exceeded ({wallclock_limit:g}s)",
-                        error_code="tool_timeout",
-                    )
-                    app_module.db_append_log(job_id, "ERROR", "Render wall-clock budget exceeded")
-                return
-            current = app_module.db_get_job(job_id) or {}
-            package_dir = current.get("pkg_dir")
-            memory_limit = _memory_limit_bytes(current)
-            if memory_limit > 0:
-                rss_bytes = _process_tree_rss_bytes(int(process.pid))
-                if rss_bytes > memory_limit:
+                    app_module.logger.exception("Could not record wall-clock resource breach for %s", job_id)
+                finally:
                     try:
                         from dashboard_compat import _terminate_process_tree
                         _terminate_process_tree(process)
@@ -251,16 +241,36 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                             process.terminate()
                         except Exception:
                             pass
-                    current = app_module.db_get_job(job_id) or {}
-                    if current.get("status") in {"queued", "running", "cancelling"}:
-                        app_module.db_update_job(
-                            job_id,
-                            status="error",
-                            step="resource_limit",
-                            error=f"Worker memory budget exceeded ({rss_bytes} > {memory_limit} bytes)",
-                            error_code="resource_limit",
-                        )
-                        app_module.db_append_log(job_id, "ERROR", "Worker memory budget exceeded")
+                return
+            current = app_module.db_get_job(job_id) or {}
+            package_dir = current.get("pkg_dir")
+            memory_limit = _memory_limit_bytes(current)
+            if memory_limit > 0:
+                rss_bytes = _process_tree_rss_bytes(int(process.pid))
+                if rss_bytes > memory_limit:
+                    reason = f"Worker memory budget exceeded ({rss_bytes} > {memory_limit} bytes)"
+                    try:
+                        current = app_module.db_get_job(job_id) or {}
+                        if current.get("status") in {"queued", "running", "cancelling"}:
+                            app_module.db_update_job(
+                                job_id,
+                                status="error",
+                                step="resource_limit",
+                                error=reason,
+                                error_code="resource_limit",
+                            )
+                            app_module.db_append_log(job_id, "ERROR", reason)
+                    except Exception:
+                        app_module.logger.exception("Could not record memory resource breach for %s", job_id)
+                    finally:
+                        try:
+                            from dashboard_compat import _terminate_process_tree
+                            _terminate_process_tree(process)
+                        except Exception:
+                            try:
+                                process.terminate()
+                            except Exception:
+                                pass
                     return
             if now - last_total_storage_scan >= RESOURCE_RECONCILE_INTERVAL_SECONDS:
                 last_total_storage_scan = now
@@ -269,6 +279,46 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                     app_module.OUTPUT_FOLDER,
                     limit=__import__("resource_governor").MAX_TOTAL_STORAGE_BYTES,
                 ) > __import__("resource_governor").MAX_TOTAL_STORAGE_BYTES:
+                    reason = "Total storage quota exceeded"
+                    try:
+                        current = app_module.db_get_job(job_id) or {}
+                        if current.get("status") in {"queued", "running", "cancelling"}:
+                            app_module.db_update_job(
+                                job_id,
+                                status="error",
+                                step="resource_limit",
+                                error=reason,
+                                error_code="resource_limit",
+                            )
+                            app_module.db_append_log(job_id, "ERROR", reason)
+                    except Exception:
+                        app_module.logger.exception("Could not record total storage breach for %s", job_id)
+                    finally:
+                        try:
+                            from dashboard_compat import _terminate_process_tree
+                            _terminate_process_tree(process)
+                        except Exception:
+                            try:
+                                process.terminate()
+                            except Exception:
+                                pass
+                    return
+            if package_dir and not job_storage_ok(package_dir):
+                reason = f"Per-job storage quota exceeded ({MAX_JOB_STORAGE_BYTES // (1024 * 1024)} MiB)"
+                try:
+                    current = app_module.db_get_job(job_id) or {}
+                    if current.get("status") in {"queued", "running", "cancelling"}:
+                        app_module.db_update_job(
+                            job_id,
+                            status="error",
+                            step="resource_limit",
+                            error=reason,
+                            error_code="resource_limit",
+                        )
+                        app_module.db_append_log(job_id, "ERROR", reason)
+                except Exception:
+                    app_module.logger.exception("Could not record per-job storage breach for %s", job_id)
+                finally:
                     try:
                         from dashboard_compat import _terminate_process_tree
                         _terminate_process_tree(process)
@@ -277,36 +327,6 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                             process.terminate()
                         except Exception:
                             pass
-                    current = app_module.db_get_job(job_id) or {}
-                    if current.get("status") in {"queued", "running", "cancelling"}:
-                        app_module.db_update_job(
-                            job_id,
-                            status="error",
-                            step="resource_limit",
-                            error="Total storage quota exceeded",
-                            error_code="resource_limit",
-                        )
-                        app_module.db_append_log(job_id, "ERROR", "Total storage quota exceeded")
-                    return
-            if package_dir and not job_storage_ok(package_dir):
-                try:
-                    from dashboard_compat import _terminate_process_tree
-                    _terminate_process_tree(process)
-                except Exception:
-                    try:
-                        process.terminate()
-                    except Exception:
-                        pass
-                current = app_module.db_get_job(job_id) or {}
-                if current.get("status") in {"queued", "running", "cancelling"}:
-                    app_module.db_update_job(
-                        job_id,
-                        status="error",
-                        step="resource_limit",
-                        error=f"Per-job storage quota exceeded ({MAX_JOB_STORAGE_BYTES // (1024 * 1024)} MiB)",
-                        error_code="resource_limit",
-                    )
-                    app_module.db_append_log(job_id, "ERROR", "Per-job storage quota exceeded")
                 return
             clock.sleep(min(RESOURCE_CHECK_INTERVAL_SECONDS, max(0.25, deadline - clock.monotonic())))
 
