@@ -398,6 +398,24 @@ def register_dashboard_compat(app):
             return jsonify({"error": "Package not found"}), 404
         return send_file(resolved)
 
+    @app.route("/api/admin/audit", methods=["GET"])
+    def audit_events_admin():
+        if _request_role() != "admin":
+            return jsonify({"error": "Admin role required"}), 403
+        raw_last_id = request.args.get("last_id", "0")
+        raw_limit = request.args.get("limit", "200")
+        try:
+            last_id = max(0, int(raw_last_id))
+            limit = max(1, min(1000, int(raw_limit)))
+        except (TypeError, ValueError):
+            return jsonify({"error": "last_id and limit must be integers"}), 400
+        from dashboard_store import DashboardStore
+        events = DashboardStore(web_app_v3.DB_PATH).audit_events_since(last_id=last_id, limit=limit)
+        return jsonify({
+            "events": events,
+            "last_id": int(events[-1]["id"]) if events else last_id,
+        })
+
     @app.route("/api/admin/cleanup", methods=["POST"])
     def cleanup_packages_admin():
         if _request_role() != "admin":
