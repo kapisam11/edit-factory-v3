@@ -575,6 +575,15 @@ class AutonomousStore:
             ).fetchall()
         return [str(row["script"]) for row in rows if str(row["script"]).strip()]
 
+    def recent_titles(self, limit: int = 30) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT title FROM autonomous_jobs WHERE title<>'' "
+                "ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(200, int(limit))),),
+            ).fetchall()
+        return [str(row["title"]) for row in rows if str(row["title"]).strip()]
+
     def recent_topics(self, limit: int = 30, *, exclude_job_id: str = "") -> list[str]:
         with self._connect() as conn:
             if exclude_job_id:
@@ -1008,6 +1017,7 @@ class AutonomousManager:
                 title=sanitized["title"],
                 description=sanitized["description"],
                 recent_texts=self.store.recent_scripts(),
+                recent_titles=self.store.recent_titles(),
             )
             rights_value = metadata.get("media_rights")
             rights: Mapping[str, Any] = rights_value if isinstance(rights_value, Mapping) else {}
