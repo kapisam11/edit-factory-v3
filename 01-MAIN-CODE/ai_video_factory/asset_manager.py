@@ -118,11 +118,31 @@ class RuntimeAssetSpec:
     name: str
     url: str
     relative_path: str
-    sha256: str = ""
+    sha256: str
 
 
-# Heavy model files stay external to the Python wheel. They are downloaded once,
-# checked when a digest is supplied, and reused by all production runs.
+def _locked_model_hashes() -> Dict[str, str]:
+    """Read mandatory SHA-256 values from the versioned production model lock."""
+    lock_path = Path(os.environ.get(
+        "AIVF_MODEL_LOCK_FILE",
+        str(Path(__file__).resolve().parents[2] / "06-CONFIG-AND-DEPLOYMENT" / "model-lock.json"),
+    ))
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        return {
+            str(item.get("name")): str(item.get("sha256", "")).strip().lower()
+            for item in payload.get("assets", [])
+            if isinstance(item, dict) and item.get("name") and item.get("sha256")
+        }
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+_LOCKED_MODEL_HASHES = _locked_model_hashes()
+
+
+# Heavy model files stay external to the Python wheel. Production assets are
+# pinned by an immutable source revision and mandatory SHA-256 values.
 PRODUCTION_ENVIRONMENTS = {"production", "prod"}
 
 RUNTIME_ASSETS = (
@@ -130,13 +150,19 @@ RUNTIME_ASSETS = (
         "mobilenet_ssd_config",
         "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/97406996b1eee2d40eb0a00ae567cf41e23369f9/deploy.prototxt",
         ".models/mobilenet_ssd/deploy.prototxt",
-        os.environ.get("AIVF_MOBILENET_CONFIG_SHA256", "").strip().lower(),
+        (
+            os.environ.get("AIVF_MOBILENET_CONFIG_SHA256", "").strip().lower()
+            or _LOCKED_MODEL_HASHES.get("mobilenet_ssd_config", "")
+        ),
     ),
     RuntimeAssetSpec(
         "mobilenet_ssd_weights",
         "https://github.com/chuanqi305/MobileNet-SSD/raw/97406996b1eee2d40eb0a00ae567cf41e23369f9/mobilenet_iter_73000.caffemodel",
         ".models/mobilenet_ssd/mobilenet.caffemodel",
-        os.environ.get("AIVF_MOBILENET_WEIGHTS_SHA256", "").strip().lower(),
+        (
+            os.environ.get("AIVF_MOBILENET_WEIGHTS_SHA256", "").strip().lower()
+            or _LOCKED_MODEL_HASHES.get("mobilenet_ssd_weights", "")
+        ),
     ),
 )
 
