@@ -39,6 +39,7 @@ RUN mkdir -p /app/.models/mobilenet_ssd \
     && test -s /app/.models/mobilenet_ssd/mobilenet.caffemodel \
     && sha256sum /app/.models/mobilenet_ssd/deploy.prototxt /app/.models/mobilenet_ssd/mobilenet.caffemodel > /app/.models/mobilenet_ssd/SHA256SUMS \
     && python 03-SIDE-CODE/tools/generate_model_manifest.py /app/.models/mobilenet_ssd $MOBILENET_COMMIT
+RUN echo "AIVF_MODEL_LOCK_BUILD_MANIFEST" && cat /app/.models/mobilenet_ssd/model-manifest.json
 RUN groupadd --system aivf \
     && useradd --system --gid aivf --create-home aivf \
     && mkdir -p /app/output /app/uploads /app/knowledge_base_v3 /app/state \
