@@ -188,6 +188,21 @@ def test_daily_cost_limit_accounts_for_generation_before_publish(tmp_path: Path)
         manager._guard_limits()
 
 
+
+def test_human_quality_guard_rejects_reused_title_template():
+    assessment = assess_package(
+        script=(
+            "Apollo 11 took a dangerous turn after a small decision. "
+            "The crew had seconds to react, and the consequence was real."
+        ),
+        title="Why Apollo 11 still matters",
+        description="A specific history of the mission and the decision that followed.",
+        recent_titles=["Why Challenger still matters"],
+    )
+    assert assessment.publish_blocked is True
+    assert any("template" in reason or "similar" in reason for reason in assessment.reasons)
+
+
 def test_stale_schedule_is_moved_to_policy_review(tmp_path: Path):
     manager = AutonomousManager(_config(tmp_path, stale_schedule_days=1))
     job_id = manager.enqueue("Old scheduled topic")
