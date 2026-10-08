@@ -152,6 +152,11 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
         finally:
             _terminate_current_worker_tree()
 
+    try:
+        print(f"[aivf-worker] job={job_id} max_job_seconds={max_job_seconds:g} memory_budget_mb={os.environ.get('AIVF_MAX_JOB_MEMORY_MB', '8192')}", flush=True)
+    except Exception:
+        pass
+
     deadline_thread = threading.Thread(
         target=enforce_deadline,
         name=f"aivf-worker-deadline-{job_id}",
