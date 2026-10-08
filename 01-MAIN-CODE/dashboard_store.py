@@ -62,6 +62,7 @@ class DashboardStore:
 
     def __init__(self, db_path: str | Path):
         self.db_path = str(Path(db_path))
+        self._schema_verified = False
 
     @staticmethod
     def _is_busy(exc: sqlite3.OperationalError) -> bool:
@@ -159,8 +160,10 @@ class DashboardStore:
         allow_runtime = os.environ.get("AIVF_ALLOW_RUNTIME_MIGRATIONS", "0").strip() == "1"
         if environment == "production" and not allow_runtime:
             verify_database_schema(self.db_path)
+            self._schema_verified = True
             return
         migrate_database(self.db_path)
+        self._schema_verified = True
         with self.connect() as conn:
             # DashboardStore is also used against fresh/empty SQLite files in
             # tests and recovery paths. Bootstrap the minimal storage schema
@@ -319,12 +322,17 @@ class DashboardStore:
         principal_value = str(principal).strip() or "unknown"
 
         def write(conn: sqlite3.Connection) -> None:
-            # Some legacy callers create only the original jobs table before
-            # inserting. Bring its lifecycle columns up to date before admission.
-            self._ensure_job_columns(conn)
-            # Schema upgrades above may have opened a transaction. Commit them
-            # before acquiring the admission write lock explicitly.
-            conn.commit()
+            # Production requests may never mutate the live schema. Startup/deployment
+            # must run `aivf-db-migrate`; request-time writes only verify the contract.
+            if not self._schema_verified:
+                environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+                allow_runtime = os.environ.get("AIVF_ALLOW_RUNTIME_MIGRATIONS", "0").strip() == "1"
+                if environment == "production" and not allow_runtime:
+                    verify_database_schema(self.db_path)
+                    self._schema_verified = True
+                else:
+                    self._ensure_job_columns(conn)
+                    conn.commit()
             # Serialize admission with all other writers so quota checks and the
             # subsequent INSERT cannot race across concurrent dashboard requests.
             conn.execute("BEGIN IMMEDIATE")
@@ -440,6 +448,15 @@ class DashboardStore:
         encoded = json.dumps(params)
 
         def write(conn: sqlite3.Connection) -> tuple[str, bool]:
+            if not self._schema_verified:
+                environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+                allow_runtime = os.environ.get("AIVF_ALLOW_RUNTIME_MIGRATIONS", "0").strip() == "1"
+                if environment == "production" and not allow_runtime:
+                    verify_database_schema(self.db_path)
+                    self._schema_verified = True
+                else:
+                    self._ensure_job_columns(conn)
+                    conn.commit()
             conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 "SELECT job_id, request_hash FROM idempotency_keys WHERE principal=? AND idem_key=?",
@@ -556,6 +573,8 @@ class DashboardStore:
         max_cpu_weight: float,
         max_memory_bytes: int,
         resource_class: str = "cpu_render",
+        storage_paths: tuple[str | Path, ...] = (),
+        min_free_disk_bytes: int = 0,
     ) -> bool:
         """Atomically reserve host capacity and a class-specific execution slot."""
         class_name = str(resource_class or "cpu_render").strip()
@@ -594,6 +613,18 @@ class DashboardStore:
                 or class_cpu + values[2] > float(class_budget.max_cpu_weight)
             ):
                 return False
+            # Couple the logical reservation with a physical free-space budget.
+            # The SQLite write lock serializes this calculation so concurrent
+            # submissions cannot reserve the same remaining disk headroom.
+            if storage_paths and int(min_free_disk_bytes) > 0:
+                try:
+                    import shutil
+                    roots = [Path(p).resolve() for p in storage_paths]
+                    usage = shutil.disk_usage(str(roots[0]))
+                    if usage.free < int(min_free_disk_bytes) + disk + values[1]:
+                        return False
+                except (OSError, ValueError, IndexError):
+                    return False
             conn.execute(
                 """
                 INSERT INTO resource_reservations(
@@ -1045,6 +1076,52 @@ class DashboardStore:
                     (max(0, int(last_id)), bounded_limit),
                 ).fetchall()
         return [dict(row) for row in rows]
+
+    def record_artifact(
+        self,
+        *,
+        job_id: str,
+        attempt_id: str | None,
+        kind: str,
+        path: str | Path,
+        sha256: str | None = None,
+        size_bytes: int | None = None,
+    ) -> int:
+        """Persist an immutable artifact record for auditability and retention."""
+        artifact_path = str(Path(path).resolve())
+        digest = None if sha256 is None else str(sha256).strip().lower()
+        size = None if size_bytes is None else max(0, int(size_bytes))
+        def write(conn: sqlite3.Connection) -> int:
+            cursor = conn.execute(
+                """
+                INSERT INTO job_artifacts(job_id, attempt_id, kind, path, sha256, size_bytes)
+                VALUES (?,?,?,?,?,?)
+                """,
+                (
+                    str(job_id),
+                    None if attempt_id is None else str(attempt_id),
+                    str(kind),
+                    artifact_path,
+                    digest,
+                    size,
+                ),
+            )
+            self._record_event(
+                conn,
+                job_id,
+                "artifact_published",
+                details=json.dumps(
+                    {
+                        "kind": str(kind),
+                        "path": artifact_path,
+                        "sha256": digest,
+                        "size_bytes": size,
+                    },
+                    sort_keys=True,
+                ),
+            )
+            return int(cursor.lastrowid or 0)
+        return int(self.write(write))
 
     def append_log(self, job_id: str, level: str, message: str) -> None:
         self.write(
