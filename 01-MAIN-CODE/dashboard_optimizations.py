@@ -20,6 +20,7 @@ from resource_governor import (
     RESOURCE_CHECK_INTERVAL_SECONDS,
     RESOURCE_RECONCILE_INTERVAL_SECONDS,
     MAX_SSE_LIFETIME_SECONDS,
+    MAX_JOB_MEMORY_BYTES,
     ResourceLimitExceeded,
     acquire_sse,
     check_job_creation_limits,
@@ -187,6 +188,33 @@ def install_dashboard_optimizations(app_module: Any) -> None:
         wallclock_limit = max(1.0, float(wallclock_limit))
         deadline = started + wallclock_limit
         last_total_storage_scan = 0.0
+
+        def _memory_limit_bytes(job: dict) -> int:
+            limit = int(MAX_JOB_MEMORY_BYTES)
+            try:
+                raw = json.loads(job.get("params") or "{}")
+                budget = raw.get("_resource_budget") if isinstance(raw, dict) else None
+                if isinstance(budget, dict) and budget.get("memory_bytes") is not None:
+                    limit = min(limit, max(128 * 1024 * 1024, int(budget["memory_bytes"])))
+            except (TypeError, ValueError, json.JSONDecodeError, OverflowError):
+                pass
+            return limit
+
+        def _process_tree_rss_bytes(pid: int) -> int:
+            try:
+                import psutil
+                root_proc = psutil.Process(pid)
+                processes = [root_proc, *root_proc.children(recursive=True)]
+            except (ImportError, OSError):
+                return 0
+            total = 0
+            for proc in processes:
+                try:
+                    if proc.is_running():
+                        total += int(proc.memory_info().rss)
+                except (OSError, ValueError):
+                    continue
+            return total
         while process.is_alive():
             now = clock.monotonic()
             if now >= deadline:
@@ -211,6 +239,29 @@ def install_dashboard_optimizations(app_module: Any) -> None:
                 return
             current = app_module.db_get_job(job_id) or {}
             package_dir = current.get("pkg_dir")
+            memory_limit = _memory_limit_bytes(current)
+            if memory_limit > 0:
+                rss_bytes = _process_tree_rss_bytes(int(process.pid))
+                if rss_bytes > memory_limit:
+                    try:
+                        from dashboard_compat import _terminate_process_tree
+                        _terminate_process_tree(process)
+                    except Exception:
+                        try:
+                            process.terminate()
+                        except Exception:
+                            pass
+                    current = app_module.db_get_job(job_id) or {}
+                    if current.get("status") in {"queued", "running", "cancelling"}:
+                        app_module.db_update_job(
+                            job_id,
+                            status="error",
+                            step="resource_limit",
+                            error=f"Worker memory budget exceeded ({rss_bytes} > {memory_limit} bytes)",
+                            error_code="resource_limit",
+                        )
+                        app_module.db_append_log(job_id, "ERROR", "Worker memory budget exceeded")
+                    return
             if now - last_total_storage_scan >= RESOURCE_RECONCILE_INTERVAL_SECONDS:
                 last_total_storage_scan = now
                 if total_storage_bytes(
