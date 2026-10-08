@@ -28,8 +28,14 @@ def verify(root: str | Path = ".") -> dict[str, object]:
     for asset in payload.get("assets", []):
         name = str(asset["name"])
         relative = str(asset["relative_path"])
+        try:
+            path = (base / relative).resolve()
+        except OSError:
+            path = base / "__invalid_model_path__"
+        if base not in path.parents:
+            results.append({"name": name, "path": str(path), "ok": False, "error": "model path escapes repository root"})
+            continue
         env_name = str(asset["sha256_env"])
-        path = base / relative
         locked_expected = str(asset.get("sha256", "")).strip().lower()
         env_expected = os.environ.get(env_name, "").strip().lower()
         expected = locked_expected or env_expected
