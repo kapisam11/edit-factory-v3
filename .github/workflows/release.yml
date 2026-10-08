@@ -103,6 +103,7 @@ jobs:
       inputs.deploy == true &&
       inputs.human_approval == true }}
     environment: production
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
