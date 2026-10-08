@@ -1,10 +1,7 @@
 services:
   web:
-    image: ${AIVF_IMAGE:?AIVF_IMAGE must be pinned to an immutable image digest}
-    build:
-      context: ..
-      dockerfile: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
-    ports:
+    restart: unless-stopped
+    image: ${AIVF_IMAGE:?AIVF_IMAGE must be pinned to an immutable image digest}    ports:
       - "5000:5000"
     cpus: "${AIVF_CONTAINER_CPUS:-4}"
     mem_limit: "${AIVF_CONTAINER_MEMORY:-8g}"
