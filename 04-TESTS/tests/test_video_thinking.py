@@ -9,6 +9,8 @@ from ai_video_factory.ai_gateway import AIResponseError
 from ai_video_factory.model_adapter import ModelResult
 from ai_video_factory.plan import make_idea
 from ai_video_factory.video_thinking import VideoThinkingAgent, validate_video_plan
+from ai_video_factory.production_pipeline import _video_thinking_timeline_directives
+from ai_video_factory.edit_planner import _directive_for_index
 
 
 def _plan(*, hook: str = "Seconds Before Landing", stronger: bool = False) -> dict[str, Any]:
@@ -156,3 +158,18 @@ def test_existing_planner_consumes_thinking_script_and_edit_directions() -> None
     assert idea["script"].splitlines()[0] == "Seconds Before Landing."
     assert idea["title_options"][0].startswith("Apollo 11")
     assert any("Start on the strongest verified landing moment" in label for _, label in idea["edit_plan"])
+
+def test_video_thinking_directions_reach_footage_timeline_without_v3_contract() -> None:
+    plan = validate_video_plan(_plan(), topic="Apollo 11 landing", target_seconds=30)
+    script = "\n".join(plan["script_lines"])
+    directives = _video_thinking_timeline_directives(plan, script)
+    phases = directives["phase_directives"]
+
+    assert len(phases) == len(script.splitlines())
+    assert phases[0]["purpose"] == "Hook"
+    assert phases[-1]["purpose"] == "Payoff"
+    assert "Start on the strongest verified landing moment" in phases[0]["visual_style"]
+    assert "climax" not in directives  # This is a phase-oriented legacy plan, not a V3 blueprint.
+    assert _directive_for_index(directives, 0)["purpose"] == "Hook"
+    assert _directive_for_index(directives, len(phases) - 1)["purpose"] == "Payoff"
+
