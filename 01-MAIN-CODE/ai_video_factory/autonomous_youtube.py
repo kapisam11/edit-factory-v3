@@ -889,6 +889,57 @@ class AutonomousStore:
         with self._connect() as conn:
             self._event(conn, job_id, name, details)
 
+    def recover_stale_jobs(self, *, older_than_minutes: int = 120) -> dict[str, int]:
+        """Recover work left in an in-progress state after a process crash."""
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(minutes=max(10, int(older_than_minutes)))
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        now = _utc_now()
+        recovered = {"production": 0, "publish": 0, "analytics": 0}
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                "SELECT id,state,retry_count,approval,publish_requested FROM autonomous_jobs "
+                "WHERE state IN ('PRODUCING','UPLOADING','ANALYZING') AND updated_at<?",
+                (cutoff,),
+            ).fetchall()
+            for row in rows:
+                old_state = str(row["state"])
+                stage = {"PRODUCING": "production", "UPLOADING": "publish", "ANALYZING": "analytics"}[old_state]
+                retries = int(row["retry_count"] or 0) + 1
+                exhausted = retries > self.config.max_retries
+                due = None if exhausted else now
+                if old_state == "PRODUCING":
+                    new_state = "POLICY_REVIEW" if exhausted else "FAILED"
+                    error = "Recovered abandoned production attempt after worker interruption"
+                elif old_state == "UPLOADING":
+                    can_retry = bool(row["approval"] == "approved" and row["publish_requested"])
+                    new_state = "SCHEDULED" if can_retry and not exhausted else "POLICY_REVIEW"
+                    error = "Interrupted upload recovered; existing-upload reconciliation is required before any retry"
+                    if new_state == "POLICY_REVIEW":
+                        due = None
+                else:
+                    new_state = "PUBLISHED" if not exhausted else "POLICY_REVIEW"
+                    error = "Recovered interrupted analytics collection"
+                    if new_state == "POLICY_REVIEW":
+                        due = None
+                conn.execute(
+                    "UPDATE autonomous_jobs SET state=?,retry_count=?,retry_stage=?,"
+                    "approval=CASE WHEN ?='POLICY_REVIEW' THEN 'pending' ELSE approval END,"
+                    "scheduled_at=CASE WHEN ?='POLICY_REVIEW' THEN NULL ELSE scheduled_at END,"
+                    "next_attempt_at=?,error=?,updated_at=? WHERE id=?",
+                    (new_state, retries, stage, new_state, new_state, due, error, now, row["id"]),
+                )
+                self._event(
+                    conn,
+                    str(row["id"]),
+                    "stale_job_recovered",
+                    {"from": old_state, "to": new_state, "stage": stage, "retry_count": retries},
+                )
+                recovered[stage] += 1
+            conn.commit()
+        return recovered
+
     def prune(self) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.config.retention_days)
         stale_cutoff = datetime.now(timezone.utc) - timedelta(days=self.config.stale_schedule_days)
@@ -1178,8 +1229,9 @@ class AutonomousManager:
             )
         )
         retry_count = int(job.get("retry_count") or 0) + 1
+        integrity_failure = isinstance(exc, PublicationIntegrityError)
         next_attempt: Optional[str] = None
-        if auth_or_quota_failure:
+        if auth_or_quota_failure or integrity_failure:
             state = "POLICY_REVIEW"
         elif retry_count <= self.config.max_retries:
             delay = min(
@@ -1187,11 +1239,11 @@ class AutonomousManager:
                 self.config.retry_base_seconds * (2 ** max(0, retry_count - 1)),
             )
             next_attempt = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat().replace("+00:00", "Z")
-            state = "FAILED" if stage == "production" else "SCHEDULED"
+            state = {"production": "FAILED", "publish": "SCHEDULED", "analytics": "PUBLISHED"}.get(stage, "POLICY_REVIEW")
         else:
             state = "POLICY_REVIEW"
 
-        if auth_or_quota_failure:
+        if auth_or_quota_failure or integrity_failure:
             next_attempt = None
         failures = int(self.store.setting("consecutive_failures", "0") or 0) + 1
         self.store.set_setting("consecutive_failures", str(failures))
@@ -1212,6 +1264,8 @@ class AutonomousManager:
             ),
         )
         self.store.event(str(job["id"]), "failed", {"stage": stage, "error": str(exc), "retry_count": retry_count})
+        if integrity_failure:
+            self.store.event(str(job["id"]), "publication_integrity_blocked", {"stage": stage, "error": error_text[:500]})
         _notify(
             self.config,
             {
@@ -1281,6 +1335,19 @@ class AutonomousManager:
                     f">= {topic_guard['threshold']:.2f}"
                 )
             options = self._production_options(job)
+            package_parent = self.config.output_dir / "autonomous"
+            output_root = self.config.output_dir.resolve()
+            package_parent.mkdir(parents=True, exist_ok=True)
+            if package_parent.resolve(strict=True).parent != output_root:
+                raise PublicationIntegrityError("autonomous workspace root resolves outside the configured output directory")
+            if package_dir.is_symlink():
+                raise PublicationIntegrityError("production workspace cannot be a symbolic link")
+            if package_dir.exists():
+                resolved_package = package_dir.resolve(strict=True)
+                if resolved_package.parent != package_parent.resolve(strict=True):
+                    raise PublicationIntegrityError("production workspace resolves outside the autonomous output root")
+                import shutil
+                shutil.rmtree(resolved_package)
             result = run_complete_factory(
                 None,
                 str(job["topic"]),
@@ -1616,18 +1683,7 @@ class AutonomousManager:
             self.store.event(job_id, "analytics_recorded", {"score": score})
             return job_id
         except Exception as exc:
-            retry = int(claim.get("retry_count") or 0) + 1
-            delay = min(self.config.retry_max_seconds, self.config.retry_base_seconds * (2 ** max(0, retry - 1)))
-            next_attempt = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat().replace("+00:00", "Z")
-            self.store.update(
-                job_id,
-                state="PUBLISHED",
-                retry_count=retry,
-                retry_stage="analytics",
-                next_attempt_at=next_attempt,
-                error=f"analytics: {exc}",
-            )
-            _notify(self.config, {"event": "autonomous_analytics_retry", "job_id": job_id, "error": str(exc), "retry_count": retry})
+            self._record_failure(claim, exc, stage="analytics")
             return job_id
 
     def generate_learning_profile(self) -> dict[str, Any]:
@@ -1754,6 +1810,11 @@ class AutonomousManager:
         except Exception as exc:
             logger.exception("automatic backup failed")
             _notify(self.config, {"event": "autonomous_backup_failed", "error": str(exc)})
+        try:
+            result["recovered"] = self.store.recover_stale_jobs(older_than_minutes=self.config.stale_job_minutes)
+        except Exception:
+            logger.exception("stale autonomous job recovery failed")
+            result["recovered"] = {"error": "recovery_failed"}
         if self.store.setting("emergency_stop", "0") == "1" or self.store.setting("paused", "0") == "1":
             result["paused"] = True
             return result
