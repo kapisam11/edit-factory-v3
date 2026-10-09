@@ -1166,7 +1166,7 @@ def _extract_package(package_dir: Path) -> tuple[dict[str, Any], str, Path]:
         script = script_path.read_text(encoding="utf-8", errors="replace")
     except FileNotFoundError:
         script = ""
-    if video_path is None:
+    if not isinstance(video_path, Path):
         raise FileNotFoundError("final YouTube video is missing from package")
     return metadata, script, video_path
 
