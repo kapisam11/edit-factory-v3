@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -322,6 +323,71 @@ def test_package_extraction_rejects_path_traversal(tmp_path: Path):
 
     with pytest.raises(PublicationIntegrityError, match="escapes"):
         _extract_package(package)
+
+
+def test_crash_recovery_requeues_abandoned_production_job(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path, max_retries=2))
+    job_id = manager.enqueue("Interrupted production test")
+    manager.store.update(
+        job_id,
+        state="PRODUCING",
+        updated_at="2000-01-01T00:00:00Z",
+    )
+
+    recovered = manager.store.recover_stale_jobs(older_than_minutes=10)
+    job = manager.store.get(job_id)
+    assert recovered["production"] == 1
+    assert job is not None
+    assert job["state"] == "FAILED"
+    assert job["retry_stage"] == "production"
+    assert job["retry_count"] == 1
+    assert job["next_attempt_at"]
+
+
+def test_publish_blocks_metadata_changed_after_review(tmp_path: Path, monkeypatch):
+    manager = AutonomousManager(_config(tmp_path))
+    job_id = manager.enqueue("Publication integrity test")
+    package = manager.config.output_dir / "autonomous" / job_id
+    metadata_dir = package / "upload" / "youtube_shorts"
+    metadata_dir.mkdir(parents=True)
+    video = package / "video.mp4"
+    video.write_bytes(b"approved fake video")
+    metadata_path = metadata_dir / "metadata.json"
+    metadata_path.write_text(
+        json.dumps({
+            "files": {"video": "video.mp4"},
+            "selected_title": "Publication integrity test",
+            "description": "A sufficiently long, specific description for integrity testing.",
+            "tags": [],
+            "media_rights": {
+                "status": "not_declared",
+                "publish_blocked": False,
+                "requires_explicit_declaration": False,
+            },
+        }),
+        encoding="utf-8",
+    )
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    manager.store.update(
+        job_id,
+        state="SCHEDULED",
+        approval="approved",
+        scheduled_at="2000-01-01T00:00:00Z",
+        package_dir=str(package),
+        video_sha256=hashlib.sha256(video.read_bytes()).hexdigest(),
+        metadata_sha256="0" * 64,
+        published_at=None,
+    )
+
+    monkeypatch.delenv("AIVF_YOUTUBE_PRIVACY", raising=False)
+    result = manager.publish_one()
+    job = manager.store.get(job_id)
+    assert result == job_id
+    assert job is not None
+    assert job["state"] == "POLICY_REVIEW"
+    assert job["approval"] == "pending"
+    assert "metadata changed" in job["error"]
+
 
 
 
