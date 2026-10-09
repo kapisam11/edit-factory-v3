@@ -28,7 +28,7 @@ from .youtube_publisher import fetch_video_analytics, fetch_video_statistics, up
 
 logger = logging.getLogger(__name__)
 
-AUTONOMOUS_SCHEMA_VERSION = 4
+AUTONOMOUS_SCHEMA_VERSION = 5
 
 
 STATES = {
@@ -70,6 +70,7 @@ class AutonomousConfig:
     channel_niche: str = ""
     min_topic_variation: float = 0.72
     stale_schedule_days: int = 14
+    stale_job_minutes: int = 120
     require_factual_review: bool = True
     allow_public_autopublish: bool = False
     auto_disclosure_policy_acknowledged: bool = False
@@ -109,6 +110,7 @@ class AutonomousConfig:
             channel_niche=os.environ.get("AIVF_CHANNEL_NICHE", "").strip(),
             min_topic_variation=max(0.5, min(0.95, float(os.environ.get("AIVF_MIN_TOPIC_VARIATION", "0.72")))),
             stale_schedule_days=max(1, int(os.environ.get("AIVF_STALE_SCHEDULE_DAYS", "14"))),
+            stale_job_minutes=max(10, int(os.environ.get("AIVF_AUTONOMOUS_STALE_JOB_MINUTES", "120"))),
             require_factual_review=os.environ.get("AIVF_AUTONOMOUS_REQUIRE_FACT_REVIEW", "1").strip() == "1",
             allow_public_autopublish=os.environ.get("AIVF_AUTONOMOUS_ALLOW_PUBLIC", "0").strip() == "1",
             auto_disclosure_policy_acknowledged=os.environ.get(
@@ -122,7 +124,17 @@ def _utc_now() -> str:
 
 
 def _parse_time(value: str) -> datetime:
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include an explicit timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_scheduled_at(value: Optional[str]) -> Optional[str]:
+    if value is None or not str(value).strip():
+        return None
+    parsed = _parse_time(str(value).strip()).replace(microsecond=0)
+    return parsed.isoformat().replace("+00:00", "Z")
 
 
 def _parse_json(raw: str, default: Any) -> Any:
@@ -196,6 +208,7 @@ class AutonomousStore:
                     video_id TEXT,
                     fingerprint TEXT,
                     video_sha256 TEXT,
+                    metadata_sha256 TEXT,
                     script TEXT NOT NULL DEFAULT '',
                     estimated_cost_usd REAL NOT NULL DEFAULT 0,
                     actual_cost_usd REAL NOT NULL DEFAULT 0,
@@ -368,6 +381,31 @@ class AutonomousStore:
                 )
                 current = 4
 
+            if current < 5:
+                job_columns = {
+                    str(row["name"])
+                    for row in conn.execute("PRAGMA table_info(autonomous_jobs)").fetchall()
+                }
+                if "metadata_sha256" not in job_columns:
+                    conn.execute("ALTER TABLE autonomous_jobs ADD COLUMN metadata_sha256 TEXT")
+                # Old READY/SCHEDULED packages were not bound to the exact metadata
+                # approved during review. Require a fresh review rather than trust
+                # an unverifiable title/description/tags/rights snapshot.
+                conn.execute(
+                    """
+                    UPDATE autonomous_jobs
+                    SET state='POLICY_REVIEW', approval='pending', scheduled_at=NULL,
+                        next_attempt_at=NULL,
+                        error='Publication metadata integrity review required after upgrade',
+                        updated_at=?
+                    WHERE package_dir IS NOT NULL
+                      AND state IN ('READY','POLICY_REVIEW','SCHEDULED')
+                      AND (metadata_sha256 IS NULL OR metadata_sha256='')
+                    """,
+                    (_utc_now(),),
+                )
+                current = 5
+
             for key, value in {
                 "paused": "0",
                 "emergency_stop": "0",
@@ -453,6 +491,7 @@ class AutonomousStore:
         clean_topic = str(topic or "").strip()
         if not clean_topic:
             raise ValueError("topic is required")
+        scheduled_at = _normalize_scheduled_at(scheduled_at)
         if platform not in PLATFORM_LAYOUTS:
             raise ValueError(f"unsupported platform: {platform}")
         seed = f"{clean_topic}|{platform}|{scheduled_at or ''}|{json.dumps(dict(options or {}), sort_keys=True)}"
@@ -627,6 +666,7 @@ class AutonomousStore:
             "video_id",
             "fingerprint",
             "video_sha256",
+            "metadata_sha256",
             "script",
             "estimated_cost_usd",
             "actual_cost_usd",
@@ -682,7 +722,7 @@ class AutonomousStore:
             self.schedule(job_id)
 
     def schedule(self, job_id: str, publish_at: Optional[str] = None) -> str:
-        target = publish_at or self.next_publish_slot()
+        target = _normalize_scheduled_at(publish_at) or self.next_publish_slot()
         with self._connect() as conn:
             conn.execute(
                 "UPDATE autonomous_jobs SET state='SCHEDULED',scheduled_at=?,updated_at=? "
@@ -1006,6 +1046,7 @@ class AutonomousManager:
                 "channel_niche": self.config.channel_niche,
                 "min_topic_variation": self.config.min_topic_variation,
                 "stale_schedule_days": self.config.stale_schedule_days,
+                "stale_job_minutes": self.config.stale_job_minutes,
                 "require_factual_review": self.config.require_factual_review,
                 "allow_public_autopublish": self.config.allow_public_autopublish,
                 "auto_disclosure_policy_acknowledged": self.config.auto_disclosure_policy_acknowledged,
