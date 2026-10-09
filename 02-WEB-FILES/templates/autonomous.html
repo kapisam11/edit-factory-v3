@@ -157,7 +157,15 @@
         ? 'You are approving this package and acknowledging its factual/rights checks and AI/altered-content disclosure decision. Realistic altered/synthetic media will be flagged on YouTube when applicable; no factory or AI-generator credit is added to the description. Verify the script and visible factual claims before continuing.'
         : 'Approve this package after reviewing its content, factual claims, and any relevant platform disclosure?';
       if (!confirm(message)) return;
-      try { await requestJson('/api/autonomous/approve/' + encodeURIComponent(id), {method:'POST'}); show('Disclosure reviewed; approved and scheduled.', 'done'); refresh(); }
+      try {
+        await requestJson('/api/autonomous/approve/' + encodeURIComponent(id), {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({disclosure_acknowledged:needsDisclosureReview})
+        });
+        show('Review recorded; approved and scheduled.', 'done');
+        refresh();
+      }
       catch (err) { show(err.message, 'error'); }
     }
     async function pauseLoop() {
