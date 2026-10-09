@@ -125,7 +125,7 @@ def aggregate_video_reach_csv(
     end = date.fromisoformat(end_date)
     if end < start:
         raise ValueError("end_date must be on or after start_date")
-    reader = csv.DictReader(io.StringIO(csv_text.lstrip("\\ufeff")))
+    reader = csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff")))
     required = {
         "date",
         "video_id",
@@ -306,7 +306,7 @@ def fetch_video_reach_metrics(
             continue
         # Aggregate helper is intentionally pure; the per-day values are parsed
         # below so an overlapping re-delivered report can replace older data.
-        reader = csv.DictReader(io.StringIO(payload.lstrip("\\ufeff")))
+        reader = csv.DictReader(io.StringIO(payload.lstrip("\ufeff")))
         for row in reader:
             normalized = {str(key or "").strip().lower(): str(value or "").strip() for key, value in row.items()}
             if normalized.get("video_id") != video_id:
