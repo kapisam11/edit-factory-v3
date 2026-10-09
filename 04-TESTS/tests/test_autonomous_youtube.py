@@ -180,6 +180,44 @@ def test_publish_claim_atomically_moves_one_job_to_uploading(tmp_path: Path):
     assert manager.store.claim_publish(now="2026-10-08T12:00:00Z") is None
 
 
+def test_ai_publish_claim_requires_recorded_disclosure_review(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path))
+    job_id = manager.enqueue("A synthetic media disclosure test", publish_requested=True)
+    manager.store.update(
+        job_id,
+        state="SCHEDULED",
+        approval="approved",
+        scheduled_at="2000-01-01T00:00:00Z",
+        package_dir=str(tmp_path / "package"),
+        ai_generated=1,
+        realistic_alteration=1,
+        disclosure_reviewed=0,
+    )
+
+    assert manager.store.claim_publish(now="2026-10-08T12:00:00Z") is None
+    assert manager.store.get(job_id)["state"] == "SCHEDULED"
+
+
+def test_approval_records_disclosure_review_and_schedules_policy_review(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path))
+    job_id = manager.enqueue("Review the disclosure before publishing")
+    manager.store.update(
+        job_id,
+        state="POLICY_REVIEW",
+        package_dir=str(tmp_path / "package"),
+        ai_generated=1,
+        realistic_alteration=1,
+        disclosure_reviewed=0,
+    )
+
+    manager.approve(job_id, actor="test-reviewer")
+    job = manager.store.get(job_id)
+    assert job is not None
+    assert job["state"] == "SCHEDULED"
+    assert job["approval"] == "approved"
+    assert job["disclosure_reviewed"] == 1
+
+
 def test_daily_cost_limit_accounts_for_generation_before_publish(tmp_path: Path):
     manager = AutonomousManager(
         _config(tmp_path, max_daily_cost_usd=1.0, estimated_cost_per_video_usd=1.0)
