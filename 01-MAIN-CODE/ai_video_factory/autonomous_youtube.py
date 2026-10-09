@@ -512,8 +512,9 @@ class AutonomousStore:
                 )
             new_state = "PRODUCING" if row["state"] in {"IDEA", "FAILED"} else row["state"]
             conn.execute(
-                "UPDATE autonomous_jobs SET state=?,updated_at=?,error='' WHERE id=?",
-                (new_state, now, row["id"]),
+                "UPDATE autonomous_jobs SET state=?,updated_at=?,error='',"
+                "actual_cost_usd=actual_cost_usd+? WHERE id=?",
+                (new_state, now, estimate, row["id"]),
             )
             self._event(conn, row["id"], "claimed", {"from": row["state"], "to": new_state})
             conn.commit()
@@ -1210,7 +1211,6 @@ class AutonomousManager:
                 fingerprint=fingerprint,
                 video_sha256=video_hash,
                 estimated_cost_usd=self.config.estimated_cost_per_video_usd,
-                actual_cost_usd=self.config.estimated_cost_per_video_usd,
                 approval=approval,
                 scheduled_at=scheduled,
                 experiment_family=str(job.get("experiment_family") or ""),
@@ -1324,7 +1324,6 @@ class AutonomousManager:
                 job_id,
                 state="PUBLISHED",
                 video_id=video_id,
-                actual_cost_usd=self.config.estimated_cost_per_video_usd,
                 published_at=_utc_now(),
                 error="",
             )
