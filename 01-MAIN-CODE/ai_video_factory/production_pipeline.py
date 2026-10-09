@@ -118,6 +118,48 @@ def _footage_evidence_from_scenes(scenes: Sequence[Any]) -> Dict[str, Any]:
     } for scene in ranked[:12]]}
 
 
+def _video_thinking_timeline_directives(plan: Mapping[str, Any], script: str) -> Dict[str, Any]:
+    """Translate creative story phases into footage-aware timeline hints."""
+    raw_directions = plan.get("edit_directions")
+    directions = raw_directions if isinstance(raw_directions, Mapping) else {}
+    lines = [line.strip() for line in str(script or "").splitlines() if line.strip()]
+    if not lines:
+        return {"phase_directives": []}
+
+    purpose_by_phase = {
+        "hook": "Hook", "setup": "Memory", "conflict": "Threat",
+        "climax": "Climax", "payoff": "Payoff",
+    }
+    motion_by_phase = {
+        "hook": "punch-in", "setup": "subtle-parallax",
+        "conflict": "tracking", "climax": "tracking", "payoff": "slow push",
+    }
+    transition_by_phase = {
+        "hook": "hard cut", "setup": "match cut", "conflict": "match cut",
+        "climax": "speed ramp", "payoff": "dissolve",
+    }
+    phase_directives: list[dict[str, Any]] = []
+    for index, _line in enumerate(lines):
+        ratio = index / max(1, len(lines) - 1)
+        if index == 0:
+            phase = "hook"
+        elif index == len(lines) - 1:
+            phase = "payoff"
+        elif ratio <= 0.25:
+            phase = "setup"
+        elif ratio <= 0.55:
+            phase = "conflict"
+        else:
+            phase = "climax"
+        phase_directives.append({
+            "purpose": purpose_by_phase[phase],
+            "visual_style": str(directions.get(phase) or "")[:220],
+            "camera_motion": motion_by_phase[phase],
+            "transition": transition_by_phase[phase],
+        })
+    return {"phase_directives": phase_directives, "min_scene_match_score": 0.15}
+
+
 def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, target_seconds: float = 45.0,
                             research_summary: Optional[Dict[str, Any]] = None, enable_ocr: bool = False,
                             model_key: Optional[str] = None, skip_qc: bool = False, music_path: Optional[str] = None,
@@ -162,8 +204,45 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     _merge_footage_evidence_into_scenes(scenes, summary.get("footage_evidence"))
     result.scenes_path = save_scene_index(scenes, os.path.join(package_dir, "scenes.json"), source)
 
-    script, script_source = _generate_script(topic, summary, target_seconds, model_key)
-    if not script: result.errors.append("Planner returned an empty script"); return result
+    thinking_plan: Optional[Dict[str, Any]] = None
+    if not is_v3 and os.environ.get("AIVF_VIDEO_THINKING_ENABLED", "1").strip() != "0":
+        from .video_thinking import VideoThinkingAgent
+
+        if model_key:
+            from .model_adapter import call_model_result
+
+            agent = VideoThinkingAgent(
+                model_call=lambda prompt: call_model_result(prompt, api_key=model_key, timeout=45)
+            )
+        else:
+            agent = VideoThinkingAgent()
+        outcome = agent.create_plan(
+            topic,
+            context=summary,
+            target_seconds=target_seconds,
+        )
+        summary["video_thinking_report"] = outcome.to_dict(include_plan=False)
+        if outcome.plan is not None:
+            thinking_plan = dict(outcome.plan)
+            summary["video_thinking_plan"] = thinking_plan
+            summary["emotion"] = thinking_plan["emotion"]
+            summary["strongest_angle"] = thinking_plan["angle"]
+            summary["main_conflict"] = thinking_plan["stakes"]
+            summary["why_care"] = thinking_plan["why_people_care"]
+            summary["payoff"] = thinking_plan["payoff"]
+            summary["viral_title"] = thinking_plan["title_options"][0]
+        if outcome.warning and outcome.status != "not_configured":
+            result.warnings.append(f"Video thinking: {outcome.warning}")
+        _write_json(os.path.join(package_dir, "video_thinking.json"), outcome.to_dict())
+
+    if thinking_plan is not None:
+        script = "\n".join(str(line).strip() for line in thinking_plan.get("script_lines", []))
+        script_source = "video_thinking"
+    else:
+        script, script_source = _generate_script(topic, summary, target_seconds, model_key)
+    if not script:
+        result.errors.append("Planner returned an empty script")
+        return result
     result.script_path = _write_text(os.path.join(package_dir, "script.txt"), script)
 
     intelligence: Dict[str, Any] = {"object_detection": {"enabled": enable_object_detection, "available": False, "count": 0},
@@ -225,8 +304,18 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
 
     platform_profile = v3_directives.get("platform_profile") if isinstance(v3_directives.get("platform_profile"), dict) else summary.get("platform_profile", {})
     aspect_ratio = _platform_aspect_ratio(platform_profile)
+    creative_timeline_directives: Mapping[str, Any] = v3_directives
+    if not is_v3 and thinking_plan is not None:
+        creative_timeline_directives = _video_thinking_timeline_directives(thinking_plan, script)
     try:
-        timeline = build_timeline(script, scenes, total_seconds=float(target_seconds), aspect_ratio=aspect_ratio, source_video=source, creative_directives=v3_directives)
+        timeline = build_timeline(
+            script,
+            scenes,
+            total_seconds=float(target_seconds),
+            aspect_ratio=aspect_ratio,
+            source_video=source,
+            creative_directives=creative_timeline_directives,
+        )
     except Exception as exc: result.errors.append(f"Timeline planning failed: {exc}"); return result
     if v3_directives:
         planned_clips = v3_directives.get("clip_plan", [])
@@ -249,7 +338,8 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     result.timeline_path = save_timeline(timeline, os.path.join(package_dir, "timeline.json"))
     plan_payload: Dict[str, Any] = dict(summary)
     plan_payload.update({"topic": topic, "script": script, "script_source": script_source, "edit_plan": timeline_to_composer_plan(timeline), "timeline_path": result.timeline_path, "scene_index_path": result.scenes_path,
-                         "recommendation": recommendation.settings, "intelligence": intelligence, "platform": platform, "v3_directives": v3_directives})
+                         "recommendation": recommendation.settings, "intelligence": intelligence, "platform": platform, "v3_directives": v3_directives,
+                         "video_thinking_timeline_directives": dict(creative_timeline_directives) if thinking_plan is not None else {}})
     result.plan_path = _write_json(os.path.join(package_dir, "plan.json"), plan_payload)
 
     # V3 has its own strict render/QC/readiness contract. The legacy
@@ -282,7 +372,7 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     qc_path = os.path.join(package_dir, "qc_report.json"); result.qc_report_path = qc_path if os.path.exists(qc_path) else None
     result.metadata_path = _write_json(os.path.join(package_dir, "metadata.json"), {"version": 7, "generated_at": datetime.now(timezone.utc).isoformat(), "topic": topic, "input_video": source,
                               "target_seconds": target_seconds, "actual_timeline_seconds": timeline.duration, "scene_count": len(scenes), "segment_count": len(timeline.segments), "ocr_enabled": enable_ocr,
-                              "script_source": script_source, "model_backed": script_source == "model", "recommendation": recommendation.__dict__, "intelligence": intelligence,
+                              "script_source": script_source, "model_backed": script_source in {"model", "video_thinking"}, "recommendation": recommendation.__dict__, "intelligence": intelligence,
                               "platform": platform, "platform_aspect_ratio": aspect_ratio, "rendered": result.final_video is not None, "v3_edit_type": v3_directives.get("edit_type"),
                               "v3_retention_events": len(v3_directives.get("retention_map", [])), "warnings": result.warnings, "errors": result.errors})
     result.metrics_path = _write_json(os.path.join(package_dir, "metrics.json"), {"scene_count": len(scenes), "segment_count": len(timeline.segments),
