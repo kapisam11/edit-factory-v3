@@ -176,6 +176,16 @@ def _directive_for_index(directives: Mapping[str, Any], index: int) -> Mapping[s
     clip_plan = directives.get("clip_plan", [])
     if isinstance(clip_plan, list) and index < len(clip_plan) and isinstance(clip_plan[index], Mapping):
         return clip_plan[index]
+    # The specialist video-thinking plan is phase-oriented rather than a
+    # versioned V3 blueprint. Its per-line edit directions influence scene
+    # relevance without activating the stricter V3 immutable-boundary contract.
+    phase_directives = directives.get("phase_directives", [])
+    if (
+        isinstance(phase_directives, list)
+        and 0 <= index < len(phase_directives)
+        and isinstance(phase_directives[index], Mapping)
+    ):
+        return phase_directives[index]
     return {}
 
 
