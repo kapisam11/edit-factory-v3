@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from .ai_response_validation import parse_script_lines_response
 from .composer import compose_short_from_video
