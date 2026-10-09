@@ -1236,13 +1236,15 @@ class AutonomousManager:
                 recent_titles=self.store.recent_titles(),
             )
             rights_value = metadata.get("media_rights")
+            rights: Mapping[str, Any] = (
+                rights_value if isinstance(rights_value, Mapping) else {}
+            )
             if style.publish_blocked:
                 raise RuntimeError("human-quality guard blocked package: " + "; ".join(style.reasons[:6]))
             if _rights_review_pending(rights_value):
                 raise RuntimeError(
                     "rights gate blocked package; valid source-rights evidence is missing or unresolved"
                 )
-            rights: Mapping[str, Any] = rights_value
             # Required factual-review evidence must exist and identify the source
             # research status. Missing manifests do not count as a clean review.
             if not video_path.exists():
