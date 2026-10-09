@@ -1463,6 +1463,36 @@ class AutonomousManager:
                         complete_manifest = manifest_value
                 except (OSError, ValueError):
                     complete_manifest = {}
+            thinking_report: dict[str, Any] = {}
+            thinking_report_found = False
+            for report_path in (
+                package_dir / "primary" / "video_thinking.json",
+                package_dir / "video_thinking.json",
+            ):
+                if report_path.is_file():
+                    try:
+                        report_value = json.loads(report_path.read_text(encoding="utf-8"))
+                        if isinstance(report_value, dict):
+                            thinking_report = report_value
+                            thinking_report_found = True
+                            break
+                    except (OSError, ValueError):
+                        thinking_report = {
+                            "status": "invalid_report",
+                            "human_review_required": True,
+                            "warning": "video thinking report could not be read",
+                        }
+                        thinking_report_found = True
+                        break
+            thinking_enabled = os.environ.get("AIVF_VIDEO_THINKING_ENABLED", "1").strip() != "0"
+            # When enabled, a missing or malformed report is not permission to
+            # publish. Explicit human review is required unless the stage was
+            # deliberately disabled for this deployment.
+            thinking_review_pending = thinking_enabled and (
+                not thinking_report_found
+                or bool(thinking_report.get("human_review_required", True))
+                or thinking_report.get("status") in {"invalid_draft", "model_unavailable"}
+            )
             fact_review = complete_manifest.get("fact_check_review")
             if not isinstance(fact_review, Mapping):
                 fact_review = {}
@@ -1534,6 +1564,7 @@ class AutonomousManager:
                 and not self.config.require_human_approval
                 and not fact_review_pending
                 and not disclosure_review_pending
+                and not thinking_review_pending
                 else "pending"
             )
             state = (
@@ -1541,7 +1572,7 @@ class AutonomousManager:
                 if approval == "approved"
                 else (
                     "POLICY_REVIEW"
-                    if fact_review_pending or disclosure_review_pending
+                    if fact_review_pending or disclosure_review_pending or thinking_review_pending
                     else "READY"
                 )
             )
@@ -1575,13 +1606,28 @@ class AutonomousManager:
                         **style.to_dict(),
                         "topic_diversity": topic_guard,
                         "factuality_review": fact_review,
+                        "video_thinking": {
+                            key: thinking_report.get(key)
+                            for key in (
+                                "status", "critique_score", "critique_issues",
+                                "revision_applied", "human_review_required", "warning"
+                            )
+                            if key in thinking_report
+                        },
                     },
                     sort_keys=True,
                 ),
                 error="",
             )
             self.store.set_setting("consecutive_failures", "0")
-            self.store.event(job_id, "production_ready", {"style_score": style.score, "scheduled_at": scheduled, "experiment_family": str(job.get("experiment_family") or ""), "title_variant": title_variant})
+            self.store.event(job_id, "production_ready", {
+                "style_score": style.score,
+                "scheduled_at": scheduled,
+                "experiment_family": str(job.get("experiment_family") or ""),
+                "title_variant": title_variant,
+                "thinking_review_pending": thinking_review_pending,
+                "thinking_score": thinking_report.get("critique_score"),
+            })
             return job_id
         except Exception as exc:
             self._record_failure(job, exc, stage="production")
