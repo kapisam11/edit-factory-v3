@@ -674,7 +674,7 @@ class AutonomousStore:
             row = conn.execute(
                 "SELECT * FROM autonomous_jobs WHERE state='SCHEDULED' "
                 "AND approval='approved' AND publish_requested=1 AND scheduled_at<=? "
-                "AND disclosure_reviewed=1 "
+                "AND ((ai_generated=0 AND realistic_alteration=0) OR disclosure_reviewed=1) "
                 "ORDER BY priority DESC, scheduled_at, created_at LIMIT 1",
                 (current,),
             ).fetchone()
