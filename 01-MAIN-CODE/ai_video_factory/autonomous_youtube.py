@@ -701,21 +701,33 @@ class AutonomousStore:
                 (*values.values(), job_id),
             )
 
-    def approve(self, job_id: str, actor: str = "local-user") -> None:
+    def approve(
+        self,
+        job_id: str,
+        actor: str = "local-user",
+        *,
+        disclosure_acknowledged: bool = False,
+    ) -> None:
         job = self.get(job_id)
         if not job:
             raise KeyError(job_id)
+        needs_disclosure_review = bool(job.get("ai_generated") or job.get("realistic_alteration"))
+        if needs_disclosure_review and not disclosure_acknowledged:
+            raise ValueError("explicit AI/altered-content disclosure acknowledgement is required")
+        reviewed = bool(disclosure_acknowledged or not needs_disclosure_review)
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE autonomous_jobs SET approval='approved',disclosure_reviewed=1,updated_at=? "
+            changed = conn.execute(
+                "UPDATE autonomous_jobs SET approval='approved',disclosure_reviewed=?,updated_at=? "
                 "WHERE id=? AND state IN ('READY','POLICY_REVIEW','SCHEDULED')",
-                (_utc_now(), job_id),
-            )
+                (1 if reviewed else 0, _utc_now(), job_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("job is not in a state that can be approved")
             self._event(
                 conn,
                 job_id,
                 "approved",
-                {"actor": actor, "disclosure_reviewed": True},
+                {"actor": actor, "disclosure_reviewed": reviewed},
             )
         updated = self.get(job_id)
         if updated and updated["state"] in {"READY", "POLICY_REVIEW"}:
@@ -1183,8 +1195,18 @@ class AutonomousManager:
         self.store.set_setting("emergency_stop", "0")
         self.store.event(None, "emergency_stop_cleared")
 
-    def approve(self, job_id: str, actor: str = "local-user") -> None:
-        self.store.approve(job_id, actor=actor)
+    def approve(
+        self,
+        job_id: str,
+        actor: str = "local-user",
+        *,
+        disclosure_acknowledged: bool = False,
+    ) -> None:
+        self.store.approve(
+            job_id,
+            actor=actor,
+            disclosure_acknowledged=disclosure_acknowledged,
+        )
 
     def enqueue(self, topic: str, **kwargs: Any) -> str:
         return self.store.enqueue(topic, **kwargs)
@@ -1870,6 +1892,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     enqueue.add_argument("--no-publish", action="store_true")
     approve = sub.add_parser("approve")
     approve.add_argument("job_id")
+    approve.add_argument(
+        "--acknowledge-disclosure",
+        action="store_true",
+        help="explicitly acknowledge the AI/altered-content disclosure review",
+    )
     pause = sub.add_parser("pause")
     pause.add_argument("reason", nargs="?", default="operator pause")
     sub.add_parser("resume")
@@ -1890,7 +1917,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps({"job_id": job_id, "status": manager.store.get(job_id)}, indent=2, ensure_ascii=False))
         return 0
     if args.command == "approve":
-        manager.approve(args.job_id)
+        manager.approve(
+            args.job_id,
+            actor="cli",
+            disclosure_acknowledged=bool(args.acknowledge_disclosure),
+        )
         return 0
     if args.command == "pause":
         manager.pause(args.reason)
