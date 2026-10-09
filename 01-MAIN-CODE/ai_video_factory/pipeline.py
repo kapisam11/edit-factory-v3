@@ -306,9 +306,6 @@ class VideoThinkingStage(PipelineStage):
             ctx.research["viral_title"] = plan["title_options"][0]
             ctx.research["payoff"] = plan["payoff"]
             ctx.research["watch_to_end_reason"] = plan["watch_to_end_reason"]
-        elif outcome.warning and outcome.status != "not_configured":
-            ctx.warnings.append(f"Video thinking unavailable: {outcome.warning}")
-
         if outcome.warning and outcome.status != "not_configured":
             ctx.warnings.append(f"Video thinking: {outcome.warning}")
         if ctx.package_dir:
