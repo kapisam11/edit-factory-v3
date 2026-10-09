@@ -388,6 +388,26 @@ class AutonomousStore:
                 }
                 if "metadata_sha256" not in job_columns:
                     conn.execute("ALTER TABLE autonomous_jobs ADD COLUMN metadata_sha256 TEXT")
+                # Normalize all existing schedule strings before comparing them
+                # against ISO UTC timestamps in the due-job query.
+                schedules = conn.execute(
+                    "SELECT id,scheduled_at FROM autonomous_jobs WHERE scheduled_at IS NOT NULL"
+                ).fetchall()
+                for scheduled in schedules:
+                    try:
+                        normalized = _normalize_scheduled_at(str(scheduled["scheduled_at"]))
+                    except (TypeError, ValueError):
+                        conn.execute(
+                            "UPDATE autonomous_jobs SET state='POLICY_REVIEW',approval='pending',"
+                            "scheduled_at=NULL,next_attempt_at=NULL,error=?,updated_at=? WHERE id=?",
+                            ("Invalid legacy schedule requires manual review", _utc_now(), scheduled["id"]),
+                        )
+                    else:
+                        if normalized != scheduled["scheduled_at"]:
+                            conn.execute(
+                                "UPDATE autonomous_jobs SET scheduled_at=? WHERE id=?",
+                                (normalized, scheduled["id"]),
+                            )
                 # Old READY/SCHEDULED packages were not bound to the exact metadata
                 # approved during review. Require a fresh review rather than trust
                 # an unverifiable title/description/tags/rights snapshot.
@@ -1078,7 +1098,10 @@ class PublicationIntegrityError(RuntimeError):
 
 
 def _resolve_package_file(package_dir: Path, relative: str) -> Path:
-    root = Path(package_dir).resolve(strict=True)
+    package_input = Path(package_dir)
+    if package_input.is_symlink():
+        raise PublicationIntegrityError("approved package root cannot be a symbolic link")
+    root = package_input.resolve(strict=True)
     rel = Path(str(relative))
     if rel.is_absolute() or any(part == ".." for part in rel.parts):
         raise PublicationIntegrityError("package artifact path escapes the approved workspace")
@@ -1095,7 +1118,10 @@ def _resolve_package_file(package_dir: Path, relative: str) -> Path:
 
 
 def _package_metadata_path(package_dir: Path) -> Path:
-    root = Path(package_dir).resolve(strict=True)
+    package_input = Path(package_dir)
+    if package_input.is_symlink():
+        raise PublicationIntegrityError("approved package root cannot be a symbolic link")
+    root = package_input.resolve(strict=True)
     for relative in ("upload/youtube_shorts/metadata.json", "upload/metadata.json"):
         candidate = root / relative
         if candidate.exists() or candidate.is_symlink():
@@ -1104,7 +1130,10 @@ def _package_metadata_path(package_dir: Path) -> Path:
 
 
 def _extract_package(package_dir: Path) -> tuple[dict[str, Any], str, Path]:
-    root = Path(package_dir).resolve(strict=True)
+    package_input = Path(package_dir)
+    if package_input.is_symlink():
+        raise PublicationIntegrityError("approved package root cannot be a symbolic link")
+    root = package_input.resolve(strict=True)
     metadata_path = _package_metadata_path(root)
     metadata_value = json.loads(metadata_path.read_text(encoding="utf-8"))
     if not isinstance(metadata_value, dict):
@@ -1272,6 +1301,8 @@ class AutonomousManager:
         self.store.update(
             str(job["id"]),
             state=state,
+            approval="pending" if state == "POLICY_REVIEW" else str(job.get("approval") or "pending"),
+            scheduled_at=None if state == "POLICY_REVIEW" else job.get("scheduled_at"),
             retry_count=retry_count,
             retry_stage=stage,
             next_attempt_at=next_attempt,
@@ -1550,6 +1581,12 @@ class AutonomousManager:
             raise
         try:
             package = Path(str(job["package_dir"]))
+            if package.is_symlink():
+                raise PublicationIntegrityError("approved package root cannot be a symbolic link")
+            expected_parent = (self.config.output_dir / "autonomous").resolve(strict=True)
+            expected_package = expected_parent / job_id
+            if package.resolve(strict=True) != expected_package.resolve(strict=False):
+                raise PublicationIntegrityError("job package path does not match its assigned workspace")
             metadata, _script, video_path = _extract_package(package)
             if not video_path.exists():
                 raise FileNotFoundError(video_path)
