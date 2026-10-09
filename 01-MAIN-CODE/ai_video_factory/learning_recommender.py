@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
 
 
@@ -17,6 +17,7 @@ class Recommendation:
     confidence: float
     evidence_count: int
     reason: str
+    learning: Dict[str, Any] = field(default_factory=dict)
 
 
 NUMERIC_FEATURES = ("cuts_per_minute", "avg_shot_duration", "hook_duration", "music_energy")
@@ -68,14 +69,20 @@ def recommend(
     *,
     defaults: Optional[Dict[str, Any]] = None,
     neighbors: int = 8,
+    model_path: Optional[str] = None,
 ) -> Recommendation:
-    records = list(experiments)
+    records = [record for record in experiments if isinstance(record, dict)]
+    from .video_learning import recommend_learned_profile, train_preference_model, training_summary
+
+    trained_model = train_preference_model(records, model_path=model_path)
+    learning_info = training_summary(trained_model)
     if not records:
         return Recommendation(
             settings=dict(defaults or {}),
             confidence=0.05,
             evidence_count=0,
             reason="Cold start: no experiment history is available.",
+            learning=learning_info,
         )
 
     ranked = sorted(records, key=lambda record: _distance(context, record))[: max(1, neighbors)]
@@ -105,9 +112,33 @@ def recommend(
             settings[key] = round(value / total_weight, 4)
 
     confidence = min(0.95, 0.20 + 0.10 * len(ranked) + 0.15 * min(1.0, max(0.0, _metric_score(best))))
+    learned_profile = recommend_learned_profile(context, records, trained_model)
+    reason = f"Selected settings from {len(ranked)} nearest experiments; best evidence score={_metric_score(best):.3f}."
+    if learned_profile:
+        learned_settings = learned_profile.get("settings")
+        if isinstance(learned_settings, dict):
+            # The trained local model ranks only configurations that were actually
+            # tried. That keeps recommendations inside the channel's evidence base.
+            for key, value in learned_settings.items():
+                if key in NUMERIC_FEATURES or key in ("caption_style", "voice", "music_style", "platform", "content_type", "edit_type"):
+                    settings[key] = value
+        learning_info.update({
+            "predicted_reward": learned_profile.get("predicted_reward"),
+            "selected_observed_reward": learned_profile.get("observed_reward"),
+            "candidate_count": learned_profile.get("candidate_count"),
+        })
+        reason += (
+            f" Local preference model ranked {learned_profile.get('candidate_count')} tested profiles "
+            f"from {learned_profile.get('sample_count')} measured/rated videos."
+        )
+        confidence = max(confidence, min(0.90, 0.35 + 0.04 * int(learned_profile.get("sample_count") or 0)))
+    elif trained_model.get("status") == "warming_up":
+        reason += " Local preference model is collecting enough real feedback to retrain."
+
     return Recommendation(
         settings=settings,
         confidence=round(confidence, 3),
         evidence_count=len(ranked),
-        reason=f"Selected settings from {len(ranked)} nearest experiments; best evidence score={_metric_score(best):.3f}.",
+        reason=reason,
+        learning=learning_info,
     )
