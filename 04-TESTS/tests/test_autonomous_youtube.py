@@ -213,6 +213,29 @@ def test_cost_reservation_is_atomic_and_counts_each_production_attempt(tmp_path:
     assert manager.store.daily_cost() == pytest.approx(2.0)
 
 
+def test_per_video_estimated_cost_accumulates_across_retries(tmp_path: Path):
+    manager = AutonomousManager(
+        _config(tmp_path, max_daily_cost_usd=5.0, estimated_cost_per_video_usd=1.0)
+    )
+    job_id = manager.enqueue("A topic that requires a retry")
+
+    first = manager.store.claim_production(
+        estimated_cost_usd=1.0, max_daily_cost_usd=5.0
+    )
+    assert first is not None
+    assert first["id"] == job_id
+    assert first["actual_cost_usd"] == pytest.approx(1.0)
+
+    manager.store.update(job_id, state="FAILED")
+    second = manager.store.claim_production(
+        estimated_cost_usd=1.0, max_daily_cost_usd=5.0
+    )
+    assert second is not None
+    assert second["id"] == job_id
+    assert second["actual_cost_usd"] == pytest.approx(2.0)
+    assert manager.store.daily_cost() == pytest.approx(2.0)
+
+
 def test_daily_cost_comes_from_ledger_not_mutable_job_updated_at(tmp_path: Path):
     manager = AutonomousManager(_config(tmp_path))
     job_id = manager.enqueue("Untouched cost-ledger test")
