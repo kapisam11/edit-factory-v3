@@ -276,7 +276,10 @@ def make_idea(summary: Dict[str, str]) -> Dict[str, object]:
             "payoff": str(thinking.get("payoff") or ""),
             "music_direction": str(thinking.get("music_direction") or ""),
             "thumbnail_concept": str(thinking.get("thumbnail_concept") or ""),
-        } if video_thinking_applied else {},
+            "learned_music_style": str(learned_settings.get("music_style") or ""),
+            "learned_caption_style": str(learned_settings.get("caption_style") or ""),
+            "learned_voice": str(learned_settings.get("voice") or ""),
+        },
         "structure": {
             "total_seconds": duration_total,
             "hook": [0.0, durations[0]],
