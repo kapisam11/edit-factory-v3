@@ -118,13 +118,45 @@ def _footage_evidence_from_scenes(scenes: Sequence[Any]) -> Dict[str, Any]:
     } for scene in ranked[:12]]}
 
 
-def _video_thinking_timeline_directives(plan: Mapping[str, Any], script: str) -> Dict[str, Any]:
-    """Translate creative story phases into footage-aware timeline hints."""
+def _video_thinking_timeline_directives(
+    plan: Mapping[str, Any],
+    script: str,
+    *,
+    target_seconds: Optional[float] = None,
+    preferences: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Translate story phases and learned pacing into footage-aware timeline cues."""
     raw_directions = plan.get("edit_directions")
     directions = raw_directions if isinstance(raw_directions, Mapping) else {}
     lines = [line.strip() for line in str(script or "").splitlines() if line.strip()]
     if not lines:
         return {"phase_directives": []}
+
+    settings = preferences if isinstance(preferences, Mapping) else {}
+    desired_count = len(lines)
+    duration = float(target_seconds) if target_seconds is not None else None
+    if duration is not None and duration > 0:
+        try:
+            cuts_per_minute = float(settings.get("cuts_per_minute", 0.0))
+        except (TypeError, ValueError):
+            cuts_per_minute = 0.0
+        if 0.1 <= cuts_per_minute <= 240.0:
+            desired_count = max(5, min(120, int(round(duration * cuts_per_minute / 60.0))))
+
+    segment_durations: list[float] = []
+    if duration is not None and duration > 0 and desired_count > 0:
+        try:
+            hook_duration = float(settings.get("hook_duration", 0.0))
+        except (TypeError, ValueError):
+            hook_duration = 0.0
+        if not 0.1 <= hook_duration <= min(6.0, duration * 0.30):
+            hook_duration = min(duration / desired_count, duration * 0.20)
+        if desired_count == 1:
+            segment_durations = [duration]
+        else:
+            remaining = max(0.1, duration - hook_duration)
+            segment_durations = [hook_duration] + [remaining / (desired_count - 1)] * (desired_count - 1)
+            segment_durations[-1] += duration - sum(segment_durations)
 
     purpose_by_phase = {
         "hook": "Hook", "setup": "Memory", "conflict": "Threat",
@@ -139,11 +171,11 @@ def _video_thinking_timeline_directives(plan: Mapping[str, Any], script: str) ->
         "climax": "speed ramp", "payoff": "dissolve",
     }
     phase_directives: list[dict[str, Any]] = []
-    for index, _line in enumerate(lines):
-        ratio = index / max(1, len(lines) - 1)
+    for index in range(desired_count):
+        ratio = index / max(1, desired_count - 1)
         if index == 0:
             phase = "hook"
-        elif index == len(lines) - 1:
+        elif index == desired_count - 1:
             phase = "payoff"
         elif ratio <= 0.25:
             phase = "setup"
@@ -151,14 +183,20 @@ def _video_thinking_timeline_directives(plan: Mapping[str, Any], script: str) ->
             phase = "conflict"
         else:
             phase = "climax"
-        phase_directives.append({
+        directive: dict[str, Any] = {
             "purpose": purpose_by_phase[phase],
             "visual_style": str(directions.get(phase) or "")[:220],
             "camera_motion": motion_by_phase[phase],
             "transition": transition_by_phase[phase],
-        })
-    return {"phase_directives": phase_directives, "min_scene_match_score": 0.15}
-
+        }
+        if segment_durations:
+            directive["duration"] = round(segment_durations[index], 3)
+        phase_directives.append(directive)
+    return {
+        "phase_directives": phase_directives,
+        "min_scene_match_score": 0.15,
+        "learned_cuts_per_minute_applied": len(phase_directives) / (duration / 60.0) if duration else None,
+    }
 
 def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, target_seconds: float = 45.0,
                             research_summary: Optional[Dict[str, Any]] = None, enable_ocr: bool = False,
@@ -324,7 +362,12 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     aspect_ratio = _platform_aspect_ratio(platform_profile)
     creative_timeline_directives: Mapping[str, Any] = v3_directives
     if not is_v3 and thinking_plan is not None:
-        creative_timeline_directives = _video_thinking_timeline_directives(thinking_plan, script)
+        creative_timeline_directives = _video_thinking_timeline_directives(
+            thinking_plan,
+            script,
+            target_seconds=float(target_seconds),
+            preferences=recommendation.settings,
+        )
     try:
         timeline = build_timeline(
             script,
