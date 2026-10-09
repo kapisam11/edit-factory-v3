@@ -65,10 +65,17 @@ def register_autonomous_routes(app) -> None:
     @app.post("/api/autonomous/approve/<job_id>")
     def autonomous_approve(job_id: str):
         require_admin()
+        payload = request.get_json(silent=True) or {}
         try:
-            manager.approve(job_id, actor=str(request.headers.get("X-AIVF-Actor") or "dashboard-admin"))
+            manager.approve(
+                job_id,
+                actor=str(request.headers.get("X-AIVF-Actor") or "dashboard-admin"),
+                disclosure_acknowledged=payload.get("disclosure_acknowledged") is True,
+            )
         except KeyError:
             return jsonify({"error": "job not found"}), 404
+        except ValueError as exc:
+            return jsonify({"error": str(exc), "code": "AUTONOMY_APPROVAL_REJECTED"}), 400
         return jsonify(manager.store.get(job_id))
 
     @app.post("/api/autonomous/pause")
