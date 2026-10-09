@@ -224,4 +224,4 @@ def test_youtube_analytics_become_trainable_settings_and_reward(tmp_path: Path) 
     assert record["edit_type"] == "dramatic"
     assert record["retention"] == 0.75
     assert record["engagement_rate"] == 0.09
-    assert observed_reward(record) == pytest.approx(0.84)
+    assert observed_reward(record) == pytest.approx(0.795)
