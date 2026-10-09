@@ -354,7 +354,7 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
             cap.release()
         except Exception as exc: result.warnings.append(f"Face analysis unavailable: {exc}")
         object_boxes = _safe_boxes(object_detections); captions = build_choreographed_captions(speech_words, face_boxes_by_time=faces_by_time, object_boxes_by_time=object_boxes)
-        choreography_path = save_json(os.path.join(package_dir, "caption_choreography.json"), [cue.__dict__ for cue in captions]); ass_path = write_ass_captions(captions, os.path.join(package_dir, "captions.ass"))
+        choreography_path = save_json(os.path.join(package_dir, "caption_choreography.json"), [cue.__dict__ for cue in captions]); ass_path = write_ass_captions(captions, os.path.join(package_dir, "captions.ass"), caption_style=str(recommendation.settings.get("caption_style") or "karaoke"))
         intelligence["caption_choreography"] = {"available": True, "count": len(captions), "path": ass_path, "json_path": choreography_path}
     except Exception as exc: result.warnings.append(f"Speech intelligence unavailable: {exc}")
 
