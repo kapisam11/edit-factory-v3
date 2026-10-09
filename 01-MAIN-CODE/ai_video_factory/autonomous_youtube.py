@@ -1457,7 +1457,10 @@ class AutonomousManager:
                 str(package_dir),
                 target_seconds=options["target_seconds"],
                 platforms=options["platforms"],
-                experiment_history_path=str(self.config.state_dir / "learning_history.json"),
+                experiment_history_path=(
+                    os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+                    or str(self.config.state_dir / "learning_history.json")
+                ),
                 auto_research=True,
                 publish_youtube=False,
                 skip_qc=False,
