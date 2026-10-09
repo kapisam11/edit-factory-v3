@@ -173,3 +173,19 @@ def test_video_thinking_directions_reach_footage_timeline_without_v3_contract() 
     assert _directive_for_index(directives, 0)["purpose"] == "Hook"
     assert _directive_for_index(directives, len(phases) - 1)["purpose"] == "Payoff"
 
+
+def test_learned_pacing_changes_actual_timeline_cut_count_and_hook_duration() -> None:
+    plan = validate_video_plan(_plan(), topic="Apollo 11 landing", target_seconds=30)
+    script = "\n".join(plan["script_lines"])
+    directives = _video_thinking_timeline_directives(
+        plan,
+        script,
+        target_seconds=30,
+        preferences={"cuts_per_minute": 24.0, "hook_duration": 1.5},
+    )
+    phases = directives["phase_directives"]
+
+    assert len(phases) == 12
+    assert phases[0]["duration"] == pytest.approx(1.5)
+    assert sum(item["duration"] for item in phases) == pytest.approx(30.0)
+    assert directives["learned_cuts_per_minute_applied"] == pytest.approx(24.0)
