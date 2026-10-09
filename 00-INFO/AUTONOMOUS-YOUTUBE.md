@@ -32,6 +32,7 @@ After you have reviewed several successful packages, fully unattended publicatio
     AIVF_MAX_VIDEOS_PER_DAY=2
     AIVF_MAX_CONSECUTIVE_FAILURES=3
     AIVF_MAX_DAILY_COST_USD=5
+    AIVF_ESTIMATED_COST_PER_VIDEO_USD=1
     AIVF_TOPIC_SEEDS=your niche seed|another seed
     AIVF_PUBLISH_TIMES_UTC=12:00,18:00
 
@@ -69,7 +70,7 @@ The queue has explicit IDEA -> PRODUCING -> READY -> SCHEDULED -> UPLOADING -> P
 
 ## Economics and learning
 
-The loop tracks estimated provider cost, YouTube analytics, estimated revenue when the YouTube Analytics API permits it, daily ROI, and channel-level performance recommendations. Analytics failures are retried independently rather than regenerating the video.
+The loop records a cost estimate for each production attempt in an append-only SQLite ledger; a transaction reserves the estimate before generation, so concurrent local daemons cannot spend the same daily budget headroom. Set `AIVF_ESTIMATED_COST_PER_VIDEO_USD` conservatively for the providers/models you use. This is a budget guard based on configured estimates, **not an exact billing meter**: provider usage/cost data is not available from every configured generator, so check provider billing dashboards as well. The loop also collects YouTube analytics, estimates revenue when the YouTube Analytics API permits it, computes daily ROI, and writes channel-level performance recommendations. Analytics failures are retried independently rather than regenerating the video.
 
 No system can guarantee monetization, growth, or revenue. The engineering goal is to maximize the quality of videos produced per hour of human attention while keeping the system bounded and stoppable.
 
