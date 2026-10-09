@@ -264,6 +264,11 @@ def _ranked_thumbnail(package_dir: str, variants: Sequence[str], topic: str) -> 
 def run_complete_factory(input_video: Optional[str], topic: str, package_dir: str, *, target_seconds: float = 45.0, platforms: Sequence[str] = tuple(PLATFORM_LAYOUTS), clip_count: Optional[int] = None, experiment_history_path: Optional[str] = None, auto_research: bool = True, publish_youtube: bool = False, youtube_options: Optional[Mapping[str, Any]] = None, model_key: Optional[str] = None, skip_qc: bool = False) -> Dict[str, Any]:
     root = Path(package_dir)
     root.mkdir(parents=True, exist_ok=True)
+    learning_history_path = (
+        experiment_history_path
+        or os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+        or None
+    )
     checkpoints = CheckpointStore(str(root / "checkpoints.json"))
     if checkpoints.is_complete("complete") and (root / "complete_factory_manifest.json").exists():
         return json.loads((root / "complete_factory_manifest.json").read_text(encoding="utf-8"))
@@ -279,8 +284,8 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         research["strategy"] = generate_content_strategy(topic)
         research["emotion"] = detect_emotion(topic)
         research["hooks"] = generate_hook_candidates(topic, research, count=8)
-        if experiment_history_path and os.path.exists(experiment_history_path):
-            research["learned_style"] = learn_channel_style(load_experiments(experiment_history_path))
+        if learning_history_path and os.path.exists(learning_history_path):
+            research["learned_style"] = learn_channel_style(load_experiments(learning_history_path))
         _write_json(str(root / "auto_research.json"), research)
         checkpoints.mark("research", status="complete", artifacts=[str(root / "auto_research.json")])
 
@@ -299,7 +304,7 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         primary_result.errors.extend(ctx.errors)
     else:
         primary_dir = str(root / "primary")
-        primary_result = provider_retry(lambda: run_production_pipeline(input_video, topic, primary_dir, target_seconds=target_seconds, research_summary=research, model_key=model_key, skip_qc=skip_qc, experiment_history_path=experiment_history_path, platform="youtube_shorts"), attempts=3)
+        primary_result = provider_retry(lambda: run_production_pipeline(input_video, topic, primary_dir, target_seconds=target_seconds, research_summary=research, model_key=model_key, skip_qc=skip_qc, experiment_history_path=learning_history_path, platform="youtube_shorts"), attempts=3)
     if primary_result.errors or not primary_result.final_video:
         return {"status": "failed", "errors": primary_result.errors or ["Primary production produced no video"], "warnings": primary_result.warnings}
     checkpoints.mark("primary", status="complete", artifacts=[primary_result.final_video])
@@ -451,8 +456,8 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
     manifest["artifact_readiness"] = artifact_readiness
     _write_json(str(root / "complete_factory_manifest.json"), manifest)
 
-    if experiment_history_path:
-        manifest["learning_record"] = update_learning_history(experiment_history_path, topic=topic, platform="youtube_shorts", package_dir=str(root), metrics={"hook_duration": pacing[0] if pacing else 2.0})
+    if learning_history_path:
+        manifest["learning_record"] = update_learning_history(learning_history_path, topic=topic, platform="youtube_shorts", package_dir=str(root), metrics={"hook_duration": pacing[0] if pacing else 2.0})
         _write_json(str(root / "complete_factory_manifest.json"), manifest)
 
     if publish_youtube:
@@ -481,8 +486,8 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             manifest["playlist"] = add_video_to_playlist(upload_result["video_id"], playlist["id"], client_secrets_path=opts.get("client_secrets_path"), token_path=opts.get("token_path"))
         stats = fetch_video_statistics(upload_result["video_id"], client_secrets_path=opts.get("client_secrets_path"), token_path=opts.get("token_path"))
         manifest["performance_feedback"] = stats
-        if experiment_history_path:
-            update_learning_history(experiment_history_path, topic=topic, platform="youtube_shorts", package_dir=str(root), metrics={}, performance_metrics=stats.get("statistics", {}))
+        if learning_history_path:
+            update_learning_history(learning_history_path, topic=topic, platform="youtube_shorts", package_dir=str(root), metrics={}, performance_metrics=stats.get("statistics", {}))
         _write_json(str(root / "complete_factory_manifest.json"), manifest)
 
     checkpoints.mark("complete", status="complete", artifacts=[str(root / "complete_factory_manifest.json")])
