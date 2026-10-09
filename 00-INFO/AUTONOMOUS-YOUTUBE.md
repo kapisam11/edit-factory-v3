@@ -23,7 +23,7 @@ Use the defaults first:
 - AIVF_MAX_CONSECUTIVE_FAILURES=3
 - AIVF_YOUTUBE_PRIVACY=private
 
-This produces packages and schedules them in READY/SCHEDULED, but requires dashboard approval before a public upload.
+This produces packages and routes packages needing factual or disclosure review to POLICY_REVIEW. The dashboard shows factual claims to verify and whether AI/realistic-alteration flags are present; approval records the operator's review before scheduling.
 
 After you have reviewed several successful packages, fully unattended publication can be enabled explicitly:
 
