@@ -320,7 +320,13 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         primary_path = root / "primary"
         primary_path.mkdir(parents=True, exist_ok=True)
         primary_dir = str(primary_path)
-        ctx = PipelineContext(topic=topic, package_dir=primary_dir, target_seconds=target_seconds, model_key=model_key)
+        ctx = PipelineContext(
+            topic=topic,
+            package_dir=primary_dir,
+            target_seconds=target_seconds,
+            model_key=model_key,
+            learning_history_path=learning_history_path,
+        )
         ctx = provider_retry(lambda: build_director_pipeline(verbose=False).run(ctx), attempts=2)
         primary_result = ProductionResult(package_dir=primary_dir)
         primary_result.final_video = ctx.final_video
