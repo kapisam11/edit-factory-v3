@@ -237,6 +237,91 @@ def disclosure_setting(*, ai_generated: bool, realistic_alteration: bool) -> Dic
     }
 
 
+
+
+
+def _attach_uploaded_assets(
+    youtube: Any,
+    video_id: str,
+    media_upload_type: Any,
+    *,
+    thumbnail_path: Optional[str],
+    caption_path: Optional[str],
+    caption_language: str,
+) -> Dict[str, Any]:
+    """Apply retry-safe thumbnail/caption steps after the video itself exists."""
+    attached: Dict[str, Any] = {}
+    if thumbnail_path:
+        thumb = Path(thumbnail_path)
+        if not thumb.is_file():
+            raise FileNotFoundError(thumb)
+        attached["thumbnail"] = youtube.thumbnails().set(
+            videoId=video_id,
+            media_body=media_upload_type(
+                str(thumb),
+                mimetype=mimetypes.guess_type(str(thumb))[0] or "image/jpeg",
+            ),
+        ).execute()
+    if caption_path:
+        caption = Path(caption_path)
+        if not caption.is_file():
+            raise FileNotFoundError(caption)
+        caption_resource = youtube.captions()
+        existing_items = (
+            caption_resource.list(part="snippet", videoId=video_id).execute().get("items") or []
+        )
+        existing = next(
+            (
+                item for item in existing_items
+                if str((item.get("snippet") or {}).get("language") or "").lower()
+                == str(caption_language or "en").lower()
+                and str((item.get("snippet") or {}).get("name") or "") == "Captions"
+            ),
+            None,
+        )
+        if existing:
+            attached["captions"] = {
+                "id": existing.get("id"),
+                "already_present": True,
+            }
+        else:
+            attached["captions"] = caption_resource.insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "videoId": video_id,
+                        "language": caption_language,
+                        "name": "Captions",
+                        "isDraft": False,
+                    }
+                },
+                media_body=media_upload_type(
+                    str(caption),
+                    mimetype=mimetypes.guess_type(str(caption))[0] or "text/vtt",
+                ),
+            ).execute()
+    return attached
+
+
+def _mark_idempotent_assets(
+    idem_path: Optional[Path],
+    video_id: str,
+    *,
+    thumbnail_path: Optional[str],
+    caption_path: Optional[str],
+) -> None:
+    if idem_path is None:
+        return
+    record = _read_idempotency_record(idem_path)
+    if not record or str(record.get("video_id") or "") != video_id:
+        raise RuntimeError("uploaded video idempotency record changed before asset completion")
+    if thumbnail_path:
+        record["thumbnail_applied"] = True
+    if caption_path:
+        record["caption_applied"] = True
+    record["assets_updated_at"] = time.time()
+    _write_idempotency_record(idem_path, record)
+
 def upload_video(
     video_path: str,
     *,
@@ -272,6 +357,11 @@ def upload_video(
     video = Path(video_path)
     if not video.is_file():
         raise FileNotFoundError(video)
+    # Validate sidecar inputs before uploading the main video. Otherwise a bad
+    # thumbnail/caption path can leave an uploaded video whose retry looks done.
+    for asset_path in (thumbnail_path, caption_path):
+        if asset_path and not Path(asset_path).is_file():
+            raise FileNotFoundError(asset_path)
     youtube = _service("youtube", "v3", client_secrets_path, token_path, UPLOAD_SCOPES)
     duration_seconds = 0.0
     try:
@@ -304,14 +394,32 @@ def upload_video(
                     "A prior upload has a recorded video ID but could not be verified; "
                     "refusing to upload a duplicate"
                 ) from exc
-            return {
-                "video_id": str(previous["video_id"]),
-                "url": f"https://www.youtube.com/watch?v={previous['video_id']}",
+            video_id = str(previous["video_id"])
+            result: Dict[str, Any] = {
+                "video_id": video_id,
+                "url": f"https://www.youtube.com/watch?v={video_id}",
                 "response": existing,
                 "disclosure": disclosure,
                 "youtube_status": existing.get("status") or {},
                 "deduplicated": True,
             }
+            result.update(
+                _attach_uploaded_assets(
+                    youtube,
+                    video_id,
+                    MediaFileUpload,
+                    thumbnail_path=thumbnail_path,
+                    caption_path=caption_path,
+                    caption_language=caption_language,
+                )
+            )
+            _mark_idempotent_assets(
+                idem_path,
+                video_id,
+                thumbnail_path=thumbnail_path,
+                caption_path=caption_path,
+            )
+            return result
         if previous:
             if str(previous.get("status") or "") != "uploading":
                 raise RuntimeError(
@@ -345,7 +453,7 @@ def upload_video(
                     "recovered_after_error": True,
                 }
                 _write_idempotency_record(idem_path, completed)
-                return {
+                result = {
                     "video_id": existing_id,
                     "url": f"https://www.youtube.com/watch?v={existing_id}",
                     "response": existing,
@@ -353,6 +461,23 @@ def upload_video(
                     "youtube_status": existing.get("status") or {},
                     "deduplicated": True,
                 }
+                result.update(
+                    _attach_uploaded_assets(
+                        youtube,
+                        existing_id,
+                        MediaFileUpload,
+                        thumbnail_path=thumbnail_path,
+                        caption_path=caption_path,
+                        caption_language=caption_language,
+                    )
+                )
+                _mark_idempotent_assets(
+                    idem_path,
+                    existing_id,
+                    thumbnail_path=thumbnail_path,
+                    caption_path=caption_path,
+                )
+                return result
             cooldown = 600.0
             if time.time() - previous_attempt_started < cooldown:
                 raise RuntimeError(
@@ -433,7 +558,7 @@ def upload_video(
                     "recovered_after_error": True,
                 },
             )
-            return {
+            result = {
                 "video_id": existing_id,
                 "url": f"https://www.youtube.com/watch?v={existing_id}",
                 "response": existing,
@@ -441,6 +566,23 @@ def upload_video(
                 "youtube_status": existing.get("status") or {},
                 "deduplicated": True,
             }
+            result.update(
+                _attach_uploaded_assets(
+                    youtube,
+                    existing_id,
+                    MediaFileUpload,
+                    thumbnail_path=thumbnail_path,
+                    caption_path=caption_path,
+                    caption_language=caption_language,
+                )
+            )
+            _mark_idempotent_assets(
+                idem_path,
+                existing_id,
+                thumbnail_path=thumbnail_path,
+                caption_path=caption_path,
+            )
+            return result
     if response is None:
         # Keep the status=uploading marker. A retry will verify the account's
         # uploads playlist and wait out a safety cooldown before any new upload.
@@ -467,20 +609,22 @@ def upload_video(
                 "attempt_count": attempt_count,
             },
         )
-    if thumbnail_path:
-        thumb = Path(thumbnail_path)
-        if not thumb.is_file():
-            raise FileNotFoundError(thumb)
-        result["thumbnail"] = youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(str(thumb), mimetype=mimetypes.guess_type(str(thumb))[0] or "image/jpeg")).execute()
-    if caption_path:
-        caption = Path(caption_path)
-        if not caption.is_file():
-            raise FileNotFoundError(caption)
-        result["captions"] = youtube.captions().insert(
-            part="snippet",
-            body={"snippet": {"videoId": video_id, "language": caption_language, "name": "Captions", "isDraft": False}},
-            media_body=MediaFileUpload(str(caption), mimetype=mimetypes.guess_type(str(caption))[0] or "text/vtt"),
-        ).execute()
+    result.update(
+        _attach_uploaded_assets(
+            youtube,
+            str(video_id),
+            MediaFileUpload,
+            thumbnail_path=thumbnail_path,
+            caption_path=caption_path,
+            caption_language=caption_language,
+        )
+    )
+    _mark_idempotent_assets(
+        idem_path,
+        str(video_id),
+        thumbnail_path=thumbnail_path,
+        caption_path=caption_path,
+    )
     return result
 
 
