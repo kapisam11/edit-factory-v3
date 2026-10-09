@@ -140,11 +140,9 @@ def validate_video_plan(payload: Mapping[str, Any], *, topic: str, target_second
     }
     titles = _string_list(data.get("title_options"), "title_options", minimum=3, maximum=5, item_max=100)
     topic_tokens = {token.casefold() for token in re.findall(r"[A-Za-z0-9]{3,}", topic)}
-    clean_title, clean_description, _ = (
-        sanitize_public_metadata(titles[0], strings["description"], [])["title"],
-        sanitize_public_metadata(titles[0], strings["description"], [])["description"],
-        [],
-    )
+    initially_sanitized = sanitize_public_metadata(titles[0], strings["description"], [])
+    clean_title = str(initially_sanitized["title"])
+    clean_description = str(initially_sanitized["description"])
     title_tokens = {token.casefold() for token in re.findall(r"[A-Za-z0-9]{3,}", clean_title)}
     if topic_tokens and not topic_tokens.intersection(title_tokens):
         clean_title = f"{topic.strip()}: {clean_title}"[:100].strip()
@@ -247,7 +245,7 @@ Return JSON with exactly these keys:
   "title_options": ["three distinct, non-clickbait titles"],
   "description": "topic-specific video description of at least 40 characters"
 }}
-The script should be appropriate for a {float(target_seconds):.1f}-second video and must use 24-{min(260, max(60, int(float(target_seconds) * 3.5 + 15)))} words. Return valid JSON only."""
+The script should be appropriate for a {float(target_seconds):.1f}-second video and must use {max(24, int(float(target_seconds) * 1.15))}-{min(260, max(60, int(float(target_seconds) * 3.5 + 15)))} words. Return valid JSON only."""
 
 
 def _critique_prompt(topic: str, plan: Mapping[str, Any], target_seconds: float) -> str:
@@ -312,7 +310,14 @@ class VideoThinkingAgent:
         if not 8 <= duration <= 180:
             raise ValueError("target_seconds must be between 8 and 180")
         context_text = _context_for_prompt(context)
-        first = self._model_call(_plan_prompt(clean_topic, context_text, duration))
+        try:
+            first = self._model_call(_plan_prompt(clean_topic, context_text, duration))
+        except Exception as exc:
+            # Provider/configuration exceptions must not crash the media pipeline.
+            return VideoThinkingOutcome(
+                status="model_unavailable",
+                warning=f"AI creative planning failed ({type(exc).__name__}); deterministic planning remains available.",
+            )
         if not first.success or not first.text.strip():
             status = first.error_type or "unavailable"
             return VideoThinkingOutcome(
@@ -339,7 +344,15 @@ class VideoThinkingAgent:
         issues: tuple[str, ...] = ()
         revision_applied = False
         warning = ""
-        critique = self._model_call(_critique_prompt(clean_topic, plan, duration))
+        try:
+            critique = self._model_call(_critique_prompt(clean_topic, plan, duration))
+        except Exception as exc:
+            critique = ModelResult(
+                success=False,
+                provider=provider,
+                error_type=type(exc).__name__,
+                message="The editorial critique call failed.",
+            )
         if critique.success and critique.text.strip():
             try:
                 critique_score, issues, revision_brief = _parse_critique(critique.text)
@@ -347,9 +360,17 @@ class VideoThinkingAgent:
                 warning = f"AI critique output was invalid: {exc}"
             else:
                 if critique_score < self.revision_threshold or issues or plan["style_blocked"] or plan["generic_markers_detected"]:
-                    revised_result = self._model_call(
-                        _plan_prompt(clean_topic, context_text, duration, revision=revision_brief or "; ".join(issues))
-                    )
+                    try:
+                        revised_result = self._model_call(
+                            _plan_prompt(clean_topic, context_text, duration, revision=revision_brief or "; ".join(issues))
+                        )
+                    except Exception as exc:
+                        revised_result = ModelResult(
+                            success=False,
+                            provider=provider,
+                            error_type=type(exc).__name__,
+                            message="The bounded revision call failed.",
+                        )
                     if revised_result.success and revised_result.text.strip():
                         try:
                             revised = validate_video_plan(
