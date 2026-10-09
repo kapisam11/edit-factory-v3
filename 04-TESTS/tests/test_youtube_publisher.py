@@ -6,6 +6,7 @@ import pytest
 
 import ai_video_factory.youtube_publisher as publisher
 from ai_video_factory.youtube_publisher import (
+    _attach_uploaded_assets,
     _find_existing_video,
     _timestamp_epoch,
     fetch_video_statistics,
@@ -137,6 +138,70 @@ def test_idempotency_recovery_searches_private_uploads_and_ignores_older_match()
     assert found["status"]["privacyStatus"] == "private"
     assert playlist_resource.list_calls[0]["playlistId"] == "uploads-playlist"
     assert video_resource.list_calls[0]["id"] == "fresh-private-video"
+
+
+def test_retrying_uploaded_video_reapplies_thumbnail_without_duplicate_captions(tmp_path):
+    thumbnail = tmp_path / "thumb.png"
+    captions = tmp_path / "captions.srt"
+    thumbnail.write_bytes(b"fake thumbnail")
+    captions.write_text("1\\n00:00:00,000 --> 00:00:01,000\\nCaption\\n", encoding="utf-8")
+
+    class _ThumbnailResource:
+        def __init__(self):
+            self.calls = []
+
+        def set(self, **kwargs):
+            self.calls.append(kwargs)
+            return _FakeCall({"status": "thumbnail-set"})
+
+    class _CaptionResource:
+        def __init__(self):
+            self.list_calls = []
+            self.insert_calls = []
+
+        def list(self, **kwargs):
+            self.list_calls.append(kwargs)
+            return _FakeCall({
+                "items": [{
+                    "id": "existing-caption",
+                    "snippet": {"language": "en", "name": "Captions"},
+                }]
+            })
+
+        def insert(self, **kwargs):
+            self.insert_calls.append(kwargs)
+            raise AssertionError("existing captions must not be inserted twice")
+
+    class _YouTube:
+        def __init__(self):
+            self.thumbnail_resource = _ThumbnailResource()
+            self.caption_resource = _CaptionResource()
+
+        def thumbnails(self):
+            return self.thumbnail_resource
+
+        def captions(self):
+            return self.caption_resource
+
+    youtube = _YouTube()
+
+    def _media_upload(path, **kwargs):
+        return {"path": path, **kwargs}
+
+    attached = _attach_uploaded_assets(
+        youtube,
+        "video-id",
+        _media_upload,
+        thumbnail_path=str(thumbnail),
+        caption_path=str(captions),
+        caption_language="en",
+    )
+
+    assert attached["thumbnail"]["status"] == "thumbnail-set"
+    assert attached["captions"]["already_present"] is True
+    assert youtube.caption_resource.list_calls[0]["videoId"] == "video-id"
+    assert youtube.caption_resource.insert_calls == []
+    assert len(youtube.thumbnail_resource.calls) == 1
 
 
 def test_new_idempotency_key_does_not_match_an_unrelated_old_video(monkeypatch, tmp_path):
