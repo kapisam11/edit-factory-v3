@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from ai_video_factory.autonomous_youtube import AutonomousConfig, AutonomousManager, AutonomousStore
+from ai_video_factory.autonomous_youtube import (
+    AutonomousConfig,
+    AutonomousManager,
+    AutonomousStore,
+    _fact_review_pending,
+    _rights_review_pending,
+)
 from ai_video_factory.human_style_guard import (
     assess_package,
     assess_topic_diversity,
@@ -178,6 +184,33 @@ def test_publish_claim_atomically_moves_one_job_to_uploading(tmp_path: Path):
     assert claimed["state"] == "UPLOADING"
     assert manager.store.get(job_id)["state"] == "UPLOADING"
     assert manager.store.claim_publish(now="2026-10-08T12:00:00Z") is None
+
+
+def test_required_factual_review_fails_closed_on_missing_evidence():
+    assert _fact_review_pending({}, required=True)
+    assert _fact_review_pending(
+        {"claims_to_verify": [], "research_available": False},
+        required=True,
+    )
+    assert not _fact_review_pending(
+        {"claims_to_verify": [], "research_available": True},
+        required=True,
+    )
+    assert not _fact_review_pending({}, required=False)
+
+
+def test_rights_gate_fails_closed_for_missing_or_unresolved_evidence():
+    assert _rights_review_pending(None)
+    assert _rights_review_pending({"status": "review_required", "publish_blocked": True})
+    assert _rights_review_pending(
+        {"status": "not_declared", "publish_blocked": False, "requires_explicit_declaration": True}
+    )
+    assert not _rights_review_pending(
+        {"status": "not_declared", "publish_blocked": False, "requires_explicit_declaration": False}
+    )
+    assert not _rights_review_pending(
+        {"status": "cleared", "publish_blocked": False, "requires_explicit_declaration": True}
+    )
 
 
 def test_ai_publish_claim_requires_recorded_disclosure_review(tmp_path: Path):
