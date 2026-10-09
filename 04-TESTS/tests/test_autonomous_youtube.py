@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from ai_video_factory.autonomous_youtube import (
     AutonomousStore,
     _fact_review_pending,
     _rights_review_pending,
+    PublicationIntegrityError,
+    _extract_package,
 )
 from ai_video_factory.human_style_guard import (
     assess_package,
@@ -243,12 +246,83 @@ def test_approval_records_disclosure_review_and_schedules_policy_review(tmp_path
         disclosure_reviewed=0,
     )
 
-    manager.approve(job_id, actor="test-reviewer")
+    manager.approve(
+        job_id,
+        actor="test-reviewer",
+        disclosure_acknowledged=True,
+    )
     job = manager.store.get(job_id)
     assert job is not None
     assert job["state"] == "SCHEDULED"
     assert job["approval"] == "approved"
     assert job["disclosure_reviewed"] == 1
+
+def test_ai_approval_requires_explicit_disclosure_acknowledgement(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path))
+    job_id = manager.enqueue("Synthetic media needs disclosure review")
+    manager.store.update(
+        job_id,
+        state="POLICY_REVIEW",
+        ai_generated=1,
+        realistic_alteration=1,
+        disclosure_reviewed=0,
+    )
+
+    with pytest.raises(ValueError, match="disclosure acknowledgement"):
+        manager.approve(job_id, actor="test-reviewer")
+
+    job = manager.store.get(job_id)
+    assert job is not None
+    assert job["approval"] == "pending"
+    assert job["disclosure_reviewed"] == 0
+
+
+def test_publish_claim_respects_retry_backoff(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path))
+    job_id = manager.enqueue("Backoff test")
+    future = (datetime.now(timezone.utc).replace(microsecond=0)).isoformat().replace("+00:00", "Z")
+    manager.store.update(
+        job_id,
+        state="SCHEDULED",
+        approval="approved",
+        scheduled_at="2000-01-01T00:00:00Z",
+        next_attempt_at="2999-01-01T00:00:00Z",
+    )
+
+    assert manager.store.claim_publish(now=future) is None
+    assert manager.store.get(job_id)["state"] == "SCHEDULED"
+
+
+def test_publish_claim_enforces_daily_cap_atomically(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path, max_videos_per_day=1))
+    published_id = manager.enqueue("Already published")
+    waiting_id = manager.enqueue("Must stay queued")
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    manager.store.update(published_id, state="PUBLISHED", published_at=now)
+    manager.store.update(
+        waiting_id,
+        state="SCHEDULED",
+        approval="approved",
+        scheduled_at="2000-01-01T00:00:00Z",
+    )
+
+    assert manager.store.claim_publish(now=now, max_videos_per_day=1) is None
+    assert manager.store.get(waiting_id)["state"] == "SCHEDULED"
+
+
+def test_package_extraction_rejects_path_traversal(tmp_path: Path):
+    package = tmp_path / "package"
+    metadata_dir = package / "upload" / "youtube_shorts"
+    metadata_dir.mkdir(parents=True)
+    (tmp_path / "outside.mp4").write_bytes(b"outside")
+    (metadata_dir / "metadata.json").write_text(
+        json.dumps({"files": {"video": "../../outside.mp4"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PublicationIntegrityError, match="escapes"):
+        _extract_package(package)
+
 
 
 def test_daily_cost_limit_accounts_for_generation_before_publish(tmp_path: Path):
