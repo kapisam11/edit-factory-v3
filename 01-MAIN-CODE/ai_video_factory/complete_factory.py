@@ -168,7 +168,69 @@ def render_clip_factory(source: str, package_dir: str, *, count: int, crop_plan:
 
 def update_learning_history(path: str, *, topic: str, platform: str, package_dir: str, metrics: Mapping[str, Any], performance_metrics: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     history = load_experiments(path) if os.path.exists(path) else []
-    record: Dict[str, Any] = {"topic": topic, "platform": platform, "package_dir": package_dir, "cuts_per_minute": metrics.get("cuts_per_minute", 0), "avg_shot_duration": metrics.get("avg_shot_duration", 0), "hook_duration": metrics.get("hook_duration", 2.0), "music_energy": metrics.get("music_energy", 0.5), "caption_style": metrics.get("caption_style", "karaoke"), "voice": metrics.get("voice", "en-US-GuyNeural")}
+    observed_metrics: Dict[str, Any] = dict(metrics)
+    root = Path(package_dir)
+
+    # Preserve actual rendered settings even when the caller only provides a
+    # small set of extra experiment variables (for example, the hook duration).
+    for metrics_path in (root / "metrics.json", root / "primary" / "metrics.json"):
+        try:
+            payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            if value is not None and (
+                key not in observed_metrics
+                or observed_metrics.get(key) is None
+                or observed_metrics.get(key) == 0
+            ):
+                observed_metrics[key] = value
+
+    try:
+        target_seconds = float(observed_metrics.get("actual_duration_seconds") or observed_metrics.get("actual_timeline_seconds") or observed_metrics.get("target_seconds") or 0.0)
+        segment_count = int(observed_metrics.get("actual_rendered_segments") or observed_metrics.get("segment_count") or 0)
+        cuts_per_minute = float(observed_metrics.get("cuts_per_minute") or 0.0)
+    except (TypeError, ValueError):
+        target_seconds, segment_count, cuts_per_minute = 0.0, 0, 0.0
+    if cuts_per_minute <= 0 and target_seconds > 0 and segment_count > 0:
+        cuts_per_minute = segment_count / (target_seconds / 60.0)
+    average_shot = observed_metrics.get("avg_shot_duration")
+    try:
+        average_shot = float(average_shot or 0.0)
+    except (TypeError, ValueError):
+        average_shot = 0.0
+    if average_shot <= 0 and cuts_per_minute > 0:
+        average_shot = 60.0 / cuts_per_minute
+
+    thinking: Dict[str, Any] = {}
+    for thinking_path in (root / "video_thinking.json", root / "primary" / "video_thinking.json"):
+        try:
+            payload = json.loads(thinking_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            nested = payload.get("plan")
+            if isinstance(nested, dict):
+                thinking = nested
+                break
+
+    edit_emotion = str(observed_metrics.get("emotion") or thinking.get("emotion") or "")
+    record: Dict[str, Any] = {
+        "topic": topic,
+        "platform": platform,
+        "content_type": observed_metrics.get("content_type", "short_video"),
+        "package_dir": package_dir,
+        "cuts_per_minute": cuts_per_minute,
+        "avg_shot_duration": average_shot or 2.5,
+        "hook_duration": observed_metrics.get("hook_duration", 2.0),
+        "music_energy": observed_metrics.get("music_energy", 0.5),
+        "caption_style": observed_metrics.get("caption_style", "karaoke"),
+        "voice": observed_metrics.get("voice", "en-US-GuyNeural"),
+        "music_style": observed_metrics.get("music_style", edit_emotion or "dramatic"),
+        "edit_type": observed_metrics.get("edit_type", edit_emotion or "dramatic"),
+    }
     if performance_metrics:
         from .content_factory import performance_feedback
         record.update(performance_feedback(performance_metrics))
@@ -178,7 +240,6 @@ def update_learning_history(path: str, *, topic: str, platform: str, package_dir
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(history, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     return record
-
 
 def _fact_check_review(script: str, research: Mapping[str, Any]) -> Dict[str, Any]:
     lines = [line.strip() for line in script.splitlines() if line.strip()]
