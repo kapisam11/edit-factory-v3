@@ -666,7 +666,7 @@ def fetch_video_analytics(video_id: str, *, start_date: str, end_date: str, clie
     date.fromisoformat(start_date)
     date.fromisoformat(end_date)
     service = _service("youtubeAnalytics", "v2", client_secrets_path, token_path, ANALYTICS_SCOPES)
-    base_metrics = "views,likes,comments,averageViewDuration,averageViewPercentage,subscribersGained,shares"
+    base_metrics = "views,engagedViews,likes,comments,averageViewDuration,averageViewPercentage,subscribersGained,shares"
     try:
         return service.reports().query(
             ids="channel==MINE",

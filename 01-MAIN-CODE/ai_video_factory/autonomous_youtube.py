@@ -144,6 +144,36 @@ def _parse_json(raw: str, default: Any) -> Any:
         return default
 
 
+def _first_analytics_row(report: Any) -> dict[str, Any]:
+    """Map a YouTube Analytics API row array to names using columnHeaders.
+
+    The official API returns rows as arrays, not dictionaries. Mapping rows
+    supplied by tests/adapters are also accepted. Missing/malformed data fails
+    closed to an empty mapping rather than guessing column positions.
+    """
+    if not isinstance(report, Mapping):
+        return {}
+    rows = report.get("rows")
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)) or not rows:
+        return {}
+    row = rows[0]
+    if isinstance(row, Mapping):
+        return {str(key): value for key, value in row.items()}
+    if not isinstance(row, Sequence) or isinstance(row, (str, bytes)):
+        return {}
+    headers = report.get("columnHeaders")
+    if not isinstance(headers, Sequence) or isinstance(headers, (str, bytes)):
+        return {}
+    names = [
+        str(header.get("name") or "")
+        for header in headers
+        if isinstance(header, Mapping)
+    ]
+    if len(names) != len(headers) or len(names) != len(row) or any(not name for name in names):
+        return {}
+    return dict(zip(names, row))
+
+
 def _fact_review_pending(review: Any, *, required: bool) -> bool:
     """Fail closed when required factual-review evidence is absent or incomplete."""
     if not required:
@@ -1693,20 +1723,36 @@ class AutonomousManager:
             start = published.date().isoformat()
             end = datetime.now(timezone.utc).date().isoformat()
             analytics = fetch_video_analytics(video_id, start_date=start, end_date=end, client_secrets_path=client, token_path=token)
-            raw = (analytics.get("rows") or [{}])[0]
+            raw = _first_analytics_row(analytics)
             views = float(raw.get("views", stats.get("statistics", {}).get("viewCount", 0)) or 0)
             likes = float(raw.get("likes", stats.get("statistics", {}).get("likeCount", 0)) or 0)
             comments = float(raw.get("comments", stats.get("statistics", {}).get("commentCount", 0)) or 0)
             avg_pct = float(raw.get("averageViewPercentage", 0.0) or 0.0)
+            avg_duration = float(raw.get("averageViewDuration", 0.0) or 0.0)
             shares = float(raw.get("shares", 0.0) or 0.0)
             subscribers = float(raw.get("subscribersGained", 0.0) or 0.0)
             revenue = float(raw.get("estimatedRevenue", 0.0) or 0.0)
+            engaged_raw = raw.get("engagedViews")
+            engaged_views = float(engaged_raw or 0.0) if engaged_raw is not None else None
+            # This is an API-derived engaged-view-rate proxy, not Studio's
+            # separate Shorts "stayed to watch" metric.
+            engaged_view_rate_proxy = (
+                min(1.0, max(0.0, engaged_views / max(1.0, views)))
+                if engaged_views is not None
+                else None
+            )
+            score_components = [
+                (0.40, min(1.0, max(0.0, avg_pct / 100.0))),
+                (0.20, engaged_view_rate_proxy),
+                (0.15, min(1.0, likes / max(1.0, views) * 12.0)),
+                (0.10, min(1.0, comments / max(1.0, views) * 30.0)),
+                (0.10, min(1.0, shares / max(1.0, views) * 25.0)),
+                (0.05, min(1.0, subscribers / max(1.0, views) * 50.0)),
+            ]
+            available_weight = sum(weight for weight, value in score_components if value is not None)
             score = round(
-                min(1.0, avg_pct / 100.0) * 0.50
-                + min(1.0, likes / max(1.0, views) * 12.0) * 0.15
-                + min(1.0, comments / max(1.0, views) * 30.0) * 0.10
-                + min(1.0, shares / max(1.0, views) * 25.0) * 0.15
-                + min(1.0, subscribers / max(1.0, views) * 50.0) * 0.10,
+                sum(weight * float(value) for weight, value in score_components if value is not None)
+                / max(available_weight, 1e-9),
                 4,
             )
             payload = {
@@ -1714,6 +1760,10 @@ class AutonomousManager:
                 "likes": likes,
                 "comments": comments,
                 "averageViewPercentage": avg_pct,
+                "averageViewDuration": avg_duration,
+                "engagedViews": engaged_views,
+                "engagedViewRateProxy": engaged_view_rate_proxy,
+                "stayedToWatchRate": None,
                 "shares": shares,
                 "subscribersGained": subscribers,
                 "estimatedRevenue": revenue,

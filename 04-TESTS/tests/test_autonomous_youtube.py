@@ -496,3 +496,27 @@ def test_automatic_backup_writes_a_non_secret_config_snapshot(tmp_path: Path):
     payload = snapshot.read_text(encoding="utf-8")
     assert "max_videos_per_day" in payload
     assert "YOUTUBE_TOKEN_PATH" not in payload
+
+
+def test_analytics_api_rows_are_mapped_by_column_headers():
+    from ai_video_factory.autonomous_youtube import _first_analytics_row
+
+    official_report = {
+        "columnHeaders": [
+            {"name": "views", "columnType": "METRIC", "dataType": "INTEGER"},
+            {"name": "engagedViews", "columnType": "METRIC", "dataType": "INTEGER"},
+            {"name": "averageViewPercentage", "columnType": "METRIC", "dataType": "FLOAT"},
+        ],
+        "rows": [[120, 84, 52.5]],
+    }
+    assert _first_analytics_row(official_report) == {
+        "views": 120,
+        "engagedViews": 84,
+        "averageViewPercentage": 52.5,
+    }
+    assert _first_analytics_row({"rows": [{"views": 8, "engagedViews": 6}]}) == {
+        "views": 8,
+        "engagedViews": 6,
+    }
+    assert _first_analytics_row({"columnHeaders": [{"name": "views"}], "rows": [[1, 2]]}) == {}
+
