@@ -1859,6 +1859,40 @@ class AutonomousManager:
             self.store.update(job_id, state="ANALYZED", analytics_json=json.dumps(payload, sort_keys=True, default=str))
             self.store.set_setting("consecutive_failures", "0")
             self.store.event(job_id, "analytics_recorded", {"score": score})
+
+            # Feed real YouTube observations back into the same local-learning
+            # history used when the next video is planned. Keep learning failures
+            # advisory so a missing history file cannot turn successful analytics
+            # collection into a failed analysis job.
+            try:
+                from .complete_factory import update_learning_history
+
+                learning_history_path = (
+                    os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+                    or str(self.config.state_dir / "learning_history.json")
+                )
+                package_dir = str(claim.get("package_dir") or "").strip()
+                if package_dir:
+                    update_learning_history(
+                        learning_history_path,
+                        topic=str(claim.get("topic") or ""),
+                        platform=str(claim.get("platform") or "youtube_shorts"),
+                        package_dir=package_dir,
+                        metrics={},
+                        performance_metrics={
+                            "views": views,
+                            "likes": likes,
+                            "comments": comments,
+                            "averageViewPercentage": avg_pct,
+                        },
+                    )
+                    self.store.event(job_id, "local_learning_feedback_recorded", {
+                        "history_path": learning_history_path,
+                        "metrics": ["views", "likes", "comments", "averageViewPercentage"],
+                    })
+            except Exception as learning_exc:
+                logger.warning("could not append analytics to local learning history for %s: %s", job_id, type(learning_exc).__name__)
+                self.store.event(job_id, "local_learning_feedback_failed", {"error_type": type(learning_exc).__name__})
             return job_id
         except Exception as exc:
             self._record_failure(claim, exc, stage="analytics")
