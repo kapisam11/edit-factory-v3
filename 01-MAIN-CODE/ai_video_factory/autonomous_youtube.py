@@ -132,6 +132,32 @@ def _parse_json(raw: str, default: Any) -> Any:
         return default
 
 
+def _fact_review_pending(review: Any, *, required: bool) -> bool:
+    """Fail closed when required factual-review evidence is absent or incomplete."""
+    if not required:
+        return False
+    if not isinstance(review, Mapping):
+        return True
+    claims = review.get("claims_to_verify")
+    if not isinstance(claims, Sequence) or isinstance(claims, (str, bytes)):
+        return True
+    if "research_available" not in review:
+        return True
+    return bool(claims) or not bool(review.get("research_available"))
+
+
+def _rights_review_pending(rights: Any) -> bool:
+    """Missing, blocked, or malformed source-rights metadata cannot green-light publishing."""
+    if not isinstance(rights, Mapping):
+        return True
+    status = str(rights.get("status") or "")
+    if bool(rights.get("publish_blocked")) or status not in {"cleared", "not_declared"}:
+        return True
+    if bool(rights.get("requires_explicit_declaration")) and status != "cleared":
+        return True
+    return False
+
+
 class AutonomousStore:
     def __init__(self, config: AutonomousConfig) -> None:
         self.config = config
@@ -1210,13 +1236,15 @@ class AutonomousManager:
                 recent_titles=self.store.recent_titles(),
             )
             rights_value = metadata.get("media_rights")
-            rights: Mapping[str, Any] = rights_value if isinstance(rights_value, Mapping) else {}
             if style.publish_blocked:
                 raise RuntimeError("human-quality guard blocked package: " + "; ".join(style.reasons[:6]))
-            if rights.get("publish_blocked"):
-                raise RuntimeError("rights gate blocked package; explicit evidence is required")
-            # Factual claims do not make the package unusable, but they do prevent
-            # unattended approval until the claim-review gate is explicitly cleared.
+            if _rights_review_pending(rights_value):
+                raise RuntimeError(
+                    "rights gate blocked package; valid source-rights evidence is missing or unresolved"
+                )
+            rights: Mapping[str, Any] = rights_value
+            # Required factual-review evidence must exist and identify the source
+            # research status. Missing manifests do not count as a clean review.
             if not video_path.exists():
                 raise FileNotFoundError("final YouTube video missing")
             video_hash = _file_sha256(video_path)
@@ -1226,7 +1254,9 @@ class AutonomousManager:
             package_ai_generated, package_realistic_alteration = _disclosure_from_package(metadata)
             ai_generated = pipeline_ai_generated or package_ai_generated
             realistic_alteration = pipeline_realistic_alteration or package_realistic_alteration
-            fact_review_pending = bool(fact_review.get("claims_to_verify")) and self.config.require_factual_review
+            fact_review_pending = _fact_review_pending(
+                fact_review, required=self.config.require_factual_review
+            )
             disclosure_review_required = ai_generated or realistic_alteration
             disclosure_reviewed = (
                 not disclosure_review_required
