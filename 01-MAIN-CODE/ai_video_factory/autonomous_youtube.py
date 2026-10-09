@@ -732,17 +732,37 @@ class AutonomousStore:
             self._event(conn, job_id, "scheduled", {"scheduled_at": target})
         return target
 
-    def claim_publish(self, now: Optional[str] = None) -> Optional[dict[str, Any]]:
-        """Claim one due upload atomically so two daemons cannot publish it twice."""
-        current = now or _utc_now()
+    def claim_publish(
+        self,
+        now: Optional[str] = None,
+        *,
+        max_videos_per_day: Optional[int] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Atomically claim a due upload and enforce rate/backoff limits under SQLite's write lock."""
+        current = _normalize_scheduled_at(now) or _utc_now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            daily_limit = max(0, int(max_videos_per_day or 0))
+            if daily_limit:
+                day_start = _parse_time(current).replace(hour=0, minute=0, second=0, microsecond=0)
+                day_start_text = day_start.isoformat().replace("+00:00", "Z")
+                counted = conn.execute(
+                    "SELECT (SELECT COUNT(*) FROM autonomous_jobs "
+                    "WHERE state IN ('PUBLISHED','ANALYZING','ANALYZED') AND published_at>=?) "
+                    "+ (SELECT COUNT(*) FROM autonomous_jobs "
+                    "WHERE state='UPLOADING' AND updated_at>=?) AS n",
+                    (day_start_text, day_start_text),
+                ).fetchone()
+                if int(counted["n"] or 0) >= daily_limit:
+                    conn.commit()
+                    return None
             row = conn.execute(
                 "SELECT * FROM autonomous_jobs WHERE state='SCHEDULED' "
                 "AND approval='approved' AND publish_requested=1 AND scheduled_at<=? "
+                "AND (next_attempt_at IS NULL OR next_attempt_at<=?) "
                 "AND ((ai_generated=0 AND realistic_alteration=0) OR disclosure_reviewed=1) "
                 "ORDER BY priority DESC, scheduled_at, created_at LIMIT 1",
-                (current,),
+                (current, current),
             ).fetchone()
             if not row:
                 conn.commit()
@@ -1291,6 +1311,7 @@ class AutonomousManager:
             if not video_path.exists():
                 raise FileNotFoundError("final YouTube video missing")
             video_hash = _file_sha256(video_path)
+            metadata_hash = _file_sha256(_package_metadata_path(package_dir))
             fingerprint = hashlib.sha256(
                 (script + "\n" + sanitized["title"] + "\n" + video_hash).encode("utf-8")
             ).hexdigest()
@@ -1338,6 +1359,7 @@ class AutonomousManager:
                 script=script[:20000],
                 fingerprint=fingerprint,
                 video_sha256=video_hash,
+                metadata_sha256=metadata_hash,
                 estimated_cost_usd=self.config.estimated_cost_per_video_usd,
                 approval=approval,
                 scheduled_at=scheduled,
@@ -1376,7 +1398,7 @@ class AutonomousManager:
                 "public autonomous publishing is disabled; set "
                 "AIVF_AUTONOMOUS_ALLOW_PUBLIC=1 after proving the pipeline"
             )
-        job = self.store.claim_publish()
+        job = self.store.claim_publish(max_videos_per_day=self.config.max_videos_per_day)
         if not job:
             return None
         job_id = str(job["id"])
@@ -1399,6 +1421,14 @@ class AutonomousManager:
             metadata, _script, video_path = _extract_package(package)
             if not video_path.exists():
                 raise FileNotFoundError(video_path)
+            expected_video_hash = str(job.get("video_sha256") or "")
+            actual_video_hash = _file_sha256(video_path)
+            if not expected_video_hash or not secrets.compare_digest(actual_video_hash, expected_video_hash):
+                raise PublicationIntegrityError("video artifact integrity mismatch after editorial approval")
+            expected_metadata_hash = str(job.get("metadata_sha256") or "")
+            actual_metadata_hash = _file_sha256(_package_metadata_path(package))
+            if not expected_metadata_hash or not secrets.compare_digest(actual_metadata_hash, expected_metadata_hash):
+                raise PublicationIntegrityError("upload metadata changed after editorial approval")
             title_candidates_value = metadata.get("title_candidates")
             title_candidates: list[str] = (
                 [str(value).strip() for value in title_candidates_value if str(value).strip()]
@@ -1423,7 +1453,13 @@ class AutonomousManager:
                 str(description_value or ""),
                 public_tags,
             )
-            local_hash = str(job.get("video_sha256") or _file_sha256(video_path))
+            if public["title"] != str(job.get("title") or ""):
+                raise PublicationIntegrityError("selected public title differs from the title approved in review")
+            if _rights_review_pending(metadata.get("media_rights")):
+                raise PublicationIntegrityError("source-rights status is no longer publishable")
+            local_hash = str(job.get("fingerprint") or "") or hashlib.sha256(
+                (str(job.get("script") or "") + "\n" + public["title"] + "\n" + actual_video_hash).encode("utf-8")
+            ).hexdigest()
             files_value = metadata.get("files")
             package_files: Mapping[str, Any] = files_value if isinstance(files_value, Mapping) else {}
             thumbnail_rel = package_files.get("thumbnail")
