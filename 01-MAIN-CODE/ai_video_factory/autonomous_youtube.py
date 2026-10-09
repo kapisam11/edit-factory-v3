@@ -1583,7 +1583,10 @@ class AutonomousManager:
             package = Path(str(job["package_dir"]))
             if package.is_symlink():
                 raise PublicationIntegrityError("approved package root cannot be a symbolic link")
+            output_root = self.config.output_dir.resolve(strict=True)
             expected_parent = (self.config.output_dir / "autonomous").resolve(strict=True)
+            if expected_parent.parent != output_root:
+                raise PublicationIntegrityError("autonomous package root resolves outside the configured output directory")
             expected_package = expected_parent / job_id
             if package.resolve(strict=True) != expected_package.resolve(strict=False):
                 raise PublicationIntegrityError("job package path does not match its assigned workspace")
