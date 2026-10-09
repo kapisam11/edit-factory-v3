@@ -273,6 +273,52 @@ class ResearchStage(PipelineStage):
         return ctx
 
 
+class VideoThinkingStage(PipelineStage):
+    """Create, critique, and optionally revise a topic-specific video creative plan."""
+
+    name = "video_thinking"
+    skippable = True
+    retryable = False
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        if os.environ.get("AIVF_VIDEO_THINKING_ENABLED", "1").strip() == "0":
+            ctx.research["video_thinking_status"] = "disabled"
+            return ctx
+
+        from .video_thinking import VideoThinkingAgent
+
+        outcome = VideoThinkingAgent().create_plan(
+            ctx.topic,
+            context=ctx.research,
+            target_seconds=ctx.target_seconds,
+        )
+        report = outcome.to_dict()
+        ctx.research["video_thinking_report"] = outcome.to_dict(include_plan=False)
+        if outcome.plan is not None:
+            plan = dict(outcome.plan)
+            ctx.research["video_thinking_plan"] = plan
+            # These keys are consumed by the existing planner; the dedicated
+            # plan remains available as structured provenance as well.
+            ctx.research["emotion"] = plan["emotion"]
+            ctx.research["strongest_angle"] = plan["angle"]
+            ctx.research["main_conflict"] = plan["stakes"]
+            ctx.research["why_care"] = plan["why_people_care"]
+            ctx.research["viral_title"] = plan["title_options"][0]
+            ctx.research["payoff"] = plan["payoff"]
+            ctx.research["watch_to_end_reason"] = plan["watch_to_end_reason"]
+        elif outcome.warning and outcome.status != "not_configured":
+            ctx.warnings.append(f"Video thinking unavailable: {outcome.warning}")
+
+        if outcome.warning and outcome.status != "not_configured":
+            ctx.warnings.append(f"Video thinking: {outcome.warning}")
+        if ctx.package_dir:
+            with open(os.path.join(ctx.package_dir, "video_thinking.json"), "w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=2, ensure_ascii=False, default=str)
+            with open(os.path.join(ctx.package_dir, "research.json"), "w", encoding="utf-8") as handle:
+                json.dump(ctx.research, handle, indent=2, ensure_ascii=False, default=str)
+        return ctx
+
+
 class PlanStage(PipelineStage):
     name = "plan"
     skippable = False
@@ -296,8 +342,13 @@ class ScriptStage(PipelineStage):
     skippable = False
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        from .story import generate_script
-        ctx.script = generate_script(ctx.plan, ctx.topic)
+        if ctx.plan.get("video_thinking_applied") and isinstance(ctx.plan.get("script"), str):
+            # Use the validated specialist script as-is. The fallback story
+            # rewriter intentionally does not add random phrases to an AI plan.
+            ctx.script = ctx.plan["script"].strip()
+        else:
+            from .story import generate_script
+            ctx.script = generate_script(ctx.plan, ctx.topic)
         if not ctx.script.strip():
             raise RuntimeError("Script generation produced an empty script")
         if ctx.package_dir:
@@ -505,7 +556,7 @@ def build_director_pipeline(
     progress_callback: Optional[ProgressCallback] = None,
 ) -> Pipeline:
     all_stages = [
-        ResearchStage(), PlanStage(), ScriptStage(), ThumbnailStage(),
+        ResearchStage(), VideoThinkingStage(), PlanStage(), ScriptStage(), ThumbnailStage(),
         AutoEditStage(), VoiceoverStage(), MusicStage(), QCStage(),
         MetadataStage(), MetricsStage(),
     ]
