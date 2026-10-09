@@ -28,7 +28,7 @@ from .youtube_publisher import fetch_video_analytics, fetch_video_statistics, up
 
 logger = logging.getLogger(__name__)
 
-AUTONOMOUS_SCHEMA_VERSION = 3
+AUTONOMOUS_SCHEMA_VERSION = 4
 
 
 STATES = {
@@ -72,6 +72,7 @@ class AutonomousConfig:
     stale_schedule_days: int = 14
     require_factual_review: bool = True
     allow_public_autopublish: bool = False
+    auto_disclosure_policy_acknowledged: bool = False
 
     @classmethod
     def from_environment(cls) -> "AutonomousConfig":
@@ -110,6 +111,9 @@ class AutonomousConfig:
             stale_schedule_days=max(1, int(os.environ.get("AIVF_STALE_SCHEDULE_DAYS", "14"))),
             require_factual_review=os.environ.get("AIVF_AUTONOMOUS_REQUIRE_FACT_REVIEW", "1").strip() == "1",
             allow_public_autopublish=os.environ.get("AIVF_AUTONOMOUS_ALLOW_PUBLIC", "0").strip() == "1",
+            auto_disclosure_policy_acknowledged=os.environ.get(
+                "AIVF_AUTONOMOUS_DISCLOSURE_POLICY_ACKNOWLEDGED", "0"
+            ).strip() == "1",
         )
 
 
@@ -181,6 +185,7 @@ class AutonomousStore:
                     publish_requested INTEGER NOT NULL DEFAULT 0,
                     ai_generated INTEGER NOT NULL DEFAULT 0,
                     realistic_alteration INTEGER NOT NULL DEFAULT 0,
+                    disclosure_reviewed INTEGER NOT NULL DEFAULT 0,
                     rights_json TEXT NOT NULL DEFAULT '{}',
                     quality_json TEXT NOT NULL DEFAULT '{}',
                     analytics_json TEXT NOT NULL DEFAULT '{}',
@@ -305,6 +310,37 @@ class AutonomousStore:
                         ),
                     )
                 current = 3
+
+            if current < 4:
+                job_columns = {
+                    str(row["name"])
+                    for row in conn.execute("PRAGMA table_info(autonomous_jobs)").fetchall()
+                }
+                if "disclosure_reviewed" not in job_columns:
+                    conn.execute(
+                        "ALTER TABLE autonomous_jobs ADD COLUMN disclosure_reviewed "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                # Videos without synthetic/AI flags need no disclosure decision.
+                conn.execute(
+                    "UPDATE autonomous_jobs SET disclosure_reviewed=1 "
+                    "WHERE ai_generated=0 AND realistic_alteration=0"
+                )
+                # Never silently publish already-scheduled legacy AI jobs that
+                # have no recorded disclosure review after this upgrade.
+                conn.execute(
+                    """
+                    UPDATE autonomous_jobs
+                    SET state='POLICY_REVIEW', approval='pending', scheduled_at=NULL,
+                        error=CASE WHEN error='' THEN
+                            'Disclosure review required after safety upgrade'
+                            ELSE error END
+                    WHERE state='SCHEDULED'
+                      AND (ai_generated=1 OR realistic_alteration=1)
+                      AND disclosure_reviewed=0
+                    """
+                )
+                current = 4
 
             for key, value in {
                 "paused": "0",
@@ -580,6 +616,7 @@ class AutonomousStore:
             "publish_requested",
             "ai_generated",
             "realistic_alteration",
+            "disclosure_reviewed",
             "rights_json",
             "quality_json",
             "analytics_json",
@@ -604,11 +641,16 @@ class AutonomousStore:
             raise KeyError(job_id)
         with self._connect() as conn:
             conn.execute(
-                "UPDATE autonomous_jobs SET approval='approved',updated_at=? "
+                "UPDATE autonomous_jobs SET approval='approved',disclosure_reviewed=1,updated_at=? "
                 "WHERE id=? AND state IN ('READY','POLICY_REVIEW','SCHEDULED')",
                 (_utc_now(), job_id),
             )
-            self._event(conn, job_id, "approved", {"actor": actor})
+            self._event(
+                conn,
+                job_id,
+                "approved",
+                {"actor": actor, "disclosure_reviewed": True},
+            )
         updated = self.get(job_id)
         if updated and updated["state"] in {"READY", "POLICY_REVIEW"}:
             self.schedule(job_id)
@@ -618,7 +660,7 @@ class AutonomousStore:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE autonomous_jobs SET state='SCHEDULED',scheduled_at=?,updated_at=? "
-                "WHERE id=? AND state='READY'",
+                "WHERE id=? AND state IN ('READY','POLICY_REVIEW') AND approval='approved'",
                 (target, _utc_now(), job_id),
             )
             self._event(conn, job_id, "scheduled", {"scheduled_at": target})
@@ -632,6 +674,7 @@ class AutonomousStore:
             row = conn.execute(
                 "SELECT * FROM autonomous_jobs WHERE state='SCHEDULED' "
                 "AND approval='approved' AND publish_requested=1 AND scheduled_at<=? "
+                "AND disclosure_reviewed=1 "
                 "ORDER BY priority DESC, scheduled_at, created_at LIMIT 1",
                 (current,),
             ).fetchone()
@@ -939,6 +982,7 @@ class AutonomousManager:
                 "stale_schedule_days": self.config.stale_schedule_days,
                 "require_factual_review": self.config.require_factual_review,
                 "allow_public_autopublish": self.config.allow_public_autopublish,
+                "auto_disclosure_policy_acknowledged": self.config.auto_disclosure_policy_acknowledged,
             },
         }
 
@@ -1183,17 +1227,28 @@ class AutonomousManager:
             ai_generated = pipeline_ai_generated or package_ai_generated
             realistic_alteration = pipeline_realistic_alteration or package_realistic_alteration
             fact_review_pending = bool(fact_review.get("claims_to_verify")) and self.config.require_factual_review
+            disclosure_review_required = ai_generated or realistic_alteration
+            disclosure_reviewed = (
+                not disclosure_review_required
+                or self.config.auto_disclosure_policy_acknowledged
+            )
+            disclosure_review_pending = disclosure_review_required and not disclosure_reviewed
             approval = (
                 "approved"
                 if self.config.autonomous_publish
                 and not self.config.require_human_approval
                 and not fact_review_pending
+                and not disclosure_review_pending
                 else "pending"
             )
             state = (
                 "SCHEDULED"
                 if approval == "approved"
-                else ("POLICY_REVIEW" if fact_review_pending else "READY")
+                else (
+                    "POLICY_REVIEW"
+                    if fact_review_pending or disclosure_review_pending
+                    else "READY"
+                )
             )
             scheduled = None
             if state == "SCHEDULED":
@@ -1217,6 +1272,7 @@ class AutonomousManager:
                 title_variant=title_variant,
                 ai_generated=int(ai_generated),
                 realistic_alteration=int(realistic_alteration),
+                disclosure_reviewed=int(disclosure_reviewed),
                 rights_json=json.dumps(rights, sort_keys=True),
                 quality_json=json.dumps(
                     {
@@ -1316,7 +1372,7 @@ class AutonomousManager:
                 token_path=os.environ.get("YOUTUBE_TOKEN_PATH"),
                 ai_generated=bool(job.get("ai_generated")),
                 realistic_alteration=bool(job.get("realistic_alteration")),
-                disclosure_reviewed=True,
+                disclosure_reviewed=bool(job.get("disclosure_reviewed")),
                 idempotency_key=local_hash,
             )
             video_id = str(result["video_id"])
@@ -1498,6 +1554,7 @@ class AutonomousManager:
                 "require_human_approval": self.config.require_human_approval,
                 "require_factual_review": self.config.require_factual_review,
                 "allow_public_autopublish": self.config.allow_public_autopublish,
+                "auto_disclosure_policy_acknowledged": self.config.auto_disclosure_policy_acknowledged,
             },
             "editorial": {
                 "channel_niche": self.config.channel_niche,
