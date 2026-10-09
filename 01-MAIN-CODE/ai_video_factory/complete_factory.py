@@ -188,6 +188,32 @@ def update_learning_history(path: str, *, topic: str, platform: str, package_dir
             ):
                 observed_metrics[key] = value
 
+    # The production metadata records the settings that were actually chosen.
+    # Prefer them to defaults so later retraining compares the real edit profile.
+    for metadata_path in (root / "metadata.json", root / "primary" / "metadata.json"):
+        try:
+            metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(metadata_payload, dict):
+            continue
+        recommendation_payload = metadata_payload.get("recommendation")
+        if isinstance(recommendation_payload, Mapping):
+            recommended_settings = recommendation_payload.get("settings")
+            if isinstance(recommended_settings, Mapping):
+                for key in (
+                    "cuts_per_minute", "avg_shot_duration", "hook_duration", "music_energy",
+                    "caption_style", "voice", "music_style", "content_type", "edit_type",
+                ):
+                    if key in recommended_settings and (
+                        key not in observed_metrics
+                        or observed_metrics.get(key) is None
+                        or observed_metrics.get(key) == 0
+                    ):
+                        observed_metrics[key] = recommended_settings[key]
+        if metadata_payload.get("v3_edit_type") and not observed_metrics.get("edit_type"):
+            observed_metrics["edit_type"] = metadata_payload["v3_edit_type"]
+
     try:
         target_seconds = float(observed_metrics.get("actual_duration_seconds") or observed_metrics.get("actual_timeline_seconds") or observed_metrics.get("target_seconds") or 0.0)
         segment_count = int(observed_metrics.get("actual_rendered_segments") or observed_metrics.get("segment_count") or 0)
