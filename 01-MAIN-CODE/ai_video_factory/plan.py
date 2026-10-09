@@ -215,7 +215,8 @@ def make_idea(summary: Dict[str, str]) -> Dict[str, object]:
         # Convert the learned cut rate into a bounded number of actual beats,
         # then distribute them over the story arc instead of only storing the
         # recommendation in metadata.
-        target_cuts = max(5, min(120, int(round(target_total_seconds * learned_cuts_per_minute / 60.0))))
+        max_target_cuts = min(120, max(5, int(target_total_seconds / 0.5)))
+        target_cuts = max(5, min(max_target_cuts, int(round(target_total_seconds * learned_cuts_per_minute / 60.0))))
         phase_durations = [item[0] for item in beat_definitions]
         remaining_cuts = target_cuts - len(beat_definitions)
         total_phase_duration = sum(phase_durations) or target_total_seconds
