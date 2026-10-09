@@ -391,17 +391,23 @@ class AutonomousStore:
                 # Normalize all existing schedule strings before comparing them
                 # against ISO UTC timestamps in the due-job query.
                 schedules = conn.execute(
-                    "SELECT id,scheduled_at FROM autonomous_jobs WHERE scheduled_at IS NOT NULL"
+                    "SELECT id,state,scheduled_at FROM autonomous_jobs WHERE scheduled_at IS NOT NULL"
                 ).fetchall()
                 for scheduled in schedules:
                     try:
                         normalized = _normalize_scheduled_at(str(scheduled["scheduled_at"]))
                     except (TypeError, ValueError):
-                        conn.execute(
-                            "UPDATE autonomous_jobs SET state='POLICY_REVIEW',approval='pending',"
-                            "scheduled_at=NULL,next_attempt_at=NULL,error=?,updated_at=? WHERE id=?",
-                            ("Invalid legacy schedule requires manual review", _utc_now(), scheduled["id"]),
-                        )
+                        if str(scheduled["state"]) in {"READY", "POLICY_REVIEW", "SCHEDULED"}:
+                            conn.execute(
+                                "UPDATE autonomous_jobs SET state='POLICY_REVIEW',approval='pending',"
+                                "scheduled_at=NULL,next_attempt_at=NULL,error=?,updated_at=? WHERE id=?",
+                                ("Invalid legacy schedule requires manual review", _utc_now(), scheduled["id"]),
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE autonomous_jobs SET scheduled_at=NULL WHERE id=?",
+                                (scheduled["id"],),
+                            )
                     else:
                         if normalized != scheduled["scheduled_at"]:
                             conn.execute(
