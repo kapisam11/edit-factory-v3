@@ -24,7 +24,14 @@ from .complete_factory import PLATFORM_LAYOUTS, run_complete_factory
 from .feedback_store import FeedbackStore
 from .human_style_guard import assess_package, assess_topic_diversity, sanitize_public_metadata
 from .performance_learning import ChannelPerformanceModel, PerformanceObservation
-from .youtube_publisher import fetch_video_analytics, fetch_video_statistics, upload_video
+from .youtube_publisher import (
+    authorize_video_reporting_token,
+    ensure_video_reach_report_job,
+    fetch_video_analytics,
+    fetch_video_reach_metrics,
+    fetch_video_statistics,
+    upload_video,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1723,6 +1730,26 @@ class AutonomousManager:
             start = published.date().isoformat()
             end = datetime.now(timezone.utc).date().isoformat()
             analytics = fetch_video_analytics(video_id, start_date=start, end_date=end, client_secrets_path=client, token_path=token)
+            reach: dict[str, Any] = {"available": False, "reason": "not_configured"}
+            try:
+                reporting_job_id = self.store.setting("reach_report_job_id", "") or None
+                reach = fetch_video_reach_metrics(
+                    video_id,
+                    start_date=start,
+                    end_date=end,
+                    job_id=reporting_job_id,
+                    client_secrets_path=client,
+                    token_path=os.environ.get("YOUTUBE_REPORTING_TOKEN_PATH"),
+                )
+            except Exception as reach_exc:
+                # CTR reports are an optional asynchronous API. Their absence
+                # must not discard core analytics or mark a valid upload failed.
+                logger.warning(
+                    "YouTube reach metrics unavailable for video %s (%s)",
+                    video_id,
+                    type(reach_exc).__name__,
+                )
+                reach = {"available": False, "reason": type(reach_exc).__name__}
             raw = _first_analytics_row(analytics)
             views = float(raw.get("views", stats.get("statistics", {}).get("viewCount", 0)) or 0)
             likes = float(raw.get("likes", stats.get("statistics", {}).get("likeCount", 0)) or 0)
@@ -1741,9 +1768,20 @@ class AutonomousManager:
                 if engaged_views is not None
                 else None
             )
+            ctr_value = reach.get("video_thumbnail_impressions_ctr")
+            thumbnail_ctr = (
+                float(ctr_value)
+                if reach.get("available") and isinstance(ctr_value, (int, float))
+                and 0.0 <= float(ctr_value) <= 1.0
+                else None
+            )
+            thumbnail_ctr_score = (
+                min(1.0, thumbnail_ctr / 0.05) if thumbnail_ctr is not None else None
+            )
             score_components = [
-                (0.40, min(1.0, max(0.0, avg_pct / 100.0))),
-                (0.20, engaged_view_rate_proxy),
+                (0.35, min(1.0, max(0.0, avg_pct / 100.0))),
+                (0.15, engaged_view_rate_proxy),
+                (0.10, thumbnail_ctr_score),
                 (0.15, min(1.0, likes / max(1.0, views) * 12.0)),
                 (0.10, min(1.0, comments / max(1.0, views) * 30.0)),
                 (0.10, min(1.0, shares / max(1.0, views) * 25.0)),
@@ -1764,6 +1802,9 @@ class AutonomousManager:
                 "engagedViews": engaged_views,
                 "engagedViewRateProxy": engaged_view_rate_proxy,
                 "stayedToWatchRate": None,
+                "thumbnailImpressions": reach.get("video_thumbnail_impressions"),
+                "thumbnailImpressionsClickThroughRate": thumbnail_ctr,
+                "thumbnailReachMetrics": reach,
                 "shares": shares,
                 "subscribersGained": subscribers,
                 "estimatedRevenue": revenue,
@@ -1922,6 +1963,31 @@ class AutonomousManager:
                 logger.warning("failed to prune stale automation backup %s", stale)
         self.store.event(None, "backup_created", {"archive": str(archive), "verified_files": verification.get("verified_files")})
         return str(archive)
+    def _ensure_reach_reporting(self) -> Optional[str]:
+        existing = self.store.setting("reach_report_job_id", "") or ""
+        if existing:
+            return existing
+        client = os.environ.get("YOUTUBE_CLIENT_SECRETS", "")
+        token = os.environ.get(
+            "YOUTUBE_REPORTING_TOKEN_PATH",
+            os.path.expanduser("~/.config/edit-factory/youtube-reporting-token.json"),
+        )
+        if not client or not Path(client).is_file() or not Path(token).is_file():
+            return None
+        try:
+            job_id = ensure_video_reach_report_job(
+                client_secrets_path=client,
+                token_path=token,
+            )
+            self.store.set_setting("reach_report_job_id", job_id)
+            self.store.event(None, "youtube_reach_reporting_ready", {"job_id": job_id})
+            return job_id
+        except Exception as exc:
+            # Keep core generation/publishing available while the optional
+            # delayed reach-reporting API is being configured or is unavailable.
+            logger.warning("YouTube reach reporting could not be prepared (%s)", type(exc).__name__)
+            return None
+
     def run_once(self, *, seed_topics: Optional[Sequence[str]] = None) -> dict[str, Any]:
         started = time.time()
         result: dict[str, Any] = {"produced": None, "published": None, "analyzed": None, "discovered": 0, "backup": None}
@@ -1938,6 +2004,7 @@ class AutonomousManager:
         if self.store.setting("emergency_stop", "0") == "1" or self.store.setting("paused", "0") == "1":
             result["paused"] = True
             return result
+        self._ensure_reach_reporting()
         effective_seeds = [str(item).strip() for item in (seed_topics or []) if str(item).strip()]
         if not effective_seeds and self.config.channel_niche:
             effective_seeds = [self.config.channel_niche]
@@ -2004,7 +2071,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     list_cmd = sub.add_parser("queue")
     list_cmd.add_argument("--limit", type=int, default=50)
     sub.add_parser("learn")
+    sub.add_parser(
+        "authorize-reporting",
+        help="authorize the separate YouTube Reporting API token used for thumbnail CTR metrics",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if args.command == "authorize-reporting":
+        token_path = authorize_video_reporting_token()
+        print(json.dumps({
+            "status": "authorized",
+            "token_path": token_path,
+            "next_step": "start the automation daemon; it will register the daily channel reach report job",
+        }, indent=2))
+        return 0
 
     manager = AutonomousManager()
     if args.command == "status":

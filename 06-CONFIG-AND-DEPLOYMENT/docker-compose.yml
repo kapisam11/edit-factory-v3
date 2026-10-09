@@ -103,6 +103,7 @@ services:
       AIVF_FAILURE_WEBHOOK_URL: ${AIVF_FAILURE_WEBHOOK_URL:-}
       YOUTUBE_CLIENT_SECRETS: ${YOUTUBE_CLIENT_SECRETS:-/app/state/youtube-client-secrets.json}
       YOUTUBE_TOKEN_PATH: ${YOUTUBE_TOKEN_PATH:-/app/state/youtube-token.json}
+      YOUTUBE_REPORTING_TOKEN_PATH: ${YOUTUBE_REPORTING_TOKEN_PATH:-/app/state/youtube-reporting-token.json}
       YOUTUBE_IDEMPOTENCY_DIR: ${YOUTUBE_IDEMPOTENCY_DIR:-/app/state/youtube-idempotency}
       YOUTUBE_AUTH_INTERACTIVE: ${YOUTUBE_AUTH_INTERACTIVE:-0}
     volumes:

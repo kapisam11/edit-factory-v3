@@ -262,3 +262,43 @@ def test_new_idempotency_key_does_not_match_an_unrelated_old_video(monkeypatch, 
     record = json.loads((idem_root / "new-content-fingerprint.json").read_text(encoding="utf-8"))
     assert record["status"] == "uploaded"
     assert record["video_id"] == "brand-new-video"
+
+
+def test_aggregate_video_reach_csv_uses_only_requested_video_and_dates():
+    from ai_video_factory.youtube_publisher import aggregate_video_reach_csv
+
+    report = (
+        "date,channel_id,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr\\n"
+        "2026-10-08,channel,video-a,1000,0.04\\n"
+        "2026-10-09,channel,video-a,500,0.06\\n"
+        "2026-10-09,channel,video-b,1000,0.20\\n"
+        "2026-10-10,channel,video-a,900,0.99\\n"
+    )
+    metrics = aggregate_video_reach_csv(
+        report, video_id="video-a", start_date="2026-10-08", end_date="2026-10-09"
+    )
+    assert metrics["available"] is True
+    assert metrics["video_thumbnail_impressions"] == 1500
+    assert metrics["video_thumbnail_impressions_ctr"] == pytest.approx(0.046667, abs=1e-6)
+    assert metrics["observed_days"] == 2
+
+
+def test_aggregate_video_reach_csv_fails_closed_on_missing_columns_or_no_data():
+    from ai_video_factory.youtube_publisher import aggregate_video_reach_csv
+
+    assert aggregate_video_reach_csv(
+        "date,video_id\\n2026-10-09,video-a\\n",
+        video_id="video-a",
+        start_date="2026-10-09",
+        end_date="2026-10-09",
+    ) == {"available": False, "reason": "missing_reach_columns"}
+    result = aggregate_video_reach_csv(
+        "date,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr\\n"
+        "2026-10-09,video-a,0,0.05\\n",
+        video_id="video-a",
+        start_date="2026-10-09",
+        end_date="2026-10-09",
+    )
+    assert result["available"] is False
+    assert result["reason"] == "no_reach_rows_for_video"
+

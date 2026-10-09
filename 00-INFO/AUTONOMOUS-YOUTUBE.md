@@ -114,3 +114,11 @@ After a valid refresh token has been saved, keep the daemon setting at:
     YOUTUBE_AUTH_INTERACTIVE=0
 
 Authentication refresh failures and YouTube quota/auth failures pause autonomous publishing and require operator action.
+
+## Thumbnail reach metrics
+
+The automation can collect real YouTube thumbnail impressions and thumbnail click-through rate (CTR) through the YouTube Reporting API's `channel_reach_basic_a1` daily report. This is separate from the faster targeted Analytics API, so the report may not exist until YouTube generates it. When it is absent, the system stores the reach metrics as unavailable and still keeps the ordinary views/retention/engagement analysis; it never invents CTR.
+
+A separate, least-privilege OAuth token is used for this reporting job so its grants do not silently replace the upload token. Set `YOUTUBE_REPORTING_TOKEN_PATH` (Docker defaults to `/app/state/youtube-reporting-token.json`) and run `aivf-autopublish authorize-reporting` once in an interactive terminal before you expect CTR to be collected. Keep the token outside Git and protect it like other OAuth credentials. The daemon registers the daily reach report job automatically after the token exists.
+
+The exact Studio Shorts metric **Stayed to watch / swiped away** is not treated as interchangeable with API `engagedViews / views`. The latter is labelled only as an engaged-view-rate proxy.

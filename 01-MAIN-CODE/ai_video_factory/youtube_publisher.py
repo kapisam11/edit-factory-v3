@@ -1,18 +1,23 @@
 """Optional YouTube publishing, playlist, disclosure and analytics integration."""
 from __future__ import annotations
 
+import csv
+import io
 import json
 import mimetypes
 import os
 import stat
 import time
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 UPLOAD_SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.force-ssl"]
 ANALYTICS_SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
+REPORTING_SCOPES = ["https://www.googleapis.com/auth/yt-analytics.readonly"]
+REACH_REPORT_TYPE_ID = "channel_reach_basic_a1"
+MAX_REACH_REPORT_BYTES = 50 * 1024 * 1024
 
 
 def _require_google() -> None:
@@ -73,6 +78,267 @@ def _paths(client_secrets_path: Optional[str], token_path: Optional[str]) -> tup
         raise ValueError("Provide client_secrets_path or set YOUTUBE_CLIENT_SECRETS")
     return client, token
 
+
+
+def _reporting_paths(
+    client_secrets_path: Optional[str], token_path: Optional[str]
+) -> tuple[str, str]:
+    client = client_secrets_path or os.environ.get("YOUTUBE_CLIENT_SECRETS")
+    token = token_path or os.environ.get(
+        "YOUTUBE_REPORTING_TOKEN_PATH",
+        os.path.expanduser("~/.config/edit-factory/youtube-reporting-token.json"),
+    )
+    if not client:
+        raise ValueError("Provide client_secrets_path or set YOUTUBE_CLIENT_SECRETS")
+    return client, token
+
+
+def authorize_video_reporting_token(
+    *, client_secrets_path: Optional[str] = None, token_path: Optional[str] = None
+) -> str:
+    """Run the one-time interactive OAuth flow for reporting-only reach metrics."""
+    _require_google()
+    from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore
+
+    client, token = _reporting_paths(client_secrets_path, token_path)
+    flow = InstalledAppFlow.from_client_secrets_file(client, scopes=REPORTING_SCOPES)
+    credentials = flow.run_local_server(port=0)
+    token_file = Path(token)
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(credentials.to_json(), encoding="utf-8")
+    try:
+        os.chmod(token_file, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+    return str(token_file)
+
+
+def aggregate_video_reach_csv(
+    csv_text: str, *, video_id: str, start_date: str, end_date: str
+) -> Dict[str, Any]:
+    """Aggregate actual YouTube thumbnail impressions/CTR rows for one video.
+
+    YouTube Reporting API CTR is a ratio, not Studio's Shorts "stayed to watch"
+    metric. Rows outside the requested date range and malformed values are ignored.
+    """
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError("end_date must be on or after start_date")
+    reader = csv.DictReader(io.StringIO(csv_text.lstrip("\\ufeff")))
+    required = {
+        "date",
+        "video_id",
+        "video_thumbnail_impressions",
+        "video_thumbnail_impressions_ctr",
+    }
+    if not reader.fieldnames or not required.issubset(
+        {str(name or "").strip().lower() for name in reader.fieldnames}
+    ):
+        return {"available": False, "reason": "missing_reach_columns"}
+
+    daily: Dict[str, tuple[int, float]] = {}
+    for row in reader:
+        normalized = {str(key or "").strip().lower(): str(value or "").strip() for key, value in row.items()}
+        if normalized.get("video_id") != video_id:
+            continue
+        try:
+            row_date = date.fromisoformat(normalized.get("date", ""))
+            impressions = int(float(normalized.get("video_thumbnail_impressions", "")))
+            ctr = float(normalized.get("video_thumbnail_impressions_ctr", ""))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if row_date < start or row_date > end or impressions < 0:
+            continue
+        if not (0.0 <= ctr <= 1.0):
+            continue
+        daily[row_date.isoformat()] = (impressions, ctr)
+
+    total_impressions = sum(item[0] for item in daily.values())
+    if total_impressions <= 0:
+        return {
+            "available": False,
+            "reason": "no_reach_rows_for_video",
+            "impressions": total_impressions,
+            "observed_days": len(daily),
+        }
+    weighted_clicks = sum(impressions * ctr for impressions, ctr in daily.values())
+    return {
+        "available": True,
+        "video_thumbnail_impressions": total_impressions,
+        "video_thumbnail_impressions_ctr": round(weighted_clicks / total_impressions, 6),
+        "observed_days": len(daily),
+        "period_start": min(daily),
+        "period_end": max(daily),
+        "source": "youtube_reporting_api_channel_reach_basic_a1",
+    }
+
+
+def ensure_video_reach_report_job(
+    *, client_secrets_path: Optional[str] = None, token_path: Optional[str] = None
+) -> str:
+    """Ensure YouTube's daily channel reach reporting job exists and return its ID."""
+    _require_google()
+    from googleapiclient.discovery import build  # type: ignore
+
+    client, token = _reporting_paths(client_secrets_path, token_path)
+    credentials = _credentials(client, token, REPORTING_SCOPES)
+    reporting = build("youtubereporting", "v1", credentials=credentials, cache_discovery=False)
+    page_token: Optional[str] = None
+    for _ in range(20):
+        kwargs: Dict[str, Any] = {"pageSize": 50}
+        if page_token:
+            kwargs["pageToken"] = page_token
+        response = reporting.jobs().list(**kwargs).execute()
+        for job in response.get("jobs") or []:
+            if job.get("reportTypeId") == REACH_REPORT_TYPE_ID and job.get("id"):
+                return str(job["id"])
+        page_token = str(response.get("nextPageToken") or "").strip() or None
+        if not page_token:
+            break
+    created = reporting.jobs().create(
+        body={
+            "reportTypeId": REACH_REPORT_TYPE_ID,
+            "name": "Edit Factory channel thumbnail reach metrics",
+        }
+    ).execute()
+    job_id = str(created.get("id") or "").strip()
+    if not job_id:
+        raise RuntimeError("YouTube Reporting API did not return a reach-report job ID")
+    return job_id
+
+
+def fetch_video_reach_metrics(
+    video_id: str,
+    *,
+    start_date: str,
+    end_date: str,
+    job_id: Optional[str] = None,
+    client_secrets_path: Optional[str] = None,
+    token_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fetch real thumbnail reach/CTR from generated YouTube bulk reports.
+
+    Reach reports are daily and may not be ready immediately; missing reports are
+    returned as unavailable, never fabricated. Authorization uses a dedicated
+    least-privilege reporting token so upload token grants are not silently changed.
+    """
+    _require_google()
+    import requests
+
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError("end_date must be on or after start_date")
+    client, token = _reporting_paths(client_secrets_path, token_path)
+    credentials = _credentials(client, token, REPORTING_SCOPES)
+    from googleapiclient.discovery import build  # type: ignore
+
+    reporting = build("youtubereporting", "v1", credentials=credentials, cache_discovery=False)
+    selected_job = str(job_id or "").strip() or ensure_video_reach_report_job(
+        client_secrets_path=client, token_path=token
+    )
+    end_exclusive = end + timedelta(days=1)
+    reports: list[dict[str, Any]] = []
+    page_token: Optional[str] = None
+    for _ in range(100):
+        kwargs: Dict[str, Any] = {
+            "jobId": selected_job,
+            "startTimeAtOrAfter": f"{start.isoformat()}T00:00:00Z",
+            "startTimeBefore": f"{end_exclusive.isoformat()}T00:00:00Z",
+            "pageSize": 100,
+        }
+        if page_token:
+            kwargs["pageToken"] = page_token
+        response = reporting.jobs().reports().list(**kwargs).execute()
+        reports.extend(
+            item for item in (response.get("reports") or [])
+            if isinstance(item, dict) and item.get("downloadUrl")
+        )
+        page_token = str(response.get("nextPageToken") or "").strip() or None
+        if not page_token:
+            break
+
+    csv_payloads: list[str] = []
+    for report in reports:
+        url = str(report.get("downloadUrl") or "").strip()
+        if not url:
+            continue
+        response = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {credentials.token}", "Accept-Encoding": "gzip"},
+            timeout=(5, 30),
+            stream=True,
+        )
+        response.raise_for_status()
+        chunks: list[bytes] = []
+        byte_count = 0
+        try:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                byte_count += len(chunk)
+                if byte_count > MAX_REACH_REPORT_BYTES:
+                    raise RuntimeError("YouTube reach report exceeds the 50 MiB safety limit")
+                chunks.append(chunk)
+        finally:
+            response.close()
+        csv_payloads.append(b"".join(chunks).decode("utf-8-sig", errors="replace"))
+
+    if not csv_payloads:
+        return {
+            "available": False,
+            "reason": "reach_reports_not_ready",
+            "report_count": len(reports),
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+            "source": "youtube_reporting_api_channel_reach_basic_a1",
+        }
+
+    # Reports are daily; replacing same-day entries makes repeated downloads
+    # idempotent rather than double-counting duplicated report deliveries.
+    merged: Dict[str, tuple[int, float]] = {}
+    for payload in csv_payloads:
+        result = aggregate_video_reach_csv(
+            payload, video_id=video_id, start_date=start.isoformat(), end_date=end.isoformat()
+        )
+        if not result.get("available"):
+            continue
+        # Aggregate helper is intentionally pure; the per-day values are parsed
+        # below so an overlapping re-delivered report can replace older data.
+        reader = csv.DictReader(io.StringIO(payload.lstrip("\\ufeff")))
+        for row in reader:
+            normalized = {str(key or "").strip().lower(): str(value or "").strip() for key, value in row.items()}
+            if normalized.get("video_id") != video_id:
+                continue
+            try:
+                row_date = date.fromisoformat(normalized.get("date", ""))
+                impressions = int(float(normalized.get("video_thumbnail_impressions", "")))
+                ctr = float(normalized.get("video_thumbnail_impressions_ctr", ""))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if start <= row_date <= end and impressions >= 0 and 0.0 <= ctr <= 1.0:
+                merged[row_date.isoformat()] = (impressions, ctr)
+
+    total_impressions = sum(value[0] for value in merged.values())
+    if total_impressions <= 0:
+        return {
+            "available": False,
+            "reason": "no_reach_rows_for_video",
+            "report_count": len(reports),
+            "source": "youtube_reporting_api_channel_reach_basic_a1",
+        }
+    weighted_clicks = sum(impressions * ctr for impressions, ctr in merged.values())
+    return {
+        "available": True,
+        "video_thumbnail_impressions": total_impressions,
+        "video_thumbnail_impressions_ctr": round(weighted_clicks / total_impressions, 6),
+        "observed_days": len(merged),
+        "period_start": min(merged),
+        "period_end": max(merged),
+        "report_count": len(reports),
+        "source": "youtube_reporting_api_channel_reach_basic_a1",
+    }
 
 
 def _idempotency_path(idempotency_key: str) -> Path:
@@ -694,4 +960,10 @@ def save_json(path: str, payload: Any) -> str:
     return str(output)
 
 
-__all__ = ["upload_video", "add_video_to_playlist", "ensure_playlist", "fetch_video_statistics", "fetch_video_analytics", "disclosure_setting", "save_json", "UPLOAD_SCOPES", "ANALYTICS_SCOPES"]
+__all__ = [
+    "upload_video", "add_video_to_playlist", "ensure_playlist",
+    "fetch_video_statistics", "fetch_video_analytics", "fetch_video_reach_metrics",
+    "ensure_video_reach_report_job", "authorize_video_reporting_token",
+    "aggregate_video_reach_csv", "disclosure_setting", "save_json",
+    "UPLOAD_SCOPES", "ANALYTICS_SCOPES", "REPORTING_SCOPES",
+]
