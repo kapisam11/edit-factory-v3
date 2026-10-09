@@ -141,7 +141,8 @@ def _video_thinking_timeline_directives(
         except (TypeError, ValueError):
             cuts_per_minute = 0.0
         if 0.1 <= cuts_per_minute <= 240.0:
-            desired_count = max(5, min(120, int(round(duration * cuts_per_minute / 60.0))))
+            max_target_cuts = min(120, max(5, int(duration / 0.5)))
+            desired_count = max(5, min(max_target_cuts, int(round(duration * cuts_per_minute / 60.0))))
 
     segment_durations: list[float] = []
     if duration is not None and duration > 0 and desired_count > 0:
