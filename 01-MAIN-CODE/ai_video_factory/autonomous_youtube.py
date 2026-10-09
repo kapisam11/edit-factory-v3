@@ -188,6 +188,18 @@ def _fact_review_pending(review: Any, *, required: bool) -> bool:
     return bool(claims) or not bool(review.get("research_available"))
 
 
+def _video_thinking_review_pending(report: Any, *, enabled: bool, found: bool) -> bool:
+    """Fail closed on missing, invalid, weak, or uncertain creative-director output."""
+    if not enabled:
+        return False
+    if not found or not isinstance(report, Mapping):
+        return True
+    status = str(report.get("status") or "")
+    if status not in {"ready", "not_configured"}:
+        return True
+    return bool(report.get("human_review_required", True))
+
+
 def _rights_review_pending(rights: Any) -> bool:
     """Missing, blocked, or malformed source-rights metadata cannot green-light publishing."""
     if not isinstance(rights, Mapping):
@@ -1488,10 +1500,10 @@ class AutonomousManager:
             # When enabled, a missing or malformed report is not permission to
             # publish. Explicit human review is required unless the stage was
             # deliberately disabled for this deployment.
-            thinking_review_pending = thinking_enabled and (
-                not thinking_report_found
-                or bool(thinking_report.get("human_review_required", True))
-                or thinking_report.get("status") in {"invalid_draft", "model_unavailable"}
+            thinking_review_pending = _video_thinking_review_pending(
+                thinking_report,
+                enabled=thinking_enabled,
+                found=thinking_report_found,
             )
             fact_review = complete_manifest.get("fact_check_review")
             if not isinstance(fact_review, Mapping):
