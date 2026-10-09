@@ -244,11 +244,19 @@ def _opening(text: str) -> str:
 
 
 def _title_structure(text: str) -> tuple[str, ...]:
-    """Map topic-specific words to placeholders so repeated title templates compare."""
-    return tuple(
-        token if token in TITLE_STRUCTURE_STOPWORDS else "<topic>"
-        for token in _tokens(text)
-    )
+    """Map topic-specific words to a single placeholder per phrase.
+
+    Collapsing adjacent topic tokens prevents titles such as
+    "Why Apollo 11 still matters" and "Why Challenger still matters" from
+    escaping the repeated-template check only because one topic has two tokens.
+    """
+    structure: list[str] = []
+    for token in _tokens(text):
+        normalized = token if token in TITLE_STRUCTURE_STOPWORDS else "<topic>"
+        if normalized == "<topic>" and structure and structure[-1] == "<topic>":
+            continue
+        structure.append(normalized)
+    return tuple(structure)
 
 
 def _title_structure_similarity(left: str, right: str) -> float:
