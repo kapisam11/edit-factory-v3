@@ -1010,21 +1010,64 @@ def _youtube_duration_seconds(video_path: Path) -> float:
         return 0.0
 
 
+class PublicationIntegrityError(RuntimeError):
+    """Reviewed package metadata or media changed after editorial approval."""
+
+
+def _resolve_package_file(package_dir: Path, relative: str) -> Path:
+    root = Path(package_dir).resolve(strict=True)
+    rel = Path(str(relative))
+    if rel.is_absolute() or any(part == ".." for part in rel.parts):
+        raise PublicationIntegrityError("package artifact path escapes the approved workspace")
+    candidate = root / rel
+    cursor = candidate
+    while cursor != root and root in cursor.parents:
+        if cursor.is_symlink():
+            raise PublicationIntegrityError("symbolic links are not allowed for approved package artifacts")
+        cursor = cursor.parent
+    resolved = candidate.resolve(strict=True)
+    if root not in resolved.parents or not resolved.is_file():
+        raise PublicationIntegrityError("package artifact resolves outside the approved workspace")
+    return resolved
+
+
+def _package_metadata_path(package_dir: Path) -> Path:
+    root = Path(package_dir).resolve(strict=True)
+    for relative in ("upload/youtube_shorts/metadata.json", "upload/metadata.json"):
+        candidate = root / relative
+        if candidate.exists() or candidate.is_symlink():
+            return _resolve_package_file(root, relative)
+    raise FileNotFoundError("YouTube upload metadata was not produced")
+
+
 def _extract_package(package_dir: Path) -> tuple[dict[str, Any], str, Path]:
-    metadata_path = package_dir / "upload" / "youtube_shorts" / "metadata.json"
-    if not metadata_path.exists():
-        metadata_path = package_dir / "upload" / "metadata.json"
-    if not metadata_path.exists():
-        raise FileNotFoundError("YouTube upload metadata was not produced")
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    root = Path(package_dir).resolve(strict=True)
+    metadata_path = _package_metadata_path(root)
+    metadata_value = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(metadata_value, dict):
+        raise PublicationIntegrityError("YouTube upload metadata must be a JSON object")
+    metadata = metadata_value
     files = metadata.get("files") or {}
-    video_rel = files.get("video") or "primary/final.mp4"
-    video_path = package_dir / video_rel
-    if not video_path.exists():
-        candidates = [package_dir / "renders" / "youtube_shorts.mp4", package_dir / "primary" / "final.v3.mp4", package_dir / "primary" / "final.mp4"]
-        video_path = next((candidate for candidate in candidates if candidate.exists()), video_path)
-    script_path = package_dir / "primary" / "script.txt"
-    script = script_path.read_text(encoding="utf-8", errors="replace") if script_path.exists() else ""
+    if not isinstance(files, Mapping):
+        raise PublicationIntegrityError("YouTube upload files metadata is malformed")
+    video_rel = files.get("video")
+    if video_rel:
+        video_path = _resolve_package_file(root, str(video_rel))
+    else:
+        video_path = None
+        for relative in ("renders/youtube_shorts.mp4", "primary/final.v3.mp4", "primary/final.mp4"):
+            try:
+                video_path = _resolve_package_file(root, relative)
+                break
+            except FileNotFoundError:
+                continue
+        if video_path is None:
+            raise FileNotFoundError("final YouTube video is missing from package")
+    try:
+        script_path = _resolve_package_file(root, "primary/script.txt")
+        script = script_path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        script = ""
     return metadata, script, video_path
 
 
