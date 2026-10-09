@@ -399,7 +399,6 @@ def add_manual_rating(
     record["user_rating"] = int(rating)
     record["user_feedback"] = str(note or "").strip()[:1000]
     record["user_feedback_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    _atomic_write_json(target, {"records": payload}) if False else None
     fd, temporary = tempfile.mkstemp(prefix=".learning-history-", suffix=".partial", dir=str(target.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
@@ -429,7 +428,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Train and inspect Edit Factory's local video preference model.")
     parser.add_argument("action", choices=("train", "rate"), help="retrain the preference model or rate a video")
     parser.add_argument("--history", default=os.environ.get("AIVF_LEARNING_HISTORY_PATH", "state/learning_history.json"))
-    parser.add_argument("--model", default=os.environ.get("AIVF_LEARNING_MODEL_PATH", "state/video_preference_model.json"))
+    parser.add_argument("--model", default=os.environ.get("AIVF_LEARNING_MODEL_PATH") or None)
     parser.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
     parser.add_argument("--package-dir", default="", help="Exact output package directory for a human rating")
     parser.add_argument("--rating", type=int, choices=range(1, 6), help="Human rating from 1 (poor) to 5 (excellent)")
@@ -440,7 +439,18 @@ def main() -> int:
         if not args.package_dir or args.rating is None:
             parser.error("rate requires --package-dir and --rating")
         record = add_manual_rating(args.history, package_dir=args.package_dir, rating=args.rating, note=args.note)
-        print(json.dumps({"status": "rated", "package_dir": record.get("package_dir"), "rating": record["user_rating"]}, indent=2))
+        model_path = args.model or str(Path(args.history).with_name("video_preference_model.json"))
+        try:
+            history = json.loads(Path(args.history).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            parser.error(f"cannot reload learning history: {exc}")
+        model = train_preference_model(history, model_path=model_path, min_samples=args.min_samples)
+        print(json.dumps({
+            "status": "rated",
+            "package_dir": record.get("package_dir"),
+            "rating": record["user_rating"],
+            "training": training_summary(model),
+        }, indent=2))
         return 0
 
     try:
@@ -449,7 +459,8 @@ def main() -> int:
         parser.error(f"cannot read learning history: {exc}")
     if not isinstance(history, list):
         parser.error("learning history must be a JSON list")
-    model = train_preference_model(history, model_path=args.model, min_samples=args.min_samples)
+    model_path = args.model or str(Path(args.history).with_name("video_preference_model.json"))
+    model = train_preference_model(history, model_path=model_path, min_samples=args.min_samples)
     print(json.dumps(training_summary(model), indent=2))
     return 0 if model.get("status") in {"trained", "warming_up"} else 1
 
