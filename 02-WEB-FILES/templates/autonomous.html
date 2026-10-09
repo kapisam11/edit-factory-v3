@@ -102,12 +102,14 @@
           `<div>Queue: ${esc(JSON.stringify(data.queue_counts))}</div>` +
           `<div>Daily video cap: ${esc(data.config.max_videos_per_day)}</div>` +
           `<div>Failure circuit breaker: ${esc(data.config.max_consecutive_failures)}</div>` +
-          `<div>Human approval required: ${esc(data.config.require_human_approval)}</div>`;
+          `<div>Human approval required: ${esc(data.config.require_human_approval)}</div>` +
+          `<div>Automatic disclosure-policy acknowledgement: ${esc(data.config.auto_disclosure_policy_acknowledged)}</div>`;
         const queue = await requestJson('/api/autonomous/queue?limit=100');
         document.getElementById('queueList').innerHTML = queue.map(job =>
           `<div class="panel" style="margin-bottom:8px"><strong>${esc(job.topic)}</strong><br>` +
-          `<small>${esc(job.id)} · ${esc(job.state)} · approval=${esc(job.approval)} · scheduled=${esc(job.scheduled_at || 'auto')}</small>` +
-          (job.state === 'READY' || job.state === 'POLICY_REVIEW' ? `<br><button class="btn-sm" onclick="approve('${esc(job.id)}')">Approve & schedule</button>` : '') +
+          `<small>${esc(job.id)} · ${esc(job.state)} · approval=${esc(job.approval)} · scheduled=${esc(job.scheduled_at || 'auto')}</small><br>` +
+          `<small>AI generated: ${Number(job.ai_generated) === 1 ? 'yes' : 'no'} · realistic altered media: ${Number(job.realistic_alteration) === 1 ? 'yes' : 'no'} · disclosure reviewed: ${Number(job.disclosure_reviewed) === 1 ? 'yes' : 'no'}</small>` +
+          (job.state === 'READY' || job.state === 'POLICY_REVIEW' ? `<br><button class="btn-sm" onclick="approve('${esc(job.id)}', ${Number(job.ai_generated || 0)}, ${Number(job.realistic_alteration || 0)})">Review disclosure & approve</button>` : '') +
           `</div>`
         ).join('') || '<div class="empty-state">Queue is empty.</div>';
       } catch (err) {
@@ -133,8 +135,13 @@
         refresh();
       } catch (err) { show(err.message, 'error'); }
     }
-    async function approve(id) {
-      try { await requestJson('/api/autonomous/approve/' + encodeURIComponent(id), {method:'POST'}); show('Approved and scheduled.', 'done'); refresh(); }
+    async function approve(id, aiGenerated=0, realisticAlteration=0) {
+      const needsDisclosureReview = Boolean(Number(aiGenerated) || Number(realisticAlteration));
+      const message = needsDisclosureReview
+        ? 'You are acknowledging the AI/altered-content disclosure decision for this video. Realistic altered/synthetic media will be flagged on YouTube when applicable; no factory or AI-generator credit is added to the description. Continue?'
+        : 'Approve this content and schedule it for upload?';
+      if (!confirm(message)) return;
+      try { await requestJson('/api/autonomous/approve/' + encodeURIComponent(id), {method:'POST'}); show('Disclosure reviewed; approved and scheduled.', 'done'); refresh(); }
       catch (err) { show(err.message, 'error'); }
     }
     async function pauseLoop() {
