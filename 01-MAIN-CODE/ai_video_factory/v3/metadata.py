@@ -104,9 +104,9 @@ def generate_final_metadata(
         "schema_version": "1.0.0",
         "source": "final_content_manifest",
         "title_candidates": title_candidates[:10],
-        "selected_title": title_candidates[0] if title_candidates else "Edit Factory Short",
+        "selected_title": title_candidates[0] if title_candidates else topic,
         "description": description,
-        "hashtags": hashtags or ["#editfactory"],
+        "hashtags": hashtags,
         "thumbnail_concept": thumbnail,
         "evidence": {
             "source_sha256": str(manifest.get("source_sha256", "")),

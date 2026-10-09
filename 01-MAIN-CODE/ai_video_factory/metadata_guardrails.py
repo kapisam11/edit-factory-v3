@@ -15,7 +15,7 @@ def _clean(text: str, max_length: int) -> str:
 def normalize_title(topic: str, hook: str = "", max_length: int = 100) -> str:
     value = _clean(hook or topic, max_length)
     value = re.sub(r"^[\W_]+|[\W_]+$", "", value)
-    return (value or "Edit Factory Short")[:max_length]
+    return value[:max_length]
 
 def hashtags_from_text(text: str, limit: int = 8) -> list[str]:
     stop = {"this","that","with","from","your","have","what","when","they","into","then","just","edit"}

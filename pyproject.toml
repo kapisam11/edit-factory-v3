@@ -19,6 +19,7 @@ aivf-db-migrate = "ai_video_factory.db_migrations:main"
 aivf-release-check = "ai_video_factory.release_check:main"
 aivf-backup = "ai_video_factory.backup_restore:main"
 aivf-janitor = "ai_video_factory.retention_janitor:main"
+aivf-autopublish = "ai_video_factory.autonomous_youtube:main"
 aivf-hardware-smoke = "ai_video_factory.hardware_smoke:main"
 aivf-compat = "ai_video_factory.compatibility_cli:main"
 aivf-content = "app.content_factory_cli:main"
@@ -44,7 +45,7 @@ packages = ["ai_video_factory", "ai_video_factory.v3", "app", "tools"]
 py-modules = ["cli", "dashboard_auth", "dashboard_cache", "dashboard_compat", "dashboard_optimizations", "dashboard_shutdown", "dashboard_store", "dashboard_worker", "resource_governor", "wsgi"]
 
 [tool.setuptools.data-files]
-"share/ai-video-factory/templates" = ["02-WEB-FILES/templates/index.html", "02-WEB-FILES/templates/login.html", "02-WEB-FILES/templates/minecraft_betrayal.json"]
+"share/ai-video-factory/templates" = ["02-WEB-FILES/templates/index.html", "02-WEB-FILES/templates/login.html", "02-WEB-FILES/templates/autonomous.html", "02-WEB-FILES/templates/minecraft_betrayal.json"]
 "share/ai-video-factory/static/css" = ["02-WEB-FILES/static/css/style.css", "02-WEB-FILES/static/css/enhancements.css"]
 "share/ai-video-factory/static/js" = ["02-WEB-FILES/static/js/dashboard_enhancements.js"]
 
@@ -90,6 +91,8 @@ files = [
   "01-MAIN-CODE/ai_video_factory/benchmark.py",
   "01-MAIN-CODE/ai_video_factory/compatibility_matrix.py",
   "01-MAIN-CODE/ai_video_factory/reproducible_build.py",
+  "01-MAIN-CODE/ai_video_factory/autonomous_youtube.py",
+  "01-MAIN-CODE/ai_video_factory/human_style_guard.py",
   "01-MAIN-CODE/ai_video_factory/production_readiness.py",
   "01-MAIN-CODE/ai_video_factory/observability_metrics.py",
   "01-MAIN-CODE/ai_video_factory/production_assurance.py",

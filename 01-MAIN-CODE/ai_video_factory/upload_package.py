@@ -13,6 +13,7 @@ from .render_engine import run_ffprobe
 from .rights_policy import rights_gate
 from .factuality_guard import metadata_fact_gate
 from .human_review import review_gate
+from .human_style_guard import sanitize_public_metadata
 
 
 @dataclass(frozen=True)
@@ -551,7 +552,17 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
     source_records = rights["sources"]
     description = str(final_metadata.get("description") or build_description(topic, summary, script, platform))
     final_tags = final_metadata.get("hashtags") if isinstance(final_metadata, Mapping) else None
-    tags = list(final_tags) if isinstance(final_tags, Sequence) and not isinstance(final_tags, (str, bytes)) else generate_platform_tags(chosen_title, description, topic, max_tags=profile.tag_limit, source_records=source_records)
+    tags = list(final_tags) if isinstance(final_tags, Sequence) and not isinstance(final_tags, (str, bytes)) else generate_platform_tags(
+        chosen_title,
+        description,
+        topic,
+        max_tags=profile.tag_limit,
+        source_records=source_records,
+    )
+    public_metadata = sanitize_public_metadata(chosen_title, description, tags)
+    chosen_title = str(public_metadata["title"])
+    description = str(public_metadata["description"])
+    tags = [str(tag) for tag in public_metadata["tags"]]
     metadata_quality = validate_metadata_quality(
         topic,
         chosen_title,

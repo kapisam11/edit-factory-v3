@@ -63,11 +63,8 @@ EMOTIONS = [
     "mysterious", "funny", "shocking", "intense",
 ]
 
-HOOK_TEMPLATES = [
-    "Nobody believed him", "The hidden legend", "His final choice",
-    "Lost forever", "The real reason", "He lost everything",
-    "The truth revealed", "Nobody expected this", "The last war", "Betrayed",
-]
+# Generic hook templates are intentionally disabled for autonomous production.
+# A hook must be grounded in the actual researched topic/angle/conflict.
 
 MUSIC_MOODS = {
     "emotional": "emotional_cinematic",
@@ -229,15 +226,22 @@ class VideoDirector:
         return "The untold story"
 
     def _generate_hook(self, summary: Dict, emotion: str) -> str:
-        text = " ".join(str(v) for v in summary.values()).lower()
-        for tmpl in HOOK_TEMPLATES:
-            if any(k in text for k in tmpl.lower().split()):
-                return tmpl
-        conflict = summary.get("main_conflict", "")
-        if conflict:
-            words = conflict.split()[:3]
-            return " ".join(words).title()
-        return "The Real Reason"
+        """Build a topic-specific hook; never fall back to a canned viral phrase."""
+        conflict = str(summary.get("main_conflict") or "").strip()
+        angle = str(summary.get("strongest_angle") or "").strip()
+        topic = str(summary.get("topic") or summary.get("title") or "").strip()
+        for source in (conflict, angle):
+            words = [word.strip(".,!?;:-") for word in source.split() if word.strip(".,!?;:-")]
+            if len(words) >= 3:
+                candidate = " ".join(words[:5]).strip()
+                if candidate and candidate.lower() not in {
+                    "the real reason",
+                    "the hidden truth",
+                    "nobody expected this",
+                }:
+                    return candidate
+        topic_words = [word.strip(".,!?;:-") for word in topic.split() if word.strip(".,!?;:-")]
+        return " ".join(topic_words[:5]) if topic_words else ""
 
     # ── 2. STYLE LEARNING ────────────────────────
 
@@ -348,17 +352,16 @@ OUTPUT FORMAT — return ONLY valid JSON, no markdown:
     def _build_script_template(self, analysis: Dict) -> str:
         """Fallback template script when LLM is unavailable or fails validation."""
         brief = self.creative_brief
-        hook = brief.get("hook", "The Real Reason")
-        topic = brief.get("topic", "")
-        angle = brief.get("strongest_angle", "")
+        hook = str(brief.get("hook") or "").strip()
+        topic = str(brief.get("topic") or "").strip()
+        angle = str(brief.get("strongest_angle") or "").strip()
+        conflict = str(brief.get("main_conflict") or "").strip()
+        why_care = str(brief.get("why_care") or "").strip()
 
-        lines = [
-            hook,
-            f"This is the story of {topic}.",
-            f"{angle}.",
-            "But nobody saw this coming.",
-            "And the ending changed everything.",
-        ]
+        # Template fallback must still satisfy the same sentence-ending
+        # invariant as the LLM path; otherwise a temporary provider outage would
+        # turn a usable fallback into a hard production failure.
+        lines = [value.rstrip(".!?") + "." for value in (hook, topic, angle, conflict, why_care) if value]
         return "\n".join(lines)
 
     def build_script(self, analysis: Dict) -> str:
@@ -375,11 +378,10 @@ OUTPUT FORMAT — return ONLY valid JSON, no markdown:
         violations = _validate_script_against_rules(script, self.creative_brief.get("hook", ""))
         if violations:
             logger.warning("[DIRECTOR] Script from %s has violations: %s", source, violations)
-            # If LLM failed rules, we already fell back; if template fails, we can't do much more
-            # so we log and deliver anyway (degraded package)
             if self._manifest:
                 self._manifest.degraded = True
                 self._manifest.add_artifact("script_violations", violations)
+            raise ValueError("script failed anti-slop validation: " + "; ".join(violations))
 
         brief = self.creative_brief
         brief["script"] = script

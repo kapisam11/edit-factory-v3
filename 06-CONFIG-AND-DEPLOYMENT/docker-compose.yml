@@ -54,8 +54,6 @@ services:
       AIVF_FAILED_WORKSPACE_RETENTION_HOURS: ${AIVF_FAILED_WORKSPACE_RETENTION_HOURS:-24}
       AIVF_ENV: ${AIVF_ENV:-production}
       AIVF_PRUNE_TERMINAL_JOBS: ${AIVF_PRUNE_TERMINAL_JOBS:-1}
-      AIVF_ENV: ${AIVF_ENV:-production}
-      AIVF_PRUNE_TERMINAL_JOBS: ${AIVF_PRUNE_TERMINAL_JOBS:-1}
       AIVF_BACKUP_REMOTE: ${AIVF_BACKUP_REMOTE:-}
       AIVF_BACKUP_REMOTE_DIR: ${AIVF_BACKUP_REMOTE_DIR:-}
     volumes:
@@ -63,6 +61,57 @@ services:
       - aivf-uploads:/app/uploads
       - aivf-knowledge:/app/knowledge_base_v3
       - aivf-state:/app/state
+
+
+  autonomous-publisher:
+    profiles: ["automation"]
+    image: ${AIVF_IMAGE:?AIVF_IMAGE must be pinned to an immutable image digest}
+    restart: unless-stopped
+    cpus: "${AIVF_AUTOMATION_CONTAINER_CPUS:-2}"
+    mem_limit: "${AIVF_AUTOMATION_CONTAINER_MEMORY:-8g}"
+    pids_limit: ${AIVF_AUTOMATION_CONTAINER_PIDS:-256}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g
+    env_file:
+      - .env
+    environment:
+      AIVF_ENV: ${AIVF_ENV:-production}
+      AIVF_STATE_DIR: /app/state
+      AIVF_OUTPUT_DIR: /app/output
+      AIVF_AUTOMATION_INTERVAL_SECONDS: ${AIVF_AUTOMATION_INTERVAL_SECONDS:-60}
+      AIVF_AUTONOMOUS_PUBLISH: ${AIVF_AUTONOMOUS_PUBLISH:-0}
+      AIVF_AUTONOMOUS_REQUIRE_HUMAN_APPROVAL: ${AIVF_AUTONOMOUS_REQUIRE_HUMAN_APPROVAL:-1}
+      AIVF_AUTONOMOUS_REQUIRE_FACT_REVIEW: ${AIVF_AUTONOMOUS_REQUIRE_FACT_REVIEW:-1}
+      AIVF_AUTONOMOUS_ALLOW_PUBLIC: ${AIVF_AUTONOMOUS_ALLOW_PUBLIC:-0}
+      AIVF_AUTONOMOUS_DISCLOSURE_POLICY_ACKNOWLEDGED: ${AIVF_AUTONOMOUS_DISCLOSURE_POLICY_ACKNOWLEDGED:-0}
+      AIVF_CHANNEL_NICHE: ${AIVF_CHANNEL_NICHE:-}
+      AIVF_MIN_TOPIC_VARIATION: ${AIVF_MIN_TOPIC_VARIATION:-0.72}
+      AIVF_STALE_SCHEDULE_DAYS: ${AIVF_STALE_SCHEDULE_DAYS:-14}
+      AIVF_MAX_VIDEOS_PER_DAY: ${AIVF_MAX_VIDEOS_PER_DAY:-2}
+      AIVF_MAX_CONTENT_QUEUE: ${AIVF_MAX_CONTENT_QUEUE:-30}
+      AIVF_MAX_CONSECUTIVE_FAILURES: ${AIVF_MAX_CONSECUTIVE_FAILURES:-3}
+      AIVF_MAX_DAILY_COST_USD: ${AIVF_MAX_DAILY_COST_USD:-5}
+      AIVF_ESTIMATED_COST_PER_VIDEO_USD: ${AIVF_ESTIMATED_COST_PER_VIDEO_USD:-1.0}
+      AIVF_TOPIC_SEEDS: ${AIVF_TOPIC_SEEDS:-}
+      AIVF_PUBLISH_TIMES_UTC: ${AIVF_PUBLISH_TIMES_UTC:-12:00,18:00}
+      AIVF_YOUTUBE_PRIVACY: ${AIVF_YOUTUBE_PRIVACY:-private}
+      AIVF_FAILURE_WEBHOOK_URL: ${AIVF_FAILURE_WEBHOOK_URL:-}
+      YOUTUBE_CLIENT_SECRETS: ${YOUTUBE_CLIENT_SECRETS:-/app/state/youtube-client-secrets.json}
+      YOUTUBE_TOKEN_PATH: ${YOUTUBE_TOKEN_PATH:-/app/state/youtube-token.json}
+      YOUTUBE_IDEMPOTENCY_DIR: ${YOUTUBE_IDEMPOTENCY_DIR:-/app/state/youtube-idempotency}
+      YOUTUBE_AUTH_INTERACTIVE: ${YOUTUBE_AUTH_INTERACTIVE:-0}
+    volumes:
+      - aivf-output:/app/output
+      - aivf-uploads:/app/uploads
+      - aivf-state:/app/state
+    depends_on:
+      - web
+    command: ["aivf-autopublish", "daemon"]
 
   janitor:
     image: ${AIVF_IMAGE:?AIVF_IMAGE must be pinned to an immutable image digest}

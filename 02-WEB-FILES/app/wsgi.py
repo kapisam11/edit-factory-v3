@@ -30,11 +30,13 @@ from dashboard_optimizations import install_dashboard_optimizations
 from dashboard_auth import configure_dashboard_auth
 from dashboard_compat import register_dashboard_compat
 from app.observability import install_observability
+from app.autonomous_control import register_autonomous_routes
 
 install_dashboard_optimizations(_web_app_v3)
 configure_dashboard_auth(app)
 register_dashboard_compat(app)
 install_observability(app)
+register_autonomous_routes(app)
 
 
 @app.before_request
