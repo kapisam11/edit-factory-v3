@@ -103,6 +103,12 @@ Public autonomous publishing is disabled by default:
 
 The factory does not add its own product/vendor/AI-generator credit to public title, description, or tags, and does not add a factory watermark. This removes accidental factory boilerplate only; it does not remove source/rights information or suppress a YouTube-required altered/synthetic-media disclosure. AI credits in public prose are separate from YouTube's native disclosure: native disclosure remains enabled when required.
 
+## Channel-specific learning and retraining
+
+The factory trains a small local weighted-ridge model from past edit settings and observed retention/engagement or explicit human ratings. It is separate from the OpenAI/Groq language model: the base language model remains fixed. With enough evidence, the local model ranks previously tested editing profiles and supplies learned preferences to later planning. The minimum is six eligible measured or human-rated examples; before that it keeps using the cold-start / nearest-history recommender.
+
+For durable state, configure `AIVF_LEARNING_HISTORY_PATH` (the autonomous service already writes its history under the state directory) and optionally `AIVF_LEARNING_MODEL_PATH`. The model file contains coefficients and training diagnostics, not scripts or provider secrets. Rate a package using `aivf-learn rate --history state/learning_history.json --package-dir output/autonomous/JOB_ID --rating 4 --note "Good pacing; hook could be faster"`. Rating immediately attempts a retrain; new YouTube analytics are picked up in later recommendation cycles. Never treat training-set error as proof of generalization; compare future uploads against held-out results.
+
 ## Video-thinking creative director
 
 The autonomous production pipeline includes the dedicated video-only thinking stage documented in [VIDEO-THINKING-AI.md](VIDEO-THINKING-AI.md). It uses the configured OpenAI/Groq provider to draft a topic-specific story plan, critique it, and revise it once when weak. The validated script and phase-specific edit directions feed the existing production planner.
