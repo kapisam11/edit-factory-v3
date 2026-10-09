@@ -75,7 +75,11 @@ def register_autonomous_routes(app) -> None:
         except KeyError:
             return jsonify({"error": "job not found"}), 404
         except ValueError as exc:
-            return jsonify({"error": str(exc), "code": "AUTONOMY_APPROVAL_REJECTED"}), 400
+            app.logger.warning("autonomous approval rejected for job %s: %s", job_id, exc)
+            return jsonify({
+                "error": "unable to approve autonomous job",
+                "code": "AUTONOMY_APPROVAL_REJECTED",
+            }), 400
         return jsonify(manager.store.get(job_id))
 
     @app.post("/api/autonomous/pause")
