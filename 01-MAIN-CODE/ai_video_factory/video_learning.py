@@ -92,13 +92,18 @@ def observed_reward(record: Mapping[str, Any]) -> float | None:
 
 
 def _valid_setting_record(record: Mapping[str, Any]) -> bool:
+    bounds = {
+        "cuts_per_minute": (0.1, 240.0),
+        "avg_shot_duration": (0.1, 120.0),
+        "hook_duration": (0.1, 15.0),
+        "music_energy": (0.0, 1.0),
+    }
     for key in NUMERIC_FEATURES:
         parsed = _finite_float(record.get(key, _DEFAULTS[key]))
         if parsed is None:
             return False
-        if key != "music_energy" and parsed <= 0:
-            return False
-        if key == "music_energy" and not 0 <= parsed <= 1:
+        minimum, maximum = bounds[key]
+        if not minimum <= parsed <= maximum:
             return False
     return True
 
