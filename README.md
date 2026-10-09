@@ -36,7 +36,7 @@ The goal is a result that feels intentionally edited by a human. The creative la
 
 The v3 planner exposes a required capability registry on top of the existing production stack. It includes emotion-first story analysis, exact edit-type locking, evidence-aware hook candidate evaluation, adaptive clip planning, concise overlays, beat/drop synchronization, semantic retention anchors, automated editorial checks, platform-safe layouts, clearly labeled performance heuristics, thumbnail concepts, title options, descriptions, and hashtag packs.
 
-The production pipeline also includes a video-only **Thinking AI** creative-director stage. It drafts a topic-specific story/edit plan, critiques it against editorial criteria, revises weak drafts once, and passes the validated script and phase-specific edit directions into the existing planner. Weak or uncertain plans are flagged for review rather than silently approved. See [00-INFO/VIDEO-THINKING-AI.md](00-INFO/VIDEO-THINKING-AI.md).
+The production pipeline also includes a video-only **Thinking AI** creative-director stage. It drafts a topic-specific story/edit plan, critiques it against editorial criteria, revises weak drafts once, and passes the validated script and phase-specific edit directions into the existing planner. A separate, small local preference model retrains from observed retention/engagement and explicit human ratings, then ranks previously tested edit profiles for future videos. The OpenAI/Groq language model stays fixed; Edit Factory learns channel-specific editing preferences without trying to recreate ChatGPT. See [00-INFO/VIDEO-THINKING-AI.md](00-INFO/VIDEO-THINKING-AI.md).
 
 The repository also retains the previously implemented production features: scene intelligence, captions/subtitles, music intelligence and mixing, thumbnail tooling, upload packaging, channel/style learning, checkpoint/retry hardening, YouTube publishing support, dashboard/job handling, FFmpeg validation, Docker deployment, and CI.
 
@@ -92,6 +92,10 @@ when at least three matched human annotations exist.
 Each editorial decision records its operation, reason, confidence, evidence,
 policy version, planner version, configuration hash, and source hash when available.
 Low-confidence decisions can explicitly resolve to `DO_NOTHING`.
+
+## Learning from your channel
+
+Edit Factory retrains a small local preference model from real video performance and ratings. Configure `AIVF_LEARNING_HISTORY_PATH` and optionally `AIVF_LEARNING_MODEL_PATH`; the trained weights are stored in `video_preference_model.json`. Rate an output package with `aivf-learn rate --history state/learning_history.json --package-dir output/my-video --rating 5 --note "Strong hook and pacing"`. See [00-INFO/VIDEO-THINKING-AI.md](00-INFO/VIDEO-THINKING-AI.md) for how training data and recommendations work.
 
 ## Windows one-click start
 
