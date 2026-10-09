@@ -28,7 +28,7 @@ from .youtube_publisher import fetch_video_analytics, fetch_video_statistics, up
 
 logger = logging.getLogger(__name__)
 
-AUTONOMOUS_SCHEMA_VERSION = 2
+AUTONOMOUS_SCHEMA_VERSION = 3
 
 
 STATES = {
@@ -54,7 +54,7 @@ class AutonomousConfig:
     max_queue_size: int = 30
     max_consecutive_failures: int = 3
     max_daily_cost_usd: float = 5.0
-    estimated_cost_per_video_usd: float = 0.0
+    estimated_cost_per_video_usd: float = 1.0
     max_retries: int = 4
     retry_base_seconds: int = 60
     retry_max_seconds: int = 3600
@@ -92,7 +92,7 @@ class AutonomousConfig:
             max_queue_size=max(1, int(os.environ.get("AIVF_MAX_CONTENT_QUEUE", "30"))),
             max_consecutive_failures=max(1, int(os.environ.get("AIVF_MAX_CONSECUTIVE_FAILURES", "3"))),
             max_daily_cost_usd=max(0.0, float(os.environ.get("AIVF_MAX_DAILY_COST_USD", "5"))),
-            estimated_cost_per_video_usd=max(0.0, float(os.environ.get("AIVF_ESTIMATED_COST_PER_VIDEO_USD", "0"))),
+            estimated_cost_per_video_usd=max(0.0, float(os.environ.get("AIVF_ESTIMATED_COST_PER_VIDEO_USD", "1.0"))),
             max_retries=max(0, int(os.environ.get("AIVF_MAX_PUBLISH_RETRIES", "4"))),
             retry_base_seconds=max(1, int(os.environ.get("AIVF_RETRY_BASE_SECONDS", "60"))),
             retry_max_seconds=max(1, int(os.environ.get("AIVF_RETRY_MAX_SECONDS", "3600"))),
@@ -215,6 +215,17 @@ class AutonomousStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_auto_analytics_video_time
                     ON autonomous_analytics(video_id, observed_at);
+                CREATE TABLE IF NOT EXISTS autonomous_cost_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    amount_usd REAL NOT NULL CHECK(amount_usd >= 0),
+                    source TEXT NOT NULL,
+                    details TEXT NOT NULL DEFAULT '{}',
+                    event_key TEXT NOT NULL UNIQUE
+                );
+                CREATE INDEX IF NOT EXISTS idx_auto_cost_events_time
+                    ON autonomous_cost_events(occurred_at);
                 """
             )
 
@@ -265,6 +276,35 @@ class AutonomousStore:
                 if "revenue_usd" not in analytics_columns:
                     conn.execute("ALTER TABLE autonomous_analytics ADD COLUMN revenue_usd REAL NOT NULL DEFAULT 0")
                 current = 2
+
+            if current < 3:
+                # v3 records a spend estimate for each production attempt instead
+                # of inferring daily cost from updated_at (which changes for
+                # uploads, retries, and analytics). event_key makes this
+                # migration safe to retry if startup is interrupted.
+                legacy_costs = conn.execute(
+                    "SELECT id, updated_at, actual_cost_usd FROM autonomous_jobs "
+                    "WHERE actual_cost_usd > 0"
+                ).fetchall()
+                for legacy in legacy_costs:
+                    event_key = f"legacy:{legacy['id']}:{legacy['updated_at']}"
+                    conn.execute(
+                        """
+                        INSERT INTO autonomous_cost_events(
+                            job_id, occurred_at, amount_usd, source, details, event_key
+                        ) VALUES(?,?,?,?,?,?)
+                        ON CONFLICT(event_key) DO NOTHING
+                        """,
+                        (
+                            str(legacy["id"]),
+                            str(legacy["updated_at"]),
+                            float(legacy["actual_cost_usd"]),
+                            "legacy_estimate",
+                            "{}",
+                            event_key,
+                        ),
+                    )
+                current = 3
 
             for key, value in {
                 "paused": "0",
@@ -420,7 +460,13 @@ class AutonomousStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def _claim(self, states: Sequence[str]) -> Optional[dict[str, Any]]:
+    def _claim(
+        self,
+        states: Sequence[str],
+        *,
+        estimated_cost_usd: float = 0.0,
+        max_daily_cost_usd: float = 0.0,
+    ) -> Optional[dict[str, Any]]:
         placeholders = ",".join("?" for _ in states)
         now = _utc_now()
         with self._connect() as conn:
@@ -435,6 +481,35 @@ class AutonomousStore:
             if not row:
                 conn.commit()
                 return None
+            estimate = max(0.0, float(estimated_cost_usd))
+            if estimate > 0:
+                day_start = _parse_time(now).replace(hour=0, minute=0, second=0, microsecond=0)
+                day_start_text = day_start.isoformat().replace("+00:00", "Z")
+                spent_row = conn.execute(
+                    "SELECT COALESCE(SUM(amount_usd), 0) AS cost "
+                    "FROM autonomous_cost_events WHERE occurred_at>=?",
+                    (day_start_text,),
+                ).fetchone()
+                spent = float(spent_row["cost"] or 0.0)
+                projected = spent + estimate
+                if max_daily_cost_usd > 0 and projected >= max_daily_cost_usd:
+                    conn.rollback()
+                    raise RuntimeError("daily cost limit reached")
+                conn.execute(
+                    """
+                    INSERT INTO autonomous_cost_events(
+                        job_id, occurred_at, amount_usd, source, details, event_key
+                    ) VALUES(?,?,?,?,?,?)
+                    """,
+                    (
+                        str(row["id"]),
+                        now,
+                        estimate,
+                        "production_estimate",
+                        json.dumps({"daily_cost_limit_usd": max_daily_cost_usd}, sort_keys=True),
+                        secrets.token_hex(16),
+                    ),
+                )
             new_state = "PRODUCING" if row["state"] in {"IDEA", "FAILED"} else row["state"]
             conn.execute(
                 "UPDATE autonomous_jobs SET state=?,updated_at=?,error='' WHERE id=?",
@@ -445,8 +520,17 @@ class AutonomousStore:
             updated = conn.execute("SELECT * FROM autonomous_jobs WHERE id=?", (row["id"],)).fetchone()
         return dict(updated) if updated else None
 
-    def claim_production(self) -> Optional[dict[str, Any]]:
-        return self._claim(("IDEA", "FAILED"))
+    def claim_production(
+        self,
+        *,
+        estimated_cost_usd: float = 0.0,
+        max_daily_cost_usd: float = 0.0,
+    ) -> Optional[dict[str, Any]]:
+        return self._claim(
+            ("IDEA", "FAILED"),
+            estimated_cost_usd=estimated_cost_usd,
+            max_daily_cost_usd=max_daily_cost_usd,
+        )
 
     def claim_analysis(self) -> Optional[dict[str, Any]]:
         now_dt = datetime.now(timezone.utc)
@@ -594,11 +678,12 @@ class AutonomousStore:
         return int(row["n"])
 
     def daily_cost(self) -> float:
+        """Return today's UTC production cost estimates from the append-only ledger."""
         start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT COALESCE(SUM(actual_cost_usd),0) AS cost FROM autonomous_jobs "
-                "WHERE updated_at>=?",
+                "SELECT COALESCE(SUM(amount_usd),0) AS cost FROM autonomous_cost_events "
+                "WHERE occurred_at>=?",
                 (start.isoformat().replace("+00:00", "Z"),),
             ).fetchone()
         return float(row["cost"] or 0.0)
@@ -884,7 +969,7 @@ class AutonomousManager:
         if self.store.setting("paused", "0") == "1":
             raise RuntimeError("autonomous publisher is paused")
 
-    def _guard_limits(self) -> None:
+    def _guard_limits(self, *, reserve_production_cost: bool = True) -> None:
         if self.store.setting("emergency_stop", "0") == "1":
             raise RuntimeError("autonomous publisher emergency stop is active")
         if self.store.setting("paused", "0") == "1":
@@ -893,8 +978,10 @@ class AutonomousManager:
             raise RuntimeError("daily upload limit reached")
         if self.config.max_daily_cost_usd > 0:
             daily_cost = self.store.daily_cost()
-            projected = daily_cost + self.config.estimated_cost_per_video_usd
-            if daily_cost >= self.config.max_daily_cost_usd or projected > self.config.max_daily_cost_usd:
+            projected = daily_cost + (
+                self.config.estimated_cost_per_video_usd if reserve_production_cost else 0.0
+            )
+            if daily_cost >= self.config.max_daily_cost_usd or projected >= self.config.max_daily_cost_usd:
                 raise RuntimeError("daily cost limit reached")
         if int(self.store.setting("consecutive_failures", "0") or 0) >= self.config.max_consecutive_failures:
             self.pause("automatic pause after repeated failures")
@@ -995,8 +1082,13 @@ class AutonomousManager:
         }
 
     def produce_one(self) -> Optional[str]:
-        self._guard_limits()
-        job = self.store.claim_production()
+        self._guard_limits(reserve_production_cost=True)
+        # Reservation and job claim share one BEGIN IMMEDIATE transaction so
+        # competing single-host daemons cannot both spend the same budget headroom.
+        job = self.store.claim_production(
+            estimated_cost_usd=self.config.estimated_cost_per_video_usd,
+            max_daily_cost_usd=self.config.max_daily_cost_usd,
+        )
         if not job:
             return None
         job_id = str(job["id"])
@@ -1144,7 +1236,8 @@ class AutonomousManager:
             return job_id
 
     def publish_one(self) -> Optional[str]:
-        self._guard_limits()
+        # Generation costs have already been reserved when the package was claimed.
+        self._guard_limits(reserve_production_cost=False)
         self._raise_if_halted()
         privacy_status = os.environ.get("AIVF_YOUTUBE_PRIVACY", "private").strip().lower()
         if privacy_status not in {"private", "unlisted", "public"}:
