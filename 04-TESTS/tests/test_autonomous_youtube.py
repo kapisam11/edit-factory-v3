@@ -13,6 +13,7 @@ from ai_video_factory.autonomous_youtube import (
     AutonomousStore,
     _fact_review_pending,
     _rights_review_pending,
+    _video_thinking_review_pending,
     PublicationIntegrityError,
     _extract_package,
 )
@@ -520,3 +521,22 @@ def test_analytics_api_rows_are_mapped_by_column_headers():
     }
     assert _first_analytics_row({"columnHeaders": [{"name": "views"}], "rows": [[1, 2]]}) == {}
 
+
+
+@pytest.mark.parametrize(
+    ("report", "enabled", "found", "expected"),
+    [
+        ({"status": "ready", "human_review_required": False}, True, True, False),
+        ({"status": "not_configured", "human_review_required": False}, True, True, False),
+        ({"status": "review_required", "human_review_required": True}, True, True, True),
+        ({"status": "model_unavailable", "human_review_required": False}, True, True, True),
+        ({"status": "invalid_report"}, True, True, True),
+        ({}, True, False, True),
+        (None, True, True, True),
+        ({}, False, False, False),
+    ],
+)
+def test_video_thinking_gate_fails_closed_for_weak_or_missing_reports(
+    report, enabled, found, expected
+):
+    assert _video_thinking_review_pending(report, enabled=enabled, found=found) is expected
