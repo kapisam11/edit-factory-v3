@@ -15,6 +15,7 @@ from ai_video_factory.video_learning import (
     train_preference_model,
 )
 from ai_video_factory.advanced_intelligence import CaptionCue, write_ass_captions
+from ai_video_factory.complete_factory import update_learning_history
 
 
 def _history(count: int = 12) -> list[dict]:
@@ -171,3 +172,56 @@ def test_learned_caption_style_changes_rendered_ass_preset(tmp_path: Path) -> No
     assert bold_style != minimal_style
     assert ",72," in bold_style
     assert ",52," in minimal_style
+
+def test_youtube_analytics_become_trainable_settings_and_reward(tmp_path: Path) -> None:
+    package = tmp_path / "output" / "video-001"
+    primary = package / "primary"
+    primary.mkdir(parents=True)
+    (primary / "metrics.json").write_text(json.dumps({
+        "cuts_per_minute": 16.0,
+        "segment_count": 8,
+        "actual_duration_seconds": 30.0,
+    }), encoding="utf-8")
+    (primary / "metadata.json").write_text(json.dumps({
+        "recommendation": {
+            "settings": {
+                "cuts_per_minute": 16.0,
+                "avg_shot_duration": 3.75,
+                "hook_duration": 1.25,
+                "music_energy": 0.65,
+                "caption_style": "minimal",
+                "voice": "en-US-AriaNeural",
+                "music_style": "emotional",
+            }
+        }
+    }), encoding="utf-8")
+    (primary / "video_thinking.json").write_text(json.dumps({
+        "plan": {"emotion": "dramatic"}
+    }), encoding="utf-8")
+    history_path = tmp_path / "state" / "learning_history.json"
+
+    record = update_learning_history(
+        str(history_path),
+        topic="test topic",
+        platform="youtube_shorts",
+        package_dir=str(package),
+        metrics={},
+        performance_metrics={
+            "views": 1000,
+            "likes": 70,
+            "comments": 10,
+            "averageViewPercentage": 75.0,
+        },
+    )
+
+    assert record["cuts_per_minute"] == 16.0
+    assert record["avg_shot_duration"] == 3.75
+    assert record["hook_duration"] == 1.25
+    assert record["music_energy"] == 0.65
+    assert record["caption_style"] == "minimal"
+    assert record["voice"] == "en-US-AriaNeural"
+    assert record["music_style"] == "emotional"
+    assert record["edit_type"] == "dramatic"
+    assert record["retention"] == 0.75
+    assert record["engagement_rate"] == 0.09
+    assert observed_reward(record) == pytest.approx(0.84)
