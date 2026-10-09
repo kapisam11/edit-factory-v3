@@ -399,7 +399,12 @@ class ThumbnailStage(PipelineStage):
             ctx.thumbnail = None
             return ctx
         from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical
-        subject = str((ctx.plan.get("title_options") or [ctx.topic])[0])[:80]
+        creative = ctx.plan.get("creative_directives")
+        creative = creative if isinstance(creative, dict) else {}
+        subject = str(
+            creative.get("thumbnail_concept")
+            or (ctx.plan.get("title_options") or [ctx.topic])[0]
+        )[:120]
         thumb_dir = os.path.join(ctx.package_dir, "thumbnails")
 
         background_path = None
@@ -473,7 +478,13 @@ class VoiceoverStage(PipelineStage):
             return ctx
         from .capability_registry import build_default_registry
         path = os.path.join(ctx.package_dir, "voiceover.mp3")
-        result = build_default_registry().call("tts", text=ctx.script, output_path=path)
+        creative = ctx.plan.get("creative_directives")
+        creative = creative if isinstance(creative, dict) else {}
+        voice = str(creative.get("learned_voice") or "").strip()
+        tts_options = {"text": ctx.script, "output_path": path}
+        if voice:
+            tts_options["voice"] = voice
+        result = build_default_registry().call("tts", **tts_options)
         if result.success:
             ctx.voiceover = result.data
         else:
@@ -490,7 +501,10 @@ class MusicStage(PipelineStage):
             return ctx
         from .capability_registry import build_default_registry
         path = os.path.join(ctx.package_dir, "music_track.mp3")
-        result = build_default_registry().call("music", emotion=ctx.plan.get("mood", "dramatic"), output_path=path)
+        creative = ctx.plan.get("creative_directives")
+        creative = creative if isinstance(creative, dict) else {}
+        music_style = str(creative.get("learned_music_style") or ctx.plan.get("mood", "dramatic")).strip()
+        result = build_default_registry().call("music", emotion=music_style or "dramatic", output_path=path)
         if result.success:
             ctx.music_track = result.data
         else:
