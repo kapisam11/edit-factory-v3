@@ -189,6 +189,39 @@ def test_daily_cost_limit_accounts_for_generation_before_publish(tmp_path: Path)
 
 
 
+def test_cost_reservation_is_atomic_and_counts_each_production_attempt(tmp_path: Path):
+    manager = AutonomousManager(
+        _config(tmp_path, max_daily_cost_usd=3.0, estimated_cost_per_video_usd=1.0)
+    )
+    job_ids = [manager.enqueue(f"Distinct topic {index}") for index in range(3)]
+
+    first = manager.store.claim_production(
+        estimated_cost_usd=1.0, max_daily_cost_usd=3.0
+    )
+    second = manager.store.claim_production(
+        estimated_cost_usd=1.0, max_daily_cost_usd=3.0
+    )
+    assert first is not None and second is not None
+    assert manager.store.daily_cost() == pytest.approx(2.0)
+
+    with pytest.raises(RuntimeError, match="daily cost limit"):
+        manager.store.claim_production(
+            estimated_cost_usd=1.0, max_daily_cost_usd=3.0
+        )
+    states = {item["id"]: item["state"] for item in manager.store.list_jobs(limit=10)}
+    assert states[job_ids[2]] == "IDEA"
+    assert manager.store.daily_cost() == pytest.approx(2.0)
+
+
+def test_daily_cost_comes_from_ledger_not_mutable_job_updated_at(tmp_path: Path):
+    manager = AutonomousManager(_config(tmp_path))
+    job_id = manager.enqueue("Untouched cost-ledger test")
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    manager.store.update(job_id, actual_cost_usd=4.0, updated_at=now)
+
+    assert manager.store.daily_cost() == pytest.approx(0.0)
+
+
 def test_human_quality_guard_rejects_reused_title_template():
     assessment = assess_package(
         script=(
