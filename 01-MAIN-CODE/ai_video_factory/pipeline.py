@@ -137,6 +137,7 @@ class PipelineContext:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     stage_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    learning_history_path: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.target_seconds = validate_target_seconds(self.target_seconds)
@@ -286,7 +287,8 @@ class VideoThinkingStage(PipelineStage):
             return ctx
 
         history_path = (
-            os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+            str(ctx.learning_history_path or "").strip()
+            or os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
             or os.path.join(os.environ.get("AIVF_STATE_DIR", "state"), "learning_history.json")
         )
         if os.path.isfile(history_path):
