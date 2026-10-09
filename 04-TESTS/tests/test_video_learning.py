@@ -14,6 +14,7 @@ from ai_video_factory.video_learning import (
     predict_reward,
     train_preference_model,
 )
+from ai_video_factory.advanced_intelligence import CaptionCue, write_ass_captions
 
 
 def _history(count: int = 12) -> list[dict]:
@@ -156,3 +157,17 @@ def test_manual_rating_rejects_invalid_rating_and_unknown_package(tmp_path: Path
         add_manual_rating(history_path, package_dir="/missing", rating=6)
     with pytest.raises(KeyError, match="no learning history record"):
         add_manual_rating(history_path, package_dir="/missing", rating=5)
+
+def test_learned_caption_style_changes_rendered_ass_preset(tmp_path: Path) -> None:
+    cue = CaptionCue(text="A real payoff", start=0.0, end=1.2, x=0.5, y=0.78)
+    bold_path = tmp_path / "bold.ass"
+    minimal_path = tmp_path / "minimal.ass"
+
+    write_ass_captions([cue], str(bold_path), caption_style="bold")
+    write_ass_captions([cue], str(minimal_path), caption_style="minimal")
+
+    bold_style = next(line for line in bold_path.read_text(encoding="utf-8").splitlines() if line.startswith("Style: Default"))
+    minimal_style = next(line for line in minimal_path.read_text(encoding="utf-8").splitlines() if line.startswith("Style: Default"))
+    assert bold_style != minimal_style
+    assert ",72," in bold_style
+    assert ",52," in minimal_style
