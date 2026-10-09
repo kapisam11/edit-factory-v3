@@ -145,6 +145,29 @@ def make_idea(summary: Dict[str, str]) -> Dict[str, object]:
     base_segments = [2.0, 6.0, 12.0, 25.0, 15.0]
     scale = target_total_seconds / sum(base_segments)
     durations = [round(value * scale, 2) for value in base_segments]
+
+    learned_value = summary.get("learned_editor_preferences") or summary.get("recommended_settings") or {}
+    learned_settings = learned_value if isinstance(learned_value, dict) else {}
+    learned_cuts_per_minute: Optional[float] = None
+    try:
+        candidate_cpm = float(learned_settings.get("cuts_per_minute"))
+        if 0.1 <= candidate_cpm <= 240.0:
+            learned_cuts_per_minute = candidate_cpm
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        learned_hook = float(learned_settings.get("hook_duration"))
+    except (TypeError, ValueError):
+        learned_hook = 0.0
+    if 0.1 <= learned_hook <= min(6.0, target_total_seconds * 0.30):
+        original_rest = sum(durations[1:])
+        rest_target = target_total_seconds - learned_hook
+        durations = [learned_hook] + [
+            round(value * rest_target / max(0.01, original_rest), 2)
+            for value in durations[1:]
+        ]
+        durations[-1] = round(durations[-1] + target_total_seconds - sum(durations), 2)
     duration_total = round(sum(durations), 2)
 
     beat_definitions = [
@@ -188,8 +211,33 @@ def make_idea(summary: Dict[str, str]) -> Dict[str, object]:
     ]
 
     edit_plan: List[Tuple[float, str]] = []
-    for segment_duration, labels in beat_definitions:
-        edit_plan.extend(_subdivide_segment(segment_duration, labels))
+    if learned_cuts_per_minute is not None:
+        # Convert the learned cut rate into a bounded number of actual beats,
+        # then distribute them over the story arc instead of only storing the
+        # recommendation in metadata.
+        target_cuts = max(5, min(120, int(round(target_total_seconds * learned_cuts_per_minute / 60.0))))
+        phase_durations = [item[0] for item in beat_definitions]
+        remaining_cuts = target_cuts - len(beat_definitions)
+        total_phase_duration = sum(phase_durations) or target_total_seconds
+        exact_extras = [remaining_cuts * value / total_phase_duration for value in phase_durations]
+        extras = [int(value) for value in exact_extras]
+        missing = remaining_cuts - sum(extras)
+        order = sorted(range(len(exact_extras)), key=lambda index: exact_extras[index] - extras[index], reverse=True)
+        for index in order[:missing]:
+            extras[index] += 1
+        for (segment_duration, labels), extra_count in zip(beat_definitions, extras):
+            count = 1 + extra_count
+            base_duration = segment_duration / count
+            for index in range(count):
+                edit_plan.append((round(base_duration, 2), labels[index % len(labels)]))
+        if edit_plan:
+            edit_plan[-1] = (
+                round(edit_plan[-1][0] + duration_total - sum(value for value, _label in edit_plan), 2),
+                edit_plan[-1][1],
+            )
+    else:
+        for segment_duration, labels in beat_definitions:
+            edit_plan.extend(_subdivide_segment(segment_duration, labels))
 
     directions = thinking.get("edit_directions")
     if isinstance(directions, dict):
