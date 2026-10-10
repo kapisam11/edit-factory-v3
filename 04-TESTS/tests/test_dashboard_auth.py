@@ -159,7 +159,7 @@ def test_login_rate_limit_blocks_excessive_attempts(monkeypatch):
     client = app.test_client()
     for _ in range(10):
         assert client.post("/login", data={"token": "wrong"}, headers={"Origin": "http://localhost"}).status_code == 401
-    assert client.post("/login", data={"token": "wrong"}).status_code == 429
+    assert client.post("/login", data={"token": "wrong"}, headers={"Origin": "http://localhost"}).status_code == 429
 
 
 def test_session_cookie_is_secure(monkeypatch):
@@ -168,7 +168,7 @@ def test_session_cookie_is_secure(monkeypatch):
     client = app.test_client()
     import dashboard_auth
     dashboard_auth._login_attempts.clear()
-    response = client.post("/login", data={"token": "test-token"})
+    response = client.post("/login", data={"token": "test-token"}, headers={"Origin": "http://localhost"})
     assert response.status_code == 302
     assert "Secure" in response.headers.get("Set-Cookie", "")
 
