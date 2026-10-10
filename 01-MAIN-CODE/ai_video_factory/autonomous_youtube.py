@@ -24,7 +24,14 @@ from .complete_factory import PLATFORM_LAYOUTS, run_complete_factory
 from .feedback_store import FeedbackStore
 from .human_style_guard import assess_package, assess_topic_diversity, sanitize_public_metadata
 from .performance_learning import ChannelPerformanceModel, PerformanceObservation
-from .youtube_publisher import fetch_video_analytics, fetch_video_statistics, upload_video
+from .youtube_publisher import (
+    authorize_video_reporting_token,
+    ensure_video_reach_report_job,
+    fetch_video_analytics,
+    fetch_video_reach_metrics,
+    fetch_video_statistics,
+    upload_video,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1457,10 +1464,7 @@ class AutonomousManager:
                 str(package_dir),
                 target_seconds=options["target_seconds"],
                 platforms=options["platforms"],
-                experiment_history_path=(
-                    os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
-                    or str(self.config.state_dir / "learning_history.json")
-                ),
+                experiment_history_path=str(self.config.state_dir / "learning_history.json"),
                 auto_research=True,
                 publish_youtube=False,
                 skip_qc=False,
@@ -1500,9 +1504,6 @@ class AutonomousManager:
                         thinking_report_found = True
                         break
             thinking_enabled = os.environ.get("AIVF_VIDEO_THINKING_ENABLED", "1").strip() != "0"
-            # When enabled, a missing or malformed report is not permission to
-            # publish. Explicit human review is required unless the stage was
-            # deliberately disabled for this deployment.
             thinking_review_pending = _video_thinking_review_pending(
                 thinking_report,
                 enabled=thinking_enabled,
@@ -1784,6 +1785,29 @@ class AutonomousManager:
             start = published.date().isoformat()
             end = datetime.now(timezone.utc).date().isoformat()
             analytics = fetch_video_analytics(video_id, start_date=start, end_date=end, client_secrets_path=client, token_path=token)
+            reach: dict[str, Any] = {"available": False, "reason": "not_configured"}
+            reporting_token_path = Path(os.environ.get(
+                "YOUTUBE_REPORTING_TOKEN_PATH",
+                os.path.expanduser("~/.config/edit-factory/youtube-reporting-token.json"),
+            )).expanduser()
+            if reporting_token_path.is_file():
+                try:
+                    reporting_job_id = self.store.setting("reach_report_job_id", "") or None
+                    reach = fetch_video_reach_metrics(
+                        video_id,
+                        start_date=start,
+                        end_date=end,
+                        job_id=reporting_job_id,
+                        client_secrets_path=client,
+                        token_path=str(reporting_token_path),
+                    )
+                except Exception as reach_exc:
+                    logger.warning(
+                        "YouTube reach metrics unavailable for video %s (%s)",
+                        video_id,
+                        type(reach_exc).__name__,
+                    )
+                    reach = {"available": False, "reason": type(reach_exc).__name__}
             raw = _first_analytics_row(analytics)
             views = float(raw.get("views", stats.get("statistics", {}).get("viewCount", 0)) or 0)
             likes = float(raw.get("likes", stats.get("statistics", {}).get("likeCount", 0)) or 0)
@@ -1806,9 +1830,20 @@ class AutonomousManager:
                 if engaged_views is not None
                 else None
             )
+            ctr_value = reach.get("video_thumbnail_impressions_ctr")
+            thumbnail_ctr = (
+                float(ctr_value)
+                if reach.get("available") and isinstance(ctr_value, (int, float))
+                and 0.0 <= float(ctr_value) <= 1.0
+                else None
+            )
+            thumbnail_ctr_score = (
+                min(1.0, thumbnail_ctr / 0.05) if thumbnail_ctr is not None else None
+            )
             score_components = [
-                (0.40, min(1.0, max(0.0, avg_pct / 100.0)) if avg_pct is not None else None),
-                (0.20, engaged_view_rate_proxy),
+                (0.35, min(1.0, max(0.0, avg_pct / 100.0)) if avg_pct is not None else None),
+                (0.15, engaged_view_rate_proxy),
+                (0.10, thumbnail_ctr_score),
                 (0.15, min(1.0, likes / max(1.0, views) * 12.0)),
                 (0.10, min(1.0, comments / max(1.0, views) * 30.0)),
                 (0.10, min(1.0, shares / max(1.0, views) * 25.0)),
@@ -1829,6 +1864,9 @@ class AutonomousManager:
                 "engagedViews": engaged_views,
                 "engagedViewRateProxy": engaged_view_rate_proxy,
                 "stayedToWatchRate": None,
+                "thumbnailImpressions": reach.get("video_thumbnail_impressions"),
+                "thumbnailImpressionsClickThroughRate": thumbnail_ctr,
+                "thumbnailReachMetrics": reach,
                 "shares": shares,
                 "subscribersGained": subscribers,
                 "estimatedRevenue": revenue,
@@ -1851,12 +1889,12 @@ class AutonomousManager:
                 "likes": likes,
                 "comments": comments,
                 "share": shares / max(1.0, views),
-                # YouTube does not expose a per-video save count through this report; omit it.
                 "subscriber_rate": subscribers / max(1.0, views),
             }
             if avg_pct is not None:
                 feedback_metrics["retention"] = avg_pct / 100.0
                 feedback_metrics["completion"] = avg_pct / 100.0
+            # Per-video save counts are not provided by the Analytics query.
             feedback.add(
                 video_id,
                 "youtube_shorts",
@@ -1869,10 +1907,9 @@ class AutonomousManager:
             self.store.set_setting("consecutive_failures", "0")
             self.store.event(job_id, "analytics_recorded", {"score": score})
 
-            # Feed real YouTube observations back into the same local-learning
-            # history used when the next video is planned. Keep learning failures
-            # advisory so a missing history file cannot turn successful analytics
-            # collection into a failed analysis job.
+            # Store verified YouTube outcomes beside the editing settings used
+            # to create this package, so the next planning job can retrain from
+            # real channel performance. Learning errors never fail analytics.
             try:
                 from .complete_factory import update_learning_history
 
@@ -1882,26 +1919,34 @@ class AutonomousManager:
                 )
                 package_dir = str(claim.get("package_dir") or "").strip()
                 if package_dir:
+                    performance_metrics: dict[str, Any] = {
+                        "views": views,
+                        "likes": likes,
+                        "comments": comments,
+                    }
+                    if avg_pct is not None:
+                        performance_metrics["averageViewPercentage"] = avg_pct
                     update_learning_history(
                         learning_history_path,
                         topic=str(claim.get("topic") or ""),
                         platform=str(claim.get("platform") or "youtube_shorts"),
                         package_dir=package_dir,
                         metrics={},
-                        performance_metrics={
-                            "views": views,
-                            "likes": likes,
-                            "comments": comments,
-                            **({"averageViewPercentage": avg_pct} if avg_pct is not None else {}),
-                        },
+                        performance_metrics=performance_metrics,
                     )
                     self.store.event(job_id, "local_learning_feedback_recorded", {
                         "history_path": learning_history_path,
-                        "metrics": ["views", "likes", "comments", "averageViewPercentage"],
+                        "metrics": list(performance_metrics),
                     })
             except Exception as learning_exc:
-                logger.warning("could not append analytics to local learning history for %s: %s", job_id, type(learning_exc).__name__)
-                self.store.event(job_id, "local_learning_feedback_failed", {"error_type": type(learning_exc).__name__})
+                logger.warning(
+                    "could not append analytics to local learning history for %s: %s",
+                    job_id,
+                    type(learning_exc).__name__,
+                )
+                self.store.event(job_id, "local_learning_feedback_failed", {
+                    "error_type": type(learning_exc).__name__,
+                })
             return job_id
         except Exception as exc:
             self._record_failure(claim, exc, stage="analytics")
@@ -2023,6 +2068,29 @@ class AutonomousManager:
                 logger.warning("failed to prune stale automation backup %s", stale)
         self.store.event(None, "backup_created", {"archive": str(archive), "verified_files": verification.get("verified_files")})
         return str(archive)
+    def _ensure_reach_reporting(self) -> Optional[str]:
+        existing = self.store.setting("reach_report_job_id", "") or ""
+        if existing:
+            return existing
+        client = os.environ.get("YOUTUBE_CLIENT_SECRETS", "")
+        token = os.environ.get(
+            "YOUTUBE_REPORTING_TOKEN_PATH",
+            os.path.expanduser("~/.config/edit-factory/youtube-reporting-token.json"),
+        )
+        if not client or not Path(client).is_file() or not Path(token).expanduser().is_file():
+            return None
+        try:
+            job_id = ensure_video_reach_report_job(
+                client_secrets_path=client,
+                token_path=str(Path(token).expanduser()),
+            )
+            self.store.set_setting("reach_report_job_id", job_id)
+            self.store.event(None, "youtube_reach_reporting_ready", {"job_id": job_id})
+            return job_id
+        except Exception as exc:
+            logger.warning("YouTube reach reporting could not be prepared (%s)", type(exc).__name__)
+            return None
+
     def run_once(self, *, seed_topics: Optional[Sequence[str]] = None) -> dict[str, Any]:
         started = time.time()
         result: dict[str, Any] = {"produced": None, "published": None, "analyzed": None, "discovered": 0, "backup": None}
@@ -2039,6 +2107,7 @@ class AutonomousManager:
         if self.store.setting("emergency_stop", "0") == "1" or self.store.setting("paused", "0") == "1":
             result["paused"] = True
             return result
+        self._ensure_reach_reporting()
         effective_seeds = [str(item).strip() for item in (seed_topics or []) if str(item).strip()]
         if not effective_seeds and self.config.channel_niche:
             effective_seeds = [self.config.channel_niche]
@@ -2105,7 +2174,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     list_cmd = sub.add_parser("queue")
     list_cmd.add_argument("--limit", type=int, default=50)
     sub.add_parser("learn")
+    sub.add_parser(
+        "authorize-reporting",
+        help="authorize the separate YouTube Reporting API token used for thumbnail CTR metrics",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if args.command == "authorize-reporting":
+        token_path = authorize_video_reporting_token()
+        print(json.dumps({
+            "status": "authorized",
+            "token_path": token_path,
+            "next_step": "start the automation daemon; it will register the daily channel reach report job",
+        }, indent=2))
+        return 0
 
     manager = AutonomousManager()
     if args.command == "status":
