@@ -93,3 +93,19 @@ def test_engagement_predictor_constant_features_have_stable_scale(tmp_path: Path
     assert model.feature_means["avg_shot_duration"] == 2.0
     assert model.feature_stds["avg_shot_duration"] == 1.0
     assert math.isfinite(model.predict(_features(avg_shot_duration=2.0, cuts_per_minute=12.0)))
+
+
+def test_legacy_engagement_model_is_not_loaded_with_unverified_normalization(tmp_path: Path) -> None:
+    path = tmp_path / "engagement_model.json"
+    path.write_text(
+        '{"weights":{"avg_shot_duration":100.0},"bias":0.95,'
+        '"means":{"avg_shot_duration":999.0},"stds":{"avg_shot_duration":0.000001}}',
+        encoding="utf-8",
+    )
+
+    model = EngagementPredictor(str(path))
+
+    assert model.weights == {}
+    assert model.bias == 0.5
+    assert model.feature_means == {}
+    assert model.feature_stds == {}
