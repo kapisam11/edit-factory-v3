@@ -294,6 +294,9 @@ class VideoThinkingStage(PipelineStage):
         if os.path.isfile(history_path):
             try:
                 from .learning_recommender import load_experiments, recommend
+                from .video_learning import build_creative_feedback_context
+                history_records = load_experiments(history_path)
+                ctx.research["learned_creator_preferences"] = build_creative_feedback_context(history_records)
 
                 learning_model_path = (
                     os.environ.get("AIVF_LEARNING_MODEL_PATH", "").strip()
@@ -308,7 +311,7 @@ class VideoThinkingStage(PipelineStage):
                         "hook_duration": float(ctx.research.get("hook_duration") or 2.0),
                         "music_energy": float(ctx.research.get("music_energy") or 0.5),
                     },
-                    load_experiments(history_path),
+                    history_records,
                     defaults={"caption_style": "karaoke", "voice": "en-US-GuyNeural"},
                     model_path=learning_model_path,
                 )
