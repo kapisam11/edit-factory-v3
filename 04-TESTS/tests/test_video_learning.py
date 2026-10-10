@@ -8,7 +8,9 @@ import pytest
 from ai_video_factory.learning_recommender import recommend
 from ai_video_factory.video_learning import (
     add_manual_rating,
+    build_creative_feedback_context,
     eligible_examples,
+    evaluate_preference_model,
     load_preference_model,
     observed_reward,
     predict_reward,
@@ -82,6 +84,56 @@ def test_preference_model_retrains_and_persists_coefficients(tmp_path: Path) -> 
     prediction = predict_reward(loaded, history[-1])
     assert prediction is not None
     assert 0.0 <= prediction <= 1.0
+
+
+def test_holdout_evaluation_checks_unseen_videos_against_simple_baseline() -> None:
+    history = _history(12)
+    for index, row in enumerate(history):
+        row["published_at"] = f"2026-09-{index + 1:02d}T12:00:00Z"
+        row["package_dir"] = f"output/video-{index:03d}"
+
+    report = evaluate_preference_model(history, holdout_fraction=0.25, min_train_samples=6)
+
+    assert report["status"] == "evaluated"
+    assert report["split_strategy"] == "latest_videos_holdout"
+    assert report["training_examples"] == 9
+    assert report["holdout_examples"] == 3
+    assert report["valid_predictions"] == 3
+    assert report["model_mae"] >= 0
+    assert report["baseline_mae"] >= 0
+    assert "future videos" in report["warning"]
+
+
+def test_holdout_evaluation_does_not_fake_enough_data() -> None:
+    report = evaluate_preference_model(_history(5))
+    assert report["status"] == "insufficient_data"
+    assert report["holdout_examples"] == 0
+    assert "No synthetic or placeholder outcomes" in report["message"]
+
+
+def test_creator_feedback_context_uses_corrections_but_marks_priors_as_not_training_data() -> None:
+    history = _history(2)
+    history[0].update({
+        "package_dir": "output/favourite",
+        "user_rating": 5,
+        "user_feedback": "Strong opening, fewer overlays, hold the emotional reveal.",
+        "user_corrected_script": "The gate opened. Nobody moved. Then the lights came back.",
+        "caption_style": "minimal",
+        "music_style": "emotional",
+        "edit_type": "storytelling",
+        "user_feedback_at": "2026-10-01T12:00:00Z",
+    })
+    context = build_creative_feedback_context(history)
+
+    assert context["rated_video_count"] == 1
+    assert context["corrected_script_count"] == 1
+    assert context["what_the_creator_liked"] == [
+        "Strong opening, fewer overlays, hold the emotional reveal."
+    ]
+    assert context["creator_edited_examples"][0]["creator_edited_example"].startswith("The gate opened.")
+    assert context["preferred_settings"]["caption_style"] == "minimal"
+    assert context["starter_editorial_priors"]["is_training_data"] is False
+    assert context["starter_editorial_priors"]["source"] == "built_in_editorial_principles_not_channel_analytics"
 
 
 def test_recommender_uses_trained_model_to_rank_tested_edit_profiles(tmp_path: Path) -> None:
