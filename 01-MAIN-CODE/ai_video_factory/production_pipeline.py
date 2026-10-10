@@ -152,12 +152,23 @@ def _video_thinking_timeline_directives(
             hook_duration = 0.0
         if not 0.1 <= hook_duration <= min(6.0, duration * 0.30):
             hook_duration = min(duration / desired_count, duration * 0.20)
+
+        # Allocate exact integer milliseconds first. Independently rounding
+        # every segment can drift by one millisecond per edit and violate the
+        # target duration, even when the unrounded arithmetic was correct.
+        total_ms = max(1, int(round(duration * 1000.0)))
         if desired_count == 1:
-            segment_durations = [duration]
+            segment_durations = [total_ms / 1000.0]
         else:
-            remaining = max(0.1, duration - hook_duration)
-            segment_durations = [hook_duration] + [remaining / (desired_count - 1)] * (desired_count - 1)
-            segment_durations[-1] += duration - sum(segment_durations)
+            hook_ms = min(total_ms - (desired_count - 1), max(1, int(round(hook_duration * 1000.0))))
+            remaining_ms = total_ms - hook_ms
+            base_ms, extra_ms = divmod(remaining_ms, desired_count - 1)
+            duration_ms = [hook_ms]
+            duration_ms.extend(
+                base_ms + (1 if index < extra_ms else 0)
+                for index in range(desired_count - 1)
+            )
+            segment_durations = [value / 1000.0 for value in duration_ms]
 
     purpose_by_phase = {
         "hook": "Hook", "setup": "Memory", "conflict": "Threat",
