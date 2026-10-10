@@ -521,7 +521,7 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
                 "YouTube publishing blocked: third-party media rights are not cleared; "
                 "verify ownership, permission, license, or public-domain status first."
             )
-        from .youtube_publisher import add_video_to_playlist, ensure_playlist, fetch_video_statistics, upload_video
+        from .youtube_publisher import add_video_to_playlist, ensure_playlist, fetch_video_analytics, fetch_video_statistics, upload_video
         caption_file = short_package.get("files", {}).get("captions_srt")
         disclosure_reviewed = bool(opts.get("disclosure_reviewed", False))
         upload_result = upload_video(
@@ -537,10 +537,62 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         if playlist_title:
             playlist = ensure_playlist(str(playlist_title), description=str(opts.get("playlist_description", "")), privacy_status=str(opts.get("playlist_privacy", "private")), client_secrets_path=opts.get("client_secrets_path"), token_path=opts.get("token_path"))
             manifest["playlist"] = add_video_to_playlist(upload_result["video_id"], playlist["id"], client_secrets_path=opts.get("client_secrets_path"), token_path=opts.get("token_path"))
-        stats = fetch_video_statistics(upload_result["video_id"], client_secrets_path=opts.get("client_secrets_path"), token_path=opts.get("token_path"))
+        video_id = str(upload_result["video_id"])
+        stats = fetch_video_statistics(video_id, client_secrets_path=opts.get("client_secrets_path"), token_path=opts.get("token_path"))
         manifest["performance_feedback"] = stats
         if learning_history_path:
-            update_learning_history(learning_history_path, topic=topic, platform="youtube_shorts", package_dir=str(root), metrics={}, performance_metrics=stats.get("statistics", {}))
+            published_at = str((stats.get("snippet") or {}).get("publishedAt") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+            stats_payload = stats.get("statistics") or {}
+            performance_metrics: Dict[str, Any] = {}
+            for output_key, source_key in (
+                ("views", "viewCount"),
+                ("likes", "likeCount"),
+                ("comments", "commentCount"),
+            ):
+                if stats_payload.get(source_key) is not None:
+                    performance_metrics[output_key] = float(stats_payload[source_key] or 0.0)
+            start_date = published_at[:10]
+            end_date = datetime.now(timezone.utc).date().isoformat()
+            try:
+                analytics = fetch_video_analytics(
+                    video_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    client_secrets_path=opts.get("client_secrets_path"),
+                    token_path=opts.get("token_path"),
+                )
+                rows = analytics.get("rows") if isinstance(analytics, Mapping) else None
+                headers = analytics.get("columnHeaders") if isinstance(analytics, Mapping) else None
+                raw: Dict[str, Any] = {}
+                if isinstance(rows, list) and rows and isinstance(headers, list):
+                    first_row = rows[0]
+                    names = [
+                        str(header.get("name") or "")
+                        for header in headers if isinstance(header, Mapping)
+                    ]
+                    if isinstance(first_row, (list, tuple)) and len(names) == len(first_row) == len(headers) and all(names):
+                        raw = dict(zip(names, first_row))
+                    elif isinstance(first_row, Mapping):
+                        raw = dict(first_row)
+                for metric in ("views", "likes", "comments"):
+                    if raw.get(metric) is not None:
+                        performance_metrics[metric] = float(raw[metric])
+                if raw.get("averageViewPercentage") is not None:
+                    performance_metrics["averageViewPercentage"] = float(raw["averageViewPercentage"])
+            except Exception:
+                # Public Data API counts remain usable. Missing retention stays
+                # absent instead of becoming a synthetic zero label.
+                pass
+            update_learning_history(
+                learning_history_path,
+                topic=topic,
+                platform="youtube_shorts",
+                package_dir=str(root),
+                metrics={},
+                performance_metrics=performance_metrics,
+                video_id=video_id,
+                published_at=published_at,
+            )
         _write_json(str(root / "complete_factory_manifest.json"), manifest)
 
     checkpoints.mark("complete", status="complete", artifacts=[str(root / "complete_factory_manifest.json")])
