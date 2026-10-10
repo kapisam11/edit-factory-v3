@@ -244,6 +244,11 @@ class EngagementPredictor:
         if os.path.exists(self.storage_path):
             with open(self.storage_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                # Pre-v2 models were trained with a feature-count proxy rather
+                # than observation-count statistics. Never trust those weights
+                # after this fix; the next training run will rebuild them.
+                if data.get("normalization_version") != 2:
+                    return
                 self.weights = data.get("weights", {})
                 self.bias = data.get("bias", 0.5)
                 self.feature_means = data.get("means", {})
@@ -253,6 +258,7 @@ class EngagementPredictor:
         os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
         with open(self.storage_path, "w", encoding="utf-8") as f:
             json.dump({
+                "normalization_version": 2,
                 "weights": self.weights,
                 "bias": self.bias,
                 "means": self.feature_means,
