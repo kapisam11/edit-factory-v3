@@ -203,12 +203,25 @@ class FeedbackStore:
         result: dict[str, Any] = {}
         for (plat, edit), bucket in groups.items():
             keys = set().union(*(item.keys() for item in bucket))
+            means: dict[str, float] = {}
+            for key in keys:
+                # Metrics that are unavailable for a video are absent, not
+                # zero. Average only observations that were actually measured.
+                values = []
+                for item in bucket:
+                    if key not in item or item[key] is None:
+                        continue
+                    try:
+                        value = float(item[key])
+                    except (TypeError, ValueError):
+                        continue
+                    if value == value and abs(value) != float("inf"):
+                        values.append(value)
+                if values:
+                    means[key] = round(sum(values) / len(values), 6)
             result[f"{plat}:{edit}"] = {
                 "samples": len(bucket),
-                "means": {
-                    k: round(sum(float(item.get(k, 0.0)) for item in bucket) / len(bucket), 6)
-                    for k in keys
-                },
+                "means": means,
             }
         return result
 
