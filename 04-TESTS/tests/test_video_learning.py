@@ -13,6 +13,7 @@ from ai_video_factory.video_learning import (
     build_creative_feedback_context,
     eligible_examples,
     evaluate_preference_model,
+    import_youtube_history,
     load_preference_model,
     observed_reward,
     predict_reward,
@@ -178,6 +179,82 @@ def test_creator_feedback_context_uses_corrections_but_marks_priors_as_not_train
     assert context["preferred_settings"]["caption_style"] == "minimal"
     assert context["starter_editorial_priors"]["is_training_data"] is False
     assert context["starter_editorial_priors"]["source"] == "built_in_editorial_principles_not_channel_analytics"
+
+
+def test_import_youtube_history_only_trains_on_matched_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "output" / "existing-video"
+    primary = package / "primary"
+    primary.mkdir(parents=True)
+    (package / "complete_factory_manifest.json").write_text(json.dumps({
+        "topic": "Existing channel story",
+        "youtube_upload": {"video_id": "video-matched"},
+    }), encoding="utf-8")
+    (primary / "metrics.json").write_text(json.dumps({
+        "cuts_per_minute": 14.0,
+        "segment_count": 7,
+        "actual_duration_seconds": 30.0,
+    }), encoding="utf-8")
+    (primary / "metadata.json").write_text(json.dumps({
+        "recommendation": {"settings": {
+            "cuts_per_minute": 14.0,
+            "avg_shot_duration": 4.28,
+            "hook_duration": 1.5,
+            "music_energy": 0.6,
+            "caption_style": "minimal",
+            "voice": "en-US-AriaNeural",
+            "music_style": "dramatic",
+            "edit_type": "storytelling",
+        }}
+    }), encoding="utf-8")
+
+    from ai_video_factory import youtube_publisher
+
+    monkeypatch.setattr(youtube_publisher, "fetch_channel_uploads", lambda **kwargs: [
+        {"video_id": "video-matched", "title": "Existing channel story", "published_at": "2026-08-10T10:00:00Z"},
+        {"video_id": "external-without-package", "title": "An unrelated channel video", "published_at": "2026-08-11T10:00:00Z"},
+    ])
+    monkeypatch.setattr(youtube_publisher, "fetch_video_statistics", lambda video_id, **kwargs: {
+        "snippet": {"title": "Existing channel story", "publishedAt": "2026-08-10T10:00:00Z"},
+        "statistics": {"viewCount": "1000", "likeCount": "70", "commentCount": "12"},
+    })
+    monkeypatch.setattr(youtube_publisher, "fetch_video_analytics", lambda video_id, **kwargs: {
+        "columnHeaders": [
+            {"name": "views"}, {"name": "likes"}, {"name": "comments"}, {"name": "averageViewPercentage"}
+        ],
+        "rows": [[1000, 70, 12, 75.0]],
+    })
+
+    history_path = tmp_path / "state" / "learning_history.json"
+    result = import_youtube_history(
+        history_path,
+        output_root=tmp_path / "output",
+        state_dir=None,
+        max_videos=10,
+    )
+
+    assert result["imported"] == 1
+    assert result["skipped_unmatched"] == 1
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    assert len(history) == 1
+    record = history[0]
+    assert record["video_id"] == "video-matched"
+    assert record["published_at"] == "2026-08-10T10:00:00Z"
+    assert record["cuts_per_minute"] == 14.0
+    assert record["caption_style"] == "minimal"
+    assert record["retention"] == 0.75
+    assert observed_reward(record) is not None
+
+    repeated = import_youtube_history(
+        history_path,
+        output_root=tmp_path / "output",
+        state_dir=None,
+        max_videos=10,
+    )
+    assert repeated["imported"] == 0
+    assert repeated["skipped_existing"] == 1
+    assert len(json.loads(history_path.read_text(encoding="utf-8"))) == 1
 
 
 def test_recommender_uses_trained_model_to_rank_tested_edit_profiles(tmp_path: Path) -> None:
