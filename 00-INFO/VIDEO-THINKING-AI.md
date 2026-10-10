@@ -44,7 +44,15 @@ After a video is produced, rate the package and optionally supply the corrected 
 
 Ratings are from 1 (poor) to 5 (excellent). The rating command stores the feedback and attempts a retrain. Corrected scripts are bounded examples of your preferred writing style; they are not treated as factual evidence for future topics.
 
-To retrain manually:
+### Import earlier videos from your channel
+
+When Edit Factory already has the output package and saved edit settings for a video, you can import that video's real stats from the authorized YouTube channel instead of waiting for new uploads:
+
+    aivf-learn import-youtube --history state/learning_history.json --output-root output --state-dir state --max-videos 100
+
+This uses the channel uploads playlist and YouTube Analytics with the OAuth token configured for Edit Factory. It only imports a channel video when it can match the video ID to a local Edit Factory package containing recorded edit settings. It reports unmatched videos rather than assigning them guessed/default editing settings. It also avoids duplicate imports on repeat runs. If there is no authorized token, the command will report that it cannot access the channel; it does not create fake metrics.
+
+### Retrain manually
 
     aivf-learn train --history state/learning_history.json
 
