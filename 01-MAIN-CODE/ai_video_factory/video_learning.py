@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 from pathlib import Path
 import tempfile
 from typing import Any, Iterable, Mapping, Sequence
@@ -423,6 +424,249 @@ def recommend_learned_profile(
     }
 
 
+def _analytics_row(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Map YouTube Analytics's columnHeaders/rows response into a dictionary."""
+    rows = report.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return {}
+    row = rows[0]
+    if isinstance(row, Mapping):
+        return {str(key): value for key, value in row.items()}
+    headers = report.get("columnHeaders")
+    if not isinstance(row, (list, tuple)) or not isinstance(headers, list):
+        return {}
+    names = [
+        str(header.get("name") or "")
+        for header in headers
+        if isinstance(header, Mapping)
+    ]
+    if len(names) != len(headers) or len(names) != len(row) or any(not name for name in names):
+        return {}
+    return dict(zip(names, row))
+
+
+def _package_has_observed_edit_settings(package_dir: str | Path) -> bool:
+    """Only train historical outcomes when the matching package records real settings."""
+    root = Path(package_dir)
+    has_metrics = False
+    for candidate in (root / "metrics.json", root / "primary" / "metrics.json"):
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, Mapping) and any(
+            key in payload for key in ("cuts_per_minute", "segment_count", "actual_rendered_segments")
+        ):
+            has_metrics = True
+            break
+    has_settings = False
+    for candidate in (root / "metadata.json", root / "primary" / "metadata.json"):
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        recommendation = payload.get("recommendation") if isinstance(payload, Mapping) else None
+        settings = recommendation.get("settings") if isinstance(recommendation, Mapping) else None
+        if isinstance(settings, Mapping) and any(
+            key in settings for key in (*NUMERIC_FEATURES, "caption_style", "voice", "music_style", "edit_type")
+        ):
+            has_settings = True
+            break
+    return has_metrics and has_settings
+
+
+def _find_channel_video_packages(output_root: str | Path, state_dir: str | Path | None = None) -> dict[str, dict[str, str]]:
+    """Associate channel video IDs only with output packages that identify their origin."""
+    root = Path(output_root)
+    packages: dict[str, dict[str, str]] = {}
+    manifest_count = 0
+    if root.is_dir():
+        for manifest_path in root.rglob("complete_factory_manifest.json"):
+            manifest_count += 1
+            if manifest_count > 10000:
+                break
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(manifest, Mapping):
+                continue
+            upload = manifest.get("youtube_upload")
+            video_id = str(upload.get("video_id") or "").strip() if isinstance(upload, Mapping) else ""
+            if not video_id:
+                video_id = str(manifest.get("youtube_video_id") or "").strip()
+            if video_id:
+                packages.setdefault(video_id, {
+                    "package_dir": str(manifest_path.parent),
+                    "topic": str(manifest.get("topic") or ""),
+                })
+
+    # Autonomous jobs publish outside the complete-factory uploader. Their
+    # durable queue already has the exact video-ID→package-dir association.
+    if state_dir is not None:
+        database = Path(state_dir) / "autonomous.sqlite"
+        if database.is_file():
+            try:
+                with sqlite3.connect(str(database), timeout=5) as conn:
+                    conn.row_factory = sqlite3.Row
+                    columns = {
+                        str(row[1])
+                        for row in conn.execute("PRAGMA table_info(autonomous_jobs)").fetchall()
+                    }
+                    if {"video_id", "package_dir"}.issubset(columns):
+                        for row in conn.execute(
+                            "SELECT * FROM autonomous_jobs WHERE video_id IS NOT NULL AND video_id != ''"
+                        ).fetchall():
+                            record = dict(row)
+                            video_id = str(record.get("video_id") or "").strip()
+                            package_dir = str(record.get("package_dir") or "").strip()
+                            if video_id and package_dir and Path(package_dir).is_dir():
+                                packages.setdefault(video_id, {
+                                    "package_dir": package_dir,
+                                    "topic": str(record.get("topic") or ""),
+                                })
+            except sqlite3.Error:
+                # History import should report that fewer packages matched, not
+                # damage or mutate the autonomous queue.
+                pass
+    return packages
+
+
+def import_youtube_history(
+    history_path: str | Path,
+    *,
+    output_root: str | Path = "output",
+    state_dir: str | Path | None = "state",
+    max_videos: int = 100,
+    client_secrets_path: str | None = None,
+    token_path: str | None = None,
+) -> dict[str, Any]:
+    """Import real channel analytics only for videos matched to recorded edit settings.
+
+    Videos produced outside Edit Factory, or without a saved render/settings
+    record, are reported as unmatched and are not used to train the learner.
+    """
+    limit = int(max_videos)
+    if not 1 <= limit <= 1000:
+        raise ValueError("max_videos must be between 1 and 1000")
+    from .youtube_publisher import (
+        fetch_channel_uploads,
+        fetch_video_analytics,
+        fetch_video_statistics,
+    )
+
+    target = Path(history_path)
+    history = load_experiments(str(target))
+    existing_video_ids = {
+        str(row.get("video_id") or "").strip()
+        for row in history
+        if str(row.get("video_id") or "").strip()
+    }
+    matched_packages = _find_channel_video_packages(output_root, state_dir)
+    uploads = fetch_channel_uploads(
+        max_results=limit,
+        client_secrets_path=client_secrets_path,
+        token_path=token_path,
+    )
+    end_date = datetime.now(timezone.utc).date().isoformat()
+    imported = 0
+    skipped_existing = 0
+    skipped_unmatched = 0
+    skipped_settings = 0
+    failed = 0
+    errors: list[dict[str, str]] = []
+
+    for upload in uploads:
+        video_id = str(upload.get("video_id") or "").strip()
+        if not video_id:
+            continue
+        if video_id in existing_video_ids:
+            skipped_existing += 1
+            continue
+        package = matched_packages.get(video_id)
+        if not package:
+            skipped_unmatched += 1
+            continue
+        package_dir = str(package["package_dir"])
+        if not _package_has_observed_edit_settings(package_dir):
+            skipped_settings += 1
+            continue
+
+        published_at = str(upload.get("published_at") or "").strip()
+        try:
+            stats = fetch_video_statistics(
+                video_id,
+                client_secrets_path=client_secrets_path,
+                token_path=token_path,
+            )
+            stats_payload = stats.get("statistics") or {}
+            performance: dict[str, Any] = {
+                "views": float(stats_payload.get("viewCount", 0.0) or 0.0),
+                "likes": float(stats_payload.get("likeCount", 0.0) or 0.0),
+                "comments": float(stats_payload.get("commentCount", 0.0) or 0.0),
+            }
+            if published_at:
+                try:
+                    start_date = datetime.fromisoformat(
+                        published_at.replace("Z", "+00:00")
+                    ).date().isoformat()
+                except ValueError:
+                    start_date = end_date
+                if start_date <= end_date:
+                    try:
+                        analytics = fetch_video_analytics(
+                            video_id,
+                            start_date=start_date,
+                            end_date=end_date,
+                            client_secrets_path=client_secrets_path,
+                            token_path=token_path,
+                        )
+                        row = _analytics_row(analytics)
+                        for key in ("views", "likes", "comments"):
+                            if row.get(key) is not None:
+                                performance[key] = float(row[key])
+                        if row.get("averageViewPercentage") is not None:
+                            performance["averageViewPercentage"] = float(row["averageViewPercentage"])
+                    except Exception:
+                        # Data API statistics still provide legitimate outcomes;
+                        # retention remains absent when Analytics is unavailable.
+                        pass
+
+            from .complete_factory import update_learning_history
+
+            update_learning_history(
+                str(target),
+                topic=str(package.get("topic") or upload.get("title") or "Untitled video"),
+                platform="youtube_shorts",
+                package_dir=package_dir,
+                metrics={},
+                performance_metrics=performance,
+                video_id=video_id,
+                published_at=published_at,
+            )
+            existing_video_ids.add(video_id)
+            imported += 1
+        except Exception as exc:
+            failed += 1
+            errors.append({"video_id": video_id, "error_type": type(exc).__name__})
+
+    return {
+        "status": "complete" if not failed else "completed_with_errors",
+        "channel_videos_seen": len(uploads),
+        "imported": imported,
+        "skipped_existing": skipped_existing,
+        "skipped_unmatched": skipped_unmatched,
+        "skipped_missing_edit_settings": skipped_settings,
+        "failed": failed,
+        "errors": errors[:20],
+        "history_path": str(target),
+        "training_notice": (
+            "Only matched Edit Factory packages with stored edit settings were imported. "
+            "Unmatched channel videos were not assigned guessed settings."
+        ),
+    }
+
+
 def evaluate_preference_model(
     records: Iterable[Mapping[str, Any]],
     *,
@@ -759,16 +1003,48 @@ def training_summary(model: Mapping[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train and inspect Edit Factory's local video preference model.")
-    parser.add_argument("action", choices=("train", "rate", "evaluate"), help="retrain the preference model, rate a video, or test generalization on held-out videos")
+    parser.add_argument("action", choices=("train", "rate", "evaluate", "import-youtube"), help="retrain the preference model, rate a video, or test generalization on held-out videos")
     parser.add_argument("--history", default=os.environ.get("AIVF_LEARNING_HISTORY_PATH", "state/learning_history.json"))
     parser.add_argument("--model", default=os.environ.get("AIVF_LEARNING_MODEL_PATH") or None)
     parser.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
     parser.add_argument("--holdout-fraction", type=float, default=0.20, help="Fraction of videos reserved from training for evaluation (0.10–0.40)")
+    parser.add_argument("--output-root", default=os.environ.get("AIVF_OUTPUT_DIR", "output"), help="Edit Factory outputs used to match channel video IDs to saved edit settings")
+    parser.add_argument("--state-dir", default=os.environ.get("AIVF_STATE_DIR", "state"), help="State directory containing the autonomous queue DB")
+    parser.add_argument("--max-videos", type=int, default=100, help="Maximum recent channel uploads to inspect (1–1000)")
+    parser.add_argument("--client-secrets", default=os.environ.get("YOUTUBE_CLIENT_SECRETS") or None)
+    parser.add_argument("--token-path", default=os.environ.get("YOUTUBE_TOKEN_PATH") or None)
     parser.add_argument("--package-dir", default="", help="Exact output package directory for a human rating")
     parser.add_argument("--rating", type=int, choices=range(1, 6), help="Human rating from 1 (poor) to 5 (excellent)")
     parser.add_argument("--note", default="", help="Optional brief reason for the rating")
     parser.add_argument("--corrected-script", default=None, help="Optional path to your edited script; the planner can learn your writing style from it")
     args = parser.parse_args()
+
+    if args.action == "import-youtube":
+        try:
+            report = import_youtube_history(
+                args.history,
+                output_root=args.output_root,
+                state_dir=args.state_dir,
+                max_videos=args.max_videos,
+                client_secrets_path=args.client_secrets,
+                token_path=args.token_path,
+            )
+        except Exception as exc:
+            parser.error(f"YouTube history import failed: {type(exc).__name__}: {exc}")
+        try:
+            history = json.loads(Path(args.history).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            history = []
+        model_path = args.model or str(Path(args.history).with_name("video_preference_model.json"))
+        model = train_preference_model(history, model_path=model_path, min_samples=args.min_samples)
+        report["training"] = training_summary(model)
+        report["holdout_evaluation"] = evaluate_preference_model(
+            history,
+            holdout_fraction=args.holdout_fraction,
+            min_train_samples=args.min_samples,
+        )
+        print(json.dumps(report, indent=2))
+        return 0 if report["failed"] == 0 else 1
 
     if args.action == "rate":
         if not args.package_dir or args.rating is None:
@@ -826,6 +1102,7 @@ __all__ = [
     "build_creative_feedback_context",
     "eligible_examples",
     "evaluate_preference_model",
+    "import_youtube_history",
     "load_preference_model",
     "observed_reward",
     "predict_reward",
