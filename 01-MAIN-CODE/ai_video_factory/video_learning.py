@@ -556,6 +556,8 @@ def import_youtube_history(
     )
 
     target = Path(history_path)
+    from .learning_recommender import load_experiments
+
     history = load_experiments(str(target))
     existing_video_ids = {
         str(row.get("video_id") or "").strip()
