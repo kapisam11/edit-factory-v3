@@ -522,7 +522,6 @@ def test_analytics_api_rows_are_mapped_by_column_headers():
     assert _first_analytics_row({"columnHeaders": [{"name": "views"}], "rows": [[1, 2]]}) == {}
 
 
-
 @pytest.mark.parametrize(
     ("report", "enabled", "found", "expected"),
     [
