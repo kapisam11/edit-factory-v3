@@ -227,6 +227,10 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
         or None
     )
     experiments = load_experiments(history_path) if history_path else []
+    if experiments:
+        from .video_learning import build_creative_feedback_context
+
+        summary["learned_creator_preferences"] = build_creative_feedback_context(experiments)
     model_path = (
         os.environ.get("AIVF_LEARNING_MODEL_PATH", "").strip()
         or (str(Path(history_path).with_name("video_preference_model.json")) if history_path else None)
