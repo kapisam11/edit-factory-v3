@@ -101,8 +101,11 @@ def observed_reward(record: Mapping[str, Any]) -> float | None:
         percent_aware=("retention" not in record),
     )
     engagement = _finite_float(record.get("engagement_rate"))
+    views = _finite_float(record.get("views"))
+    if engagement is not None and views is not None and views <= 0:
+        # A synthesized rate with no views is not a measured outcome.
+        engagement = None
     if engagement is None:
-        views = _finite_float(record.get("views"))
         likes = _finite_float(record.get("likes"))
         comments = _finite_float(record.get("comments"))
         if views is not None and views > 0 and (likes is not None or comments is not None):
