@@ -4,6 +4,8 @@ Welcome. Edit Factory v3 turns a topic and optional raw video into an emotion-fi
 
 You do **not** need to understand every Python file before using it. Follow the path below, then use the project map when you need more detail.
 
+For phased implementation, responsibilities, acceptance criteria, risk tracking, and release gates, see the [Actionable Project Execution Plan](12-PROJECT-EXECUTION-PLAN.md).
+
 ## What this project does
 
 ```text
