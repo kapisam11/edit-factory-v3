@@ -5,6 +5,9 @@ from typing import Any
 
 import pytest
 
+from ai_video_factory import video_thinking
+from ai_video_factory.human_style_guard import StyleAssessment
+
 from ai_video_factory.ai_gateway import AIResponseError
 from ai_video_factory.model_adapter import ModelResult
 from ai_video_factory.plan import make_idea
@@ -90,7 +93,16 @@ def test_thinking_agent_critiques_and_revises_weak_first_draft() -> None:
     assert "chain-of-thought" not in json.dumps(outcome.to_dict()).lower()
 
 
-def test_thinking_agent_uses_two_calls_when_draft_passes_review() -> None:
+def test_thinking_agent_uses_two_calls_when_all_gates_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Isolate the critique call-count behavior from the independent deterministic
+    # style guard; a separate regression test below covers style-gate overrides.
+    monkeypatch.setattr(
+        video_thinking,
+        "assess_text",
+        lambda *_args, **_kwargs: StyleAssessment(
+            score=0.95, publish_blocked=False, reasons=(), metrics={}
+        ),
+    )
     responses = [
         _result(json.dumps(_plan())),
         _result(json.dumps({"score": 91, "blocking_issues": [], "revision_brief": ""})),
@@ -110,7 +122,48 @@ def test_thinking_agent_uses_two_calls_when_draft_passes_review() -> None:
     assert outcome.plan is not None
     assert outcome.revision_applied is False
     assert outcome.critique_score == 91
+    assert outcome.human_review_required is False
 
+
+def test_style_block_forces_revision_even_with_high_critique_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assessments = iter([
+        StyleAssessment(
+            score=0.2,
+            publish_blocked=True,
+            reasons=("script lacks enough concrete, topic-specific detail",),
+            metrics={},
+        ),
+        StyleAssessment(score=0.95, publish_blocked=False, reasons=(), metrics={}),
+    ])
+    monkeypatch.setattr(
+        video_thinking,
+        "assess_text",
+        lambda *_args, **_kwargs: next(assessments),
+    )
+    responses = [
+        _result(json.dumps(_plan())),
+        _result(json.dumps({"score": 91, "blocking_issues": [], "revision_brief": ""})),
+        _result(json.dumps(_plan(stronger=True))),
+    ]
+    calls = 0
+
+    def fake_model(_prompt: str) -> ModelResult:
+        nonlocal calls
+        calls += 1
+        return responses.pop(0)
+
+    outcome = VideoThinkingAgent(model_call=fake_model).create_plan(
+        "Apollo 11 landing", target_seconds=30
+    )
+
+    assert calls == 3
+    assert outcome.plan is not None
+    assert outcome.revision_applied is True
+    assert outcome.critique_score == 91
+    assert outcome.human_review_required is False
+    assert outcome.status == "ready"
 
 def test_thinking_agent_falls_back_cleanly_when_no_model_is_configured() -> None:
     def no_model(_prompt: str) -> ModelResult:
