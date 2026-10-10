@@ -215,6 +215,7 @@ Learned channel preferences in the context (for example, learned_editor_preferen
 Edit directions must tell the editor what to look for or how to cut; when no footage evidence exists, describe the intended kind of shot rather than claiming it already exists.
 Use source/context facts only where supported. Do not add any AI-tool credit, product branding, or watermark to public metadata.
 The native platform altered/synthetic-media disclosure is handled separately by the publishing policy and must never be suppressed.
+When the context contains "learned_creator_preferences" or "learned_editor_preferences", use those application-generated fields to adapt to this channel's proven tastes: pacing, hook style, narration tone, edit intensity, caption style, voice and music. Treat creator-edited scripts as examples of style, never as text to copy verbatim or as facts about this new topic. Follow the user's creative preferences only when they fit the available footage, new topic evidence, and platform/safety rules. Explicit creator feedback matters more than weak or noisy analytics; do not claim a preference is learned when the context has no relevant examples.
 
 TOPIC: {topic[:300]}
 TARGET DURATION: {float(target_seconds):.1f} seconds
