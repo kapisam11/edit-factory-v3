@@ -103,6 +103,16 @@ Public autonomous publishing is disabled by default:
 
 The factory does not add its own product/vendor/AI-generator credit to public title, description, or tags, and does not add a factory watermark. This removes accidental factory boilerplate only; it does not remove source/rights information or suppress a YouTube-required altered/synthetic-media disclosure. AI credits in public prose are separate from YouTube's native disclosure: native disclosure remains enabled when required.
 
+## Video-thinking creative director
+
+The autonomous production pipeline includes the dedicated video-only thinking stage documented in [VIDEO-THINKING-AI.md](VIDEO-THINKING-AI.md). It uses the configured OpenAI/Groq provider to draft a topic-specific story plan, critique it, and revise it once when weak. The validated script and phase-specific edit directions feed the existing production planner.
+
+- \`AIVF_VIDEO_THINKING_ENABLED=1\` enables the stage; it is on by default.
+- \`AIVF_VIDEO_THINKING_ENABLED=0\` disables it.
+- Without an available model key, it records \`not_configured\` and leaves deterministic planning available.
+- Invalid or weak plans, missing reports while the stage is enabled, and failed critique/revision are not silently auto-approved. The autonomous manager routes packages needing review to \`POLICY_REVIEW\`.
+- Expect two model calls per video and a third when a rewrite is needed. Include this provider usage in the configured estimated cost per video and enforce limits in the provider account.
+
 ## YouTube authentication
 
 The daemon never opens a browser unexpectedly. For first-time/manual authorization only:
