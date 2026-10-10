@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import os
@@ -376,6 +377,139 @@ def recommend_learned_profile(
     }
 
 
+def evaluate_preference_model(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    holdout_fraction: float = 0.20,
+    min_train_samples: int = DEFAULT_MIN_SAMPLES,
+) -> dict[str, Any]:
+    """Evaluate future-video prediction on a deterministic holdout never used for fitting.
+
+    If every example has a publication/feedback timestamp, hold out the newest
+    examples to simulate predicting future uploads. Otherwise use a stable
+    hash split so the result is reproducible. This is a diagnostic, not a
+    substitute for an ongoing prospective test on new uploads.
+    """
+    if not 0.10 <= float(holdout_fraction) <= 0.40:
+        raise ValueError("holdout_fraction must be between 0.10 and 0.40")
+    training_minimum = max(3, int(min_train_samples))
+    examples = eligible_examples(records)
+    minimum_total = max(10, training_minimum + 2)
+    if len(examples) < minimum_total:
+        return {
+            "status": "insufficient_data",
+            "eligible_examples": len(examples),
+            "minimum_total_examples": minimum_total,
+            "minimum_train_examples": training_minimum,
+            "holdout_examples": 0,
+            "message": (
+                "Need more measured or explicitly rated videos before checking generalization. "
+                "No synthetic or placeholder outcomes are counted."
+            ),
+        }
+
+    date_keys = ("published_at", "user_feedback_at", "created_at")
+    has_complete_timeline = all(
+        any(str(row.get(key) or "").strip() for key in date_keys)
+        for row in examples
+    )
+    if has_complete_timeline:
+        def chronology_key(row: Mapping[str, Any]) -> tuple[str, str]:
+            timestamp = next(
+                str(row.get(key) or "").strip()
+                for key in date_keys
+                if str(row.get(key) or "").strip()
+            )
+            identity = str(row.get("package_dir") or row.get("video_id") or row.get("topic") or "")
+            return timestamp, identity
+        ordered = sorted(examples, key=chronology_key)
+        split_strategy = "latest_videos_holdout"
+    else:
+        def stable_key(row: Mapping[str, Any]) -> str:
+            identity = str(row.get("package_dir") or row.get("video_id") or row.get("topic") or "")
+            payload = {
+                "identity": identity,
+                "topic": str(row.get("topic") or ""),
+                "settings": {key: row.get(key) for key in SETTING_KEYS},
+                "reward": row.get("_learning_reward"),
+            }
+            encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+            return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        ordered = sorted(examples, key=stable_key)
+        split_strategy = "stable_hash_holdout"
+
+    holdout_count = max(2, int(math.ceil(len(ordered) * float(holdout_fraction))))
+    holdout_count = min(holdout_count, len(ordered) - training_minimum)
+    if holdout_count < 2:
+        return {
+            "status": "insufficient_data",
+            "eligible_examples": len(examples),
+            "minimum_total_examples": minimum_total,
+            "minimum_train_examples": training_minimum,
+            "holdout_examples": 0,
+            "message": "Not enough independent examples to form both training and holdout sets.",
+        }
+
+    training = ordered[:-holdout_count]
+    holdout = ordered[-holdout_count:]
+    model = train_preference_model(training, model_path=None, min_samples=training_minimum)
+    if model.get("status") != "trained":
+        return {
+            "status": "insufficient_training_data",
+            "eligible_examples": len(examples),
+            "training_examples": len(training),
+            "holdout_examples": len(holdout),
+            "message": "The training partition did not contain enough valid outcomes.",
+        }
+
+    train_targets = [float(row["_learning_reward"]) for row in training]
+    baseline_prediction = sum(train_targets) / len(train_targets)
+    predictions: list[tuple[float, float]] = []
+    for row in holdout:
+        predicted = predict_reward(model, row)
+        actual = _finite_float(row.get("_learning_reward"))
+        if predicted is not None and actual is not None:
+            predictions.append((predicted, actual))
+    if len(predictions) < 2:
+        return {
+            "status": "evaluation_failed",
+            "eligible_examples": len(examples),
+            "training_examples": len(training),
+            "holdout_examples": len(holdout),
+            "valid_predictions": len(predictions),
+            "message": "Too few valid held-out predictions were produced.",
+        }
+
+    model_mae = sum(abs(predicted - actual) for predicted, actual in predictions) / len(predictions)
+    baseline_mae = sum(abs(baseline_prediction - actual) for _predicted, actual in predictions) / len(predictions)
+    relative_improvement = (
+        (baseline_mae - model_mae) / baseline_mae
+        if baseline_mae > 1e-12
+        else (0.0 if model_mae >= baseline_mae else 1.0)
+    )
+    return {
+        "status": "evaluated",
+        "algorithm": str(model.get("algorithm") or "weighted_ridge_regression"),
+        "split_strategy": split_strategy,
+        "eligible_examples": len(examples),
+        "training_examples": len(training),
+        "holdout_examples": len(holdout),
+        "valid_predictions": len(predictions),
+        "model_mae": round(model_mae, 6),
+        "baseline_mae": round(baseline_mae, 6),
+        "relative_mae_improvement": round(relative_improvement, 6),
+        "beats_baseline": model_mae < baseline_mae,
+        "interpretation": (
+            "The model beat a training-mean baseline on held-out examples."
+            if model_mae < baseline_mae
+            else "The model did not beat the baseline on this holdout; collect more data or keep recommendations conservative."
+        ),
+        "warning": (
+            "This split is a retrospective diagnostic. Confirm performance on future videos that were not used in either fit or tuning."
+        ),
+    }
+
+
 def build_creative_feedback_context(
     records: Iterable[Mapping[str, Any]],
     *,
@@ -577,10 +711,11 @@ def training_summary(model: Mapping[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train and inspect Edit Factory's local video preference model.")
-    parser.add_argument("action", choices=("train", "rate"), help="retrain the preference model or rate a video")
+    parser.add_argument("action", choices=("train", "rate", "evaluate"), help="retrain the preference model, rate a video, or test generalization on held-out videos")
     parser.add_argument("--history", default=os.environ.get("AIVF_LEARNING_HISTORY_PATH", "state/learning_history.json"))
     parser.add_argument("--model", default=os.environ.get("AIVF_LEARNING_MODEL_PATH") or None)
     parser.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
+    parser.add_argument("--holdout-fraction", type=float, default=0.20, help="Fraction of videos reserved from training for evaluation (0.10–0.40)")
     parser.add_argument("--package-dir", default="", help="Exact output package directory for a human rating")
     parser.add_argument("--rating", type=int, choices=range(1, 6), help="Human rating from 1 (poor) to 5 (excellent)")
     parser.add_argument("--note", default="", help="Optional brief reason for the rating")
@@ -602,6 +737,11 @@ def main() -> int:
             "package_dir": record.get("package_dir"),
             "rating": record["user_rating"],
             "training": training_summary(model),
+            "holdout_evaluation": evaluate_preference_model(
+                history,
+                holdout_fraction=args.holdout_fraction,
+                min_train_samples=args.min_samples,
+            ),
         }, indent=2))
         return 0
 
@@ -611,9 +751,25 @@ def main() -> int:
         parser.error(f"cannot read learning history: {exc}")
     if not isinstance(history, list):
         parser.error("learning history must be a JSON list")
+    if args.action == "evaluate":
+        report = evaluate_preference_model(
+            history,
+            holdout_fraction=args.holdout_fraction,
+            min_train_samples=args.min_samples,
+        )
+        print(json.dumps(report, indent=2))
+        return 0 if report.get("status") == "evaluated" else 2
+
     model_path = args.model or str(Path(args.history).with_name("video_preference_model.json"))
     model = train_preference_model(history, model_path=model_path, min_samples=args.min_samples)
-    print(json.dumps(training_summary(model), indent=2))
+    print(json.dumps({
+        "training": training_summary(model),
+        "holdout_evaluation": evaluate_preference_model(
+            history,
+            holdout_fraction=args.holdout_fraction,
+            min_train_samples=args.min_samples,
+        ),
+    }, indent=2))
     return 0 if model.get("status") in {"trained", "warming_up"} else 1
 
 
@@ -621,6 +777,7 @@ __all__ = [
     "add_manual_rating",
     "build_creative_feedback_context",
     "eligible_examples",
+    "evaluate_preference_model",
     "load_preference_model",
     "observed_reward",
     "predict_reward",
