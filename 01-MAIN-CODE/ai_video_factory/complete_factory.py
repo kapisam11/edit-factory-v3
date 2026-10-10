@@ -261,7 +261,7 @@ def update_learning_history(path: str, *, topic: str, platform: str, package_dir
         from .content_factory import performance_feedback
         record.update(performance_feedback(performance_metrics))
         record.update({k: performance_metrics[k] for k in ("views", "likes", "comments", "averageViewPercentage") if k in performance_metrics})
-    record["performance_score"] = float(record.get("engagement_rate", 0.0)) + float(record.get("retention", 0.0))
+    record["performance_score"] = float(record.get("engagement_rate") or 0.0) + float(record.get("retention") or 0.0)
     history.append(record)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(history, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
