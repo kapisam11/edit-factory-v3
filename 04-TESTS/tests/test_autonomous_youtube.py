@@ -135,6 +135,107 @@ def test_queue_assigns_stable_experiment_variants(tmp_path: Path):
     assert one["experiment_family"] != two["experiment_family"]
 
 
+def _insert_experiment_observation(
+    store: AutonomousStore,
+    *,
+    job_id: str,
+    family: str,
+    title_variant: int,
+    thumbnail_variant: int,
+    analytics: dict,
+) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with store._connect() as conn:
+        conn.execute(
+            "INSERT INTO autonomous_jobs("
+            "id,topic,state,created_at,updated_at,experiment_family,title_variant,thumbnail_variant,analytics_json"
+            ") VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                job_id,
+                "A repeatable topic",
+                "ANALYZED",
+                timestamp,
+                timestamp,
+                family,
+                title_variant,
+                thumbnail_variant,
+                json.dumps(analytics),
+            ),
+        )
+
+
+def test_experiment_selector_uses_ctr_for_thumbnails_and_ctr_free_score_for_titles(tmp_path: Path):
+    store = AutonomousStore(_config(tmp_path))
+    family = "same-topic-family"
+    _insert_experiment_observation(
+        store, job_id="result-1", family=family, title_variant=1, thumbnail_variant=1,
+        analytics={
+            "score": 0.99,
+            "title_score": 0.90,
+            "thumbnailImpressions": 800,
+            "thumbnailImpressionsClickThroughRate": 0.02,
+        },
+    )
+    _insert_experiment_observation(
+        store, job_id="result-2", family=family, title_variant=2, thumbnail_variant=2,
+        analytics={
+            "score": 0.40,
+            "title_score": 0.40,
+            "thumbnailImpressions": 700,
+            "thumbnailImpressionsClickThroughRate": 0.07,
+        },
+    )
+    _insert_experiment_observation(
+        store, job_id="result-3", family=family, title_variant=3, thumbnail_variant=3,
+        analytics={
+            "score": 0.60,
+            "title_score": 0.60,
+            "thumbnailImpressions": 900,
+            "thumbnailImpressionsClickThroughRate": 0.05,
+        },
+    )
+
+    # The highest CTR belongs to thumbnail 2, while title 1 has the best
+    # CTR-free performance score. The two choices must be independent.
+    assert store._select_experiment_variants(family, 2, 3) == (1, 2)
+
+
+def test_thumbnail_experiment_keeps_exploring_variants_below_impression_threshold(tmp_path: Path):
+    store = AutonomousStore(_config(tmp_path))
+    family = "low-sample-family"
+    _insert_experiment_observation(
+        store, job_id="small-1", family=family, title_variant=1, thumbnail_variant=1,
+        analytics={
+            "score": 0.8,
+            "title_score": 0.8,
+            "thumbnailImpressions": 500,
+            "thumbnailImpressionsClickThroughRate": 0.03,
+        },
+    )
+    _insert_experiment_observation(
+        store, job_id="small-2", family=family, title_variant=2, thumbnail_variant=2,
+        analytics={
+            "score": 0.7,
+            "title_score": 0.7,
+            "thumbnailImpressions": 500,
+            "thumbnailImpressionsClickThroughRate": 0.04,
+        },
+    )
+    _insert_experiment_observation(
+        store, job_id="small-3", family=family, title_variant=3, thumbnail_variant=3,
+        analytics={
+            "score": 0.3,
+            "title_score": 0.3,
+            "thumbnailImpressions": 25,
+            "thumbnailImpressionsClickThroughRate": 0.99,
+        },
+    )
+
+    # A 99% CTR from 25 impressions is not enough evidence to call a winner;
+    # the least-measured arm is selected to continue exploration.
+    assert store._select_experiment_variants(family, 1, 2) == (1, 3)
+
+
 def test_topic_diversity_blocks_near_duplicate_topics():
     assessment = assess_topic_diversity(
         "The hidden history of the Apollo 11 mission",

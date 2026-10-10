@@ -154,28 +154,43 @@ class EngagementPredictor:
         return d
 
     def _normalize(self, fd: Dict[str, float]) -> Dict[str, float]:
-        out = {}
-        for k, v in fd.items():
+        """Z-score features; absent one-hot flags are measured as zero."""
+        out: Dict[str, float] = {}
+        for k in sorted(set(fd) | set(self.feature_means)):
+            value = float(fd.get(k, 0.0))
             mean = self.feature_means.get(k, 0.0)
             std = self.feature_stds.get(k, 1.0)
-            if std < 1e-6:
+            if not math.isfinite(value):
+                value = mean
+            if not math.isfinite(std) or std < 1e-6:
                 std = 1.0
-            out[k] = (v - mean) / std
+            out[k] = (value - mean) / std
         return out
 
-    def _update_stats(self, fd: Dict[str, float]):
-        """Online mean/std update."""
-        for k, v in fd.items():
-            n = len(self.feature_means)  # rough proxy
-            old_mean = self.feature_means.get(k, v)
-            old_std = self.feature_stds.get(k, 0.0)
-            new_mean = old_mean + (v - old_mean) / max(n, 1)
-            new_std = math.sqrt(
-                (old_std**2 * max(n - 1, 0) + (v - old_mean) * (v - new_mean))
-                / max(n, 1)
-            )
-            self.feature_means[k] = new_mean
-            self.feature_stds[k] = max(new_std, 1e-6)
+    def _fit_feature_stats(self, rows: List[Dict[str, float]]) -> List[str]:
+        """Fit means/scales from observations, never from feature count.
+
+        Sparse one-hot values that are absent from a record represent zero.
+        Recompute from scratch each time the model is retrained so old stats
+        do not leak into the current training run.
+        """
+        all_keys = sorted(set().union(*(row.keys() for row in rows)))
+        self.feature_means = {}
+        self.feature_stds = {}
+        if not rows:
+            return all_keys
+
+        sample_count = len(rows)
+        for key in all_keys:
+            values = [float(row.get(key, 0.0)) for row in rows]
+            mean = sum(values) / sample_count
+            variance = sum((value - mean) ** 2 for value in values) / sample_count
+            scale = math.sqrt(max(0.0, variance))
+            self.feature_means[key] = mean
+            # A constant feature normalizes to zero; scale 1 prevents unstable
+            # divisions while retaining a meaningful stored statistic.
+            self.feature_stds[key] = scale if scale >= 1e-6 else 1.0
+        return all_keys
 
     def predict(self, features: VideoFeatures) -> float:
         """Predict engagement score (0.0-1.0) for a feature vector."""
@@ -191,18 +206,16 @@ class EngagementPredictor:
         if len(records) < 3:
             return  # Need more data
 
-        # Extract and normalize features
+        # Fit batch statistics from observations. Fill absent one-hot flags
+        # with zero before normalization so training and inference use the
+        # same feature space.
         X_raw = [self._extract_feature_dict(r.features) for r in records]
-        for fd in X_raw:
-            self._update_stats(fd)
-        X = [self._normalize(fd) for fd in X_raw]
-        y = [r.engagement_score for r in records]
-
-        # Collect all feature keys
-        all_keys = set()
-        for fd in X:
-            all_keys.update(fd.keys())
-        all_keys = sorted(all_keys)
+        all_keys = self._fit_feature_stats(X_raw)
+        X = [
+            self._normalize({key: fd.get(key, 0.0) for key in all_keys})
+            for fd in X_raw
+        ]
+        y = [max(0.0, min(1.0, float(r.engagement_score))) for r in records]
 
         # Ridge regression closed form: w = (X^T X + lambda I)^{-1} X^T y
         # For single-feature, this simplifies. We'll do coordinate descent
@@ -231,6 +244,11 @@ class EngagementPredictor:
         if os.path.exists(self.storage_path):
             with open(self.storage_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                # Pre-v2 models were trained with a feature-count proxy rather
+                # than observation-count statistics. Never trust those weights
+                # after this fix; the next training run will rebuild them.
+                if data.get("normalization_version") != 2:
+                    return
                 self.weights = data.get("weights", {})
                 self.bias = data.get("bias", 0.5)
                 self.feature_means = data.get("means", {})
@@ -240,6 +258,7 @@ class EngagementPredictor:
         os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
         with open(self.storage_path, "w", encoding="utf-8") as f:
             json.dump({
+                "normalization_version": 2,
                 "weights": self.weights,
                 "bias": self.bias,
                 "means": self.feature_means,

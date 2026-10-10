@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import secrets
 import sqlite3
@@ -36,6 +37,9 @@ from .youtube_publisher import (
 logger = logging.getLogger(__name__)
 
 AUTONOMOUS_SCHEMA_VERSION = 5
+
+# Do not optimize thumbnail assignment on a handful of noisy impressions.
+MIN_THUMBNAIL_CTR_IMPRESSIONS = 100
 
 
 STATES = {
@@ -513,7 +517,12 @@ class AutonomousStore:
         )
 
     def _select_experiment_variants(self, family: str, requested_title: int, requested_thumbnail: int) -> tuple[int, int]:
-        """Prefer evidence-backed title/thumbnail variants while preserving exploration."""
+        """Select titles from broader outcomes and thumbnails from measured CTR.
+
+        Older analytics only contain a blended score, which includes CTR when
+        available. Do not reuse that blended score as a title signal; that would
+        let thumbnail CTR incorrectly decide title selection.
+        """
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT title_variant, thumbnail_variant, analytics_json "
@@ -521,27 +530,49 @@ class AutonomousStore:
                 "ORDER BY updated_at DESC LIMIT 200",
                 (family,),
             ).fetchall()
+
         title_stats: dict[int, list[float]] = {1: [], 2: [], 3: []}
-        thumb_stats: dict[int, list[float]] = {1: [], 2: [], 3: []}
+        thumbnail_ctr: dict[int, list[tuple[float, int]]] = {1: [], 2: [], 3: []}
         for row in rows:
             try:
                 payload = json.loads(str(row["analytics_json"] or "{}"))
-                score = float(payload.get("score") or 0.0)
                 title = int(row["title_variant"] or 1)
                 thumb = int(row["thumbnail_variant"] or 1)
-                if title in title_stats:
-                    title_stats[title].append(score)
-                if thumb in thumb_stats:
-                    thumb_stats[thumb].append(score)
-            except (TypeError, ValueError, json.JSONDecodeError):
+                if title not in title_stats or thumb not in thumbnail_ctr:
+                    continue
+
+                # New records carry a CTR-free title_score. For old records, a
+                # blended score is safe for title ranking only when no measured
+                # thumbnail CTR participated in that score.
+                title_value = payload.get("title_score")
+                ctr_raw = payload.get("thumbnailImpressionsClickThroughRate")
+                if title_value is None and ctr_raw is None:
+                    title_value = payload.get("score")
+                if title_value is not None and not isinstance(title_value, bool):
+                    parsed_title = float(title_value)
+                    if math.isfinite(parsed_title) and 0.0 <= parsed_title <= 1.0:
+                        title_stats[title].append(parsed_title)
+
+                # CTR is stored as a fraction. Impressions supply both a minimum
+                # evidence gate and weights for combining multiple observations.
+                impressions_raw = payload.get("thumbnailImpressions")
+                if (
+                    ctr_raw is not None
+                    and impressions_raw is not None
+                    and not isinstance(ctr_raw, bool)
+                    and not isinstance(impressions_raw, bool)
+                ):
+                    ctr = float(ctr_raw)
+                    impressions = int(impressions_raw)
+                    if math.isfinite(ctr) and 0.0 <= ctr <= 1.0 and impressions > 0:
+                        thumbnail_ctr[thumb].append((ctr, impressions))
+            except (TypeError, ValueError, OverflowError, json.JSONDecodeError):
                 continue
 
-        def choose(stats: dict[int, list[float]], fallback: int) -> int:
+        def choose_score(stats: dict[int, list[float]], fallback: int) -> int:
             unexplored = [variant for variant, values in stats.items() if not values]
             if unexplored:
-                # Deterministic exploration prevents repeatedly picking the same
-                # variant before there is enough evidence to optimize.
-                return unexplored[(fallback - 1) % len(unexplored)]
+                return unexplored[(max(1, min(3, fallback)) - 1) % len(unexplored)]
             return max(
                 stats,
                 key=lambda variant: (
@@ -551,7 +582,42 @@ class AutonomousStore:
                 ),
             )
 
-        return choose(title_stats, requested_title), choose(thumb_stats, requested_thumbnail)
+        # Keep exploring the least-measured thumbnail until every candidate has
+        # a minimum of 100 valid impressions. This avoids declaring a winner
+        # because of a tiny, noisy sample.
+        impression_totals = {
+            variant: sum(impressions for _ctr, impressions in samples)
+            for variant, samples in thumbnail_ctr.items()
+        }
+        under_sampled = [
+            variant for variant, total in impression_totals.items()
+            if total < MIN_THUMBNAIL_CTR_IMPRESSIONS
+        ]
+        if under_sampled:
+            lowest_total = min(impression_totals[variant] for variant in under_sampled)
+            least_measured = [
+                variant for variant in under_sampled
+                if impression_totals[variant] == lowest_total
+            ]
+            thumb_choice = least_measured[
+                (max(1, min(3, requested_thumbnail)) - 1) % len(least_measured)
+            ]
+        else:
+            def weighted_ctr(variant: int) -> float:
+                samples = thumbnail_ctr[variant]
+                impressions = sum(count for _ctr, count in samples)
+                return sum(ctr * count for ctr, count in samples) / max(1, impressions)
+
+            thumb_choice = max(
+                thumbnail_ctr,
+                key=lambda variant: (
+                    weighted_ctr(variant),
+                    impression_totals[variant],
+                    -variant,
+                ),
+            )
+
+        return choose_score(title_stats, requested_title), thumb_choice
 
     def enqueue(
         self,
@@ -1849,12 +1915,22 @@ class AutonomousManager:
                 (0.10, min(1.0, shares / max(1.0, views) * 25.0)),
                 (0.05, min(1.0, subscribers / max(1.0, views) * 50.0)),
             ]
-            available_weight = sum(weight for weight, value in score_components if value is not None)
-            score = round(
-                sum(weight * float(value) for weight, value in score_components if value is not None)
-                / max(available_weight, 1e-9),
-                4,
-            )
+
+            def normalized_score(components: Sequence[tuple[float, Optional[float]]]) -> float:
+                available_weight = sum(weight for weight, value in components if value is not None)
+                return round(
+                    sum(weight * float(value) for weight, value in components if value is not None)
+                    / max(available_weight, 1e-9),
+                    4,
+                )
+
+            # Broad performance remains available as "score", while title
+            # selection gets a score with thumbnail CTR intentionally removed.
+            score = normalized_score(score_components)
+            title_score = normalized_score([
+                component for index, component in enumerate(score_components)
+                if index != 2
+            ])
             payload = {
                 "views": views,
                 "likes": likes,
@@ -1866,6 +1942,7 @@ class AutonomousManager:
                 "stayedToWatchRate": None,
                 "thumbnailImpressions": reach.get("video_thumbnail_impressions"),
                 "thumbnailImpressionsClickThroughRate": thumbnail_ctr,
+                "title_score": title_score,
                 "thumbnailReachMetrics": reach,
                 "shares": shares,
                 "subscribersGained": subscribers,
