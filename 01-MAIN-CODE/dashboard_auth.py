@@ -132,7 +132,13 @@ def configure_dashboard_auth(app):
     @app.before_request
     def dashboard_authentication():
         path = request.path
-        if path.startswith("/static/") or path in PUBLIC_PATHS:
+        if path.startswith("/static/"):
+            return None
+        if path in PUBLIC_PATHS:
+            # Public endpoints may be unauthenticated, but mutating methods must
+            # still prove same-origin intent (especially login/logout POSTs).
+            if request.method not in SAFE_METHODS and not _same_origin_request():
+                abort(403)
             return None
         if app.config.get("_AIVF_LOCAL_ONLY") and not _loopback_request():
             abort(403)
