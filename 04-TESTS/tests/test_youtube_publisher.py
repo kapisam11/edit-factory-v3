@@ -9,6 +9,7 @@ from ai_video_factory.youtube_publisher import (
     _attach_uploaded_assets,
     _find_existing_video,
     _timestamp_epoch,
+    fetch_channel_uploads,
     fetch_video_statistics,
     upload_video,
 )
@@ -71,6 +72,88 @@ class _FakeYouTube:
 
     def videos(self):
         return self._video_resource
+
+
+def test_fetch_channel_uploads_paginates_and_limits_results(monkeypatch):
+    pages = [
+        {
+            "items": [
+                {
+                    "snippet": {
+                        "title": "First story",
+                        "publishedAt": "2026-09-01T10:00:00Z",
+                        "resourceId": {"videoId": "video-1"},
+                    },
+                    "contentDetails": {"videoId": "video-1"},
+                },
+                {
+                    "snippet": {
+                        "title": "Second story",
+                        "publishedAt": "2026-09-02T10:00:00Z",
+                        "resourceId": {"videoId": "video-2"},
+                    },
+                    "contentDetails": {"videoId": "video-2"},
+                },
+            ],
+            "nextPageToken": "page-2",
+        },
+        {
+            "items": [
+                {
+                    "snippet": {
+                        "title": "Third story",
+                        "publishedAt": "2026-09-03T10:00:00Z",
+                        "resourceId": {"videoId": "video-3"},
+                    },
+                    "contentDetails": {"videoId": "video-3"},
+                },
+                {
+                    "snippet": {
+                        "title": "Fourth story",
+                        "publishedAt": "2026-09-04T10:00:00Z",
+                        "resourceId": {"videoId": "video-4"},
+                    },
+                    "contentDetails": {"videoId": "video-4"},
+                },
+            ],
+            "nextPageToken": "page-3",
+        },
+    ]
+    page_calls = []
+
+    channel = _FakeResource(list_handler=lambda _kwargs: {
+        "items": [{
+            "id": "channel-1",
+            "contentDetails": {"relatedPlaylists": {"uploads": "uploads-1"}},
+        }]
+    })
+    playlist = _FakeResource(list_handler=lambda kwargs: (
+        page_calls.append(dict(kwargs)) or pages.pop(0)
+    ))
+    youtube = _FakeYouTube(
+        channel_resource=channel,
+        playlist_resource=playlist,
+        video_resource=_FakeResource(),
+    )
+    monkeypatch.setattr(publisher, "_paths", lambda client, token: ("client.json", "token.json"))
+    monkeypatch.setattr(publisher, "_service", lambda *args, **kwargs: youtube)
+
+    uploads = fetch_channel_uploads(
+        max_results=3,
+        client_secrets_path="client.json",
+        token_path="token.json",
+    )
+
+    assert [item["video_id"] for item in uploads] == ["video-1", "video-2", "video-3"]
+    assert uploads[0]["title"] == "First story"
+    assert uploads[0]["published_at"] == "2026-09-01T10:00:00Z"
+    assert len(page_calls) == 2
+    assert page_calls[1]["pageToken"] == "page-2"
+
+
+def test_fetch_channel_uploads_rejects_unbounded_requests():
+    with pytest.raises(ValueError, match="max_results must be between 1 and 1000"):
+        fetch_channel_uploads(max_results=1001)
 
 
 def test_idempotency_recovery_searches_private_uploads_and_ignores_older_match():
