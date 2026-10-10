@@ -53,6 +53,15 @@ def test_missing_retention_is_not_treated_as_zero_feedback_or_training_data(tmp_
     feedback = performance_feedback({"views": 1000, "likes": 70, "comments": 10})
     assert feedback["engagement_rate"] > 0
     assert feedback["retention"] is None
+    zero_view_feedback = performance_feedback({"views": 0, "likes": 12, "comments": 2})
+    assert zero_view_feedback["engagement_rate"] is None
+    assert observed_reward({
+        "views": 0,
+        "likes": 0,
+        "comments": 0,
+        "engagement_rate": zero_view_feedback["engagement_rate"],
+        "retention": zero_view_feedback["retention"],
+    }) is None
     assert performance_feedback({"averageViewPercentage": 0.0})["retention"] == 0.0
 
     package = tmp_path / "output" / "video-without-retention"
