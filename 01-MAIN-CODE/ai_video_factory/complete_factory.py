@@ -166,7 +166,7 @@ def render_clip_factory(source: str, package_dir: str, *, count: int, crop_plan:
     return outputs
 
 
-def update_learning_history(path: str, *, topic: str, platform: str, package_dir: str, metrics: Mapping[str, Any], performance_metrics: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+def update_learning_history(path: str, *, topic: str, platform: str, package_dir: str, metrics: Mapping[str, Any], performance_metrics: Optional[Mapping[str, Any]] = None, video_id: Optional[str] = None, published_at: Optional[str] = None) -> Dict[str, Any]:
     history = load_experiments(path) if os.path.exists(path) else []
     observed_metrics: Dict[str, Any] = dict(metrics)
     root = Path(package_dir)
@@ -262,7 +262,28 @@ def update_learning_history(path: str, *, topic: str, platform: str, package_dir
         record.update(performance_feedback(performance_metrics))
         record.update({k: performance_metrics[k] for k in ("views", "likes", "comments", "averageViewPercentage") if k in performance_metrics})
     record["performance_score"] = float(record.get("engagement_rate") or 0.0) + float(record.get("retention") or 0.0)
-    history.append(record)
+    if video_id:
+        record["video_id"] = str(video_id).strip()
+    if published_at:
+        record["published_at"] = str(published_at).strip()
+
+    # Repeated analytics imports for one video should update its existing row,
+    # not multiply the same video's weight in the training history.
+    existing_index = next(
+        (
+            index for index, existing in enumerate(history)
+            if video_id and isinstance(existing, dict)
+            and str(existing.get("video_id") or "") == str(video_id)
+        ),
+        None,
+    )
+    if existing_index is None:
+        history.append(record)
+    else:
+        merged = dict(history[existing_index])
+        merged.update(record)
+        history[existing_index] = merged
+        record = merged
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(history, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     return record
