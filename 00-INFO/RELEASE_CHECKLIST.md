@@ -12,6 +12,7 @@ Before merging a production/hardening branch, all of the following automated che
 - Docker build and dashboard health/import smoke test
 - deployment-boundary Python and shell syntax validation
 - dashboard authentication test
+- same-origin login/logout POST checks (reject missing or cross-origin origin signals; allow same-origin requests)
 - secret persistence/API redaction tests
 - malicious upload/path tests
 - real FFmpeg render integration test
