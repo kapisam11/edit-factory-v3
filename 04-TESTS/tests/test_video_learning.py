@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from ai_video_factory.learning_recommender import recommend
+from ai_video_factory.content_factory import performance_feedback
+from ai_video_factory.feedback_store import FeedbackStore
 from ai_video_factory.video_learning import (
     add_manual_rating,
     build_creative_feedback_context,
@@ -45,6 +47,39 @@ def _history(count: int = 12) -> list[dict]:
             "retention": retention,
         })
     return records
+
+
+def test_missing_retention_is_not_treated_as_zero_feedback_or_training_data(tmp_path: Path) -> None:
+    feedback = performance_feedback({"views": 1000, "likes": 70, "comments": 10})
+    assert feedback["engagement_rate"] > 0
+    assert feedback["retention"] is None
+    assert performance_feedback({"averageViewPercentage": 0.0})["retention"] == 0.0
+
+    package = tmp_path / "output" / "video-without-retention"
+    package.mkdir(parents=True)
+    history_path = tmp_path / "state" / "learning_history.json"
+    record = update_learning_history(
+        str(history_path),
+        topic="topic without retention",
+        platform="youtube_shorts",
+        package_dir=str(package),
+        metrics={},
+        performance_metrics={"views": 1000, "likes": 70, "comments": 10},
+    )
+    assert record["retention"] is None
+    assert observed_reward(record) is not None  # Measured engagement is still useful.
+
+    feedback_store = FeedbackStore(tmp_path / "state" / "feedback.sqlite")
+    feedback_store.add(
+        "measured-retention", "youtube_shorts", "storytelling", "2026-10-01T12:00:00Z",
+        {"views": 1000.0, "retention": 0.8},
+    )
+    feedback_store.add(
+        "retention-not-available", "youtube_shorts", "storytelling", "2026-10-02T12:00:00Z",
+        {"views": 1200.0},
+    )
+    means = feedback_store.aggregate(platform="youtube_shorts")["youtube_shorts:storytelling"]["means"]
+    assert means["retention"] == pytest.approx(0.8)
 
 
 def test_unobserved_placeholder_scores_do_not_become_training_labels() -> None:
