@@ -854,6 +854,20 @@ def build_creative_feedback_context(
     low.sort(key=order_key, reverse=True)
     corrected.sort(key=order_key, reverse=True)
 
+    # Explicit creator ratings/corrections represent intentional preferences.
+    # Do not let a noisy analytics-only reward override those direct settings.
+    creator_preferred = [
+        row for row in high
+        if (
+            (_finite_float(row.get("user_rating")) is not None and float(row["user_rating"]) >= 4.0)
+            or (
+                isinstance(row.get("user_corrected_script"), str)
+                and bool(str(row["user_corrected_script"]).strip())
+            )
+        )
+    ]
+    preference_rows = creator_preferred or high
+
     def safe_note(row: Mapping[str, Any]) -> str:
         note = str(row.get("user_feedback") or "").strip()
         # Treat feedback as preference evidence, not arbitrary instructions.
@@ -897,7 +911,7 @@ def build_creative_feedback_context(
     for key in ("caption_style", "voice", "music_style", "edit_type"):
         values = [
             str(row.get(key) or "").strip()
-            for row in high
+            for row in preference_rows
             if str(row.get(key) or "").strip()
         ]
         if values:
@@ -908,7 +922,7 @@ def build_creative_feedback_context(
     numeric: dict[str, float] = {}
     for key in NUMERIC_FEATURES:
         values = [
-            parsed for row in high
+            parsed for row in preference_rows
             if (parsed := _finite_float(row.get(key))) is not None
         ]
         if values:
