@@ -68,7 +68,8 @@ jobs:
           test "$health_details_code" = "401"
           curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE_URL/login" > /dev/null
           curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -L \
-            -d "token=$AIVF_DASHBOARD_TOKEN" "$BASE_URL/login" > /dev/null
+            -H "Origin: $BASE_URL" \
+  -d "token=$AIVF_DASHBOARD_TOKEN" "$BASE_URL/login" > /dev/null
           curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/jobs" > "$RESULTS_DIR/jobs.json"
           curl -fsS -b "$COOKIE_JAR" "$BASE_URL/api/queue/status" > "$RESULTS_DIR/queue.json"
           curl -fsS -b "$COOKIE_JAR" \
