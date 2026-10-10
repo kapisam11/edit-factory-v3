@@ -1788,7 +1788,11 @@ class AutonomousManager:
             views = float(raw.get("views", stats.get("statistics", {}).get("viewCount", 0)) or 0)
             likes = float(raw.get("likes", stats.get("statistics", {}).get("likeCount", 0)) or 0)
             comments = float(raw.get("comments", stats.get("statistics", {}).get("commentCount", 0)) or 0)
-            avg_pct = float(raw.get("averageViewPercentage", 0.0) or 0.0)
+            raw_avg_pct = raw.get("averageViewPercentage")
+            try:
+                avg_pct = float(raw_avg_pct) if raw_avg_pct is not None else None
+            except (TypeError, ValueError):
+                avg_pct = None
             avg_duration = float(raw.get("averageViewDuration", 0.0) or 0.0)
             shares = float(raw.get("shares", 0.0) or 0.0)
             subscribers = float(raw.get("subscribersGained", 0.0) or 0.0)
@@ -1803,7 +1807,7 @@ class AutonomousManager:
                 else None
             )
             score_components = [
-                (0.40, min(1.0, max(0.0, avg_pct / 100.0))),
+                (0.40, min(1.0, max(0.0, avg_pct / 100.0)) if avg_pct is not None else None),
                 (0.20, engaged_view_rate_proxy),
                 (0.15, min(1.0, likes / max(1.0, views) * 12.0)),
                 (0.10, min(1.0, comments / max(1.0, views) * 30.0)),
@@ -1842,21 +1846,23 @@ class AutonomousManager:
                     (job_id, video_id, _utc_now(), json.dumps(payload, sort_keys=True, default=str), score, revenue),
                 )
             feedback = FeedbackStore(self.config.state_dir / "feedback.sqlite")
+            feedback_metrics = {
+                "views": views,
+                "likes": likes,
+                "comments": comments,
+                "share": shares / max(1.0, views),
+                "save": 0.0,
+                "subscriber_rate": subscribers / max(1.0, views),
+            }
+            if avg_pct is not None:
+                feedback_metrics["retention"] = avg_pct / 100.0
+                feedback_metrics["completion"] = avg_pct / 100.0
             feedback.add(
                 video_id,
                 "youtube_shorts",
                 "Autonomous",
                 _utc_now(),
-                {
-                    "views": views,
-                    "likes": likes,
-                    "comments": comments,
-                    "retention": avg_pct / 100.0,
-                    "completion": avg_pct / 100.0,
-                    "share": shares / max(1.0, views),
-                    "save": 0.0,
-                    "subscriber_rate": subscribers / max(1.0, views),
-                },
+                feedback_metrics,
                 metadata={"job_id": job_id, "score": score},
             )
             self.store.update(job_id, state="ANALYZED", analytics_json=json.dumps(payload, sort_keys=True, default=str))
@@ -1886,7 +1892,7 @@ class AutonomousManager:
                             "views": views,
                             "likes": likes,
                             "comments": comments,
-                            "averageViewPercentage": avg_pct,
+                            **({"averageViewPercentage": avg_pct} if avg_pct is not None else {}),
                         },
                     )
                     self.store.event(job_id, "local_learning_feedback_recorded", {
