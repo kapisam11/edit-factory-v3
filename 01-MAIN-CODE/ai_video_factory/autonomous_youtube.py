@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import secrets
 import sqlite3
@@ -1914,12 +1915,22 @@ class AutonomousManager:
                 (0.10, min(1.0, shares / max(1.0, views) * 25.0)),
                 (0.05, min(1.0, subscribers / max(1.0, views) * 50.0)),
             ]
-            available_weight = sum(weight for weight, value in score_components if value is not None)
-            score = round(
-                sum(weight * float(value) for weight, value in score_components if value is not None)
-                / max(available_weight, 1e-9),
-                4,
-            )
+
+            def normalized_score(components: Sequence[tuple[float, Optional[float]]]) -> float:
+                available_weight = sum(weight for weight, value in components if value is not None)
+                return round(
+                    sum(weight * float(value) for weight, value in components if value is not None)
+                    / max(available_weight, 1e-9),
+                    4,
+                )
+
+            # Broad performance remains available as "score", while title
+            # selection gets a score with thumbnail CTR intentionally removed.
+            score = normalized_score(score_components)
+            title_score = normalized_score([
+                component for index, component in enumerate(score_components)
+                if index != 2
+            ])
             payload = {
                 "views": views,
                 "likes": likes,
@@ -1931,6 +1942,7 @@ class AutonomousManager:
                 "stayedToWatchRate": None,
                 "thumbnailImpressions": reach.get("video_thumbnail_impressions"),
                 "thumbnailImpressionsClickThroughRate": thumbnail_ctr,
+                "title_score": title_score,
                 "thumbnailReachMetrics": reach,
                 "shares": shares,
                 "subscribersGained": subscribers,
