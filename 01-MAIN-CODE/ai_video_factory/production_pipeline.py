@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from .ai_response_validation import parse_script_lines_response
 from .composer import compose_short_from_video
@@ -118,6 +118,98 @@ def _footage_evidence_from_scenes(scenes: Sequence[Any]) -> Dict[str, Any]:
     } for scene in ranked[:12]]}
 
 
+def _video_thinking_timeline_directives(
+    plan: Mapping[str, Any],
+    script: str,
+    *,
+    target_seconds: Optional[float] = None,
+    preferences: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Translate story phases and learned pacing into footage-aware timeline cues."""
+    raw_directions = plan.get("edit_directions")
+    directions = raw_directions if isinstance(raw_directions, Mapping) else {}
+    lines = [line.strip() for line in str(script or "").splitlines() if line.strip()]
+    if not lines:
+        return {"phase_directives": []}
+
+    settings = preferences if isinstance(preferences, Mapping) else {}
+    desired_count = len(lines)
+    duration = float(target_seconds) if target_seconds is not None else None
+    if duration is not None and duration > 0:
+        try:
+            cuts_per_minute = float(settings.get("cuts_per_minute", 0.0))
+        except (TypeError, ValueError):
+            cuts_per_minute = 0.0
+        if 0.1 <= cuts_per_minute <= 240.0:
+            max_target_cuts = min(120, max(5, int(duration / 0.5)))
+            desired_count = max(5, min(max_target_cuts, int(round(duration * cuts_per_minute / 60.0))))
+
+    segment_durations: list[float] = []
+    if duration is not None and duration > 0 and desired_count > 0:
+        try:
+            hook_duration = float(settings.get("hook_duration", 0.0))
+        except (TypeError, ValueError):
+            hook_duration = 0.0
+        if not 0.1 <= hook_duration <= min(6.0, duration * 0.30):
+            hook_duration = min(duration / desired_count, duration * 0.20)
+
+        # Allocate exact integer milliseconds first. Independently rounding
+        # every segment can drift by one millisecond per edit and violate the
+        # target duration, even when the unrounded arithmetic was correct.
+        total_ms = max(1, int(round(duration * 1000.0)))
+        if desired_count == 1:
+            segment_durations = [total_ms / 1000.0]
+        else:
+            hook_ms = min(total_ms - (desired_count - 1), max(1, int(round(hook_duration * 1000.0))))
+            remaining_ms = total_ms - hook_ms
+            base_ms, extra_ms = divmod(remaining_ms, desired_count - 1)
+            duration_ms = [hook_ms]
+            duration_ms.extend(
+                base_ms + (1 if index < extra_ms else 0)
+                for index in range(desired_count - 1)
+            )
+            segment_durations = [value / 1000.0 for value in duration_ms]
+
+    purpose_by_phase = {
+        "hook": "Hook", "setup": "Memory", "conflict": "Threat",
+        "climax": "Climax", "payoff": "Payoff",
+    }
+    motion_by_phase = {
+        "hook": "punch-in", "setup": "subtle-parallax",
+        "conflict": "tracking", "climax": "tracking", "payoff": "slow push",
+    }
+    transition_by_phase = {
+        "hook": "hard cut", "setup": "match cut", "conflict": "match cut",
+        "climax": "speed ramp", "payoff": "dissolve",
+    }
+    phase_directives: list[dict[str, Any]] = []
+    for index in range(desired_count):
+        ratio = index / max(1, desired_count - 1)
+        if index == 0:
+            phase = "hook"
+        elif index == desired_count - 1:
+            phase = "payoff"
+        elif ratio <= 0.25:
+            phase = "setup"
+        elif ratio <= 0.55:
+            phase = "conflict"
+        else:
+            phase = "climax"
+        directive: dict[str, Any] = {
+            "purpose": purpose_by_phase[phase],
+            "visual_style": str(directions.get(phase) or "")[:220],
+            "camera_motion": motion_by_phase[phase],
+            "transition": transition_by_phase[phase],
+        }
+        if segment_durations:
+            directive["duration"] = round(segment_durations[index], 3)
+        phase_directives.append(directive)
+    return {
+        "phase_directives": phase_directives,
+        "min_scene_match_score": 0.15,
+        "learned_cuts_per_minute_applied": len(phase_directives) / (duration / 60.0) if duration else None,
+    }
+
 def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, target_seconds: float = 45.0,
                             research_summary: Optional[Dict[str, Any]] = None, enable_ocr: bool = False,
                             model_key: Optional[str] = None, skip_qc: bool = False, music_path: Optional[str] = None,
@@ -140,11 +232,32 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     v3_directives = summary.get("v3_directives"); v3_directives = v3_directives if isinstance(v3_directives, dict) else {}
     is_v3 = bool(v3_directives.get("blueprint_contract")); allow_auto_fix = False if is_v3 else allow_auto_fix
 
-    experiments = load_experiments(experiment_history_path) if experiment_history_path else []
-    recommendation = recommend({"platform": summary.get("platform", "youtube_shorts"), "content_type": summary.get("content_type", "short_video"),
-                                "cuts_per_minute": summary.get("cuts_per_minute", 12), "avg_shot_duration": summary.get("avg_shot_duration", 2.5),
-                                "hook_duration": summary.get("hook_duration", 2.0), "music_energy": summary.get("music_energy", 0.5)}, experiments,
-                               defaults={"caption_style": "karaoke", "voice": "en-US-GuyNeural", "music_style": summary["emotion"]})
+    history_path = (
+        experiment_history_path
+        or os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+        or None
+    )
+    experiments = load_experiments(history_path) if history_path else []
+    from .video_learning import build_creative_feedback_context
+
+    summary["learned_creator_preferences"] = build_creative_feedback_context(experiments)
+    model_path = (
+        os.environ.get("AIVF_LEARNING_MODEL_PATH", "").strip()
+        or (str(Path(history_path).with_name("video_preference_model.json")) if history_path else None)
+    )
+    recommendation = recommend(
+        {
+            "platform": summary.get("platform", "youtube_shorts"),
+            "content_type": summary.get("content_type", "short_video"),
+            "cuts_per_minute": summary.get("cuts_per_minute", 12),
+            "avg_shot_duration": summary.get("avg_shot_duration", 2.5),
+            "hook_duration": summary.get("hook_duration", 2.0),
+            "music_energy": summary.get("music_energy", 0.5),
+        },
+        experiments,
+        defaults={"caption_style": "karaoke", "voice": "en-US-GuyNeural", "music_style": summary["emotion"]},
+        model_path=model_path,
+    )
     summary["recommended_settings"] = recommendation.settings
     if recommendation.evidence_count == 0: result.warnings.append(f"Learning: {recommendation.reason}")
     _write_json(os.path.join(package_dir, "recommendation.json"), recommendation.__dict__)
@@ -162,8 +275,45 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     _merge_footage_evidence_into_scenes(scenes, summary.get("footage_evidence"))
     result.scenes_path = save_scene_index(scenes, os.path.join(package_dir, "scenes.json"), source)
 
-    script, script_source = _generate_script(topic, summary, target_seconds, model_key)
-    if not script: result.errors.append("Planner returned an empty script"); return result
+    thinking_plan: Optional[Dict[str, Any]] = None
+    if not is_v3 and os.environ.get("AIVF_VIDEO_THINKING_ENABLED", "1").strip() != "0":
+        from .video_thinking import VideoThinkingAgent
+
+        if model_key:
+            from .model_adapter import call_model_result
+
+            agent = VideoThinkingAgent(
+                model_call=lambda prompt: call_model_result(prompt, api_key=model_key, timeout=45)
+            )
+        else:
+            agent = VideoThinkingAgent()
+        outcome = agent.create_plan(
+            topic,
+            context=summary,
+            target_seconds=target_seconds,
+        )
+        summary["video_thinking_report"] = outcome.to_dict(include_plan=False)
+        if outcome.plan is not None:
+            thinking_plan = dict(outcome.plan)
+            summary["video_thinking_plan"] = thinking_plan
+            summary["emotion"] = thinking_plan["emotion"]
+            summary["strongest_angle"] = thinking_plan["angle"]
+            summary["main_conflict"] = thinking_plan["stakes"]
+            summary["why_care"] = thinking_plan["why_people_care"]
+            summary["payoff"] = thinking_plan["payoff"]
+            summary["viral_title"] = thinking_plan["title_options"][0]
+        if outcome.warning and outcome.status != "not_configured":
+            result.warnings.append(f"Video thinking: {outcome.warning}")
+        _write_json(os.path.join(package_dir, "video_thinking.json"), outcome.to_dict())
+
+    if thinking_plan is not None:
+        script = "\n".join(str(line).strip() for line in thinking_plan.get("script_lines", []))
+        script_source = "video_thinking"
+    else:
+        script, script_source = _generate_script(topic, summary, target_seconds, model_key)
+    if not script:
+        result.errors.append("Planner returned an empty script")
+        return result
     result.script_path = _write_text(os.path.join(package_dir, "script.txt"), script)
 
     intelligence: Dict[str, Any] = {"object_detection": {"enabled": enable_object_detection, "available": False, "count": 0},
@@ -219,14 +369,29 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
             cap.release()
         except Exception as exc: result.warnings.append(f"Face analysis unavailable: {exc}")
         object_boxes = _safe_boxes(object_detections); captions = build_choreographed_captions(speech_words, face_boxes_by_time=faces_by_time, object_boxes_by_time=object_boxes)
-        choreography_path = save_json(os.path.join(package_dir, "caption_choreography.json"), [cue.__dict__ for cue in captions]); ass_path = write_ass_captions(captions, os.path.join(package_dir, "captions.ass"))
+        choreography_path = save_json(os.path.join(package_dir, "caption_choreography.json"), [cue.__dict__ for cue in captions]); ass_path = write_ass_captions(captions, os.path.join(package_dir, "captions.ass"), caption_style=str(recommendation.settings.get("caption_style") or "karaoke"))
         intelligence["caption_choreography"] = {"available": True, "count": len(captions), "path": ass_path, "json_path": choreography_path}
     except Exception as exc: result.warnings.append(f"Speech intelligence unavailable: {exc}")
 
     platform_profile = v3_directives.get("platform_profile") if isinstance(v3_directives.get("platform_profile"), dict) else summary.get("platform_profile", {})
     aspect_ratio = _platform_aspect_ratio(platform_profile)
+    creative_timeline_directives: Mapping[str, Any] = v3_directives
+    if not is_v3 and thinking_plan is not None:
+        creative_timeline_directives = _video_thinking_timeline_directives(
+            thinking_plan,
+            script,
+            target_seconds=float(target_seconds),
+            preferences=recommendation.settings,
+        )
     try:
-        timeline = build_timeline(script, scenes, total_seconds=float(target_seconds), aspect_ratio=aspect_ratio, source_video=source, creative_directives=v3_directives)
+        timeline = build_timeline(
+            script,
+            scenes,
+            total_seconds=float(target_seconds),
+            aspect_ratio=aspect_ratio,
+            source_video=source,
+            creative_directives=creative_timeline_directives,
+        )
     except Exception as exc: result.errors.append(f"Timeline planning failed: {exc}"); return result
     if v3_directives:
         planned_clips = v3_directives.get("clip_plan", [])
@@ -249,7 +414,8 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     result.timeline_path = save_timeline(timeline, os.path.join(package_dir, "timeline.json"))
     plan_payload: Dict[str, Any] = dict(summary)
     plan_payload.update({"topic": topic, "script": script, "script_source": script_source, "edit_plan": timeline_to_composer_plan(timeline), "timeline_path": result.timeline_path, "scene_index_path": result.scenes_path,
-                         "recommendation": recommendation.settings, "intelligence": intelligence, "platform": platform, "v3_directives": v3_directives})
+                         "recommendation": recommendation.settings, "intelligence": intelligence, "platform": platform, "v3_directives": v3_directives,
+                         "video_thinking_timeline_directives": dict(creative_timeline_directives) if thinking_plan is not None else {}})
     result.plan_path = _write_json(os.path.join(package_dir, "plan.json"), plan_payload)
 
     # V3 has its own strict render/QC/readiness contract. The legacy
@@ -282,7 +448,7 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
     qc_path = os.path.join(package_dir, "qc_report.json"); result.qc_report_path = qc_path if os.path.exists(qc_path) else None
     result.metadata_path = _write_json(os.path.join(package_dir, "metadata.json"), {"version": 7, "generated_at": datetime.now(timezone.utc).isoformat(), "topic": topic, "input_video": source,
                               "target_seconds": target_seconds, "actual_timeline_seconds": timeline.duration, "scene_count": len(scenes), "segment_count": len(timeline.segments), "ocr_enabled": enable_ocr,
-                              "script_source": script_source, "model_backed": script_source == "model", "recommendation": recommendation.__dict__, "intelligence": intelligence,
+                              "script_source": script_source, "model_backed": script_source in {"model", "video_thinking"}, "recommendation": recommendation.__dict__, "intelligence": intelligence,
                               "platform": platform, "platform_aspect_ratio": aspect_ratio, "rendered": result.final_video is not None, "v3_edit_type": v3_directives.get("edit_type"),
                               "v3_retention_events": len(v3_directives.get("retention_map", [])), "warnings": result.warnings, "errors": result.errors})
     result.metrics_path = _write_json(os.path.join(package_dir, "metrics.json"), {"scene_count": len(scenes), "segment_count": len(timeline.segments),

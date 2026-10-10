@@ -188,13 +188,29 @@ def _ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{centis:02d}"
 
 
-def write_ass_captions(cues: Sequence[CaptionCue], output_path: str, *, width: int = 1080, height: int = 1920) -> str:
-    """Write ASS subtitles using absolute positions from the choreography engine."""
+def write_ass_captions(
+    cues: Sequence[CaptionCue],
+    output_path: str,
+    *,
+    width: int = 1080,
+    height: int = 1920,
+    caption_style: str = "karaoke",
+) -> str:
+    """Write ASS subtitles with a bounded, named caption style preset."""
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    style_profiles = {
+        "karaoke": "Style: Default,Arial,64,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,5,2,5,40,40,40,1",
+        "bold": "Style: Default,Arial,72,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,6,2,5,40,40,48,1",
+        "bold_white": "Style: Default,Arial,70,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,6,2,5,40,40,48,1",
+        "minimal": "Style: Default,Arial,52,&H00FFFFFF,&H00FFFFFF,&H00000000,&H40000000,0,0,0,0,100,100,0,0,1,2,0,5,48,48,56,1",
+        "cinematic": "Style: Default,Arial,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,1,5,44,44,48,1",
+    }
+    selected_style = str(caption_style or "karaoke").strip().lower()
+    style_line = style_profiles.get(selected_style, style_profiles["karaoke"])
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {width}", f"PlayResY: {height}", "",
         "[V4+ Styles]", "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Arial,64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,5,2,5,40,40,40,1", "",
+        style_line, "",
         "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     for cue in cues:

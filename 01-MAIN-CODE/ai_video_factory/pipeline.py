@@ -137,6 +137,7 @@ class PipelineContext:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     stage_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    learning_history_path: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.target_seconds = validate_target_seconds(self.target_seconds)
@@ -273,6 +274,92 @@ class ResearchStage(PipelineStage):
         return ctx
 
 
+class VideoThinkingStage(PipelineStage):
+    """Create, critique, and optionally revise a topic-specific video creative plan."""
+
+    name = "video_thinking"
+    skippable = True
+    retryable = False
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        if os.environ.get("AIVF_VIDEO_THINKING_ENABLED", "1").strip() == "0":
+            ctx.research["video_thinking_status"] = "disabled"
+            return ctx
+
+        history_path = (
+            str(ctx.learning_history_path or "").strip()
+            or os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+            or os.path.join(os.environ.get("AIVF_STATE_DIR", "state"), "learning_history.json")
+        )
+        try:
+            from .video_learning import build_creative_feedback_context
+
+            ctx.research.setdefault("learned_creator_preferences", build_creative_feedback_context([]))
+        except (ImportError, OSError, ValueError, TypeError):
+            # Built-in editorial priors are a convenience, not a production dependency.
+            pass
+        if os.path.isfile(history_path):
+            try:
+                from .learning_recommender import load_experiments, recommend
+                from .video_learning import build_creative_feedback_context
+                history_records = load_experiments(history_path)
+                ctx.research["learned_creator_preferences"] = build_creative_feedback_context(history_records)
+
+                learning_model_path = (
+                    os.environ.get("AIVF_LEARNING_MODEL_PATH", "").strip()
+                    or os.path.join(os.path.dirname(history_path), "video_preference_model.json")
+                )
+                learned = recommend(
+                    {
+                        "platform": str(ctx.research.get("platform") or "youtube_shorts"),
+                        "content_type": str(ctx.research.get("content_type") or "short_video"),
+                        "cuts_per_minute": float(ctx.research.get("cuts_per_minute") or 12.0),
+                        "avg_shot_duration": float(ctx.research.get("avg_shot_duration") or 2.5),
+                        "hook_duration": float(ctx.research.get("hook_duration") or 2.0),
+                        "music_energy": float(ctx.research.get("music_energy") or 0.5),
+                    },
+                    history_records,
+                    defaults={"caption_style": "karaoke", "voice": "en-US-GuyNeural"},
+                    model_path=learning_model_path,
+                )
+                ctx.research["learned_editor_preferences"] = learned.settings
+                ctx.research["learning_model_status"] = learned.learning
+            except (OSError, ValueError, TypeError) as exc:
+                # Learning is advisory. Bad/unavailable history must not stop video production.
+                ctx.warnings.append(f"Learned editor preferences unavailable: {type(exc).__name__}")
+
+        from .video_thinking import VideoThinkingAgent
+
+        outcome = VideoThinkingAgent().create_plan(
+            ctx.topic,
+            context=ctx.research,
+            target_seconds=ctx.target_seconds,
+        )
+        report = outcome.to_dict()
+        ctx.research["video_thinking_report"] = outcome.to_dict(include_plan=False)
+        if outcome.plan is not None:
+            plan = dict(outcome.plan)
+            ctx.research["video_thinking_plan"] = plan
+            # These keys are consumed by the existing planner; the dedicated
+            # plan remains available as structured provenance as well.
+            ctx.research["emotion"] = plan["emotion"]
+            ctx.research["strongest_angle"] = plan["angle"]
+            ctx.research["main_conflict"] = plan["stakes"]
+            ctx.research["why_care"] = plan["why_people_care"]
+            ctx.research["viral_title"] = plan["title_options"][0]
+            ctx.research["payoff"] = plan["payoff"]
+            ctx.research["watch_to_end_reason"] = plan["watch_to_end_reason"]
+
+        if outcome.warning and outcome.status != "not_configured":
+            ctx.warnings.append(f"Video thinking: {outcome.warning}")
+        if ctx.package_dir:
+            with open(os.path.join(ctx.package_dir, "video_thinking.json"), "w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=2, ensure_ascii=False, default=str)
+            with open(os.path.join(ctx.package_dir, "research.json"), "w", encoding="utf-8") as handle:
+                json.dump(ctx.research, handle, indent=2, ensure_ascii=False, default=str)
+        return ctx
+
+
 class PlanStage(PipelineStage):
     name = "plan"
     skippable = False
@@ -296,8 +383,13 @@ class ScriptStage(PipelineStage):
     skippable = False
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        from .story import generate_script
-        ctx.script = generate_script(ctx.plan, ctx.topic)
+        if ctx.plan.get("video_thinking_applied") and isinstance(ctx.plan.get("script"), str):
+            # Use the validated specialist script as-is. The fallback story
+            # rewriter intentionally does not add random phrases to an AI plan.
+            ctx.script = ctx.plan["script"].strip()
+        else:
+            from .story import generate_script
+            ctx.script = generate_script(ctx.plan, ctx.topic)
         if not ctx.script.strip():
             raise RuntimeError("Script generation produced an empty script")
         if ctx.package_dir:
@@ -319,7 +411,12 @@ class ThumbnailStage(PipelineStage):
             ctx.thumbnail = None
             return ctx
         from .thumbnail import extract_best_video_frame, make_thumbnail_variants, make_thumbnail_vertical
-        subject = str((ctx.plan.get("title_options") or [ctx.topic])[0])[:80]
+        creative = ctx.plan.get("creative_directives")
+        creative = creative if isinstance(creative, dict) else {}
+        subject = str(
+            creative.get("thumbnail_concept")
+            or (ctx.plan.get("title_options") or [ctx.topic])[0]
+        )[:120]
         thumb_dir = os.path.join(ctx.package_dir, "thumbnails")
 
         background_path = None
@@ -393,7 +490,13 @@ class VoiceoverStage(PipelineStage):
             return ctx
         from .capability_registry import build_default_registry
         path = os.path.join(ctx.package_dir, "voiceover.mp3")
-        result = build_default_registry().call("tts", text=ctx.script, output_path=path)
+        creative = ctx.plan.get("creative_directives")
+        creative = creative if isinstance(creative, dict) else {}
+        voice = str(creative.get("learned_voice") or "").strip()
+        tts_options = {"text": ctx.script, "output_path": path}
+        if voice:
+            tts_options["voice"] = voice
+        result = build_default_registry().call("tts", **tts_options)
         if result.success:
             ctx.voiceover = result.data
         else:
@@ -410,7 +513,10 @@ class MusicStage(PipelineStage):
             return ctx
         from .capability_registry import build_default_registry
         path = os.path.join(ctx.package_dir, "music_track.mp3")
-        result = build_default_registry().call("music", emotion=ctx.plan.get("mood", "dramatic"), output_path=path)
+        creative = ctx.plan.get("creative_directives")
+        creative = creative if isinstance(creative, dict) else {}
+        music_style = str(creative.get("learned_music_style") or ctx.plan.get("mood", "dramatic")).strip()
+        result = build_default_registry().call("music", emotion=music_style or "dramatic", output_path=path)
         if result.success:
             ctx.music_track = result.data
         else:
@@ -505,7 +611,7 @@ def build_director_pipeline(
     progress_callback: Optional[ProgressCallback] = None,
 ) -> Pipeline:
     all_stages = [
-        ResearchStage(), PlanStage(), ScriptStage(), ThumbnailStage(),
+        ResearchStage(), VideoThinkingStage(), PlanStage(), ScriptStage(), ThumbnailStage(),
         AutoEditStage(), VoiceoverStage(), MusicStage(), QCStage(),
         MetadataStage(), MetricsStage(),
     ]

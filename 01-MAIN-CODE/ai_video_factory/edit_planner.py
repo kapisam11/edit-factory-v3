@@ -176,6 +176,16 @@ def _directive_for_index(directives: Mapping[str, Any], index: int) -> Mapping[s
     clip_plan = directives.get("clip_plan", [])
     if isinstance(clip_plan, list) and index < len(clip_plan) and isinstance(clip_plan[index], Mapping):
         return clip_plan[index]
+    # The specialist video-thinking plan is phase-oriented rather than a
+    # versioned V3 blueprint. Its per-line edit directions influence scene
+    # relevance without activating the stricter V3 immutable-boundary contract.
+    phase_directives = directives.get("phase_directives", [])
+    if (
+        isinstance(phase_directives, list)
+        and 0 <= index < len(phase_directives)
+        and isinstance(phase_directives[index], Mapping)
+    ):
+        return phase_directives[index]
     return {}
 
 
@@ -266,10 +276,14 @@ def build_timeline(script: str, scenes: Sequence[Scene], *, total_seconds: Optio
         raise ValueError("Scene index is empty")
     directives = creative_directives if isinstance(creative_directives, Mapping) else {}
     clip_plan = directives.get("clip_plan") if isinstance(directives.get("clip_plan"), list) else []
+    phase_directives = directives.get("phase_directives") if isinstance(directives.get("phase_directives"), list) else []
     retention_map = directives.get("retention_map") if isinstance(directives.get("retention_map"), list) else []
     if clip_plan:
         target = _validate_v3_target_seconds(total_seconds if total_seconds is not None else clip_plan[-1].get("end", 30.0), "total_seconds", directives.get("platform_profile") if isinstance(directives.get("platform_profile"), Mapping) else None)
         lines = _fit_script_to_beats(script, len(clip_plan))
+    elif phase_directives:
+        target = validate_target_seconds(total_seconds, "total_seconds") if total_seconds is not None else validate_target_seconds(sum(s.duration for s in scenes), "total_seconds")
+        lines = _fit_script_to_beats(script, len(phase_directives))
     else:
         lines = _sentences(script)
         target = validate_target_seconds(sum(s.duration for s in scenes[: max(1, len(lines))]), "total_seconds") if total_seconds is None else validate_target_seconds(total_seconds, "total_seconds")
@@ -301,9 +315,13 @@ def build_timeline(script: str, scenes: Sequence[Scene], *, total_seconds: Optio
             desired = planned_end - planned_start
         else:
             try:
-                planned = float(directive.get("end", 0.0)) - float(directive.get("start", 0.0))
-                if planned > 0.0:
-                    desired = planned
+                requested_duration = float(directive.get("duration", 0.0))
+                if requested_duration > 0.0:
+                    desired = requested_duration
+                else:
+                    planned = float(directive.get("end", 0.0)) - float(directive.get("start", 0.0))
+                    if planned > 0.0:
+                        desired = planned
             except (TypeError, ValueError):
                 pass
 

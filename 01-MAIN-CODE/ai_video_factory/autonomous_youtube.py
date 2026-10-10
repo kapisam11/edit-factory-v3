@@ -195,6 +195,18 @@ def _fact_review_pending(review: Any, *, required: bool) -> bool:
     return bool(claims) or not bool(review.get("research_available"))
 
 
+def _video_thinking_review_pending(report: Any, *, enabled: bool, found: bool) -> bool:
+    """Fail closed on missing, invalid, weak, or uncertain creative-director output."""
+    if not enabled:
+        return False
+    if not found or not isinstance(report, Mapping):
+        return True
+    status = str(report.get("status") or "")
+    if status not in {"ready", "not_configured"}:
+        return True
+    return bool(report.get("human_review_required", True))
+
+
 def _rights_review_pending(rights: Any) -> bool:
     """Missing, blocked, or malformed source-rights metadata cannot green-light publishing."""
     if not isinstance(rights, Mapping):
@@ -1470,6 +1482,33 @@ class AutonomousManager:
                         complete_manifest = manifest_value
                 except (OSError, ValueError):
                     complete_manifest = {}
+            thinking_report: dict[str, Any] = {}
+            thinking_report_found = False
+            for report_path in (
+                package_dir / "primary" / "video_thinking.json",
+                package_dir / "video_thinking.json",
+            ):
+                if report_path.is_file():
+                    try:
+                        report_value = json.loads(report_path.read_text(encoding="utf-8"))
+                        if isinstance(report_value, dict):
+                            thinking_report = report_value
+                            thinking_report_found = True
+                            break
+                    except (OSError, ValueError):
+                        thinking_report = {
+                            "status": "invalid_report",
+                            "human_review_required": True,
+                            "warning": "video thinking report could not be read",
+                        }
+                        thinking_report_found = True
+                        break
+            thinking_enabled = os.environ.get("AIVF_VIDEO_THINKING_ENABLED", "1").strip() != "0"
+            thinking_review_pending = _video_thinking_review_pending(
+                thinking_report,
+                enabled=thinking_enabled,
+                found=thinking_report_found,
+            )
             fact_review = complete_manifest.get("fact_check_review")
             if not isinstance(fact_review, Mapping):
                 fact_review = {}
@@ -1541,6 +1580,7 @@ class AutonomousManager:
                 and not self.config.require_human_approval
                 and not fact_review_pending
                 and not disclosure_review_pending
+                and not thinking_review_pending
                 else "pending"
             )
             state = (
@@ -1548,7 +1588,7 @@ class AutonomousManager:
                 if approval == "approved"
                 else (
                     "POLICY_REVIEW"
-                    if fact_review_pending or disclosure_review_pending
+                    if fact_review_pending or disclosure_review_pending or thinking_review_pending
                     else "READY"
                 )
             )
@@ -1582,13 +1622,28 @@ class AutonomousManager:
                         **style.to_dict(),
                         "topic_diversity": topic_guard,
                         "factuality_review": fact_review,
+                        "video_thinking": {
+                            key: thinking_report.get(key)
+                            for key in (
+                                "status", "critique_score", "critique_issues",
+                                "revision_applied", "human_review_required", "warning"
+                            )
+                            if key in thinking_report
+                        },
                     },
                     sort_keys=True,
                 ),
                 error="",
             )
             self.store.set_setting("consecutive_failures", "0")
-            self.store.event(job_id, "production_ready", {"style_score": style.score, "scheduled_at": scheduled, "experiment_family": str(job.get("experiment_family") or ""), "title_variant": title_variant})
+            self.store.event(job_id, "production_ready", {
+                "style_score": style.score,
+                "scheduled_at": scheduled,
+                "experiment_family": str(job.get("experiment_family") or ""),
+                "title_variant": title_variant,
+                "thinking_review_pending": thinking_review_pending,
+                "thinking_score": thinking_report.get("critique_score"),
+            })
             return job_id
         except Exception as exc:
             self._record_failure(job, exc, stage="production")
@@ -1757,7 +1812,11 @@ class AutonomousManager:
             views = float(raw.get("views", stats.get("statistics", {}).get("viewCount", 0)) or 0)
             likes = float(raw.get("likes", stats.get("statistics", {}).get("likeCount", 0)) or 0)
             comments = float(raw.get("comments", stats.get("statistics", {}).get("commentCount", 0)) or 0)
-            avg_pct = float(raw.get("averageViewPercentage", 0.0) or 0.0)
+            raw_avg_pct = raw.get("averageViewPercentage")
+            try:
+                avg_pct = float(raw_avg_pct) if raw_avg_pct is not None else None
+            except (TypeError, ValueError):
+                avg_pct = None
             avg_duration = float(raw.get("averageViewDuration", 0.0) or 0.0)
             shares = float(raw.get("shares", 0.0) or 0.0)
             subscribers = float(raw.get("subscribersGained", 0.0) or 0.0)
@@ -1782,7 +1841,7 @@ class AutonomousManager:
                 min(1.0, thumbnail_ctr / 0.05) if thumbnail_ctr is not None else None
             )
             score_components = [
-                (0.35, min(1.0, max(0.0, avg_pct / 100.0))),
+                (0.35, min(1.0, max(0.0, avg_pct / 100.0)) if avg_pct is not None else None),
                 (0.15, engaged_view_rate_proxy),
                 (0.10, thumbnail_ctr_score),
                 (0.15, min(1.0, likes / max(1.0, views) * 12.0)),
@@ -1825,26 +1884,71 @@ class AutonomousManager:
                     (job_id, video_id, _utc_now(), json.dumps(payload, sort_keys=True, default=str), score, revenue),
                 )
             feedback = FeedbackStore(self.config.state_dir / "feedback.sqlite")
+            feedback_metrics = {
+                "views": views,
+                "likes": likes,
+                "comments": comments,
+                "share": shares / max(1.0, views),
+                "subscriber_rate": subscribers / max(1.0, views),
+            }
+            if avg_pct is not None:
+                feedback_metrics["retention"] = avg_pct / 100.0
+                feedback_metrics["completion"] = avg_pct / 100.0
+            # Per-video save counts are not provided by the Analytics query.
             feedback.add(
                 video_id,
                 "youtube_shorts",
                 "Autonomous",
                 _utc_now(),
-                {
-                    "views": views,
-                    "likes": likes,
-                    "comments": comments,
-                    "retention": avg_pct / 100.0,
-                    "completion": avg_pct / 100.0,
-                    "share": shares / max(1.0, views),
-                    "save": 0.0,
-                    "subscriber_rate": subscribers / max(1.0, views),
-                },
+                feedback_metrics,
                 metadata={"job_id": job_id, "score": score},
             )
             self.store.update(job_id, state="ANALYZED", analytics_json=json.dumps(payload, sort_keys=True, default=str))
             self.store.set_setting("consecutive_failures", "0")
             self.store.event(job_id, "analytics_recorded", {"score": score})
+
+            # Store verified YouTube outcomes beside the editing settings used
+            # to create this package, so the next planning job can retrain from
+            # real channel performance. Learning errors never fail analytics.
+            try:
+                from .complete_factory import update_learning_history
+
+                learning_history_path = (
+                    os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+                    or str(self.config.state_dir / "learning_history.json")
+                )
+                package_dir = str(claim.get("package_dir") or "").strip()
+                if package_dir:
+                    performance_metrics: dict[str, Any] = {
+                        "views": views,
+                        "likes": likes,
+                        "comments": comments,
+                    }
+                    if avg_pct is not None:
+                        performance_metrics["averageViewPercentage"] = avg_pct
+                    update_learning_history(
+                        learning_history_path,
+                        topic=str(claim.get("topic") or ""),
+                        platform=str(claim.get("platform") or "youtube_shorts"),
+                        package_dir=package_dir,
+                        metrics={},
+                        performance_metrics=performance_metrics,
+                        video_id=video_id,
+                        published_at=str(claim.get("published_at") or ""),
+                    )
+                    self.store.event(job_id, "local_learning_feedback_recorded", {
+                        "history_path": learning_history_path,
+                        "metrics": list(performance_metrics),
+                    })
+            except Exception as learning_exc:
+                logger.warning(
+                    "could not append analytics to local learning history for %s: %s",
+                    job_id,
+                    type(learning_exc).__name__,
+                )
+                self.store.event(job_id, "local_learning_feedback_failed", {
+                    "error_type": type(learning_exc).__name__,
+                })
             return job_id
         except Exception as exc:
             self._record_failure(claim, exc, stage="analytics")
