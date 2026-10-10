@@ -291,6 +291,13 @@ class VideoThinkingStage(PipelineStage):
             or os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
             or os.path.join(os.environ.get("AIVF_STATE_DIR", "state"), "learning_history.json")
         )
+        try:
+            from .video_learning import build_creative_feedback_context
+
+            ctx.research.setdefault("learned_creator_preferences", build_creative_feedback_context([]))
+        except (ImportError, OSError, ValueError, TypeError):
+            # Built-in editorial priors are a convenience, not a production dependency.
+            pass
         if os.path.isfile(history_path):
             try:
                 from .learning_recommender import load_experiments, recommend
