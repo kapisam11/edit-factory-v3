@@ -608,16 +608,19 @@ def performance_feedback(metrics: Mapping[str, Any]) -> Dict[str, Any]:
     comments = float(metrics.get("comments", 0.0) or 0.0)
     raw_avg_pct = metrics.get("averageViewPercentage", metrics.get("avg_view_percentage"))
     avg_pct = float(raw_avg_pct or 0.0)
-    engagement = (likes + comments * 2.0) / max(1.0, views)
+    # Engagement with a zero-view denominator is unavailable, not an observed
+    # zero-performance label. This prevents the cold-start learner from
+    # treating freshly uploaded or not-yet-measured videos as failures.
+    engagement = (likes + comments * 2.0) / views if views > 0 else None
     retention = (
         round(avg_pct / 100.0 if avg_pct > 1 else avg_pct, 6)
         if raw_avg_pct is not None
         else None
     )
     return {
-        "engagement_rate": round(engagement, 6),
+        "engagement_rate": round(engagement, 6) if engagement is not None else None,
         "retention": retention,
-        "label": "positive" if engagement > 0.04 or (retention is not None and retention > 0.6) else "neutral",
+        "label": "positive" if (engagement is not None and engagement > 0.04) or (retention is not None and retention > 0.6) else "neutral",
     }
 
 
