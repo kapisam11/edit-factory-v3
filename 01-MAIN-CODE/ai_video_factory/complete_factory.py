@@ -168,17 +168,104 @@ def render_clip_factory(source: str, package_dir: str, *, count: int, crop_plan:
 
 def update_learning_history(path: str, *, topic: str, platform: str, package_dir: str, metrics: Mapping[str, Any], performance_metrics: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     history = load_experiments(path) if os.path.exists(path) else []
-    record: Dict[str, Any] = {"topic": topic, "platform": platform, "package_dir": package_dir, "cuts_per_minute": metrics.get("cuts_per_minute", 0), "avg_shot_duration": metrics.get("avg_shot_duration", 0), "hook_duration": metrics.get("hook_duration", 2.0), "music_energy": metrics.get("music_energy", 0.5), "caption_style": metrics.get("caption_style", "karaoke"), "voice": metrics.get("voice", "en-US-GuyNeural")}
+    observed_metrics: Dict[str, Any] = dict(metrics)
+    root = Path(package_dir)
+
+    # Preserve actual rendered settings even when the caller only provides a
+    # small set of extra experiment variables (for example, the hook duration).
+    for metrics_path in (root / "metrics.json", root / "primary" / "metrics.json"):
+        try:
+            payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            if value is not None and (
+                key not in observed_metrics
+                or observed_metrics.get(key) is None
+                or observed_metrics.get(key) == 0
+            ):
+                observed_metrics[key] = value
+
+    # The production metadata records the settings that were actually chosen.
+    # Prefer them to defaults so later retraining compares the real edit profile.
+    for metadata_path in (root / "metadata.json", root / "primary" / "metadata.json"):
+        try:
+            metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(metadata_payload, dict):
+            continue
+        recommendation_payload = metadata_payload.get("recommendation")
+        if isinstance(recommendation_payload, Mapping):
+            recommended_settings = recommendation_payload.get("settings")
+            if isinstance(recommended_settings, Mapping):
+                for key in (
+                    "cuts_per_minute", "avg_shot_duration", "hook_duration", "music_energy",
+                    "caption_style", "voice", "music_style", "content_type", "edit_type",
+                ):
+                    if key in recommended_settings and (
+                        key not in observed_metrics
+                        or observed_metrics.get(key) is None
+                        or observed_metrics.get(key) == 0
+                    ):
+                        observed_metrics[key] = recommended_settings[key]
+        if metadata_payload.get("v3_edit_type") and not observed_metrics.get("edit_type"):
+            observed_metrics["edit_type"] = metadata_payload["v3_edit_type"]
+
+    try:
+        target_seconds = float(observed_metrics.get("actual_duration_seconds") or observed_metrics.get("actual_timeline_seconds") or observed_metrics.get("target_seconds") or 0.0)
+        segment_count = int(observed_metrics.get("actual_rendered_segments") or observed_metrics.get("segment_count") or 0)
+        cuts_per_minute = float(observed_metrics.get("cuts_per_minute") or 0.0)
+    except (TypeError, ValueError):
+        target_seconds, segment_count, cuts_per_minute = 0.0, 0, 0.0
+    if cuts_per_minute <= 0 and target_seconds > 0 and segment_count > 0:
+        cuts_per_minute = segment_count / (target_seconds / 60.0)
+    average_shot = observed_metrics.get("avg_shot_duration")
+    try:
+        average_shot = float(average_shot or 0.0)
+    except (TypeError, ValueError):
+        average_shot = 0.0
+    if average_shot <= 0 and cuts_per_minute > 0:
+        average_shot = 60.0 / cuts_per_minute
+
+    thinking: Dict[str, Any] = {}
+    for thinking_path in (root / "video_thinking.json", root / "primary" / "video_thinking.json"):
+        try:
+            payload = json.loads(thinking_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            nested = payload.get("plan")
+            if isinstance(nested, dict):
+                thinking = nested
+                break
+
+    edit_emotion = str(observed_metrics.get("emotion") or thinking.get("emotion") or "")
+    record: Dict[str, Any] = {
+        "topic": topic,
+        "platform": platform,
+        "content_type": observed_metrics.get("content_type", "short_video"),
+        "package_dir": package_dir,
+        "cuts_per_minute": cuts_per_minute,
+        "avg_shot_duration": average_shot or 2.5,
+        "hook_duration": observed_metrics.get("hook_duration", 2.0),
+        "music_energy": observed_metrics.get("music_energy", 0.5),
+        "caption_style": observed_metrics.get("caption_style", "karaoke"),
+        "voice": observed_metrics.get("voice", "en-US-GuyNeural"),
+        "music_style": observed_metrics.get("music_style", edit_emotion or "dramatic"),
+        "edit_type": observed_metrics.get("edit_type", edit_emotion or "dramatic"),
+    }
     if performance_metrics:
         from .content_factory import performance_feedback
         record.update(performance_feedback(performance_metrics))
         record.update({k: performance_metrics[k] for k in ("views", "likes", "comments", "averageViewPercentage") if k in performance_metrics})
-    record["performance_score"] = float(record.get("engagement_rate", 0.0)) + float(record.get("retention", 0.0))
+    record["performance_score"] = float(record.get("engagement_rate") or 0.0) + float(record.get("retention") or 0.0)
     history.append(record)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(history, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     return record
-
 
 def _fact_check_review(script: str, research: Mapping[str, Any]) -> Dict[str, Any]:
     lines = [line.strip() for line in script.splitlines() if line.strip()]
@@ -203,6 +290,11 @@ def _ranked_thumbnail(package_dir: str, variants: Sequence[str], topic: str) -> 
 def run_complete_factory(input_video: Optional[str], topic: str, package_dir: str, *, target_seconds: float = 45.0, platforms: Sequence[str] = tuple(PLATFORM_LAYOUTS), clip_count: Optional[int] = None, experiment_history_path: Optional[str] = None, auto_research: bool = True, publish_youtube: bool = False, youtube_options: Optional[Mapping[str, Any]] = None, model_key: Optional[str] = None, skip_qc: bool = False) -> Dict[str, Any]:
     root = Path(package_dir)
     root.mkdir(parents=True, exist_ok=True)
+    learning_history_path = (
+        experiment_history_path
+        or os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+        or None
+    )
     checkpoints = CheckpointStore(str(root / "checkpoints.json"))
     if checkpoints.is_complete("complete") and (root / "complete_factory_manifest.json").exists():
         return json.loads((root / "complete_factory_manifest.json").read_text(encoding="utf-8"))
@@ -218,8 +310,8 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         research["strategy"] = generate_content_strategy(topic)
         research["emotion"] = detect_emotion(topic)
         research["hooks"] = generate_hook_candidates(topic, research, count=8)
-        if experiment_history_path and os.path.exists(experiment_history_path):
-            research["learned_style"] = learn_channel_style(load_experiments(experiment_history_path))
+        if learning_history_path and os.path.exists(learning_history_path):
+            research["learned_style"] = learn_channel_style(load_experiments(learning_history_path))
         _write_json(str(root / "auto_research.json"), research)
         checkpoints.mark("research", status="complete", artifacts=[str(root / "auto_research.json")])
 
@@ -228,7 +320,13 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         primary_path = root / "primary"
         primary_path.mkdir(parents=True, exist_ok=True)
         primary_dir = str(primary_path)
-        ctx = PipelineContext(topic=topic, package_dir=primary_dir, target_seconds=target_seconds, model_key=model_key)
+        ctx = PipelineContext(
+            topic=topic,
+            package_dir=primary_dir,
+            target_seconds=target_seconds,
+            model_key=model_key,
+            learning_history_path=learning_history_path,
+        )
         ctx = provider_retry(lambda: build_director_pipeline(verbose=False).run(ctx), attempts=2)
         primary_result = ProductionResult(package_dir=primary_dir)
         primary_result.final_video = ctx.final_video
@@ -238,7 +336,7 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         primary_result.errors.extend(ctx.errors)
     else:
         primary_dir = str(root / "primary")
-        primary_result = provider_retry(lambda: run_production_pipeline(input_video, topic, primary_dir, target_seconds=target_seconds, research_summary=research, model_key=model_key, skip_qc=skip_qc, experiment_history_path=experiment_history_path, platform="youtube_shorts"), attempts=3)
+        primary_result = provider_retry(lambda: run_production_pipeline(input_video, topic, primary_dir, target_seconds=target_seconds, research_summary=research, model_key=model_key, skip_qc=skip_qc, experiment_history_path=learning_history_path, platform="youtube_shorts"), attempts=3)
     if primary_result.errors or not primary_result.final_video:
         return {"status": "failed", "errors": primary_result.errors or ["Primary production produced no video"], "warnings": primary_result.warnings}
     checkpoints.mark("primary", status="complete", artifacts=[primary_result.final_video])
@@ -390,8 +488,8 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
     manifest["artifact_readiness"] = artifact_readiness
     _write_json(str(root / "complete_factory_manifest.json"), manifest)
 
-    if experiment_history_path:
-        manifest["learning_record"] = update_learning_history(experiment_history_path, topic=topic, platform="youtube_shorts", package_dir=str(root), metrics={"hook_duration": pacing[0] if pacing else 2.0})
+    if learning_history_path:
+        manifest["learning_record"] = update_learning_history(learning_history_path, topic=topic, platform="youtube_shorts", package_dir=str(root), metrics={"hook_duration": pacing[0] if pacing else 2.0})
         _write_json(str(root / "complete_factory_manifest.json"), manifest)
 
     if publish_youtube:
@@ -420,8 +518,8 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             manifest["playlist"] = add_video_to_playlist(upload_result["video_id"], playlist["id"], client_secrets_path=opts.get("client_secrets_path"), token_path=opts.get("token_path"))
         stats = fetch_video_statistics(upload_result["video_id"], client_secrets_path=opts.get("client_secrets_path"), token_path=opts.get("token_path"))
         manifest["performance_feedback"] = stats
-        if experiment_history_path:
-            update_learning_history(experiment_history_path, topic=topic, platform="youtube_shorts", package_dir=str(root), metrics={}, performance_metrics=stats.get("statistics", {}))
+        if learning_history_path:
+            update_learning_history(learning_history_path, topic=topic, platform="youtube_shorts", package_dir=str(root), metrics={}, performance_metrics=stats.get("statistics", {}))
         _write_json(str(root / "complete_factory_manifest.json"), manifest)
 
     checkpoints.mark("complete", status="complete", artifacts=[str(root / "complete_factory_manifest.json")])
