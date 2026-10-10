@@ -915,6 +915,65 @@ def ensure_playlist(title: str, *, description: str = "", privacy_status: str = 
     return youtube.playlists().insert(part="snippet,status", body={"snippet": {"title": title, "description": description}, "status": {"privacyStatus": privacy_status}}).execute()
 
 
+def fetch_channel_uploads(
+    *,
+    max_results: int = 100,
+    client_secrets_path: Optional[str] = None,
+    token_path: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    """List recent uploads from the authenticated channel's uploads playlist.
+
+    Used only by an explicit history-import command; this function does not
+    publish, mutate videos, or request public channel analytics from strangers.
+    """
+    limit = int(max_results)
+    if not 1 <= limit <= 1000:
+        raise ValueError("max_results must be between 1 and 1000")
+    client, token = _paths(client_secrets_path, token_path)
+    youtube = _service("youtube", "v3", client, token, UPLOAD_SCOPES + ANALYTICS_SCOPES)
+    channel_response = youtube.channels().list(part="id,contentDetails", mine=True).execute()
+    channels = channel_response.get("items") or []
+    if not channels:
+        raise RuntimeError("No authorized YouTube channel is available for history import")
+    uploads_playlist = str(
+        ((channels[0].get("contentDetails") or {}).get("relatedPlaylists") or {}).get("uploads") or ""
+    )
+    if not uploads_playlist:
+        raise RuntimeError("The authorized YouTube channel has no uploads playlist")
+
+    uploads: list[Dict[str, Any]] = []
+    seen: set[str] = set()
+    page_token: Optional[str] = None
+    while len(uploads) < limit:
+        kwargs: Dict[str, Any] = {
+            "part": "snippet,contentDetails",
+            "playlistId": uploads_playlist,
+            "maxResults": min(50, limit - len(uploads)),
+        }
+        if page_token:
+            kwargs["pageToken"] = page_token
+        page = youtube.playlistItems().list(**kwargs).execute()
+        for item in page.get("items") or []:
+            snippet = item.get("snippet") or {}
+            details = item.get("contentDetails") or {}
+            resource = snippet.get("resourceId") or {}
+            video_id = str(details.get("videoId") or resource.get("videoId") or "").strip()
+            if not video_id or video_id in seen:
+                continue
+            seen.add(video_id)
+            uploads.append({
+                "video_id": video_id,
+                "title": str(snippet.get("title") or ""),
+                "published_at": str(snippet.get("publishedAt") or details.get("videoPublishedAt") or ""),
+            })
+            if len(uploads) >= limit:
+                break
+        page_token = page.get("nextPageToken")
+        if not page_token or not page.get("items"):
+            break
+    return uploads
+
+
 def fetch_video_statistics(video_id: str, *, client_secrets_path: Optional[str] = None, token_path: Optional[str] = None) -> Dict[str, Any]:
     client_secrets_path, token_path = _paths(client_secrets_path, token_path)
     youtube = _service("youtube", "v3", client_secrets_path, token_path, UPLOAD_SCOPES + ANALYTICS_SCOPES)
@@ -960,7 +1019,7 @@ def save_json(path: str, payload: Any) -> str:
 
 __all__ = [
     "upload_video", "add_video_to_playlist", "ensure_playlist",
-    "fetch_video_statistics", "fetch_video_analytics", "fetch_video_reach_metrics",
+    "fetch_channel_uploads", "fetch_video_statistics", "fetch_video_analytics", "fetch_video_reach_metrics",
     "ensure_video_reach_report_job", "authorize_video_reporting_token",
     "aggregate_video_reach_csv", "disclosure_setting", "save_json",
     "UPLOAD_SCOPES", "ANALYTICS_SCOPES", "REPORTING_SCOPES",
