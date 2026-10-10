@@ -1851,7 +1851,7 @@ class AutonomousManager:
                 "likes": likes,
                 "comments": comments,
                 "share": shares / max(1.0, views),
-                "save": 0.0,
+                # YouTube does not expose a per-video save count through this report; omit it.
                 "subscriber_rate": subscribers / max(1.0, views),
             }
             if avg_pct is not None:
