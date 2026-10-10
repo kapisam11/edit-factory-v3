@@ -79,48 +79,95 @@ def make_idea(summary: Dict[str, str]) -> Dict[str, object]:
                 emotion = a
                 break
 
-    # Create a concise human-style hook (2-5 words) using heuristics
-    hook_candidates = [
-        "Nobody believed him",
-        "The hidden legend",
-        "His final choice",
-        "Lost forever",
-        "The real reason",
-    ]
+    # Prefer the specialist AI plan when it passed strict schema validation.
+    thinking_value = summary.get("video_thinking_plan")
+    thinking = thinking_value if isinstance(thinking_value, dict) else {}
     strongest = summary.get("strongest_angle") or summary.get("viral_title") or ""
-    if strongest:
-        words = [w for w in strongest.replace("-", " ").split() if w.isalpha()]
-        hook = _normalize_hook(" ".join(words[:4]) if words else hook_candidates[0], hook_candidates[0])
+    fallback_hook = _clean_words(topic, 5)
+    if len(fallback_hook.split()) < 2:
+        fallback_hook = _clean_words(f"Why {topic} matters", 5)
+    hook_source = str(thinking.get("hook") or "").strip() if thinking else ""
+    if hook_source and 2 <= len(hook_source.split()) <= 5:
+        hook = _normalize_hook(hook_source, fallback_hook)
     else:
-        hook = hook_candidates[0]
-    hook = _normalize_hook(hook, hook_candidates[0])
+        words = [w for w in str(strongest).replace("-", " ").split() if w.isalpha()]
+        hook = _normalize_hook(" ".join(words[:4]) if words else fallback_hook, fallback_hook)
+
+    raw_thinking_emotion = str(thinking.get("emotion") or "").strip().lower()
+    if raw_thinking_emotion in allowed_emotions:
+        emotion = raw_thinking_emotion
 
     extra_tag = summary.get("content_type", "Story")
-    title_options = [
+    fallback_titles = [
         summary.get("viral_title", f"{hook.title()} - {topic}"),
         f"{hook.title()} - The {extra_tag} Behind {topic}",
         f"Why {topic} Changed Everything",
     ]
+    candidate_titles = thinking.get("title_options") if isinstance(thinking.get("title_options"), list) else []
+    title_options = list(dict.fromkeys(
+        str(value).strip()[:100]
+        for value in [*candidate_titles, *fallback_titles]
+        if isinstance(value, str) and str(value).strip()
+    ))
+    try:
+        from .human_style_guard import sanitize_public_metadata
+        title_options = [
+            sanitize_public_metadata(value, "", [])["title"]
+            for value in title_options
+        ]
+        title_options = list(dict.fromkeys(value for value in title_options if value))
+    except Exception:
+        pass
+    if not title_options:
+        title_options = [f"{hook} - {topic}"[:100]]
 
-    script_lines: List[str] = []
-    script_intro = f"{hook}."
-    script_lines.append(script_intro)
-    script_lines.append(_build_opening_line(summary, topic))
-    mc = summary.get("main_conflict", "A pivotal moment changes everything.")
-    if mc:
-        script_lines.append(mc)
-    if summary.get("why_care"):
-        script_lines.append(summary.get("why_care"))
-    script_lines.append("The stakes rose fast and every second mattered.")
-    script_lines.append("That choice split friends and rivals apart.")
-    script_lines.append("The payoff hits hardest at the end.")
-    script_lines.append("Why does this matter now?")
-    script_lines = [s for s in script_lines if s]
+    thinking_lines = thinking.get("script_lines")
+    if isinstance(thinking_lines, list) and len(thinking_lines) >= 6 and all(
+        isinstance(line, str) and line.strip() for line in thinking_lines
+    ):
+        script_lines = [str(line).strip() for line in thinking_lines]
+        script_lines[0] = f"{hook}."
+        video_thinking_applied = True
+    else:
+        # Deterministic fallback stays topic-grounded and never relies on a
+        # library of interchangeable viral hooks or canned ending claims.
+        script_lines: List[str] = [f"{hook}.", _build_opening_line(summary, topic)]
+        mc = str(summary.get("main_conflict") or "").strip()
+        why_care = str(summary.get("why_care") or "").strip()
+        payoff = str(summary.get("payoff") or "").strip()
+        for line in (mc, why_care, payoff):
+            if line and line not in script_lines:
+                script_lines.append(line)
+        video_thinking_applied = False
+        script_lines = [s for s in script_lines if s]
 
     # Build a fixed five-part structure that scales to the selected total length.
     base_segments = [2.0, 6.0, 12.0, 25.0, 15.0]
     scale = target_total_seconds / sum(base_segments)
     durations = [round(value * scale, 2) for value in base_segments]
+
+    learned_value = summary.get("learned_editor_preferences") or summary.get("recommended_settings") or {}
+    learned_settings = learned_value if isinstance(learned_value, dict) else {}
+    learned_cuts_per_minute: Optional[float] = None
+    try:
+        candidate_cpm = float(learned_settings.get("cuts_per_minute"))
+        if 0.1 <= candidate_cpm <= 240.0:
+            learned_cuts_per_minute = candidate_cpm
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        learned_hook = float(learned_settings.get("hook_duration"))
+    except (TypeError, ValueError):
+        learned_hook = 0.0
+    if 0.1 <= learned_hook <= min(6.0, target_total_seconds * 0.30):
+        original_rest = sum(durations[1:])
+        rest_target = target_total_seconds - learned_hook
+        durations = [learned_hook] + [
+            round(value * rest_target / max(0.01, original_rest), 2)
+            for value in durations[1:]
+        ]
+        durations[-1] = round(durations[-1] + target_total_seconds - sum(durations), 2)
     duration_total = round(sum(durations), 2)
 
     beat_definitions = [
@@ -164,17 +211,76 @@ def make_idea(summary: Dict[str, str]) -> Dict[str, object]:
     ]
 
     edit_plan: List[Tuple[float, str]] = []
-    for segment_duration, labels in beat_definitions:
-        edit_plan.extend(_subdivide_segment(segment_duration, labels))
+    if learned_cuts_per_minute is not None:
+        # Convert the learned cut rate into a bounded number of actual beats,
+        # then distribute them over the story arc instead of only storing the
+        # recommendation in metadata.
+        max_target_cuts = min(120, max(5, int(target_total_seconds / 0.5)))
+        target_cuts = max(5, min(max_target_cuts, int(round(target_total_seconds * learned_cuts_per_minute / 60.0))))
+        phase_durations = [item[0] for item in beat_definitions]
+        remaining_cuts = target_cuts - len(beat_definitions)
+        total_phase_duration = sum(phase_durations) or target_total_seconds
+        exact_extras = [remaining_cuts * value / total_phase_duration for value in phase_durations]
+        extras = [int(value) for value in exact_extras]
+        missing = remaining_cuts - sum(extras)
+        order = sorted(range(len(exact_extras)), key=lambda index: exact_extras[index] - extras[index], reverse=True)
+        for index in order[:missing]:
+            extras[index] += 1
+        for (segment_duration, labels), extra_count in zip(beat_definitions, extras):
+            count = 1 + extra_count
+            base_duration = segment_duration / count
+            for index in range(count):
+                edit_plan.append((round(base_duration, 2), labels[index % len(labels)]))
+        if edit_plan:
+            edit_plan[-1] = (
+                round(edit_plan[-1][0] + duration_total - sum(value for value, _label in edit_plan), 2),
+                edit_plan[-1][1],
+            )
+    else:
+        for segment_duration, labels in beat_definitions:
+            edit_plan.extend(_subdivide_segment(segment_duration, labels))
+
+    directions = thinking.get("edit_directions")
+    if isinstance(directions, dict):
+        phase_map = {
+            "hook": "hook",
+            "intro": "setup",
+            "conflict": "conflict",
+            "main event": "climax",
+            "payoff": "payoff",
+        }
+        directed_plan: List[Tuple[float, str]] = []
+        for duration, label in edit_plan:
+            phase = label.split(" - ", 1)[0].strip().lower()
+            directive = directions.get(phase_map.get(phase, ""))
+            if isinstance(directive, str) and directive.strip():
+                directed_plan.append((duration, f"{phase.title()} - {directive.strip()}"))
+            else:
+                directed_plan.append((duration, label))
+        edit_plan = directed_plan
 
     script_text = "\n".join(script_lines)
 
     idea = {
         "hook": hook,
         "emotion": emotion,
+        "mood": emotion,
+        "title": title_options[0],
         "title_options": title_options,
         "script": script_text,
         "edit_plan": edit_plan,
+        "video_thinking_applied": video_thinking_applied,
+        "creative_directives": {
+            "angle": str(thinking.get("angle") or ""),
+            "why_people_care": str(thinking.get("why_people_care") or ""),
+            "watch_to_end_reason": str(thinking.get("watch_to_end_reason") or ""),
+            "payoff": str(thinking.get("payoff") or ""),
+            "music_direction": str(thinking.get("music_direction") or ""),
+            "thumbnail_concept": str(thinking.get("thumbnail_concept") or ""),
+            "learned_music_style": str(learned_settings.get("music_style") or ""),
+            "learned_caption_style": str(learned_settings.get("caption_style") or ""),
+            "learned_voice": str(learned_settings.get("voice") or ""),
+        },
         "structure": {
             "total_seconds": duration_total,
             "hook": [0.0, durations[0]],
@@ -185,10 +291,11 @@ def make_idea(summary: Dict[str, str]) -> Dict[str, object]:
         },
     }
 
-    try:
-        idea = story.enforce_story_arc(idea)
-    except Exception:
-        pass
+    if not idea["video_thinking_applied"]:
+        try:
+            idea = story.enforce_story_arc(idea)
+        except Exception:
+            pass
 
     return idea
 
