@@ -375,7 +375,7 @@ def test_dashboard_job_visibility_is_scoped_to_principal(monkeypatch, tmp_path):
     dashboard_auth.configure_dashboard_auth(appmod.app)
 
     alice = appmod.app.test_client()
-    assert alice.post("/login", data={"token": "alice-token"}).status_code == 302
+    assert alice.post("/login", data={"token": "alice-token"}, headers={"Origin": "http://localhost"}).status_code == 302
     with alice.session_transaction() as state:
         state["aivf_user_id"] = "alice"
         state["aivf_role"] = "editor"
@@ -388,7 +388,7 @@ def test_dashboard_job_visibility_is_scoped_to_principal(monkeypatch, tmp_path):
         appmod.db_insert_job("job-alice", "alice", {"topic": "alice"})
 
     bob = appmod.app.test_client()
-    assert bob.post("/login", data={"token": "bob-token"}).status_code == 302
+    assert bob.post("/login", data={"token": "bob-token"}, headers={"Origin": "http://localhost"}).status_code == 302
     response = bob.get("/api/jobs")
     assert response.status_code == 200
     assert response.get_json() == []

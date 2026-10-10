@@ -26,7 +26,7 @@ def _load(monkeypatch):
 
 
 def _login(client):
-    response = client.post("/login", data={"token": "test-token"})
+    response = client.post("/login", data={"token": "test-token"}, headers={"Origin": "http://localhost"})
     assert response.status_code == 302
 
 
@@ -60,10 +60,30 @@ def test_dashboard_token_logs_user_in(monkeypatch):
     assert client.get("/").status_code == 200
 
 
+def test_public_login_post_requires_same_origin(monkeypatch):
+    app = _load(monkeypatch)
+    client = app.test_client()
+    assert client.post("/login", data={"token": "test-token"}).status_code == 403
+    assert client.post(
+        "/login",
+        data={"token": "test-token"},
+        headers={"Origin": "https://evil.example"},
+    ).status_code == 403
+
+
+def test_logout_rejects_cross_origin_post(monkeypatch):
+    app = _load(monkeypatch)
+    client = app.test_client()
+    _login(client)
+    response = client.post("/logout", headers={"Origin": "https://evil.example"})
+    assert response.status_code == 403
+    assert client.get("/").status_code == 200
+
+
 def test_wrong_dashboard_token_is_rejected(monkeypatch):
     app = _load(monkeypatch)
     client = app.test_client()
-    response = client.post("/login", data={"token": "wrong"})
+    response = client.post("/login", data={"token": "wrong"}, headers={"Origin": "http://localhost"})
     assert response.status_code == 401
 
 
@@ -121,13 +141,13 @@ def test_insecure_local_mode_is_loopback_only(monkeypatch):
 
     dashboard_auth.configure_dashboard_auth(app)
     client = app.test_client()
-    assert client.post("/login", data={"token": "local-development"}).status_code == 302
+    assert client.post("/login", data={"token": "local-development"}, headers={"Origin": "http://localhost"}).status_code == 302
     client2 = app.test_client()
     response = client2.post(
         "/login",
         data={"token": "local-development"},
         base_url="https://example.test",
-        headers={"X-Forwarded-For": "127.0.0.1"},
+        headers={"Origin": "https://example.test", "X-Forwarded-For": "127.0.0.1"},
     )
     assert response.status_code == 401
 
@@ -138,8 +158,8 @@ def test_login_rate_limit_blocks_excessive_attempts(monkeypatch):
     dashboard_auth._login_attempts.clear()
     client = app.test_client()
     for _ in range(10):
-        assert client.post("/login", data={"token": "wrong"}).status_code == 401
-    assert client.post("/login", data={"token": "wrong"}).status_code == 429
+        assert client.post("/login", data={"token": "wrong"}, headers={"Origin": "http://localhost"}).status_code == 401
+    assert client.post("/login", data={"token": "wrong"}, headers={"Origin": "http://localhost"}).status_code == 429
 
 
 def test_session_cookie_is_secure(monkeypatch):
@@ -148,7 +168,7 @@ def test_session_cookie_is_secure(monkeypatch):
     client = app.test_client()
     import dashboard_auth
     dashboard_auth._login_attempts.clear()
-    response = client.post("/login", data={"token": "test-token"})
+    response = client.post("/login", data={"token": "test-token"}, headers={"Origin": "http://localhost"})
     assert response.status_code == 302
     assert "Secure" in response.headers.get("Set-Cookie", "")
 
@@ -158,7 +178,7 @@ def test_logout_clears_session(monkeypatch):
     client = app.test_client()
     _login(client)
     assert client.get("/").status_code == 200
-    response = client.post("/logout")
+    response = client.post("/logout", headers={"Origin": "http://localhost"})
     assert response.status_code == 302
     assert "/login" in response.headers["Location"]
     assert client.get("/").status_code == 302
