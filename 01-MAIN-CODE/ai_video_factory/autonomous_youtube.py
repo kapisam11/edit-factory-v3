@@ -1933,6 +1933,8 @@ class AutonomousManager:
                         package_dir=package_dir,
                         metrics={},
                         performance_metrics=performance_metrics,
+                        video_id=video_id,
+                        published_at=str(claim.get("published_at") or ""),
                     )
                     self.store.event(job_id, "local_learning_feedback_recorded", {
                         "history_path": learning_history_path,
