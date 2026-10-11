@@ -558,7 +558,7 @@ def test_tiktok_chunk_transfer_tracks_server_acknowledgements_and_stops_on_201(
 def test_tiktok_reconciles_partial_upload_from_server_content_range(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from ai_video_factory.platform_adapters import TikTokDirectPostAdapter
+    from ai_video_factory.platform_adapters import TikTokDirectPostAdapter, _tiktok_chunk_plan
 
     size = 65 * 1024 * 1024
     uploaded = 5 * 1024 * 1024
