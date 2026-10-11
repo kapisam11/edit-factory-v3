@@ -180,7 +180,7 @@ def get_platform_access_token(
     client_secret: str = "",
     app_id: str = "",
     graph_api_version: str = "",
-    refresh_before_seconds: int = 7 * 24 * 60 * 60,
+    refresh_before_seconds: int | None = None,
 ) -> str:
     """Return a usable token, refreshing and atomically persisting it when configured."""
     normalized = platform.strip().lower()
@@ -188,6 +188,8 @@ def get_platform_access_token(
         raise ValueError(f"unsupported token refresh platform: {platform}")
     path = _state_database()
     now = time.time()
+    if refresh_before_seconds is None:
+        refresh_before_seconds = 7 * 24 * 60 * 60 if normalized == "instagram" else 60 * 60
     with _connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
