@@ -469,7 +469,7 @@ class FolderPublisher:
         metadata["privacy_status"] = privacy
         for field in ("ai_generated", "realistic_alteration", "disclosure_reviewed", "rights_reviewed", "publish_approved"):
             if not isinstance(metadata.get(field), bool):
-                return metadata, sidecar.stat().st_mtime_ns, False, f"{field} must be a JSON boolean"
+                return metadata, sidecar.stat().st_mtime_ns, False, f"{field} must be explicitly set to a JSON boolean"
         if not metadata["publish_approved"]:
             return metadata, sidecar.stat().st_mtime_ns, False, "publish_approved must be true after human review"
         if not metadata["rights_reviewed"]:
@@ -499,7 +499,7 @@ class FolderPublisher:
             try:
                 observed = self.store.observe(path, now=now)
                 seen += 1
-                if observed["state"] in TERMINAL_STATES:
+                if observed["state"] in TERMINAL_STATES or observed["state"] == "UPLOADING":
                     continue
                 if (
                     observed["state"] == "NEEDS_REVIEW"
@@ -685,6 +685,8 @@ def approve_sidecar(
     candidate = Path(file_path).expanduser()
     if not candidate.is_absolute():
         candidate = root / candidate
+    if candidate.is_symlink():
+        raise ValueError("approval target must not be a symbolic link")
     candidate = candidate.resolve(strict=True)
     try:
         candidate.relative_to(root)
@@ -693,6 +695,8 @@ def approve_sidecar(
     if candidate.is_symlink() or not candidate.is_file() or candidate.suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("approval target must be a regular supported video file inside the watched folder")
     sidecar = Path(str(candidate) + ".publish.json")
+    if sidecar.is_symlink():
+        raise ValueError("approval sidecar must not be a symbolic link")
     payload: dict[str, Any] = {}
     if sidecar.is_file():
         raw = json.loads(sidecar.read_text(encoding="utf-8"))
