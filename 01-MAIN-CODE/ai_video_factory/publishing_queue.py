@@ -551,13 +551,13 @@ class PublisherStore:
             if cursor.rowcount != 1:
                 raise RuntimeError("publishing lease was lost; refusing to renew an unfenced lease")
 
-    def save_checkpoint(self, job_id: str, owner: str, remote_id: Optional[str], provider_state: dict[str, Any]) -> None:
+    def save_checkpoint(self, job_id: str, owner: str, remote_id: Optional[str], provider_state: dict[str, Any], lease_seconds: int = 900) -> None:
         encoded = json.dumps(provider_state, sort_keys=True)
         instant = time.time()
         with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE publish_jobs SET remote_id=COALESCE(?,remote_id),provider_state_json=?,lease_expires_at=MAX(COALESCE(lease_expires_at,0),?),updated_at=? WHERE id=? AND lease_owner=?",
-                (remote_id, encoded, instant + 900, instant, job_id, owner),
+                (remote_id, encoded, instant + max(60, int(lease_seconds)), instant, job_id, owner),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("publishing lease was lost; refusing an unfenced checkpoint")
@@ -801,7 +801,7 @@ class PublisherService:
         size = source.stat().st_size
         if staged_bytes + size > self.config.max_staged_bytes:
             raise PublisherError("STAGING_QUOTA", "publisher staging quota would be exceeded")
-        if shutil.disk_usage(self.config.state_dir).free < self.config.min_free_disk_bytes + size:
+        if shutil.disk_usage(self.config.staging_dir).free < self.config.min_free_disk_bytes + size:
             raise PublisherError("LOW_DISK_SPACE", "insufficient free disk space to reserve the staged media snapshot")
         temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.partial")
         before = source.stat()
@@ -912,6 +912,7 @@ class PublisherService:
                     "SIDECAR_MISSING", "SIDECAR_INVALID", "APPROVAL_REQUIRED",
                     "APPROVAL_STALE", "DISCLOSURE_UNDECLARED",
                     "DISCLOSURE_REVIEW_REQUIRED", "DESTINATIONS_REQUIRED",
+                    "INSTAGRAM_VISIBILITY_ACK_REQUIRED",
                 } else "policy_review" if exc.code == "PUBLIC_PUBLISH_BLOCKED" else "invalid"
                 self.store.mark_source(relative, state=state, error_code=exc.code, error=str(exc), now=now)
                 result["needs_review" if state == "needs_review" else "blocked"] += 1
@@ -1037,7 +1038,7 @@ class PublisherService:
             self._notify(f"job:{job['id']}:STAGED_SNAPSHOT_INVALID", {"event": "publish_failed", "job_id": str(job["id"]), "platform": job["platform"], "state": "permanent_failed", "error_code": "STAGED_SNAPSHOT_INVALID"})
             return True
         def checkpoint(remote_id: Optional[str], provider_state: dict[str, Any]) -> None:
-            self.store.save_checkpoint(str(job["id"]), owner, remote_id, provider_state)
+            self.store.save_checkpoint(str(job["id"]), owner, remote_id, provider_state, self.config.lease_seconds)
             fresh = self.store.get_job(str(job["id"]))
             if fresh:
                 job.update(fresh)
@@ -1061,7 +1062,7 @@ class PublisherService:
             self.store.finish_claim(job, owner, AdapterUpdate("permanent_failed", error_code="PLATFORM_NOT_CONFIGURED", error="no adapter is configured for this destination"))
             return True
         def checkpoint(remote_id: Optional[str], provider_state: dict[str, Any]) -> None:
-            self.store.save_checkpoint(str(job["id"]), owner, remote_id, provider_state)
+            self.store.save_checkpoint(str(job["id"]), owner, remote_id, provider_state, self.config.lease_seconds)
             fresh = self.store.get_job(str(job["id"]))
             if fresh:
                 job.update(fresh)
