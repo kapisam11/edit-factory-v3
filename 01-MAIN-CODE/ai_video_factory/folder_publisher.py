@@ -178,7 +178,6 @@ class FolderQueue:
                         published_at REAL,
                         duplicate_of INTEGER,
                         last_error TEXT NOT NULL DEFAULT '',
-                        UNIQUE(path, source_sha256),
                         FOREIGN KEY(duplicate_of) REFERENCES folder_items(id)
                     );
                     CREATE INDEX folder_items_state_due
@@ -207,6 +206,11 @@ class FolderQueue:
                 "SELECT state, COUNT(*) AS count FROM folder_items GROUP BY state"
             ).fetchall()
         return {str(row["state"]): int(row["count"]) for row in rows}
+
+    def get_item(self, item_id: int) -> Optional[dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM folder_items WHERE id=?", (item_id,)).fetchone()
+        return dict(row) if row is not None else None
 
     def observe(self, path: Path, *, now: float) -> dict[str, Any]:
         stat_result = path.stat()
@@ -274,12 +278,14 @@ class FolderQueue:
                     (source_hash, int(duplicate["id"]), now, item_id),
                 )
             else:
+                next_state = "NEEDS_REVIEW" if error else str(current["state"])
                 conn.execute(
-                    "UPDATE folder_items SET source_sha256=?, probe_json=?, updated_at=?, "
+                    "UPDATE folder_items SET source_sha256=?, probe_json=?, state=?, updated_at=?, "
                     "next_attempt_at=?, last_error=? WHERE id=?",
                     (
-                        source_hash,
+                        source_hash or None,
                         json.dumps(probe, sort_keys=True) if probe is not None else None,
+                        next_state,
                         now,
                         now + max(0, retry_after_seconds),
                         error,
@@ -320,7 +326,7 @@ class FolderQueue:
     def claim_next(self, *, max_per_day: int, now: float) -> Optional[dict[str, Any]]:
         if max_per_day < 1:
             return None
-        day = datetime.fromtimestamp(now, tz=__import__("datetime").timezone.utc).replace(
+        day = datetime.fromtimestamp(now, tz=timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         ).timestamp()
         owner = uuid.uuid4().hex
@@ -426,8 +432,8 @@ class FolderPublisher:
             "tags": [],
             "privacy_status": self.config.privacy_status,
             "category_id": "22",
-            "ai_generated": False,
-            "realistic_alteration": False,
+            "ai_generated": None,
+            "realistic_alteration": None,
             "disclosure_reviewed": False,
             "rights_reviewed": False,
             "publish_approved": False,
@@ -495,6 +501,12 @@ class FolderPublisher:
                 seen += 1
                 if observed["state"] in TERMINAL_STATES:
                     continue
+                if (
+                    observed["state"] == "NEEDS_REVIEW"
+                    and not observed.get("probe_json")
+                    and float(observed.get("next_attempt_at") or 0) > now
+                ):
+                    continue
                 if now - float(observed["stable_since"]) < self.config.settle_seconds:
                     continue
                 source = Path(str(observed["path"]))
@@ -505,10 +517,11 @@ class FolderPublisher:
                 if before.st_size > self.config.max_file_bytes:
                     self.store.update_validation(
                         int(observed["id"]),
-                        source_hash="",
+                        source_hash=str(observed.get("source_sha256") or ""),
                         probe=None,
                         now=now,
                         error=f"file exceeds configured maximum size of {self.config.max_file_bytes} bytes",
+                        retry_after_seconds=300,
                     )
                     continue
                 file_hash = str(observed.get("source_sha256") or "")
@@ -554,7 +567,7 @@ class FolderPublisher:
                     now=now,
                     error="",
                 )
-                refreshed = next((item for item in self.store.items(limit=1000) if int(item["id"]) == int(observed["id"])), None)
+                refreshed = self.store.get_item(int(observed["id"]))
                 if refreshed is None or refreshed["state"] == "DUPLICATE":
                     continue
                 metadata, sidecar_mtime, ready, reason = self._load_metadata(source)
@@ -664,6 +677,8 @@ def approve_sidecar(
     file_path: str | Path,
     *,
     acknowledge_disclosure: bool = False,
+    ai_generated: Optional[bool] = None,
+    realistic_alteration: Optional[bool] = None,
 ) -> Path:
     """Write an explicit approval/rights attestation sidecar for one watched file."""
     root = Path(watch_dir).expanduser().resolve()
@@ -689,8 +704,12 @@ def approve_sidecar(
     payload.setdefault("tags", [])
     payload.setdefault("privacy_status", "private")
     payload.setdefault("category_id", "22")
-    payload.setdefault("ai_generated", False)
-    payload.setdefault("realistic_alteration", False)
+    payload.setdefault("ai_generated", None)
+    payload.setdefault("realistic_alteration", None)
+    if ai_generated is not None:
+        payload["ai_generated"] = ai_generated
+    if realistic_alteration is not None:
+        payload["realistic_alteration"] = realistic_alteration
     payload["publish_approved"] = True
     payload["rights_reviewed"] = True
     if acknowledge_disclosure:
@@ -731,12 +750,23 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     approve = sub.add_parser("approve", help="attest that a video is approved and its rights are cleared")
     approve.add_argument("file")
     approve.add_argument("--acknowledge-disclosure", action="store_true")
+    ai_flags = approve.add_mutually_exclusive_group()
+    ai_flags.add_argument("--ai-generated", dest="ai_generated", action="store_true")
+    ai_flags.add_argument("--not-ai-generated", dest="ai_generated", action="store_false")
+    altered_flags = approve.add_mutually_exclusive_group()
+    altered_flags.add_argument("--realistic-alteration", dest="realistic_alteration", action="store_true")
+    altered_flags.add_argument("--no-realistic-alteration", dest="realistic_alteration", action="store_false")
+    approve.set_defaults(ai_generated=None, realistic_alteration=None)
     args = parser.parse_args(list(argv) if argv is not None else None)
     logging.basicConfig(level=os.environ.get("AIVF_LOG_LEVEL", "INFO"))
 
     if args.command == "approve":
         sidecar = approve_sidecar(
-            args.watch_dir, args.file, acknowledge_disclosure=bool(args.acknowledge_disclosure)
+            args.watch_dir,
+            args.file,
+            acknowledge_disclosure=bool(args.acknowledge_disclosure),
+            ai_generated=args.ai_generated,
+            realistic_alteration=args.realistic_alteration,
         )
         print(json.dumps({"sidecar": str(sidecar), "publish_approved": True, "rights_reviewed": True}, indent=2))
         return 0
