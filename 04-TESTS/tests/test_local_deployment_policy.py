@@ -46,6 +46,8 @@ def test_windows_launcher_uses_buildable_development_compose() -> None:
     assert "docker-compose.dev.yml" in compose_assignment
     assert "docker-compose.yml\\" not in compose_assignment
     assert '$composeUpArgs += "--build"' in launcher
+    assert '$BaseUrl = "http://127.0.0.1:$DashboardPortNumber"' in launcher
+    assert "AIVF_DASHBOARD_PORT must be a TCP port number" in launcher
 
 
 def test_documentation_distinguishes_profiles_from_direct_publishers() -> None:
