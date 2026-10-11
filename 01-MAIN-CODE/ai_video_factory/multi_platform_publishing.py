@@ -308,7 +308,10 @@ class PublicationStore:
     def claim_next(self, *, max_per_day: int, now: float) -> dict[str, Any] | None:
         if max_per_day < 1:
             return None
-        day_start = now - (now % 86400)
+        local_now = datetime.fromtimestamp(now).astimezone()
+        day_start = local_now.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).timestamp()
         owner = uuid.uuid4().hex
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
