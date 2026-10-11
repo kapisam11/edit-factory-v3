@@ -85,7 +85,7 @@ def test_folder_scan_waits_for_explicit_approval_and_publishes_idempotently(
     }
     assert len(calls) == 1
     assert calls[0]["privacy_status"] == "private"
-    assert calls[0]["idempotency_key"].startswith("folder-v1-")
+    assert calls[0]["idempotency_key"].startswith("folder-v2-")
     assert Path(str(calls[0]["path"])) != video
     assert Path(str(calls[0]["path"])).parent == publisher.staging_dir.resolve()
     assert uploaded_bytes == [b"stable fake media for test"]
