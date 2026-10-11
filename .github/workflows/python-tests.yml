@@ -48,7 +48,7 @@ jobs:
     - name: Run per-platform publishing state and adapter tests
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
-      run: uv run pytest -q 04-TESTS/tests/test_multi_platform_publishing.py 04-TESTS/tests/test_platform_adapters.py
+      run: uv run pytest -q 04-TESTS/tests/test_multi_platform_publishing.py 04-TESTS/tests/test_platform_adapters.py 04-TESTS/tests/test_media_host.py
     - name: Validate deployment boundary scripts
       run: |
         uv run python -m py_compile 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py 06-CONFIG-AND-DEPLOYMENT/verify_human_acceptance.py
