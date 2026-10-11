@@ -530,19 +530,25 @@ def _platform_adapter(platform: str, account_key: str) -> Callable[..., dict[str
             next_remote = dict(remote)
             next_remote["stage"] = "youtube_upload_in_flight"
             checkpoint(next_remote)
-            result = upload_video(
-                str(path), title=str(metadata["title"]),
-                description=str(metadata.get("description") or ""),
-                tags=list(metadata.get("tags") or []),
-                privacy_status=str(metadata.get("youtube_privacy_status") or "private"),
-                thumbnail_path=metadata.get("thumbnail_path"),
-                caption_path=metadata.get("caption_path"),
-                caption_language=str(metadata.get("caption_language") or "en"),
-                ai_generated=bool(metadata.get("ai_generated")),
-                realistic_alteration=bool(metadata.get("realistic_alteration")),
-                disclosure_reviewed=bool(metadata.get("disclosure_reviewed")),
-                idempotency_key=f"folder-{job_id}",
-            )
+            try:
+                result = upload_video(
+                    str(path), title=str(metadata["title"]),
+                    description=str(metadata.get("description") or ""),
+                    tags=list(metadata.get("tags") or []),
+                    privacy_status=str(metadata.get("youtube_privacy_status") or "private"),
+                    thumbnail_path=metadata.get("thumbnail_path"),
+                    caption_path=metadata.get("caption_path"),
+                    caption_language=str(metadata.get("caption_language") or "en"),
+                    ai_generated=bool(metadata.get("ai_generated")),
+                    realistic_alteration=bool(metadata.get("realistic_alteration")),
+                    disclosure_reviewed=bool(metadata.get("disclosure_reviewed")),
+                    idempotency_key=f"folder-{job_id}",
+                )
+            except RuntimeError as exc:
+                message = str(exc).lower()
+                if any(term in message for term in ("uncertain", "refusing to risk a duplicate", "operator review", "idempotency record")):
+                    raise NeedsReconciliation(f"YouTube upload needs remote reconciliation: {exc}") from exc
+                raise
             video_id = str(result.get("video_id") or "")
             if not video_id:
                 raise PublishError("YouTube uploader returned no verified video ID")
