@@ -45,6 +45,10 @@ jobs:
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
       run: uv run pytest -q 04-TESTS/tests/test_folder_publisher.py
+    - name: Run per-platform publishing state and adapter tests
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: uv run pytest -q 04-TESTS/tests/test_multi_platform_publishing.py 04-TESTS/tests/test_platform_adapters.py
     - name: Validate deployment boundary scripts
       run: |
         uv run python -m py_compile 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py 06-CONFIG-AND-DEPLOYMENT/verify_human_acceptance.py
@@ -71,6 +75,7 @@ jobs:
         uv run python 01-MAIN-CODE/cli_v3.py --help
         uv run aivf --help
         uv run aivf-folder-publisher --help
+        uv run aivf-publish --help
     - name: Run admission/idempotency load smoke
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
