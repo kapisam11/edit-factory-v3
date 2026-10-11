@@ -179,6 +179,7 @@ def get_platform_access_token(
     client_key: str = "",
     client_secret: str = "",
     app_id: str = "",
+    app_secret: str = "",
     graph_api_version: str = "",
     refresh_before_seconds: int | None = None,
 ) -> str:
