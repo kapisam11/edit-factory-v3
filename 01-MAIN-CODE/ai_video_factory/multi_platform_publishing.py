@@ -1339,6 +1339,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("scan", help="scan approved source files and seed per-destination jobs without publishing")
     subparsers.add_parser("status", help="show redacted queue state and platform-level outcomes")
+    history = subparsers.add_parser("history", help="show the durable event history for one destination job")
+    history.add_argument("job_id", type=int)
     once = subparsers.add_parser("run-once", help="scan and optionally attempt due platform jobs")
     once.add_argument("--limit", type=int, default=100)
     subparsers.add_parser("daemon", help="continuously scan and independently process due platform jobs")
@@ -1366,6 +1368,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 0
     if args.command == "status":
         print(json.dumps(publisher.status(), indent=2, sort_keys=True))
+        return 0
+    if args.command == "history":
+        try:
+            events = publisher.store.history(args.job_id, limit=500)
+        except (KeyError, sqlite3.Error) as exc:
+            parser.error(str(exc))
+        print(json.dumps({"job_id": args.job_id, "events": events}, indent=2, sort_keys=True))
         return 0
     if args.command == "run-once":
         print(json.dumps(publisher.run_once(limit=args.limit), indent=2, sort_keys=True))
