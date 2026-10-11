@@ -113,7 +113,7 @@ It will:
 7. When `uv` is installed, run dependency, Python compilation, Ruff, mypy, and the full pytest suite.
 8. Run a final dashboard health check and report failures with a non-zero exit code.
 
-The local Compose profile publishes the dashboard only on `127.0.0.1` by default and limits admission to one concurrent job by default. The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` for a faster startup, or `docker compose ... down` to stop the stack. These defaults protect a single-PC setup; they do not configure unattended multi-platform uploads.
+The local Compose profile publishes the dashboard only on `127.0.0.1` by default and limits admission to one concurrent job by default. Set `AIVF_DASHBOARD_PORT` in `06-CONFIG-AND-DEPLOYMENT/.env` to choose another host port; the launcher follows the same setting. The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` for a faster startup, or `docker compose ... down` to stop the stack. These defaults protect a single-PC setup; they do not configure unattended multi-platform uploads.
 
 The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**.
 
