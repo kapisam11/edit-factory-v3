@@ -299,35 +299,38 @@ class FolderPublisher:
                 platform_metadata = metadata.get("platform_metadata") or {}
                 if not isinstance(platform_metadata, dict):
                     raise ValueError("platform_metadata must be a JSON object")
-                metadata_hash = _canonical_hash(metadata)
-                needs_review = (
-                    not metadata.get("approved", False)
-                    or not metadata.get("rights_cleared", False)
-                    or (
-                        bool(metadata.get("ai_generated", False))
-                        or bool(metadata.get("realistic_alteration", False))
-                    ) and not bool(metadata.get("disclosure_reviewed", False))
-                    or metadata.get("privacy_status") == "public" and not self.config.allow_public
-                )
-                review_reason = []
-                if not metadata.get("approved", False):
-                    review_reason.append("metadata approval is missing")
-                if not metadata.get("rights_cleared", False):
-                    review_reason.append("rights clearance is missing")
-                if (metadata.get("ai_generated") or metadata.get("realistic_alteration")) and not metadata.get("disclosure_reviewed"):
-                    review_reason.append("AI/altered-media disclosure has not been reviewed")
-                if metadata.get("privacy_status") == "public" and not self.config.allow_public:
-                    review_reason.append("public publishing requires AIVF_FOLDER_ALLOW_PUBLIC=1")
                 for platform in metadata["platforms"]:
                     effective = dict(metadata)
                     overrides = platform_metadata.get(platform) or {}
                     if not isinstance(overrides, dict):
                         raise ValueError(f"platform_metadata.{platform} must be a JSON object")
+                    unexpected = set(overrides) - {"title", "description", "tags", "privacy_status"}
+                    if unexpected:
+                        raise ValueError(
+                            f"platform_metadata.{platform} contains unsupported overrides: {sorted(unexpected)}"
+                        )
                     effective.update(overrides)
                     if not str(effective.get("title") or "").strip() or len(str(effective["title"])) > 100:
                         raise ValueError(f"platform_metadata.{platform}.title must be 1–100 characters")
                     if len(str(effective.get("description") or "")) > 5000:
                         raise ValueError(f"platform_metadata.{platform}.description exceeds 5000 characters")
+                    if not isinstance(effective.get("tags"), list) or any(
+                        not isinstance(tag, str) for tag in effective["tags"]
+                    ):
+                        raise ValueError(f"platform_metadata.{platform}.tags must be a list of strings")
+                    metadata_hash = _canonical_hash(effective)
+                    review_reason = []
+                    if not effective.get("approved", False):
+                        review_reason.append("metadata approval is missing")
+                    if not effective.get("rights_cleared", False):
+                        review_reason.append("rights clearance is missing")
+                    if (
+                        effective.get("ai_generated") or effective.get("realistic_alteration")
+                    ) and not effective.get("disclosure_reviewed"):
+                        review_reason.append("AI/altered-media disclosure has not been reviewed")
+                    if effective.get("privacy_status") == "public" and not self.config.allow_public:
+                        review_reason.append("public publishing requires AIVF_FOLDER_ALLOW_PUBLIC=1")
+                    needs_review = bool(review_reason)
                     job_id = hashlib.sha256(
                         f"{platform}\0{self.config.account_id}\0{source_hash}".encode("utf-8")
                     ).hexdigest()
@@ -457,6 +460,55 @@ class FolderPublisher:
             )
         return {"status": "published", "job_id": job["id"], "remote_id": remote_id, "url": remote_url}
 
+    def approve_job(self, job_id: str) -> dict[str, Any]:
+        """Explicitly release a reviewed job after revalidating its current sidecar."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM publishing_jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"unknown publishing job: {job_id}")
+        if row["state"] != "NEEDS_REVIEW":
+            raise ValueError(f"job {job_id} is not awaiting review (state={row['state']})")
+        platform = str(row["platform"])
+        if platform not in IMPLEMENTED_UPLOADERS:
+            raise ValueError(f"no direct uploader is implemented for {platform}")
+        source = Path(row["source_path"])
+        if not source.is_file() or source.is_symlink():
+            raise ValueError("source file is missing or is not a regular file")
+        now = time.time()
+        if not self._stable(source, now):
+            raise ValueError("source file has not passed the stable-file check")
+        metadata = self._read_metadata(source)
+        if platform not in metadata["platforms"]:
+            raise ValueError("current sidecar no longer includes this destination platform")
+        self._probe_video(source)
+        source_hash = _sha256_file(source, self.config.max_input_bytes)
+        if source_hash != row["source_sha256"]:
+            raise ValueError("source content changed; refusing to reuse the old publishing job")
+        effective = dict(metadata)
+        overrides = (metadata.get("platform_metadata") or {}).get(platform) or {}
+        if not isinstance(overrides, dict) or set(overrides) - {"title", "description", "tags", "privacy_status"}:
+            raise ValueError("invalid platform-specific metadata")
+        effective.update(overrides)
+        if not effective.get("approved", False) or not effective.get("rights_cleared", False):
+            raise ValueError("sidecar must set approved=true and rights_cleared=true")
+        if (effective.get("ai_generated") or effective.get("realistic_alteration")) and not effective.get("disclosure_reviewed"):
+            raise ValueError("AI/altered-media disclosure must be reviewed before approval")
+        if effective.get("privacy_status") == "public" and not self.config.allow_public:
+            raise ValueError("set AIVF_FOLDER_ALLOW_PUBLIC=1 explicitly before approving public publication")
+        if not str(effective.get("title") or "").strip() or len(str(effective["title"])) > 100:
+            raise ValueError("title must be 1–100 characters")
+        if len(str(effective.get("description") or "")) > 5000:
+            raise ValueError("description exceeds 5000 characters")
+        if not isinstance(effective.get("tags"), list) or any(not isinstance(tag, str) for tag in effective["tags"]):
+            raise ValueError("tags must be a list of strings")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE publishing_jobs SET metadata_sha256=?,metadata_json=?,state='PENDING',"
+                "attempts=0,next_attempt_epoch=NULL,last_error=NULL,updated_at=? WHERE id=? AND state='NEEDS_REVIEW'",
+                (_canonical_hash(effective), json.dumps(effective, ensure_ascii=False), _utc_now(), job_id),
+            )
+        return {"status": "approved_for_queue", "job_id": job_id, "platform": platform}
+
     def list_jobs(self, limit: int = 100) -> list[dict[str, Any]]:
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
@@ -474,9 +526,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Safely publish existing MP4 files from a watched folder (YouTube uploader only)."
     )
-    parser.add_argument("command", choices=("scan", "run-once", "list", "watch"))
+    parser.add_argument("command", choices=("scan", "run-once", "list", "watch", "approve"))
     parser.add_argument("--interval", type=float, default=60.0, help="seconds between scans in watch mode")
     parser.add_argument("--limit", type=int, default=100, help="maximum queue rows to print in list mode")
+    parser.add_argument("--job-id", default=None, help="publishing job ID for approve mode")
     return parser
 
 
@@ -485,6 +538,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=os.environ.get("AIVF_LOG_LEVEL", "INFO"))
     config = FolderPublisherConfig.from_environment()
     publisher = FolderPublisher(config)
+    if args.command == "approve":
+        if not args.job_id:
+            raise SystemExit("approve requires --job-id")
+        print(json.dumps(publisher.approve_job(args.job_id), indent=2))
+        return 0
     if args.command == "list":
         print(json.dumps(publisher.list_jobs(args.limit), indent=2, ensure_ascii=False))
         return 0
