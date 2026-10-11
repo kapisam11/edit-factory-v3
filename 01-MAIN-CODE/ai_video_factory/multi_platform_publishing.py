@@ -328,13 +328,16 @@ class PublicationStore:
                       AND active.account_id=platform_publications.account_id
                       AND active.id<>platform_publications.id
                       AND active.state IN ('uploading','processing_remote')
-                      AND COALESCE(active.lease_until,0)>?
+                      AND (
+                          COALESCE(active.lease_until,0)>?
+                          OR (active.state='processing_remote' AND active.next_attempt_at>?)
+                      )
                 )
                 ORDER BY CASE state WHEN 'processing_remote' THEN 0 WHEN 'uploading' THEN 1 ELSE 2 END,
                          next_attempt_at,created_at,id
                 LIMIT 1
                 """,
-                (now, now, now, day_start, max_per_day, now),
+                (now, now, now, day_start, max_per_day, now, now),
             ).fetchone()
             if row is None:
                 connection.commit()
@@ -497,7 +500,6 @@ class PublicationStore:
     ) -> str:
         attempts = int(job["attempts"])
         max_attempts = int(job["max_attempts"])
-        remote_operation_id = str(job.get("remote_operation_id") or "")
         if isinstance(error, PlatformPublishError):
             code = error.code
             retryable = error.retryable
@@ -513,24 +515,54 @@ class PublicationStore:
             )
             uncertain = retryable
 
-        if retryable and attempts < max_attempts:
-            provider_delay = (
-                error.retry_after_seconds
-                if isinstance(error, PlatformPublishError)
-                else None
-            )
-            delay = (
-                max(1.0, min(float(provider_delay), 86400.0))
-                if provider_delay is not None
-                else retry_after(attempts, base=30.0, cap=3600.0, key=str(job["idempotency_key"]))
-            )
-            state = "processing_remote" if remote_operation_id and uncertain else "retryable_failed"
-            next_attempt = now + delay
-        else:
-            state = "permanent_failed"
-            next_attempt = 0.0
-
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            latest = connection.execute(
+                "SELECT remote_operation_id,state FROM platform_publications WHERE id=? AND lease_owner=?",
+                (int(job["id"]), owner),
+            ).fetchone()
+            if latest is None:
+                connection.rollback()
+                raise RuntimeError("publication lease was lost while recording a failure")
+            # Callbacks may already have persisted an operation/post ID during
+            # this attempt. Never base recovery on the stale claimed-row copy.
+            remote_operation_id = str(latest["remote_operation_id"] or "")
+            safe_retry_without_remote_id = (
+                str(job.get("platform") or "") == "youtube"
+                and code == "YOUTUBE_UPLOAD_FAILED"
+            )
+            can_retry = bool(retryable and attempts < max_attempts)
+            if can_retry and uncertain and not remote_operation_id and not safe_retry_without_remote_id:
+                # A create/publish request may have reached the platform but
+                # lost its response. Without a durable operation ID there is no
+                # safe automatic reconciliation key; halt for manual review.
+                state = "permanent_failed"
+                next_attempt = 0.0
+                code = "AMBIGUOUS_OUTCOME_UNTRACKED"
+                message = (
+                    "The platform request may have been accepted, but no remote operation ID was saved. "
+                    "Automatic retry is blocked to prevent duplicate publication; reconcile the destination account manually."
+                )
+                can_retry = False
+            elif can_retry:
+                provider_delay = (
+                    error.retry_after_seconds
+                    if isinstance(error, PlatformPublishError)
+                    else None
+                )
+                delay = (
+                    max(1.0, min(float(provider_delay), 86400.0))
+                    if provider_delay is not None
+                    else retry_after(attempts, base=30.0, cap=3600.0, key=str(job["idempotency_key"]))
+                )
+                # Any known operation ID means retry must resume/reconcile that
+                # exact operation before attempting another create/upload.
+                state = "processing_remote" if remote_operation_id else "retryable_failed"
+                next_attempt = now + delay
+            else:
+                state = "permanent_failed"
+                next_attempt = 0.0
+
             cursor = connection.execute(
                 "UPDATE platform_publications SET state=?,next_attempt_at=?,lease_owner=NULL,"
                 "lease_until=NULL,updated_at=?,error_code=?,last_error=? "
@@ -538,6 +570,7 @@ class PublicationStore:
                 (state, next_attempt, now, code[:100], message[:1200], int(job["id"]), owner),
             )
             if cursor.rowcount != 1:
+                connection.rollback()
                 raise RuntimeError("publication lease was lost while recording a failure")
             self._event(
                 connection,
@@ -546,12 +579,14 @@ class PublicationStore:
                 state,
                 {
                     "error_code": code[:100],
-                    "retryable": bool(retryable and attempts < max_attempts),
+                    "retryable": can_retry,
                     "uncertain": bool(uncertain),
+                    "remote_operation_id_present": bool(remote_operation_id),
                     "retry_delay_seconds": round(next_attempt - now, 3) if next_attempt else 0,
                 },
                 now=now,
             )
+            connection.commit()
         return state
 
     def claim_notification(self, event_key: str, *, now: float) -> bool:
