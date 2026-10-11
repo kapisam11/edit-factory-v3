@@ -868,8 +868,11 @@ class ExistingFilePublisher:
                 metadata = _validate_metadata(metadata, config=self.config, watch_dir=self.config.watch_dir)
                 _probe_media(source, max_bytes=self.config.max_file_bytes, max_duration=self.config.max_duration_seconds)
                 remote = json.loads(job.get("remote_state_json") or "{}")
+                current_remote = remote
                 def checkpoint(value: dict[str, Any]) -> None:
+                    nonlocal current_remote
                     self.store.checkpoint(job_id, str(job["lease_token"]), value)
+                    current_remote = dict(value)
                 adapter = _platform_adapter(str(job["platform"]), str(job["account_key"]))
                 outcome = adapter(source, metadata, remote, checkpoint, job_id)
                 state = str(outcome.get("state") or "WAITING_REMOTE")
@@ -883,11 +886,11 @@ class ExistingFilePublisher:
                 logger.info("%s %s %s", job_id, job["platform"], state)
             except NeedsReconciliation as exc:
                 self.store.finish(job, state="NEEDS_RECONCILIATION",
-                                  remote_state=json.loads(job.get("remote_state_json") or "{}"), error=str(exc))
+                                  remote_state=current_remote if "current_remote" in locals() else json.loads(job.get("remote_state_json") or "{}"), error=str(exc))
                 self._notify_failure(job, str(exc))
             except PermanentPublishError as exc:
                 self.store.finish(job, state="FAILED",
-                                  remote_state=json.loads(job.get("remote_state_json") or "{}"), error=str(exc))
+                                  remote_state=current_remote if "current_remote" in locals() else json.loads(job.get("remote_state_json") or "{}"), error=str(exc))
                 self._notify_failure(job, str(exc))
             except Exception as exc:
                 attempts = int(job["attempts"])
@@ -896,7 +899,7 @@ class ExistingFilePublisher:
                 else:
                     state = "RETRY"
                     retry_at = time.time() + min(3600, self.config.retry_base_seconds * (2 ** max(0, attempts - 1)))
-                remote = json.loads(job.get("remote_state_json") or "{}")
+                remote = current_remote if "current_remote" in locals() else json.loads(job.get("remote_state_json") or "{}")
                 self.store.finish(job, state=state, remote_state=remote, error=f"{type(exc).__name__}: {exc}", retry_at=retry_at)
                 logger.exception("Publishing failed for %s", job_id)
                 if state == "FAILED":
@@ -927,7 +930,42 @@ class ExistingFilePublisher:
             logger.exception("Failure webhook could not be delivered")
 
 
+
+def _load_environment_file() -> None:
+    """Load publisher-only secrets without adding a dotenv dependency.
+
+    Existing process environment values win. The file is expected to be local,
+    excluded from Git, and ACL-restricted on Windows.
+    """
+    configured = os.environ.get("AIVF_FILE_PUBLISH_ENV_FILE", "publish-folder.env")
+    path = Path(configured).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.is_file():
+        return
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        if "=" not in text:
+            raise ValueError(f"Invalid publisher environment line {number}: expected KEY=VALUE")
+        key, value = text.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not key.replace("_", "").isalnum() or key[0].isdigit():
+            raise ValueError(f"Invalid publisher environment key on line {number}")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if key not in os.environ:
+            os.environ[key] = value
+
+
 def main(argv: Optional[list[str]] = None) -> int:
+    try:
+        _load_environment_file()
+    except (OSError, ValueError) as exc:
+        print(f"publisher environment error: {exc}", file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(description="Watch a folder and publish existing video files with durable per-platform state.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("daemon", help="watch continuously; start this at Windows logon")
