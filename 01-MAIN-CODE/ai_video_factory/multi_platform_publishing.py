@@ -985,8 +985,79 @@ class MultiPlatformPublisher:
                 adapter_state = {}
             platform = str(job["platform"])
             account_id = str(job["account_id"])
-            adapter = adapter_for(platform)
             owner = str(job["lease_owner"])
+
+            # Instagram's Graph API pulls a video from a publicly reachable URL;
+            # it cannot fetch the immutable snapshot on this local PC. If the user
+            # hasn't provided a video_url, optionally upload the snapshot to the
+            # configured S3-compatible store and persist a short-lived signed URL
+            # before asking Meta to create its media container.
+            overrides = metadata.get("_platform_override")
+            platform_override = dict(overrides) if isinstance(overrides, dict) else {}
+            manual_instagram_url = (
+                platform_override.get("video_url")
+                or metadata.get("instagram_video_url")
+            )
+            if platform == "instagram" and not manual_instagram_url:
+                from .media_host import MediaHostError, S3CompatibleMediaHost
+
+                try:
+                    host = S3CompatibleMediaHost.from_environment()
+                    hosted_url = str(adapter_state.get("media_host_url") or "")
+                    object_key = str(adapter_state.get("media_host_object_key") or "")
+                    try:
+                        expires_at = float(adapter_state.get("media_host_url_expires_at") or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        expires_at = 0.0
+
+                    if object_key and hosted_url and expires_at > time.time() + 60:
+                        pass
+                    elif object_key:
+                        hosted = host.presign_get(object_key)
+                        hosted_url = hosted.url
+                        expires_at = hosted.expires_at
+                        adapter_state.update({
+                            "media_host_provider": "s3-compatible",
+                            "media_host_object_key": object_key,
+                            "media_host_url": hosted_url,
+                            "media_host_url_expires_at": expires_at,
+                        })
+                        self.store.save_adapter_state(
+                            int(job["id"]), owner, adapter_state, "uploading", now=time.time()
+                        )
+                    else:
+                        hosted = host.upload_for_publication(
+                            media_path,
+                            platform=platform,
+                            account_id=account_id,
+                            publication_id=str(job["publication_id"]),
+                            source_sha256=str(job["source_sha256"]),
+                        )
+                        hosted_url = hosted.url
+                        expires_at = hosted.expires_at
+                        adapter_state.update({
+                            "media_host_provider": "s3-compatible",
+                            "media_host_object_key": hosted.object_key,
+                            "media_host_url": hosted_url,
+                            "media_host_url_expires_at": expires_at,
+                        })
+                        self.store.save_adapter_state(
+                            int(job["id"]), owner, adapter_state, "uploading", now=time.time()
+                        )
+
+                    platform_override["video_url"] = hosted_url
+                    metadata["_platform_override"] = platform_override
+                except MediaHostError as exc:
+                    raise PlatformPublishError(
+                        str(exc),
+                        code=exc.code,
+                        retryable=exc.retryable,
+                        # Repeating a deterministic object-key PUT is safe; it
+                        # cannot create a second platform post.
+                        uncertain=False,
+                    ) from exc
+
+            adapter = adapter_for(platform)
             result = adapter.publish(
                 media_path=media_path,
                 metadata=metadata,
