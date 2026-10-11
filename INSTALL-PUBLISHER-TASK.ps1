@@ -48,12 +48,16 @@ if ($UseInteractiveLogon) {
 } else {
     $Credential = Get-Credential -UserName $Identity -Message "Enter the Windows account password (not the Windows Hello PIN). Task Scheduler stores this credential securely so the publisher can run after reboot without a logged-in session."
     if (-not $Credential) { throw "No Windows credentials supplied; the scheduled task was not registered." }
-    $TaskPassword = $Credential.GetNetworkCredential().Password
+    $TaskPassword = $null
     try {
-        Register-ScheduledTask -TaskName $TaskName -InputObject $Task -User $Credential.UserName -Password $TaskPassword -Force | Out-Null
+        if (-not [string]::Equals([string]$Credential.UserName, $Identity, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Credential username must match the current Windows identity '$Identity'."
+        }
+        $TaskPassword = $Credential.GetNetworkCredential().Password
+        Register-ScheduledTask -TaskName $TaskName -InputObject $Task -User $Identity -Password $TaskPassword -Force | Out-Null
     } finally {
         $TaskPassword = $null
-        if ($Credential.Password) { $Credential.Password.Dispose() }
+        if ($Credential -and $Credential.Password) { $Credential.Password.Dispose() }
         $Credential = $null
     }
 }
