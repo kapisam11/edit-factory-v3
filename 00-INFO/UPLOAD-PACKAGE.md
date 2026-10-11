@@ -98,7 +98,7 @@ Configure an account-specific environment prefix. Account IDs are uppercased; pu
 | Instagram Reels | `AIVF_INSTAGRAM_BRAND_ACCESS_TOKEN`, `AIVF_INSTAGRAM_BRAND_USER_ID`, `AIVF_INSTAGRAM_BRAND_GRAPH_API_VERSION` | Requires an eligible professional account, the app's approved permissions, and media at a publicly accessible HTTPS URL. For automatic long-lived token exchange, also set `AIVF_INSTAGRAM_BRAND_APP_ID` and `AIVF_INSTAGRAM_BRAND_APP_SECRET`. This project does not host the local file for Meta; provide the URL through the `video_url` override. |
 | TikTok Direct Post | `AIVF_TIKTOK_CREATOR_ACCESS_TOKEN`, `AIVF_TIKTOK_CREATOR_REFRESH_TOKEN`, `AIVF_TIKTOK_CREATOR_CLIENT_KEY`, `AIVF_TIKTOK_CREATOR_CLIENT_SECRET` | Requires a TikTok developer app/user authorization with `video.publish` permission and any applicable app audit. Refresh tokens rotate and are persisted by the publisher. Set a creator-supported `privacy_level` override; public posts also require `AIVF_TIKTOK_ALLOW_PUBLIC=1`. |
 
-Use your OS's protected secret storage or a private service environment for account credentials; do not commit tokens or put them in a publish sidecar. Initial OAuth consent/onboarding is not implemented, so each app/account must be authorized and approved outside Edit Factory. When app credentials are configured, the publisher refreshes Instagram long-lived tokens and rotates TikTok refresh tokens, persisting the new token pair in `AIVF_STATE_DIR/platform-tokens.sqlite` outside the repository. Access-token-only configuration remains supported for manual rotation, but it cannot promise unattended operation after expiry. Restrict filesystem access to the state directory; platform tokens are credentials. Unreviewed/unaudited apps can be restricted by the platforms, independent of this code.
+Use your OS's protected secret storage or a private service environment for account credentials; do not commit tokens or put them in a publish sidecar. Initial OAuth consent/onboarding is not implemented, so each app/account must be authorized and approved outside Edit Factory. When app credentials are configured, the publisher refreshes Instagram long-lived tokens and rotates TikTok refresh tokens, persisting the new token pair in `AIVF_STATE_DIR/platform-secrets/platform-tokens.sqlite` outside the repository (the directory is owner-only on POSIX and receives a restricted ACL on Windows). Access-token-only configuration remains supported for manual rotation, but it cannot promise unattended operation after expiry. Restrict filesystem access to the state directory; platform tokens are credentials. Unreviewed/unaudited apps can be restricted by the platforms, independent of this code.
 
 ### State, retries and recovery
 
@@ -107,6 +107,24 @@ The publisher stores per-destination state in the same persistent SQLite file as
 TikTok's `publish_id` is used to poll/reconcile remote status. Instagram does not expose a universal idempotency key for `media_publish`; when the publish response is ambiguous after that operation began, the queue fails closed and requires account-side manual reconciliation rather than automatically issuing a second publish request. A remote operation ID alone is not treated as a confirmed post.
 
 The database includes a per-event timeline and a heartbeat file. `AIVF_FAILURE_WEBHOOK_URL` can receive HTTPS failure notifications; notification payloads omit access tokens. Keep the state directory on persistent local storage, restrict it to the service account, and include it in encrypted backups.
+
+### Windows 11 unattended startup
+
+The repository includes `INSTALL-PUBLISHER-TASK.ps1`, `RUN-PUBLISHER.ps1`, and `REMOVE-PUBLISHER-TASK.ps1`. The scheduled task starts at Windows startup and at user logon, uses a least-privilege S4U principal, ignores duplicate runner starts, requests wake-from-sleep, restarts after an unexpected process exit, and writes bounded/secret-redacted runner logs under `<AIVF_STATE_DIR>\logs\platform-publisher.log`. It is independent of whether the dashboard/browser is open.
+
+Run PowerShell from the repository folder as the ordinary Windows user who owns the app state:
+
+```powershell
+.\INSTALL-PUBLISHER-TASK.ps1 -StartNow
+Get-ScheduledTask -TaskName EditFactoryV3-PlatformPublisher
+Get-Content .\state\logs\platform-publisher.log -Tail 80
+# Remove it when needed:
+.\REMOVE-PUBLISHER-TASK.ps1
+```
+
+The task **does not enable public/network uploads by installation**. Unless `AIVF_MULTI_PUBLISH=1` is present in the task environment or local configuration, it only scans, validates, and queues approved content. Stop/restart the task after changing local environment configuration so it reloads those values. Keep the `.env` file, OAuth credentials, platform-token vault and database in user-restricted local storage, never commit them, and configure an explicit persistent `YOUTUBE_TOKEN_PATH` for the scheduled identity.
+
+`-WakeToRun` cannot override Windows power policy or firmware. Enable Windows wake timers (including the appropriate “allow wake timers” setting for the active power plan) and verify that the PC's firmware supports wake. The install script does not change system-wide power policy or grant administrator privileges. Run an actual reboot and sleep/wake acceptance test before relying on the schedule.
 
 A successful mocked test or HTTP response is not a substitute for account acceptance. Before enabling unattended publishing, complete a private/controlled real-account upload for each configured destination, verify remote processing and the final post ID/URL, then test a restart and an ambiguous timeout. Instagram's externally hosted-media requirement and platform-specific API approval must be satisfied separately.
 
