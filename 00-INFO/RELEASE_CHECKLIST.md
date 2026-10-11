@@ -13,6 +13,8 @@ Before merging a production/hardening branch, all of the following automated che
 - deployment-boundary Python and shell syntax validation
 - dashboard authentication test
 - static deployment-policy regression: dashboard ports bound to loopback, Windows launcher uses local buildable Compose, one heavy job by default
+- durable folder publisher tests for stable intake, review/rights gates, identity deduplication, remote-ID persistence, and restart-safe idempotency
+- PowerShell syntax validation for START-ALL.ps1, RUN-DAILY-PUBLISH.ps1, and REGISTER-DAILY-PUBLISHING.ps1
 - same-origin login/logout POST checks (reject missing or cross-origin origin signals; allow same-origin requests)
 - secret persistence/API redaction tests
 - malicious upload/path tests
@@ -32,6 +34,7 @@ These require the actual deployment target and cannot be certified by source ins
 - for every enabled platform/account, complete a real authorized test upload and verify its remote ID and final remote state
 - inject an ambiguous upload timeout for each enabled platform and prove the job reconciles remote status before retrying, without duplicating already successful destinations
 - verify source-folder ingestion waits for stable/copy-complete files and does not process the same source twice
+- validate the daily Windows Scheduled Task after reboot, sleep/wake, a missed trigger, expired OAuth, and temporary network loss
 - restart/reconciliation test on the deployment operating system (`target_recovery_smoke.sh`)
 - orphan-FFmpeg verification after cancellation/restart
 - one real end-to-end render using the target host's FFmpeg/FFprobe installation
