@@ -40,7 +40,7 @@ The production pipeline also includes a video-only **Thinking AI** creative-dire
 
 The repository also retains the previously implemented production features: scene intelligence, captions/subtitles, music intelligence and mixing, thumbnail tooling, upload packaging, channel/style learning, checkpoint/retry hardening, YouTube publishing support, dashboard/job handling, FFmpeg validation, Docker deployment, and CI.
 
-**Publishing scope:** YouTube is the current direct authenticated uploader. `tiktok` and `instagram_reels` are output/metadata profiles, not direct API uploaders. The autonomous publisher is a YouTube-specific topic-to-publish daemon; it does not watch a folder of existing MP4s or independently publish one file to all three platforms. See [00-INFO/UPLOAD-PACKAGE.md](00-INFO/UPLOAD-PACKAGE.md). Do not treat platform format support as evidence of a working uploader.
+**Publishing scope:** YouTube is the current direct authenticated uploader. `tiktok` and `instagram_reels` are output/metadata profiles, not direct API uploaders. The separate `aivf-folder-publisher` command can watch a folder of existing videos and publish approved files to YouTube with stable-file detection, FFprobe validation, a durable SQLite queue, immutable media snapshots, and retry idempotency. It is opt-in and private-by-default; platform/account acceptance testing is still required. The topic-generation autonomous daemon remains separate. Instagram Reels and TikTok direct publishing are not implemented. See [00-INFO/UPLOAD-PACKAGE.md](00-INFO/UPLOAD-PACKAGE.md). Do not treat platform format support as evidence of a working uploader.
 
 ## Quick start
 
