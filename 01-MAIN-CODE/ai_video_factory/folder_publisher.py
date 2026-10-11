@@ -454,8 +454,9 @@ class FolderQueue:
             hour=0, minute=0, second=0, microsecond=0
         ).timestamp()
         owner = uuid.uuid4().hex
-        # The long lease prevents a second daemon from racing a slow resumable
-        # upload. Stale UPLOADING entries are reclaimed only after process loss.
+        # The lease is renewed by the publisher while an upload is running.
+        # If the process dies, another daemon can safely reclaim the item after
+        # the bounded lease expires and the uploader reconciles its idempotency key.
         lease_until = now + 10 * 60
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -1057,7 +1058,7 @@ def approve_sidecar(
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Safely publish existing videos from a local folder to YouTube")
     parser.add_argument("--watch-dir", default=os.environ.get("AIVF_INCOMING_DIR", "./incoming"))
-    parser.add_argument("--db", default=os.environ.get("AIVF_FOLDER_STATE_DB", "./state/folder-publisher.sqlite"))
+    parser.add_argument("--db", default=os.environ.get("AIVF_FOLDER_STATE_DB", str(Path(os.environ.get("AIVF_STATE_DIR", "./state")).expanduser() / "folder-publisher.sqlite")))
     parser.add_argument("--settle-seconds", type=int, default=int(os.environ.get("AIVF_FOLDER_SETTLE_SECONDS", "30")))
     parser.add_argument("--poll-seconds", type=int, default=int(os.environ.get("AIVF_FOLDER_POLL_SECONDS", "10")))
     parser.add_argument("--max-per-day", type=int, default=int(os.environ.get("AIVF_FOLDER_MAX_VIDEOS_PER_DAY", "2")))
