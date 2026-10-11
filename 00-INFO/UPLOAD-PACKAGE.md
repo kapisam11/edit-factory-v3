@@ -28,7 +28,7 @@ Supported profiles are `youtube_shorts`, `youtube`, `tiktok`, and `instagram_ree
 
 These profiles describe output formats and metadata, not account eligibility. The repository now has separate upload paths: `aivf-folder-publisher` for the legacy YouTube-only workflow and `aivf-publish` for the opt-in per-platform/account queue described below. The latter includes YouTube, Instagram Reels, and TikTok Direct Post adapters, remote-processing checks, durable retries, and ambiguous-outcome reconciliation. This is implementation and mocked-test coverage, not proof that your own accounts can publish: each platform may require approved app permissions, eligible account types, and a controlled real-account acceptance test.
 
-The autonomous `aivf-autopublish daemon` remains YouTube-specific and generates content from its persisted topic queue; it does not watch a folder of existing videos. For existing files, `aivf-folder-publisher` is the simpler YouTube-only path, while `aivf-publish` is the separate multi-platform path. The multi-platform implementation still has deployment gates: Instagram requires a publicly reachable HTTPS media URL (the application does not host the file for Meta), account/app eligibility must be established, and each configured destination must pass controlled real-account upload/recovery checks. Both workflows still require Windows Task Scheduler/reboot/sleep acceptance before they are considered production-verified.
+The autonomous `aivf-autopublish daemon` remains YouTube-specific and generates content from its persisted topic queue; it does not watch a folder of existing videos. For existing files, `aivf-folder-publisher` is the simpler YouTube-only path, while `aivf-publish` is the separate multi-platform path. The multi-platform implementation can host a local snapshot for Instagram using an explicitly configured S3-compatible store, or use a manual publicly reachable HTTPS `video_url` override. Account/app eligibility must be established, and each configured destination must pass controlled real-account upload/recovery checks. Both workflows still require Windows Task Scheduler/reboot/sleep acceptance before they are considered production-verified.
 
 ## Existing video folder -> YouTube
 
@@ -118,8 +118,26 @@ Configure an account-specific environment prefix. Account IDs are uppercased; pu
 | Platform | Required configuration | Notes |
 | --- | --- | --- |
 | YouTube | `AIVF_YOUTUBE_DEFAULT_CLIENT_SECRETS`, `AIVF_YOUTUBE_DEFAULT_TOKEN_PATH` | Existing authorized OAuth token; YouTube's uploader refreshes it when possible. Legacy `YOUTUBE_CLIENT_SECRETS` and `YOUTUBE_TOKEN_PATH` work for `youtube:default`. |
-| Instagram Reels | `AIVF_INSTAGRAM_BRAND_ACCESS_TOKEN`, `AIVF_INSTAGRAM_BRAND_USER_ID`, `AIVF_INSTAGRAM_BRAND_GRAPH_API_VERSION` | Requires an eligible professional account, the app's approved permissions, and media at a publicly accessible HTTPS URL. For automatic long-lived token exchange, also set `AIVF_INSTAGRAM_BRAND_APP_ID` and `AIVF_INSTAGRAM_BRAND_APP_SECRET`. This project does not host the local file for Meta; provide the URL through the `video_url` override. |
+| Instagram Reels | `AIVF_INSTAGRAM_BRAND_ACCESS_TOKEN`, `AIVF_INSTAGRAM_BRAND_USER_ID`, `AIVF_INSTAGRAM_BRAND_GRAPH_API_VERSION` | Requires an eligible professional account and approved app permissions. For long-lived token exchange, also set `AIVF_INSTAGRAM_BRAND_APP_ID` and `AIVF_INSTAGRAM_BRAND_APP_SECRET`. For local input hosting, see S3-compatible setup below; an explicit `video_url` override can be used instead. |
 | TikTok Direct Post | `AIVF_TIKTOK_CREATOR_ACCESS_TOKEN`, `AIVF_TIKTOK_CREATOR_REFRESH_TOKEN`, `AIVF_TIKTOK_CREATOR_CLIENT_KEY`, `AIVF_TIKTOK_CREATOR_CLIENT_SECRET` | Requires a TikTok developer app/user authorization with `video.publish` permission and any applicable app audit. Refresh tokens rotate and are persisted by the publisher. Set a creator-supported `privacy_level` override; public posts also require `AIVF_TIKTOK_ALLOW_PUBLIC=1`. |
+
+#### Instagram media hosting for local video files
+
+Instagram's Graph API pulls the Reel from a publicly reachable HTTPS URL; it cannot read a file path on this PC. You can put `video_url` in `platform_overrides["instagram:brand"]`, or configure the optional S3-compatible host so `aivf-publish` uploads the immutable staged copy and creates a time-limited presigned GET URL.
+
+Configure the media host in the publisher's protected environment (not in the sidecar):
+
+```dotenv
+AIVF_MEDIA_HOST_S3_ENDPOINT=https://YOUR-ACCOUNT.r2.cloudflarestorage.com
+AIVF_MEDIA_HOST_S3_BUCKET=edit-factory-media
+AIVF_MEDIA_HOST_S3_REGION=auto
+AIVF_MEDIA_HOST_S3_ACCESS_KEY=...
+AIVF_MEDIA_HOST_S3_SECRET_KEY=...
+AIVF_MEDIA_HOST_S3_PREFIX=edit-factory
+AIVF_MEDIA_HOST_URL_TTL_SECONDS=3600
+```
+
+This uses S3-compatible SigV4 PUT and a presigned GET URL with a maximum one-hour lifetime. Use a public HTTPS endpoint reachable by Meta and verify your provider's path-style S3 API and signing region. Apply a storage lifecycle rule to expire temporary media objects after an appropriate grace period (for example, 7 days); do not expire them before Meta has finished fetching the media. The object key is deterministic for publication/account/content, so a retry can safely re-use the same object. The signed URL and object key are persisted in the protected job-state database for recovery; back up and restrict that state directory. If no manual URL or media-host configuration is available, Instagram publication fails closed instead of pretending a local path is public.
 
 Use your OS's protected secret storage or a private service environment for account credentials; do not commit tokens or put them in a publish sidecar. Initial OAuth consent/onboarding is not implemented, so each app/account must be authorized and approved outside Edit Factory. When app credentials are configured, the publisher refreshes Instagram long-lived tokens and rotates TikTok refresh tokens, persisting the new token pair in `AIVF_STATE_DIR/platform-secrets/platform-tokens.sqlite` outside the repository (the directory is owner-only on POSIX and receives a restricted ACL on Windows). Access-token-only configuration remains supported for manual rotation, but it cannot promise unattended operation after expiry. Restrict filesystem access to the state directory; platform tokens are credentials. Unreviewed/unaudited apps can be restricted by the platforms, independent of this code.
 
