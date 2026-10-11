@@ -77,7 +77,7 @@ def test_tiktok_direct_post_upload_saves_operation_and_waits_for_remote_completi
         metadata={
             "title": "A test title",
             "description": "",
-            "_platform_override": {"privacy_level": "SELF_ONLY", "brand_content_toggle": false},
+            "_platform_override": {"privacy_level": "SELF_ONLY", "brand_content_toggle": False},
             "_media_probe": {"duration_seconds": 10},
         },
         account_id="test",
