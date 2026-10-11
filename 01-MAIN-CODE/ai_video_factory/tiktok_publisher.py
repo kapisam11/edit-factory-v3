@@ -12,6 +12,7 @@ import math
 import os
 import stat
 import time
+import secrets
 from pathlib import Path
 from typing import Any, Optional
 
@@ -187,6 +188,14 @@ def _upload_chunks(path: Path, *, token: str, record: dict[str, Any], journal_pa
             _write_json(journal_path, record)
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def publish_video(
     video_path: str,
     *,
@@ -241,6 +250,18 @@ def publish_video(
         record = {}
 
     if not record:
+        # Commit an intent record before the remote init call. If the process dies
+        # after TikTok creates a post but before returning its publish_id, the next
+        # run sees init_started and fails closed rather than initializing another post.
+        record = {
+            "state": "init_started",
+            "source_size": size,
+            "source_sha256": _file_sha256(path),
+            "privacy_level": privacy,
+            "attempt_started_at": time.time(),
+            "created_at": time.time(),
+        }
+        _write_json(journal_path, record)
         try:
             creator_payload = _api_json("POST", CREATOR_INFO_URL, token=token, body={})
         except RuntimeError as exc:
@@ -276,6 +297,7 @@ def publish_video(
                 "disable_duet": bool(creator.get("duet_disabled", False)),
                 "disable_stitch": bool(creator.get("stitch_disabled", False)),
                 "video_cover_timestamp_ms": 1000,
+                "is_aigc": bool(_.get("ai_generated", False) or _.get("realistic_alteration", False)),
             },
             "source_info": source_info,
         }
@@ -298,8 +320,9 @@ def publish_video(
             "chunk_size": chunk_size,
             "source_size": size,
             "privacy_level": privacy,
-            "attempt_started_at": time.time(),
-            "created_at": time.time(),
+            "attempt_started_at": float(record.get("attempt_started_at") or time.time()),
+            "created_at": float(record.get("created_at") or time.time()),
+            "source_sha256": _file_sha256(path),
         }
         _write_json(journal_path, record)
 
@@ -321,20 +344,26 @@ def publish_video(
         status_data = _video_status(token, publish_id)
         status = str(status_data.get("status") or "").upper()
         if status == "PUBLISH_COMPLETE":
-            post_id = str(
+            raw_post_ids = (
                 status_data.get("publicaly_available_post_id")
                 or status_data.get("publicly_available_post_id")
-                or publish_id
+                or []
             )
+            if isinstance(raw_post_ids, str):
+                published_ids = [raw_post_ids] if raw_post_ids else []
+            elif isinstance(raw_post_ids, list):
+                published_ids = [str(value) for value in raw_post_ids if str(value).strip()]
+            else:
+                published_ids = []
+            post_id = published_ids[0] if published_ids else publish_id
             result = {
                 "video_id": post_id,
                 "publish_id": publish_id,
-                "url": None,
+                "url": f"https://www.tiktok.com/@{str(token_record.get('open_id') or os.environ.get('AIVF_TIKTOK_OPEN_ID', 'user'))}/video/{post_id}" if published_ids else None,
                 "status": status,
                 "privacy_level": privacy,
-                "publicly_available_post_id": status_data.get("publicaly_available_post_id")
-                or status_data.get("publicly_available_post_id"),
-                "deduplicated": bool(record.get("attempt_started_at") and record.get("created_at") and record.get("state") == "published"),
+                "publicly_available_post_ids": published_ids,
+                "deduplicated": False,
             }
             record["state"] = "published"
             record["result"] = result
