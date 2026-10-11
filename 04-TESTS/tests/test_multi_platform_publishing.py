@@ -641,3 +641,119 @@ def test_required_daily_deadline_passes_only_when_all_destinations_are_confirmed
             now=epoch + 2,
         )
     assert publisher.check_daily_deadline(now) is False
+
+def test_instagram_can_use_configured_media_host_for_local_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_video_factory import media_host, multi_platform_publishing as multi_module
+
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    video = incoming / "instagram.mp4"
+    video.write_bytes(b"local video awaiting public media hosting")
+    monkeypatch.setattr(
+        folder,
+        "probe_video",
+        lambda _path, *, max_duration_seconds: {
+            "duration_seconds": 8.0,
+            "width": 720,
+            "height": 1280,
+            "video_codec": "h264",
+            "format_name": "mp4",
+            "audio_streams": 1,
+        },
+    )
+    sidecar = folder.approve_sidecar(
+        incoming,
+        video.name,
+        ai_generated=False,
+        realistic_alteration=False,
+    )
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload["publication_id"] = "instagram-hosted-local-source"
+    payload["destinations"] = ["instagram:brand"]
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    base = folder.FolderPublisher(
+        folder.FolderPublisherConfig(
+            watch_dir=incoming,
+            db_path=tmp_path / "state" / "publisher.sqlite",
+            settle_seconds=0,
+            poll_seconds=1,
+            publish_enabled=False,
+        )
+    )
+    publisher = MultiPlatformPublisher(
+        base,
+        publish_enabled=True,
+        max_per_account_per_day=2,
+        min_free_disk_bytes=0,
+    )
+
+    class FakeHost:
+        def upload_for_publication(self, media_path, **kwargs):
+            assert media_path.is_file()
+            assert kwargs["platform"] == "instagram"
+            assert kwargs["account_id"] == "brand"
+            assert kwargs["source_sha256"]
+            return media_host.HostedMedia(
+                object_key="edit-factory/instagram/brand/ab/object.mp4",
+                url="https://media.example.test/signed/object.mp4?X-Amz-Signature=opaque",
+                expires_at=time.time() + 3600,
+            )
+
+        def presign_get(self, object_key):
+            return media_host.HostedMedia(
+                object_key=object_key,
+                url="https://media.example.test/signed/object.mp4?X-Amz-Signature=renewed",
+                expires_at=time.time() + 3600,
+            )
+
+    monkeypatch.setattr(
+        media_host.S3CompatibleMediaHost,
+        "from_environment",
+        classmethod(lambda _cls: FakeHost()),
+    )
+    seen: dict[str, object] = {}
+
+    class FakeAdapter:
+        def publish(self, **kwargs):
+            metadata = kwargs["metadata"]
+            state = kwargs["adapter_state"]
+            assert metadata["_platform_override"]["video_url"].startswith("https://media.example.test/")
+            assert state["media_host_object_key"].startswith("edit-factory/")
+            seen["media_url"] = metadata["_platform_override"]["video_url"]
+            seen["object_key"] = state["media_host_object_key"]
+            next_state = {
+                **state,
+                "container_id": "instagram-container-hosted",
+                "stage": "publishing",
+                "publish_started": True,
+            }
+            kwargs["on_operation"](
+                "instagram-container-hosted",
+                next_state,
+                "processing_remote",
+            )
+            return PublishResult(
+                "instagram",
+                "instagram-container-hosted",
+                "instagram-post-hosted",
+                "https://www.instagram.com/reel/instagram-post-hosted/",
+            )
+
+    monkeypatch.setattr(multi_module, "adapter_for", lambda _platform: FakeAdapter())
+    prepared = publisher.scan_and_enqueue()
+    assert prepared["publication_jobs_added"] == 1
+    result = publisher.process_one()
+    assert result is not None and result["state"] == "published"
+    assert seen["object_key"] == "edit-factory/instagram/brand/ab/object.mp4"
+    with publisher.store._connect() as connection:
+        row = connection.execute(
+            "SELECT state,adapter_state_json,remote_post_id FROM platform_publications"
+        ).fetchone()
+    saved_state = json.loads(row["adapter_state_json"])
+    assert row["state"] == "published"
+    assert row["remote_post_id"] == "instagram-post-hosted"
+    assert saved_state["media_host_url"].startswith("https://media.example.test/")
+    assert saved_state["container_id"] == "instagram-container-hosted"
