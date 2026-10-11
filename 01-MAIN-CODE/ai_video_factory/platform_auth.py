@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -23,14 +24,53 @@ class TokenRefreshError(RuntimeError):
         self.retryable = retryable
 
 
+_SECURED_DIRECTORIES: set[str] = set()
+
+
+def _protect_token_directory(directory: Path) -> None:
+    resolved = directory.resolve()
+    key = str(resolved)
+    if key in _SECURED_DIRECTORIES:
+        return
+    resolved.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        identity = os.environ.get("USERDOMAIN", "") + "\\" + os.environ.get("USERNAME", "")
+        if not identity.strip("\\"):
+            raise OSError("Windows user identity is not available to secure platform tokens")
+        try:
+            result = subprocess.run(
+                [
+                    "icacls",
+                    str(resolved),
+                    "/inheritance:r",
+                    "/grant:r",
+                    f"{identity}:(OI)(CI)F",
+                    "/grant:r",
+                    "SYSTEM:(OI)(CI)F",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise OSError("could not restrict the Windows platform-token directory ACL") from exc
+        if result.returncode != 0:
+            raise OSError("could not restrict the Windows platform-token directory ACL")
+    else:
+        os.chmod(resolved, 0o700)
+    _SECURED_DIRECTORIES.add(key)
+
+
 def _state_database() -> Path:
     configured = os.environ.get("AIVF_PLATFORM_TOKEN_DB", "").strip()
     if configured:
         path = Path(configured).expanduser()
     else:
         state_dir = Path(os.environ.get("AIVF_STATE_DIR", "./state")).expanduser()
-        path = state_dir / "platform-tokens.sqlite"
+        path = state_dir / "platform-secrets" / "platform-tokens.sqlite"
     path.parent.mkdir(parents=True, exist_ok=True)
+    _protect_token_directory(path.parent)
     return path.resolve()
 
 
