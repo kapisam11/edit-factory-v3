@@ -494,6 +494,19 @@ class FolderQueue:
         item["lease_owner"] = owner
         return item
 
+    def block_claimed_item(
+        self, item_id: int, owner: str, *, state: str, reason: str, now: float
+    ) -> None:
+        if state not in {"NEEDS_REVIEW", "SOURCE_CHANGED"}:
+            raise ValueError("invalid pre-upload blocking state")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE folder_items SET state=?,lease_owner=NULL,lease_until=NULL,"
+                "next_attempt_at=0,updated_at=?,last_error=? "
+                "WHERE id=? AND state='UPLOADING' AND lease_owner=?",
+                (state, now, reason[:2000], item_id, owner),
+            )
+
     def mark_published(self, item_id: int, owner: str, result: dict[str, Any], *, now: float) -> None:
         video_id = str(result.get("video_id") or "").strip()
         if not video_id:
@@ -868,11 +881,55 @@ class FolderPublisher:
             )
             return {"id": int(item["id"]), "state": "UPLOADING", "error": str(exc)}
         if not source_hash:
-            self.store.defer_uncertain(
-                int(item["id"]), str(item["lease_owner"]), "validated source SHA-256 is missing",
-                now=time.time(), attempts=int(item["attempts"]),
+            self.store.block_claimed_item(
+                int(item["id"]), str(item["lease_owner"]), state="NEEDS_REVIEW",
+                reason="validated source SHA-256 is missing", now=time.time(),
             )
-            return {"id": item["id"], "state": "UPLOADING", "error": "source hash missing"}
+            return {"id": int(item["id"]), "state": "NEEDS_REVIEW", "error": "source hash missing"}
+
+        # Before the first upload attempt, verify that neither the reviewed
+        # input nor its approval sidecar changed after the scan. Once an upload
+        # has become ambiguous, retries deliberately retain the staged snapshot
+        # and prior metadata so the idempotency layer can reconcile the exact
+        # original request rather than silently switching inputs.
+        if int(item.get("attempts") or 0) <= 1:
+            try:
+                current_stat = path.stat()
+                source_unchanged = (
+                    path.is_file()
+                    and self._is_within_root(path)
+                    and current_stat.st_size == int(item["size_bytes"])
+                    and current_stat.st_mtime_ns == int(item["mtime_ns"])
+                    and _sha256(path) == source_hash
+                )
+            except OSError:
+                source_unchanged = False
+            if not source_unchanged:
+                reason = "source file changed after review; rescan and approve the new version"
+                self.store.block_claimed_item(
+                    int(item["id"]), str(item["lease_owner"]), state="SOURCE_CHANGED",
+                    reason=reason, now=time.time(),
+                )
+                return {"id": int(item["id"]), "state": "SOURCE_CHANGED", "error": reason}
+
+            sidecar = self._sidecar(path)
+            try:
+                sidecar_unchanged = (
+                    not sidecar.is_symlink()
+                    and sidecar.is_file()
+                    and item.get("sidecar_mtime_ns") is not None
+                    and sidecar.stat().st_mtime_ns == int(item["sidecar_mtime_ns"])
+                )
+            except OSError:
+                sidecar_unchanged = False
+            if not sidecar_unchanged:
+                reason = "publish sidecar changed after review; rescan and confirm approval"
+                self.store.block_claimed_item(
+                    int(item["id"]), str(item["lease_owner"]), state="NEEDS_REVIEW",
+                    reason=reason, now=time.time(),
+                )
+                return {"id": int(item["id"]), "state": "NEEDS_REVIEW", "error": reason}
+
         token_path = self.config.token_path or os.path.expanduser(
             "~/.config/edit-factory/youtube-token.json"
         )
