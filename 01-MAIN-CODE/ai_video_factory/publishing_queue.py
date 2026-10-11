@@ -540,12 +540,24 @@ class PublisherStore:
     def claim_remote(self, owner: str, now: float, lease_seconds: int) -> Optional[dict[str, Any]]:
         return self._claim(owner=owner, now=now, lease_seconds=lease_seconds, remote=True)
 
-    def save_checkpoint(self, job_id: str, owner: str, remote_id: Optional[str], provider_state: dict[str, Any]) -> None:
-        encoded = json.dumps(provider_state, sort_keys=True)
+    def renew_lease(self, job_id: str, owner: str, lease_seconds: int) -> None:
+        """Extend only a lease still owned by this worker (fencing-token check)."""
+        instant = time.time()
         with self._connect() as conn:
             cursor = conn.execute(
-                "UPDATE publish_jobs SET remote_id=COALESCE(?,remote_id),provider_state_json=?,updated_at=? WHERE id=? AND lease_owner=?",
-                (remote_id, encoded, time.time(), job_id, owner),
+                "UPDATE publish_jobs SET lease_expires_at=?,updated_at=? WHERE id=? AND lease_owner=?",
+                (instant + max(60, int(lease_seconds)), instant, job_id, owner),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("publishing lease was lost; refusing to renew an unfenced lease")
+
+    def save_checkpoint(self, job_id: str, owner: str, remote_id: Optional[str], provider_state: dict[str, Any]) -> None:
+        encoded = json.dumps(provider_state, sort_keys=True)
+        instant = time.time()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE publish_jobs SET remote_id=COALESCE(?,remote_id),provider_state_json=?,lease_expires_at=MAX(COALESCE(lease_expires_at,0),?),updated_at=? WHERE id=? AND lease_owner=?",
+                (remote_id, encoded, instant + 900, instant, job_id, owner),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("publishing lease was lost; refusing an unfenced checkpoint")
@@ -666,10 +678,13 @@ class PublisherStore:
             return {str(row["state"]): int(row["total"]) for row in rows}
 
 def configured_platforms() -> dict[str, bool]:
-    """Return configuration presence only; never return tokens or token paths."""
-    youtube = bool(os.environ.get("YOUTUBE_CLIENT_SECRETS") and os.environ.get("YOUTUBE_TOKEN_PATH"))
-    instagram = bool(os.environ.get("INSTAGRAM_ACCESS_TOKEN") and os.environ.get("INSTAGRAM_GRAPH_API_VERSION"))
-    tiktok = bool(os.environ.get("TIKTOK_ACCESS_TOKEN"))
+    """Return credential-configuration presence only; never return credential values."""
+    def configured(prefixes: tuple[str, ...]) -> bool:
+        return any(value.strip() for key, value in os.environ.items() if any(key == prefix or key.startswith(prefix + "_") for prefix in prefixes))
+
+    youtube = configured(("YOUTUBE_CLIENT_SECRETS",)) and configured(("YOUTUBE_TOKEN_PATH",))
+    instagram = configured(("INSTAGRAM_ACCESS_TOKEN",)) and bool(os.environ.get("INSTAGRAM_GRAPH_API_VERSION", "").strip())
+    tiktok = configured(("TIKTOK_ACCESS_TOKEN",))
     return {"youtube": youtube, "instagram": instagram, "tiktok": tiktok}
 
 class PublisherService:
@@ -766,7 +781,13 @@ class PublisherService:
             if key in seen:
                 raise PublisherError("DESTINATION_DUPLICATE", "duplicate platform/account destination in sidecar")
             seen.add(key)
-            destinations.append({"platform": platform, "account_id": account_id})
+            raw_options = item.get("options") if isinstance(item.get("options"), dict) else {}
+            safe_options = {
+                "account_visibility_acknowledged": raw_options.get("account_visibility_acknowledged") is True,
+            }
+            if platform == "instagram" and not safe_options["account_visibility_acknowledged"]:
+                raise PublisherError("INSTAGRAM_VISIBILITY_ACK_REQUIRED", "Instagram Reels visibility is controlled by the account; add options.account_visibility_acknowledged=true after confirming the intended account audience")
+            destinations.append({"platform": platform, "account_id": account_id, "options": safe_options})
         return destinations
 
     def _stage(self, source: Path, digest: str) -> Path:
@@ -870,6 +891,7 @@ class PublisherService:
                         "disclosure_reviewed": payload.get("disclosure_reviewed") is True,
                         "media": media,
                         "options": payload.get("options") if isinstance(payload.get("options"), dict) else {},
+                        "destination_options": destination.get("options") if isinstance(destination.get("options"), dict) else {},
                     }
                     added = self.store.enqueue_job(
                         publication_id=publication_id,
@@ -898,6 +920,14 @@ class PublisherService:
                 result["errors"] += 1
                 LOG.warning("publisher ingestion failed for %s (%s)", relative, type(exc).__name__)
         result["queue_counts"] = self.store.counts()
+        try:
+            from .observability_metrics import GLOBAL_METRICS
+            for state, count in result["queue_counts"].items():
+                GLOBAL_METRICS.set_gauge(f"publisher_jobs_{state}", float(count))
+            GLOBAL_METRICS.set_gauge("publisher_sources_observed", float(result["observed_files"]))
+            GLOBAL_METRICS.set_gauge("publisher_disk_free_bytes", float(shutil.disk_usage(self.config.state_dir).free))
+        except Exception:
+            LOG.debug("publisher metrics collection failed", exc_info=True)
         return result
 
     def _source_id(self, relative: str) -> dict[str, Any]:
@@ -912,6 +942,28 @@ class PublisherService:
     def _retry_delay(self, attempt: int) -> float:
         base = min(self.config.retry_max_seconds, self.config.retry_base_seconds * (2 ** max(0, attempt - 1)))
         return random.uniform(base * 0.75, base * 1.25)
+
+    @contextlib.contextmanager
+    def _lease_heartbeat(self, job_id: str, owner: str) -> Iterator[None]:
+        """Keep long-running transfers leased, and stop immediately on ownership loss."""
+        stopped = threading.Event()
+        interval = max(10.0, min(float(self.config.lease_seconds) / 3.0, 60.0))
+
+        def beat() -> None:
+            while not stopped.wait(interval):
+                try:
+                    self.store.renew_lease(job_id, owner, self.config.lease_seconds)
+                except Exception as exc:
+                    LOG.warning("publisher lease heartbeat stopped for job %s (%s)", job_id[:12], type(exc).__name__)
+                    return
+
+        thread = threading.Thread(target=beat, name=f"publish-lease-{job_id[:8]}", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            thread.join(timeout=2.0)
 
     def _notify(self, key: str, payload: dict[str, Any]) -> None:
         url = os.environ.get("AIVF_FAILURE_WEBHOOK_URL", "").strip()
@@ -943,9 +995,12 @@ class PublisherService:
         )
         remote_id = current.get("remote_id")
         now = time.time()
-        if polling and remote_id and error.retryable and error.code not in {"TOKEN_EXPIRED", "PERMISSION_DENIED", "ACCOUNT_MISMATCH"}:
+        if polling and remote_id and error.retryable and error.code not in {"TOKEN_EXPIRED", "PERMISSION_DENIED", "ACCOUNT_MISMATCH"} and int(current.get("attempts") or 0) < int(current.get("max_attempts") or self.config.max_attempts):
             update = AdapterUpdate("retryable_failed", str(remote_id), current.get("remote_url"), current.get("provider_state"), error.code, str(error), retryable=True)
             next_at = now + self._retry_delay(max(1, int(current.get("attempts") or 1)))
+        elif polling and remote_id and error.retryable and error.code not in {"TOKEN_EXPIRED", "PERMISSION_DENIED", "ACCOUNT_MISMATCH"}:
+            update = AdapterUpdate("permanent_failed", str(remote_id), current.get("remote_url"), current.get("provider_state"), "MAX_ATTEMPTS_REACHED", "remote processing could not be verified after the configured retry limit; inspect the account before manual recovery")
+            next_at = 0
         elif not polling and remote_id:
             update = AdapterUpdate("processing_remote", str(remote_id), current.get("remote_url"), current.get("provider_state"), error.code, str(error), retryable=True)
             next_at = now + self.config.poll_seconds
@@ -987,8 +1042,11 @@ class PublisherService:
             if fresh:
                 job.update(fresh)
         try:
-            update = adapter.start(job, checkpoint)
-            self.store.finish_claim(job, owner, update, next_attempt_at=(time.time() + self.config.poll_seconds if update.state == "processing_remote" else 0))
+            with self._lease_heartbeat(str(job["id"]), owner):
+                update = adapter.start(job, checkpoint)
+            if update.state == "retryable_failed" and int(job.get("attempts") or 0) >= int(job.get("max_attempts") or self.config.max_attempts):
+                update = AdapterUpdate("permanent_failed", update.remote_id, update.remote_url, update.provider_state, "MAX_ATTEMPTS_REACHED", "publishing failed after the configured retry limit")
+            self.store.finish_claim(job, owner, update, next_attempt_at=(time.time() + self.config.poll_seconds if update.state == "processing_remote" else (time.time() + self._retry_delay(int(job.get("attempts") or 1)) if update.state == "retryable_failed" else 0)))
         except Exception as exc:
             self._finish_error(job, owner, exc, polling=False)
         return True
@@ -1008,10 +1066,15 @@ class PublisherService:
             if fresh:
                 job.update(fresh)
         try:
-            update = adapter.poll(job, checkpoint)
+            with self._lease_heartbeat(str(job["id"]), owner):
+                update = adapter.poll(job, checkpoint)
+            if update.state == "retryable_failed" and int(job.get("attempts") or 0) >= int(job.get("max_attempts") or self.config.max_attempts):
+                update = AdapterUpdate("permanent_failed", update.remote_id, update.remote_url, update.provider_state, "MAX_ATTEMPTS_REACHED", "remote processing failed after the configured retry limit")
             if update.state == "processing_remote":
                 next_at = time.time() + self.config.poll_seconds
             elif update.state == "retryable_failed" and not update.clear_remote:
+                next_at = time.time() + self._retry_delay(max(1, int(job.get("attempts") or 1)))
+            elif update.state == "retryable_failed" and update.clear_remote:
                 next_at = time.time() + self._retry_delay(max(1, int(job.get("attempts") or 1)))
             else:
                 next_at = 0
