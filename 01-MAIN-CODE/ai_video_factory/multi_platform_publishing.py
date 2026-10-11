@@ -56,6 +56,74 @@ class Target:
         return cls(normalized, account)
 
 
+def completed_publications_before_deadline(
+    rows: Iterable[dict[str, Any]],
+    *,
+    window_start: float,
+    cutoff: float,
+) -> int:
+    """Count only publications that completed on every configured target in the window."""
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for raw in rows:
+        row = dict(raw)
+        key = (str(row.get("publication_id") or ""), str(row.get("source_sha256") or ""))
+        if key[0] and key[1]:
+            grouped.setdefault(key, []).append(row)
+
+    completed = 0
+    for publication_rows in grouped.values():
+        if not publication_rows or any(str(row.get("state") or "") != "published" for row in publication_rows):
+            continue
+        try:
+            times = [float(row["published_at"]) for row in publication_rows]
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if any(timestamp < window_start or timestamp > cutoff for timestamp in times):
+            continue
+
+        expected_targets: set[tuple[str, str]] | None = None
+        invalid_targets = False
+        for row in publication_rows:
+            try:
+                metadata = json.loads(str(row.get("metadata_json") or "{}"))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                invalid_targets = True
+                break
+            if not isinstance(metadata, dict):
+                invalid_targets = True
+                break
+            raw_targets = metadata.get("destinations", ["youtube:default"])
+            if not isinstance(raw_targets, list) or not raw_targets:
+                invalid_targets = True
+                break
+            try:
+                parsed_targets = {
+                    (target.platform, target.account_id)
+                    for target in (Target.parse(str(value)) for value in raw_targets)
+                }
+            except (TypeError, ValueError):
+                invalid_targets = True
+                break
+            if expected_targets is None:
+                expected_targets = parsed_targets
+            elif expected_targets != parsed_targets:
+                invalid_targets = True
+                break
+
+        actual_targets = {
+            (str(row.get("platform") or ""), str(row.get("account_id") or ""))
+            for row in publication_rows
+        }
+        if (
+            not invalid_targets
+            and expected_targets
+            and actual_targets == expected_targets
+            and len(publication_rows) == len(expected_targets)
+        ):
+            completed += 1
+    return completed
+
+
 def publication_key(metadata: dict[str, Any], *, source_path: str, source_sha256: str) -> str:
     supplied = str(metadata.get("publication_id") or "").strip()
     if supplied:
@@ -1291,17 +1359,15 @@ class MultiPlatformPublisher:
             return False
         local_midnight = current.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         with self.store._connect() as connection:
-            completed = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM ("
-                    "SELECT publication_id FROM platform_publications GROUP BY publication_id "
-                    "HAVING COUNT(*)>0 "
-                    "AND SUM(CASE WHEN state='published' THEN 1 ELSE 0 END)=COUNT(*) "
-                    "AND MAX(published_at)>=? AND MAX(published_at)<=?"
-                    ")",
-                    (local_midnight, deadline.timestamp()),
-                ).fetchone()[0]
-            )
+            publication_rows = connection.execute(
+                "SELECT publication_id,source_sha256,platform,account_id,state,published_at,metadata_json "
+                "FROM platform_publications"
+            ).fetchall()
+        completed = completed_publications_before_deadline(
+            publication_rows,
+            window_start=local_midnight,
+            cutoff=deadline.timestamp(),
+        )
         if completed:
             return False
 

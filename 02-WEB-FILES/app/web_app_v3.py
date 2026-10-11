@@ -1808,13 +1808,17 @@ def publishing_status():
                 "WHERE state NOT IN ('published','permanent_failed','cancelled')"
             ).fetchone()[0]
             today_start = current_local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-            complete_today = int(connection.execute(
-                "SELECT COUNT(*) FROM (SELECT publication_id FROM platform_publications "
-                "GROUP BY publication_id HAVING COUNT(*)>0 "
-                "AND SUM(CASE WHEN state='published' THEN 1 ELSE 0 END)=COUNT(*) "
-                "AND MAX(published_at)>=? AND MAX(published_at)<=?)",
-                (today_start, deadline_today.timestamp()),
-            ).fetchone()[0])
+            from ai_video_factory.multi_platform_publishing import completed_publications_before_deadline
+
+            publication_rows = connection.execute(
+                "SELECT publication_id,source_sha256,platform,account_id,state,published_at,metadata_json "
+                "FROM platform_publications"
+            ).fetchall()
+            complete_today = completed_publications_before_deadline(
+                publication_rows,
+                window_start=today_start,
+                cutoff=deadline_today.timestamp(),
+            )
             rows = connection.execute(
                 "SELECT id,publication_id,platform,account_id,state,remote_operation_id,"
                 "remote_post_id,remote_url,attempts,max_attempts,next_attempt_at,created_at,"

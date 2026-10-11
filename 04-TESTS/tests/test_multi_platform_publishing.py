@@ -28,7 +28,14 @@ def _item(tmp_path: Path, item_id: int = 1) -> dict[str, object]:
     }
 
 
-def _enqueue(store: PublicationStore, tmp_path: Path, publication_id: str, target: Target, now: float = 1_800_000_000.0) -> int:
+def _enqueue(
+    store: PublicationStore,
+    tmp_path: Path,
+    publication_id: str,
+    target: Target,
+    now: float = 1_800_000_000.0,
+    metadata: dict[str, object] | None = None,
+) -> int:
     item = _item(tmp_path, len(store.jobs()) + 1)
     source = Path(str(item["path"]))
     staged = tmp_path / f"staged-{publication_id}-{target.platform}-{target.account_id}.mp4"
@@ -39,7 +46,7 @@ def _enqueue(store: PublicationStore, tmp_path: Path, publication_id: str, targe
         source_sha256="a" * 64,
         staged_path=staged,
         target=target,
-        metadata={"title": "Fixture", "privacy_status": "private"},
+        metadata=metadata or {"title": "Fixture", "privacy_status": "private"},
         max_attempts=4,
         now=now,
     )
@@ -629,8 +636,13 @@ def test_required_daily_deadline_passes_only_when_all_destinations_are_confirmed
     now = datetime.now().astimezone().replace(hour=23, minute=59, second=0, microsecond=0)
     deadline_epoch = now.replace(hour=23, minute=0, second=0, microsecond=0).timestamp()
     created_at = deadline_epoch - 60
-    yt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("youtube", "default"), now=created_at)
-    tt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("tiktok", "creator"), now=created_at)
+    daily_metadata = {
+        "title": "Fixture",
+        "privacy_status": "private",
+        "destinations": ["youtube:default", "tiktok:creator"],
+    }
+    yt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("youtube", "default"), now=created_at, metadata=daily_metadata)
+    tt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("tiktok", "creator"), now=created_at, metadata=daily_metadata)
     for expected_id in (yt, tt):
         claimed = publisher.store.claim_next(max_per_day=10, now=deadline_epoch - 10)
         assert claimed is not None and claimed["id"] == expected_id
@@ -653,8 +665,13 @@ def test_late_publication_does_not_clear_a_missed_daily_deadline(
     now = datetime.now().astimezone().replace(hour=23, minute=59, second=0, microsecond=0)
     deadline_epoch = now.replace(hour=23, minute=0, second=0, microsecond=0).timestamp()
     created_at = deadline_epoch - 60
-    yt = _enqueue(publisher.store, tmp_path, "daily-late", Target("youtube", "default"), now=created_at)
-    tt = _enqueue(publisher.store, tmp_path, "daily-late", Target("tiktok", "creator"), now=created_at)
+    daily_metadata = {
+        "title": "Fixture",
+        "privacy_status": "private",
+        "destinations": ["youtube:default", "tiktok:creator"],
+    }
+    yt = _enqueue(publisher.store, tmp_path, "daily-late", Target("youtube", "default"), now=created_at, metadata=daily_metadata)
+    tt = _enqueue(publisher.store, tmp_path, "daily-late", Target("tiktok", "creator"), now=created_at, metadata=daily_metadata)
     for expected_id in (yt, tt):
         claimed = publisher.store.claim_next(max_per_day=10, now=deadline_epoch + 1)
         assert claimed is not None and claimed["id"] == expected_id
@@ -674,6 +691,40 @@ def test_late_publication_does_not_clear_a_missed_daily_deadline(
             "SELECT local_date FROM platform_publication_deadline_alerts"
         ).fetchall()
     assert [row[0] for row in rows] == [now.date().isoformat()]
+
+
+def test_required_daily_deadline_does_not_accept_a_partial_destination_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime
+
+    publisher = _deadline_publisher(tmp_path, monkeypatch)
+    now = datetime.now().astimezone().replace(hour=23, minute=59, second=0, microsecond=0)
+    deadline_epoch = now.replace(hour=23, minute=0, second=0, microsecond=0).timestamp()
+    metadata = {
+        "title": "Fixture",
+        "privacy_status": "private",
+        "destinations": ["youtube:default", "tiktok:creator"],
+    }
+    youtube_id = _enqueue(
+        publisher.store,
+        tmp_path,
+        "partial-publication",
+        Target("youtube", "default"),
+        now=deadline_epoch - 60,
+        metadata=metadata,
+    )
+    claimed = publisher.store.claim_next(max_per_day=10, now=deadline_epoch - 10)
+    assert claimed is not None and claimed["id"] == youtube_id
+    publisher.store.mark_published(
+        youtube_id,
+        str(claimed["lease_owner"]),
+        PublishResult("youtube", "remote-youtube", "remote-youtube", "https://www.youtube.com/watch?v=remote-youtube"),
+        now=deadline_epoch - 2,
+    )
+    # YouTube is confirmed, but the configured TikTok row is missing.
+    assert publisher.check_daily_deadline(now) is True
+
 
 def test_instagram_can_use_configured_media_host_for_local_sources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
