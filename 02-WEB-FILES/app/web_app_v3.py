@@ -18,7 +18,7 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -1721,7 +1721,7 @@ def publishing_status():
     state_dir = Path(os.environ.get("AIVF_STATE_DIR", str(STATE_DIR))).expanduser()
     database = Path(
         os.environ.get("AIVF_FOLDER_STATE_DB", str(state_dir / "folder-publisher.sqlite"))
-    ).expanduser()
+    ).expanduser().resolve()
     now_epoch = time.time()
     current_local = datetime.now().astimezone()
     require_daily = os.environ.get("AIVF_REQUIRE_DAILY_PUBLISH", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -1734,12 +1734,12 @@ def publishing_status():
         if current_local < deadline_today:
             next_deadline = deadline_today
         else:
-            tomorrow = (current_local + __import__("datetime").timedelta(days=1)).date()
+            tomorrow = (current_local + timedelta(days=1)).date()
             next_deadline = datetime.combine(tomorrow, datetime.min.time(), tzinfo=current_local.tzinfo).replace(hour=deadline_hour, minute=deadline_minute)
     except (TypeError, ValueError, OverflowError):
         deadline_hour, deadline_minute = 20, 0
         deadline_today = current_local.replace(hour=20, minute=0, second=0, microsecond=0)
-        next_deadline = deadline_today if current_local < deadline_today else deadline_today + __import__("datetime").timedelta(days=1)
+        next_deadline = deadline_today if current_local < deadline_today else deadline_today + timedelta(days=1)
 
     try:
         disk_path = state_dir if state_dir.exists() else OUTPUT_FOLDER
