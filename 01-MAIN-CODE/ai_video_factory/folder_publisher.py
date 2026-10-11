@@ -15,9 +15,11 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -334,11 +336,17 @@ class FolderQueue:
                 int(current["size_bytes"]) != stat_result.st_size
                 or int(current["mtime_ns"]) != stat_result.st_mtime_ns
             ):
-                if current is not None and current["state"] not in TERMINAL_STATES:
+                # Never revoke an upload lease merely because the original input
+                # file was edited. The uploader uses an immutable staged snapshot;
+                # a changed source gets a new row while the existing upload finishes.
+                if (
+                    current is not None
+                    and current["state"] not in TERMINAL_STATES
+                    and current["state"] != "UPLOADING"
+                ):
                     conn.execute(
                         "UPDATE folder_items SET state='SOURCE_CHANGED', updated_at=?, "
-                        "last_error='source changed after its previous observation', "
-                        "lease_owner=NULL, lease_until=NULL WHERE id=?",
+                        "last_error='source changed after its previous observation' WHERE id=?",
                         (now, int(current["id"])),
                     )
                 conn.execute(
@@ -420,14 +428,20 @@ class FolderQueue:
                 raise KeyError(item_id)
             if row["state"] in {"UPLOADING", "PUBLISHED", "DUPLICATE", "SOURCE_CHANGED"}:
                 return
+            next_attempt_at = (
+                now + 300
+                if not ready and reason.startswith("staging:")
+                else now
+            )
             conn.execute(
                 "UPDATE folder_items SET metadata_json=?, sidecar_mtime_ns=?, state=?, "
-                "updated_at=?, last_error=? WHERE id=?",
+                "updated_at=?, next_attempt_at=?, last_error=? WHERE id=?",
                 (
                     json.dumps(metadata, sort_keys=True),
                     sidecar_mtime_ns,
                     "READY" if ready else "NEEDS_REVIEW",
                     now,
+                    next_attempt_at,
                     "" if ready else reason[:2000],
                     item_id,
                 ),
@@ -442,7 +456,7 @@ class FolderQueue:
         owner = uuid.uuid4().hex
         # The long lease prevents a second daemon from racing a slow resumable
         # upload. Stale UPLOADING entries are reclaimed only after process loss.
-        lease_until = now + 2 * 60 * 60
+        lease_until = now + 10 * 60
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             sent_today = int(
@@ -628,6 +642,8 @@ class FolderPublisher:
             "caption_path": "",
             "caption_language": "en",
         }
+        if sidecar.is_symlink():
+            return default, None, False, "publish sidecar must not be a symbolic link"
         if not sidecar.is_file():
             return default, None, False, "sidecar missing; use the approve command after reviewing rights and disclosure"
         try:
@@ -765,6 +781,11 @@ class FolderPublisher:
                 if ready:
                     staged, staging_error = self._ensure_staged(source, refreshed, file_hash)
                     if staged is None:
+                        # This path reset size/mtime/stability because the source
+                        # changed during copy. Leave it WAITING_STABLE rather than
+                        # overwriting that reset with a review-state transition.
+                        if staging_error.startswith("staging: source changed"):
+                            continue
                         ready = False
                         reason = staging_error or "staging: immutable media snapshot could not be created"
                 # A source already being uploaded or successfully published is immutable
