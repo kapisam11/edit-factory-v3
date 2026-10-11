@@ -263,7 +263,9 @@ def _http_json(method: str, url: str, *, headers: Optional[dict[str, str]] = Non
             raise NeedsReconciliation(error) from exc
         raise PublishError(error) from exc
     except requests.RequestException as exc:
-        raise PublishError(f"Request failed for {urlparse(url).netloc}: {exc}") from exc
+        # Do not include the exception text: client libraries may embed signed
+        # upload URLs or query strings containing credentials in those messages.
+        raise PublishError(f"Request failed for {urlparse(url).netloc} ({type(exc).__name__})") from exc
     try:
         payload = response.json()
     except ValueError:
@@ -576,7 +578,8 @@ def _instagram_api_base() -> str:
 
 def _instagram_status(container_id: str, token: str) -> dict[str, Any]:
     return _http_json("GET", f"{_instagram_api_base()}/{container_id}",
-                      params={"fields": "status_code,status", "access_token": token})
+                      headers={"Authorization": f"Bearer {token}"},
+                      params={"fields": "status_code,status"})
 
 
 def _publish_instagram(path: Path, metadata: Mapping[str, Any], remote: dict[str, Any],
@@ -655,8 +658,12 @@ def _publish_instagram(path: Path, metadata: Mapping[str, Any], remote: dict[str
                 raise PublishError(f"Instagram resumable upload returned HTTP {response.status_code}: {str(payload)[:400]}")
         except requests.RequestException as exc:
             # On resume, query the container before re-sending bytes. A partial
-            # upload must never be guessed at or blindly restarted.
-            raise NeedsReconciliation(f"Instagram file upload was interrupted; container status must be reconciled: {exc}") from exc
+            # upload must never be guessed at or blindly restarted. Do not print
+            # the transport exception because it can contain a signed upload URL.
+            raise NeedsReconciliation(
+                f"Instagram file upload was interrupted ({type(exc).__name__}); "
+                "container status must be reconciled"
+            ) from exc
         remote = {**remote, "stage": "ig_processing"}
         checkpoint(remote)
         stage = "ig_processing"
@@ -783,7 +790,12 @@ def _publish_tiktok(path: Path, metadata: Mapping[str, Any], remote: dict[str, A
                         timeout=300,
                     )
                 except requests.RequestException as exc:
-                    raise NeedsReconciliation(f"TikTok upload outcome is uncertain for chunk {next_chunk}: {exc}") from exc
+                    # TikTok upload_url contains a time-limited secret in its
+                    # query string; never echo the transport error to logs.
+                    raise NeedsReconciliation(
+                        f"TikTok upload outcome is uncertain for chunk {next_chunk} "
+                        f"({type(exc).__name__}); reconcile before retry"
+                    ) from exc
                 if response.status_code not in {200, 201, 206, 308}:
                     raise PublishError(f"TikTok upload server returned HTTP {response.status_code}: {response.text[:300]}")
                 next_chunk += 1
