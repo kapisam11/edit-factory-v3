@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ai_video_factory import folder_publisher as folder
 
 
@@ -31,6 +33,80 @@ def _publisher(tmp_path: Path, **overrides: object) -> folder.FolderPublisher:
     }
     values.update(overrides)
     return folder.FolderPublisher(folder.FolderPublisherConfig(**values))  # type: ignore[arg-type]
+
+
+def test_probe_video_reports_average_frame_rate(monkeypatch, tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("AIVF_MAX_INPUT_FPS", "60")
+    monkeypatch.setattr(
+        folder.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout=json.dumps({
+                "streams": [{
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1080,
+                    "height": 1920,
+                    "avg_frame_rate": "30000/1001",
+                    "r_frame_rate": "30/1",
+                }],
+                "format": {"duration": "12.0", "format_name": "mp4"},
+            })
+        ),
+    )
+    result = folder.probe_video(tmp_path / "clip.mp4", max_duration_seconds=30)
+    assert result["frame_rate_fps"] == pytest.approx(29.97002997)
+
+
+def test_probe_video_rejects_frame_rate_above_configured_limit(monkeypatch, tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("AIVF_MAX_INPUT_FPS", "60")
+    monkeypatch.setattr(
+        folder.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout=json.dumps({
+                "streams": [{
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1080,
+                    "height": 1920,
+                    "avg_frame_rate": "120/1",
+                    "r_frame_rate": "120/1",
+                }],
+                "format": {"duration": "12.0", "format_name": "mp4"},
+            })
+        ),
+    )
+    with pytest.raises(ValueError, match="exceeds the configured 60-fps limit"):
+        folder.probe_video(tmp_path / "clip.mp4", max_duration_seconds=30)
+
+
+def test_probe_video_rejects_missing_or_invalid_frame_rate(monkeypatch, tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        folder.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout=json.dumps({
+                "streams": [{
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1080,
+                    "height": 1920,
+                    "avg_frame_rate": "0/0",
+                    "r_frame_rate": "0/0",
+                }],
+                "format": {"duration": "12.0", "format_name": "mp4"},
+            })
+        ),
+    )
+    with pytest.raises(ValueError, match="frame rate"):
+        folder.probe_video(tmp_path / "clip.mp4", max_duration_seconds=30)
 
 
 def test_folder_scan_waits_for_explicit_approval_and_publishes_idempotently(

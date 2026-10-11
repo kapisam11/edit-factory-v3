@@ -111,7 +111,7 @@ def probe_video(path: Path, *, max_duration_seconds: int) -> dict[str, Any]:
                 "-v",
                 "error",
                 "-show_entries",
-                "format=duration,format_name:stream=codec_type,codec_name,width,height,avg_frame_rate",
+                "format=duration,format_name:stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate",
                 "-of",
                 "json",
                 str(path),
@@ -143,6 +143,40 @@ def probe_video(path: Path, *, max_duration_seconds: int) -> dict[str, Any]:
         height = int(raw_height)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("video duration or dimensions are missing/invalid") from exc
+
+    def parse_frame_rate(value: Any) -> float:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("frame-rate value is empty")
+        if "/" in text:
+            numerator, denominator = text.split("/", 1)
+            denominator_value = float(denominator)
+            if not math.isfinite(denominator_value) or denominator_value == 0:
+                raise ValueError("frame-rate denominator is zero or invalid")
+            return float(numerator) / denominator_value
+        return float(text)
+
+    frame_rate: float | None = None
+    for candidate in (videos[0].get("avg_frame_rate"), videos[0].get("r_frame_rate")):
+        try:
+            parsed_rate = parse_frame_rate(candidate)
+        except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+            continue
+        if math.isfinite(parsed_rate) and parsed_rate > 0:
+            frame_rate = parsed_rate
+            break
+    if frame_rate is None:
+        raise ValueError("video frame rate is missing or invalid")
+    try:
+        max_frame_rate = float(os.environ.get("AIVF_MAX_INPUT_FPS", "120"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("AIVF_MAX_INPUT_FPS must be a finite positive number") from exc
+    if not math.isfinite(max_frame_rate) or max_frame_rate <= 0:
+        raise ValueError("AIVF_MAX_INPUT_FPS must be a finite positive number")
+    if frame_rate > max_frame_rate:
+        raise ValueError(
+            f"video frame rate {frame_rate:.3f} fps exceeds the configured {max_frame_rate:g}-fps limit"
+        )
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("video duration must be a finite positive number")
     if duration > max_duration_seconds:
@@ -153,6 +187,7 @@ def probe_video(path: Path, *, max_duration_seconds: int) -> dict[str, Any]:
         "duration_seconds": duration,
         "width": width,
         "height": height,
+        "frame_rate_fps": frame_rate,
         "video_codec": str(videos[0].get("codec_name") or ""),
         "format_name": str(fmt.get("format_name") or ""),
         "audio_streams": sum(
