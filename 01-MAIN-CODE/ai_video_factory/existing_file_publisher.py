@@ -253,11 +253,15 @@ def _validate_metadata(metadata: Mapping[str, Any], *, config: PublisherConfig, 
 
 def _http_json(method: str, url: str, *, headers: Optional[dict[str, str]] = None,
                params: Optional[dict[str, Any]] = None, data: Any = None,
-               json_body: Optional[dict[str, Any]] = None, timeout: int = 60) -> dict[str, Any]:
+               json_body: Optional[dict[str, Any]] = None, timeout: int = 60,
+               ambiguous_on_timeout: bool = False) -> dict[str, Any]:
     try:
         response = requests.request(method, url, headers=headers, params=params, data=data, json=json_body, timeout=timeout)
     except (requests.Timeout, requests.ConnectionError) as exc:
-        raise NeedsReconciliation(f"Network outcome is ambiguous for {method} {urlparse(url).netloc}") from exc
+        error = f"Network request failed for {method} {urlparse(url).netloc}: {exc}"
+        if ambiguous_on_timeout:
+            raise NeedsReconciliation(error) from exc
+        raise PublishError(error) from exc
     except requests.RequestException as exc:
         raise PublishError(f"Request failed for {urlparse(url).netloc}: {exc}") from exc
     try:
@@ -580,6 +584,9 @@ def _publish_instagram(path: Path, metadata: Mapping[str, Any], remote: dict[str
     stage = str(remote.get("stage") or "")
     version = os.environ.get("INSTAGRAM_GRAPH_API_VERSION", "v23.0").strip()
     base = _instagram_api_base()
+    if stage == "published":
+        media_id = str(remote.get("media_id") or remote.get("post_id") or remote.get("container_id") or "")
+        return {"state": "PUBLISHED", "remote_id": media_id, "remote_url": str(remote.get("remote_url") or ""), "remote_state": remote}
     if stage == "ig_publishing":
         raise NeedsReconciliation("Instagram publish response was interrupted; verify the account before any retry")
     if not stage or stage == "ig_init_in_flight":
@@ -662,7 +669,8 @@ def _publish_instagram(path: Path, metadata: Mapping[str, Any], remote: dict[str
         remote = {**remote, "stage": "ig_publishing"}
         checkpoint(remote)
         result = _http_json("POST", f"{base}/{user_id}/media_publish",
-                            data={"creation_id": container_id, "access_token": token}, timeout=90)
+                            data={"creation_id": container_id, "access_token": token}, timeout=90,
+                            ambiguous_on_timeout=True)
         media_id = str(result.get("id") or "")
         if not media_id:
             raise NeedsReconciliation("Instagram publish response had no media ID")
@@ -674,9 +682,10 @@ def _publish_instagram(path: Path, metadata: Mapping[str, Any], remote: dict[str
 
 
 def _tiktok_api(path: str, token: str, *, body: dict[str, Any]) -> dict[str, Any]:
-    result = _http_json("POST", f"https://open.tiktokapis.com/v2/{path.lstrip('/')}",
+    path = path.lstrip("/")
+    result = _http_json("POST", f"https://open.tiktokapis.com/v2/{path}",
                         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=UTF-8"},
-                        json_body=body, timeout=90)
+                        json_body=body, timeout=90, ambiguous_on_timeout=(path == "post/publish/video/init/"))
     error = result.get("error")
     if isinstance(error, dict):
         code = str(error.get("code") or "")
@@ -706,9 +715,10 @@ def _publish_tiktok(path: Path, metadata: Mapping[str, Any], remote: dict[str, A
         raise NeedsReconciliation("TikTok initialization response was interrupted and publish_id was not saved; do not retry blindly")
     if stage == "tiktok_upload_in_flight":
         raise NeedsReconciliation("TikTok file transfer was interrupted between remote acknowledgement and checkpoint; reconcile the existing publish_id before retry")
+    if stage == "published":
+        post_id = str(remote.get("post_id") or remote.get("publish_id") or "")
+        return {"state": "PUBLISHED", "remote_id": post_id, "remote_url": str(remote.get("remote_url") or ""), "remote_state": remote}
     if not stage:
-        remote = {"stage": "tiktok_init_in_flight"}
-        checkpoint(remote)
         creator = _tiktok_api("post/publish/creator_info/query/", token, body={}).get("data") or {}
         allowed = creator.get("privacy_level_options") or []
         privacy = str(metadata.get("tiktok_privacy_level") or "SELF_ONLY")
@@ -716,6 +726,8 @@ def _publish_tiktok(path: Path, metadata: Mapping[str, Any], remote: dict[str, A
             raise PermanentPublishError(f"TikTok privacy setting {privacy} is not permitted for this creator")
         chunk_size = 64 * 1024 * 1024
         total_chunks = int(math.ceil(size / chunk_size))
+        remote = {"stage": "tiktok_init_in_flight"}
+        checkpoint(remote)
         init = _tiktok_api("post/publish/video/init/", token, body={
             "post_info": {
                 "title": str(metadata.get("tiktok_caption") or metadata.get("description") or metadata.get("title") or "")[:2200],
@@ -824,7 +836,10 @@ class ExistingFilePublisher:
                     metadata["title"] = str(metadata.get("title") or source.stem)
                     block_reason = str(exc)
                 digest = _sha256_file(source)
-                for platform in metadata.get("platforms", self.config.platforms):
+                requested_platforms = metadata.get("platforms", self.config.platforms)
+                if not isinstance(requested_platforms, list) or not requested_platforms:
+                    requested_platforms = self.config.platforms
+                for platform in requested_platforms:
                     platform = str(platform).lower()
                     account = self.account_ids.get(platform, f"unconfigured-{platform}")
                     if platform == "youtube" and account == "unconfigured-youtube":
@@ -860,6 +875,7 @@ class ExistingFilePublisher:
                 break
             processed.add(str(job["job_id"]))
             job_id = str(job["job_id"])
+            current_remote = json.loads(job.get("remote_state_json") or "{}")
             try:
                 source = Path(str(job["source_path"]))
                 if not source.is_file():
@@ -867,8 +883,7 @@ class ExistingFilePublisher:
                 metadata = json.loads(job["metadata_json"])
                 metadata = _validate_metadata(metadata, config=self.config, watch_dir=self.config.watch_dir)
                 _probe_media(source, max_bytes=self.config.max_file_bytes, max_duration=self.config.max_duration_seconds)
-                remote = json.loads(job.get("remote_state_json") or "{}")
-                current_remote = remote
+                remote = current_remote
                 def checkpoint(value: dict[str, Any]) -> None:
                     nonlocal current_remote
                     self.store.checkpoint(job_id, str(job["lease_token"]), value)
@@ -886,11 +901,11 @@ class ExistingFilePublisher:
                 logger.info("%s %s %s", job_id, job["platform"], state)
             except NeedsReconciliation as exc:
                 self.store.finish(job, state="NEEDS_RECONCILIATION",
-                                  remote_state=current_remote if "current_remote" in locals() else json.loads(job.get("remote_state_json") or "{}"), error=str(exc))
+                                  remote_state=current_remote, error=str(exc))
                 self._notify_failure(job, str(exc))
             except PermanentPublishError as exc:
                 self.store.finish(job, state="FAILED",
-                                  remote_state=current_remote if "current_remote" in locals() else json.loads(job.get("remote_state_json") or "{}"), error=str(exc))
+                                  remote_state=current_remote, error=str(exc))
                 self._notify_failure(job, str(exc))
             except Exception as exc:
                 attempts = int(job["attempts"])
@@ -899,8 +914,7 @@ class ExistingFilePublisher:
                 else:
                     state = "RETRY"
                     retry_at = time.time() + min(3600, self.config.retry_base_seconds * (2 ** max(0, attempts - 1)))
-                remote = current_remote if "current_remote" in locals() else json.loads(job.get("remote_state_json") or "{}")
-                self.store.finish(job, state=state, remote_state=remote, error=f"{type(exc).__name__}: {exc}", retry_at=retry_at)
+                self.store.finish(job, state=state, remote_state=current_remote, error=f"{type(exc).__name__}: {exc}", retry_at=retry_at)
                 logger.exception("Publishing failed for %s", job_id)
                 if state == "FAILED":
                     self._notify_failure(job, str(exc))
