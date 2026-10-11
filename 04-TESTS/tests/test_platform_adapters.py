@@ -32,7 +32,7 @@ def test_tiktok_direct_post_upload_saves_operation_and_waits_for_remote_completi
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     video = tmp_path / "clip.mp4"
-    video.write_bytes(b"local test media bytes")
+    video.write_bytes(b"x" * (5 * 1024 * 1024))
     monkeypatch.setenv("AIVF_TIKTOK_TEST_ACCESS_TOKEN", "test-access-token")
     calls: list[tuple[str, str, dict[str, Any] | None]] = []
     transfers: list[dict[str, str]] = []
@@ -45,8 +45,10 @@ def test_tiktok_direct_post_upload_saves_operation_and_waits_for_remote_completi
             body = kwargs["json"]
             assert body["source_info"]["source"] == "FILE_UPLOAD"
             assert body["source_info"]["video_size"] == video.stat().st_size
-            assert body["source_info"]["chunk_size"] == video.stat().st_size
-            assert body["source_info"]["total_chunk_count"] == 1
+            from ai_video_factory.platform_adapters import _tiktok_chunk_plan
+            chunk_size, chunk_count = _tiktok_chunk_plan(video.stat().st_size)
+            assert body["source_info"]["chunk_size"] == chunk_size
+            assert body["source_info"]["total_chunk_count"] == chunk_count
             return FakeResponse(
                 _ok(
                     {
@@ -211,11 +213,28 @@ def test_http_429_retry_after_is_preserved_for_the_durable_queue(
     assert caught.value.retry_after_seconds == 120.0
 
 
+def test_tiktok_chunk_plan_respects_minimum_and_maximum_chunk_size() -> None:
+    from ai_video_factory.platform_adapters import (
+        PlatformPublishError,
+        TIKTOK_MAX_CHUNK_BYTES,
+        TIKTOK_MIN_CHUNK_BYTES,
+        _tiktok_chunk_plan,
+    )
+
+    with pytest.raises(PlatformPublishError) as caught:
+        _tiktok_chunk_plan(TIKTOK_MIN_CHUNK_BYTES - 1)
+    assert caught.value.code == "MEDIA_SIZE_LIMIT"
+    chunk_size, chunks = _tiktok_chunk_plan(65 * 1024 * 1024)
+    assert TIKTOK_MIN_CHUNK_BYTES <= chunk_size <= TIKTOK_MAX_CHUNK_BYTES
+    assert chunks > 1
+    assert (chunks - 1) * chunk_size < 65 * 1024 * 1024 <= chunks * chunk_size
+
+
 def test_tiktok_resume_queries_saved_publish_id_without_creating_another_post(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     video = tmp_path / "clip.mp4"
-    video.write_bytes(b"local test media")
+    video.write_bytes(b"x" * (5 * 1024 * 1024))
     monkeypatch.setenv("AIVF_TIKTOK_TEST_ACCESS_TOKEN", "test-access-token")
     calls: list[str] = []
 
