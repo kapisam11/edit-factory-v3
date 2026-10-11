@@ -81,6 +81,7 @@ Use a new `publication_id` to intentionally republish identical bytes. The same 
 ```powershell
 uv run aivf-publish --watch-dir .\incoming scan
 uv run aivf-publish --watch-dir .\incoming status
+uv run aivf-publish --watch-dir .\incoming history 12
 # Only after reviewing queue state and destination metadata:
 uv run aivf-publish --watch-dir .\incoming --publish run-once
 uv run aivf-publish --watch-dir .\incoming --publish daemon
