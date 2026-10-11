@@ -589,6 +589,129 @@ class PublicationStore:
             connection.commit()
         return state
 
+    def reconcile_failed(
+        self,
+        job_id: int,
+        *,
+        outcome: str,
+        remote_post_id: str = "",
+        remote_url: str = "",
+        now: float,
+    ) -> str:
+        """Resolve an ambiguous permanent failure after checking the platform account.
+
+        This is the supported recovery path for operators; it never edits unrelated
+        jobs and writes an auditable event rather than requiring direct DB surgery.
+        """
+        normalized_outcome = str(outcome).strip().lower()
+        if normalized_outcome not in {"published", "not-published"}:
+            raise ValueError("outcome must be 'published' or 'not-published'")
+        remote_post_id = str(remote_post_id or "").strip()
+        remote_url = str(remote_url or "").strip()
+        if normalized_outcome == "published" and not remote_post_id:
+            raise ValueError("remote_post_id is required when the platform confirms publication")
+        if remote_url:
+            parsed = urlparse(remote_url)
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ValueError("remote_url must be an HTTPS URL")
+        recoverable_codes = {
+            "AMBIGUOUS_OUTCOME",
+            "AMBIGUOUS_OUTCOME_UNTRACKED",
+            "REMOTE_PROCESSING",
+            "REMOTE_STATUS_LOOKUP_FAILED",
+            "REMOTE_VIDEO_NOT_FOUND",
+            "PUBLICATION_VISIBILITY_UNCONFIRMED",
+            "REMOTE_VISIBILITY_UNCONFIRMED",
+            "REMOTE_VISIBILITY_MISMATCH",
+            "UPLOAD_TRANSFER_FAILED",
+        }
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT id,platform,state,error_code,remote_operation_id,adapter_state_json "
+                "FROM platform_publications WHERE id=?",
+                (int(job_id),),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise KeyError(job_id)
+            if str(row["state"]) != "permanent_failed" or str(row["error_code"] or "") not in recoverable_codes:
+                connection.rollback()
+                raise ValueError(
+                    "only permanent failures flagged for ambiguous remote publication can be reconciled"
+                )
+
+            platform = str(row["platform"])
+            remote_operation_id = str(row["remote_operation_id"] or "")
+            if normalized_outcome == "published":
+                connection.execute(
+                    "UPDATE platform_publications SET state='published',remote_post_id=?,remote_url=?,"
+                    "published_at=?,updated_at=?,next_attempt_at=0,lease_owner=NULL,lease_until=NULL,"
+                    "last_error='',error_code=NULL WHERE id=?",
+                    (remote_post_id, remote_url, now, now, int(job_id)),
+                )
+                state = "published"
+                detail = {
+                    "operator_confirmed": True,
+                    "remote_post_id_present": True,
+                    "remote_url_present": bool(remote_url),
+                }
+            else:
+                adapter_state: dict[str, Any] = {}
+                try:
+                    parsed_state = json.loads(str(row["adapter_state_json"] or "{}"))
+                    if isinstance(parsed_state, dict):
+                        adapter_state = parsed_state
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    adapter_state = {}
+                if platform == "instagram" and remote_operation_id:
+                    # Preserve the existing container and reset only the publish
+                    # intent after the operator has verified no post exists.
+                    adapter_state["container_id"] = str(
+                        adapter_state.get("container_id") or remote_operation_id
+                    )
+                    adapter_state["stage"] = "container_created"
+                    adapter_state["publish_started"] = False
+                    adapter_state["publish_started_at"] = None
+                    state = "processing_remote"
+                    saved_operation = remote_operation_id
+                else:
+                    # The operator has confirmed that no post exists. Discard
+                    # the old remote create/upload session before trying anew.
+                    adapter_state = {}
+                    state = "retryable_failed"
+                    saved_operation = ""
+                connection.execute(
+                    "UPDATE platform_publications SET state=?,remote_operation_id=?,"
+                    "adapter_state_json=?,remote_post_id=NULL,remote_url='',published_at=NULL,"
+                    "updated_at=?,next_attempt_at=?,lease_owner=NULL,lease_until=NULL,"
+                    "last_error='Operator confirmed no remote post exists; retry queued',"
+                    "error_code=NULL WHERE id=?",
+                    (
+                        state,
+                        saved_operation or None,
+                        _compact_json(adapter_state),
+                        now,
+                        now,
+                        int(job_id),
+                    ),
+                )
+                detail = {
+                    "operator_confirmed": True,
+                    "remote_post_absent": True,
+                    "preserved_remote_container": bool(platform == "instagram" and saved_operation),
+                }
+            self._event(
+                connection,
+                int(job_id),
+                "manual_reconciliation",
+                state,
+                {"outcome": normalized_outcome, **detail},
+                now=now,
+            )
+            connection.commit()
+        return state
+
     def claim_notification(self, event_key: str, *, now: float) -> bool:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1148,6 +1271,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     once = subparsers.add_parser("run-once", help="scan and optionally attempt due platform jobs")
     once.add_argument("--limit", type=int, default=100)
     subparsers.add_parser("daemon", help="continuously scan and independently process due platform jobs")
+    reconcile = subparsers.add_parser(
+        "reconcile",
+        help="record an operator-verified outcome for an ambiguous permanent failure",
+    )
+    reconcile.add_argument("job_id", type=int)
+    reconcile.add_argument("--result", choices=("published", "not-published"), required=True)
+    reconcile.add_argument("--remote-post-id", default="")
+    reconcile.add_argument("--remote-url", default="")
     args = parser.parse_args(list(argv) if argv is not None else None)
     logging.basicConfig(level=os.environ.get("AIVF_LOG_LEVEL", "INFO"))
 
@@ -1170,6 +1301,19 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 0
     if args.command == "daemon":
         publisher.run_forever(poll_seconds=args.poll_seconds)
+        return 0
+    if args.command == "reconcile":
+        try:
+            state = publisher.store.reconcile_failed(
+                args.job_id,
+                outcome=args.result,
+                remote_post_id=args.remote_post_id,
+                remote_url=args.remote_url,
+                now=time.time(),
+            )
+        except (KeyError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps({"job_id": args.job_id, "state": state, "operator_reconciled": True}, indent=2))
         return 0
     return 2
 
