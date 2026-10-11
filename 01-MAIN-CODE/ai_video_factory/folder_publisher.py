@@ -111,7 +111,7 @@ def probe_video(path: Path, *, max_duration_seconds: int) -> dict[str, Any]:
                 "-v",
                 "error",
                 "-show_entries",
-                "format=duration,format_name:stream=codec_type,codec_name,width,height,avg_frame_rate",
+                "format=duration,format_name:stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate",
                 "-of",
                 "json",
                 str(path),
@@ -143,6 +143,60 @@ def probe_video(path: Path, *, max_duration_seconds: int) -> dict[str, Any]:
         height = int(raw_height)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("video duration or dimensions are missing/invalid") from exc
+
+    raw_rate = videos[0].get("avg_frame_rate") or videos[0].get("r_frame_rate")
+    try:
+        if isinstance(raw_rate, str) and "/" in raw_rate:
+            numerator, denominator = raw_rate.split("/", 1)
+            denominator_value = float(denominator)
+            if denominator_value == 0:
+                raise ValueError("frame-rate denominator is zero")
+            frame_rate = float(numerator) / denominator_value
+        else:
+            frame_rate = float(raw_rate)
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError) as exc:
+        fallback_rate = videos[0].get("r_frame_rate")
+        if fallback_rate and fallback_rate != raw_rate:
+            try:
+                if isinstance(fallback_rate, str) and "/" in fallback_rate:
+                    numerator, denominator = fallback_rate.split("/", 1)
+                    denominator_value = float(denominator)
+                    if denominator_value == 0:
+                        raise ValueError("frame-rate denominator is zero")
+                    frame_rate = float(numerator) / denominator_value
+                else:
+                    frame_rate = float(fallback_rate)
+            except (TypeError, ValueError, OverflowError, ZeroDivisionError) as fallback_exc:
+                raise ValueError("video frame rate is missing or invalid") from fallback_exc
+        else:
+            raise ValueError("video frame rate is missing or invalid") from exc
+
+    if not math.isfinite(frame_rate) or frame_rate <= 0:
+        fallback_rate = videos[0].get("r_frame_rate")
+        try:
+            if not isinstance(fallback_rate, str) or "/" not in fallback_rate:
+                frame_rate = float(fallback_rate)
+            else:
+                numerator, denominator = fallback_rate.split("/", 1)
+                denominator_value = float(denominator)
+                if denominator_value == 0:
+                    raise ValueError("frame-rate denominator is zero")
+                frame_rate = float(numerator) / denominator_value
+        except (TypeError, ValueError, OverflowError, ZeroDivisionError) as exc:
+            raise ValueError("video frame rate is missing or invalid") from exc
+    if not math.isfinite(frame_rate) or frame_rate <= 0:
+        raise ValueError("video frame rate must be a finite positive number")
+
+    try:
+        max_frame_rate = float(os.environ.get("AIVF_MAX_INPUT_FPS", "120"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("AIVF_MAX_INPUT_FPS must be a finite positive number") from exc
+    if not math.isfinite(max_frame_rate) or max_frame_rate <= 0:
+        raise ValueError("AIVF_MAX_INPUT_FPS must be a finite positive number")
+    if frame_rate > max_frame_rate:
+        raise ValueError(
+            f"video frame rate {frame_rate:.3f} fps exceeds the configured {max_frame_rate:g}-fps limit"
+        )
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("video duration must be a finite positive number")
     if duration > max_duration_seconds:
@@ -153,6 +207,7 @@ def probe_video(path: Path, *, max_duration_seconds: int) -> dict[str, Any]:
         "duration_seconds": duration,
         "width": width,
         "height": height,
+        "frame_rate_fps": frame_rate,
         "video_codec": str(videos[0].get("codec_name") or ""),
         "format_name": str(fmt.get("format_name") or ""),
         "audio_streams": sum(
