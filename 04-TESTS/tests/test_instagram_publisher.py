@@ -96,7 +96,7 @@ def test_ambiguous_media_publish_reconciles_recent_post_before_retry(tmp_path, m
         return [{
             "id": "remote-media-2",
             "caption": caption,
-            "timestamp": "2026-10-11T12:00:00+0000",
+            "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
             "permalink": "https://www.instagram.com/reel/remote-media-2/",
             "media_product_type": "REELS",
         }]
