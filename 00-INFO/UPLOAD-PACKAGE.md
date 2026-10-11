@@ -132,7 +132,7 @@ The database includes a per-event timeline and a heartbeat file. `AIVF_FAILURE_W
 
 ### Windows 11 unattended startup
 
-The repository includes `INSTALL-PUBLISHER-TASK.ps1`, `RUN-PUBLISHER.ps1`, and `REMOVE-PUBLISHER-TASK.ps1`. The scheduled task starts at Windows startup and at user logon, uses a least-privilege S4U principal, ignores duplicate runner starts, requests wake-from-sleep, restarts after an unexpected process exit, and writes bounded/secret-redacted runner logs under `<AIVF_STATE_DIR>\logs\platform-publisher.log`. It is independent of whether the dashboard/browser is open.
+The repository includes `INSTALL-PUBLISHER-TASK.ps1`, `RUN-PUBLISHER.ps1`, and `REMOVE-PUBLISHER-TASK.ps1`. The scheduled task starts at Windows startup, at user logon, and at a configurable daily wake time (default 20:00 local time). It uses a least-privilege S4U principal, ignores duplicate runner starts, requests wake-from-sleep, starts missed triggers when available, restarts after an unexpected process exit, and writes bounded/secret-redacted runner logs under `<AIVF_STATE_DIR>\logs\platform-publisher.log`. It is independent of whether the dashboard/browser is open.
 
 Run PowerShell from the repository folder as the ordinary Windows user who owns the app state:
 
@@ -146,7 +146,7 @@ Get-Content .\state\logs\platform-publisher.log -Tail 80
 
 The task **does not enable public/network uploads by installation**. Unless `AIVF_MULTI_PUBLISH=1` is present in the task environment or local configuration, it only scans, validates, and queues approved content. Stop/restart the task after changing local environment configuration so it reloads those values. Keep the `.env` file, OAuth credentials, platform-token vault and database in user-restricted local storage, never commit them, and configure an explicit persistent `YOUTUBE_TOKEN_PATH` for the scheduled identity.
 
-`-WakeToRun` cannot override Windows power policy or firmware. Enable Windows wake timers (including the appropriate “allow wake timers” setting for the active power plan) and verify that the PC's firmware supports wake. The install script does not change system-wide power policy or grant administrator privileges. Run an actual reboot and sleep/wake acceptance test before relying on the schedule.
+`-WakeToRun` cannot override Windows power policy or firmware. `-DailyWakeTime` controls the scheduled wake trigger; align it with `AIVF_PUBLISH_DEADLINE_HOUR/MINUTE` if daily deadline alerting is enabled. Enable Windows wake timers (including the appropriate “allow wake timers” setting for the active power plan) and verify that the PC's firmware supports wake. The install script does not change system-wide power policy or grant administrator privileges. Run an actual reboot and sleep/wake acceptance test before relying on the schedule.
 
 A successful mocked test or HTTP response is not a substitute for account acceptance. Before enabling unattended publishing, complete a private/controlled real-account upload for each configured destination, verify remote processing and the final post ID/URL, then test a restart and an ambiguous timeout. Instagram's externally hosted-media requirement and platform-specific API approval must be satisfied separately.
 
