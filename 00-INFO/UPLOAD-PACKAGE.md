@@ -28,7 +28,7 @@ Supported profiles are `youtube_shorts`, `youtube`, `tiktok`, and `instagram_ree
 
 These are **output-format and metadata profiles**, not a promise that each platform can be uploaded to automatically. The current direct authenticated upload implementation is YouTube-only. The repository does not currently provide working direct Instagram Reels or TikTok upload adapters with authorization, remote-processing polling, and duplicate recovery.
 
-The autonomous `aivf-autopublish daemon` remains YouTube-specific and generates content from its persisted topic queue. Existing files can now use the separate `aivf-folder-publisher` command below. That path is YouTube-only: Instagram Reels and TikTok direct publishing remain unimplemented. The folder pipeline has automated regression coverage but still requires Windows Task Scheduler/reboot/sleep acceptance and real-account upload/recovery tests before it is considered production-verified.
+The autonomous `aivf-autopublish daemon` remains YouTube-specific and generates content from its persisted topic queue; it does not watch a folder of existing videos. Existing files can use the separate `aivf-folder-publisher` command below. That path is YouTube-only: Instagram Reels and TikTok direct publishing remain unimplemented. The folder pipeline has automated regression coverage but still requires Windows Task Scheduler/reboot/sleep acceptance and real-account upload/recovery tests before it is considered production-verified.
 
 ## Existing video folder -> YouTube
 
