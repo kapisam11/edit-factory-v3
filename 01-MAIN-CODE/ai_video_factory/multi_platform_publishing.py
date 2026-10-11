@@ -298,12 +298,12 @@ class PublicationStore:
                     OR (state IN ('uploading','processing_remote') AND COALESCE(lease_until,0)<=?
                         AND next_attempt_at<=?)
                 )
-                AND NOT EXISTS (
-                    SELECT 1 FROM platform_publications sent
+                AND (
+                    SELECT COUNT(*) FROM platform_publications sent
                     WHERE sent.platform=platform_publications.platform
                       AND sent.account_id=platform_publications.account_id
                       AND sent.state='published' AND sent.published_at>=?
-                )
+                ) < ?
                 AND NOT EXISTS (
                     SELECT 1 FROM platform_publications active
                     WHERE active.platform=platform_publications.platform
@@ -316,7 +316,7 @@ class PublicationStore:
                          next_attempt_at,created_at,id
                 LIMIT 1
                 """,
-                (now, now, now, day_start, now),
+                (now, now, now, day_start, max_per_day, now),
             ).fetchone()
             if row is None:
                 connection.commit()
