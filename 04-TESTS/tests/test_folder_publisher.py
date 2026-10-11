@@ -67,7 +67,7 @@ def _jobs(publisher: FolderPublisher):
         return [dict(row) for row in conn.execute("SELECT * FROM publishing_jobs ORDER BY platform")]
 
 
-def test_scan_creates_one_durable_job_per_platform_and_fails_closed_for_missing_uploaders(tmp_path):
+def test_scan_creates_independent_jobs_and_requires_instagram_public_video_url(tmp_path):
     publisher, _, _ = _make_publisher(
         tmp_path, _metadata(platforms=["youtube_shorts", "instagram_reels", "tiktok"])
     )
@@ -76,14 +76,17 @@ def test_scan_creates_one_durable_job_per_platform_and_fails_closed_for_missing_
     second = publisher.scan()
     jobs = _jobs(publisher)
 
-    assert first["queued"] == 1
+    assert first["queued"] == 2
     assert second["queued"] == 0
     assert {job["platform"] for job in jobs} == {"youtube", "instagram", "tiktok"}
-    assert {job["state"] for job in jobs if job["platform"] == "youtube"} == {"PENDING"}
-    assert all(
-        job["state"] == "BLOCKED_UNSUPPORTED"
-        for job in jobs if job["platform"] in {"instagram", "tiktok"}
+    states = {job["platform"]: job["state"] for job in jobs}
+    assert states["youtube"] == "PENDING"
+    assert states["tiktok"] == "PENDING"
+    assert states["instagram"] == "NEEDS_REVIEW"
+    assert "public HTTPS video URL" in next(
+        job["last_error"] for job in jobs if job["platform"] == "instagram"
     )
+    assert len({job["id"] for job in jobs}) == 3
     assert len({job["id"] for job in jobs}) == 3
 
 
@@ -197,22 +200,28 @@ def test_publication_defaults_to_private_and_public_upload_is_gated(tmp_path):
 
 
 def test_public_daily_limit_stops_second_upload(tmp_path):
-    publisher, _, _ = _make_publisher(
+    publisher, video, _ = _make_publisher(
         tmp_path, _metadata(), max_videos_per_day=1
     )
+    second_video = video.with_name("story-2.mp4")
+    second_video.write_bytes(b"a different stable video")
+    second_video.with_suffix(".json").write_text(
+        json.dumps(_metadata()), encoding="utf-8"
+    )
     publisher.scan()
-    job = _jobs(publisher)[0]
+    jobs = _jobs(publisher)
+    assert len(jobs) == 2
     today = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
     with publisher._connect() as conn:
         conn.execute(
             "UPDATE publishing_jobs SET state='PUBLISHED',published_at=? WHERE id=?",
-            (today, job["id"]),
+            (today, jobs[0]["id"]),
         )
 
     result = publisher.publish_one(now=time.time())
 
     assert result["status"] == "daily_limit_reached"
-    assert result["published_today"] == 1
+    assert result["capped_destinations"][0]["published_today"] == 1
 
 
 def test_scan_rejects_invalid_or_oversized_media_before_queueing(tmp_path):
