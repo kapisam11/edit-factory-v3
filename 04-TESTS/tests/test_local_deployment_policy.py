@@ -81,7 +81,7 @@ def test_existing_file_publisher_has_durable_queue_and_explicit_windows_schedule
     assert "CREATE TABLE IF NOT EXISTS publishing_jobs" in publisher
     assert "UNIQUE(platform, account_id, source_sha256)" in publisher
     assert "BLOCKED_UNSUPPORTED" in publisher
-    assert "idempotency_directory=str(self.config.state_dir / \"youtube-idempotency\")" in publisher
+    assert '"idempotency_directory": str(self.config.state_dir / f"{platform}-idempotency")' in publisher
     assert "ffprobe" in publisher
     assert "rights_cleared" in publisher
     assert "StartWhenAvailable" in scheduler
