@@ -40,7 +40,7 @@ The production pipeline also includes a video-only **Thinking AI** creative-dire
 
 The repository also retains the previously implemented production features: scene intelligence, captions/subtitles, music intelligence and mixing, thumbnail tooling, upload packaging, channel/style learning, checkpoint/retry hardening, YouTube publishing support, dashboard/job handling, FFmpeg validation, Docker deployment, and CI.
 
-**Publishing scope:** YouTube is the current direct authenticated uploader. `tiktok` and `instagram_reels` are output/metadata profiles, not direct API uploaders. The autonomous publisher is a YouTube-specific topic-to-publish daemon; it does not watch a folder of existing MP4s or independently publish one file to all three platforms. See [00-INFO/UPLOAD-PACKAGE.md](00-INFO/UPLOAD-PACKAGE.md). Do not treat platform format support as evidence of a working uploader.
+**Publishing scope:** The direct authenticated uploader and the new durable existing-MP4 folder queue currently publish to YouTube only. The folder queue has its own opt-in Windows daily Task Scheduler scripts and is documented in [00-INFO/FOLDER-PUBLISHING.md](00-INFO/FOLDER-PUBLISHING.md). Instagram Reels and TikTok are still format/metadata profiles without direct upload adapters. The separate autonomous topic-to-YouTube daemon does not watch a folder of existing MP4s. Do not treat platform format support as evidence of a working uploader.
 
 ## Quick start
 
@@ -115,7 +115,7 @@ It will:
 
 The local Compose profile publishes the dashboard only on `127.0.0.1` by default and limits admission to one concurrent job by default. Set `AIVF_DASHBOARD_PORT` in `06-CONFIG-AND-DEPLOYMENT/.env` to choose another host port; the launcher follows the same setting. The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` for a faster startup, or `docker compose ... down` to stop the stack. These defaults protect a single-PC setup; they do not configure unattended multi-platform uploads.
 
-The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**.
+The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**. Daily publishing of approved existing files is a separate opt-in workflow: read [00-INFO/FOLDER-PUBLISHING.md](00-INFO/FOLDER-PUBLISHING.md) and explicitly register `REGISTER-DAILY-PUBLISHING.ps1`. Starting the dashboard alone does not schedule uploads.
 
 ## Python API
 
