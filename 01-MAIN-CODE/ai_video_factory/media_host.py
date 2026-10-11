@@ -164,7 +164,7 @@ class S3CompatibleMediaHost:
                 "GET",
                 _canonical_uri(self.bucket, object_key),
                 _canonical_query(parameters),
-                f"host:{self.host}\n",
+                f"host:{self.host}",
                 "host",
                 "UNSIGNED-PAYLOAD",
             )
@@ -248,7 +248,7 @@ class S3CompatibleMediaHost:
             f"content-type:{mime}\n"
             f"host:{self.host}\n"
             f"x-amz-content-sha256:{payload_hash}\n"
-            f"x-amz-date:{amz_date}\n"
+            f"x-amz-date:{amz_date}"
         )
         signed_headers = "content-type;host;x-amz-content-sha256;x-amz-date"
         canonical_request = "\n".join(
