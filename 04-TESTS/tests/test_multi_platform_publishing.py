@@ -384,3 +384,77 @@ def test_shared_staging_survives_source_change_until_all_destinations_finish(
     base.store.cleanup_terminal_staging(base.staging_dir)
     assert not original_stage.exists()
     assert base.store.get_item(original_id)["staged_path"] is None
+
+def test_folder_row_and_staging_finalize_only_after_every_destination_publishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    video = incoming / "complete.mp4"
+    video.write_bytes(b"completed destinations fixture")
+
+    monkeypatch.setattr(
+        folder,
+        "probe_video",
+        lambda _path, *, max_duration_seconds: {
+            "duration_seconds": 8.0,
+            "width": 720,
+            "height": 1280,
+            "video_codec": "h264",
+            "format_name": "mp4",
+            "audio_streams": 1,
+        },
+    )
+    sidecar = folder.approve_sidecar(
+        incoming,
+        video.name,
+        ai_generated=False,
+        realistic_alteration=False,
+    )
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload["publication_id"] = "finalize-all-destinations"
+    payload["destinations"] = ["youtube:default", "tiktok:creator"]
+    payload["platform_overrides"] = {"tiktok:creator": {"privacy_level": "SELF_ONLY"}}
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    base = folder.FolderPublisher(
+        folder.FolderPublisherConfig(
+            watch_dir=incoming,
+            db_path=tmp_path / "state" / "publisher.sqlite",
+            settle_seconds=0,
+            poll_seconds=1,
+            publish_enabled=False,
+        )
+    )
+    multi = MultiPlatformPublisher(base, publish_enabled=False)
+    assert multi.scan_and_enqueue()["publication_jobs_added"] == 2
+    item = next(row for row in base.store.items() if row["path"] == str(video.resolve()))
+    source_id = int(item["id"])
+    stage = Path(str(item["staged_path"]))
+    now = time.time() + 10
+
+    first = multi.store.claim_next(max_per_day=10, now=now)
+    assert first is not None
+    multi.store.mark_published(
+        int(first["id"]),
+        str(first["lease_owner"]),
+        PublishResult(str(first["platform"]), "remote-first", "remote-first", "https://example.test/first"),
+        now=now + 1,
+    )
+    assert multi._finalize_source_if_complete(source_id, now=now + 1) is False
+    assert base.store.get_item(source_id)["state"] == "READY"
+    assert stage.is_file()
+
+    second = multi.store.claim_next(max_per_day=10, now=now + 2)
+    assert second is not None
+    multi.store.mark_published(
+        int(second["id"]),
+        str(second["lease_owner"]),
+        PublishResult(str(second["platform"]), "remote-second", "remote-second", "https://example.test/second"),
+        now=now + 3,
+    )
+    assert multi._finalize_source_if_complete(source_id, now=now + 3) is True
+    assert base.store.get_item(source_id)["state"] == "PUBLISHED"
+    base.store.cleanup_terminal_staging(base.staging_dir)
+    assert not stage.exists()
+    assert base.store.get_item(source_id)["staged_path"] is None
