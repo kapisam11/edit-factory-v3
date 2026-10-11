@@ -45,6 +45,10 @@ jobs:
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
       run: uv run pytest -q 04-TESTS/tests/test_folder_publisher.py
+    - name: Run multi-platform publishing state and recovery tests
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: uv run pytest -q 04-TESTS/tests/test_multi_platform_publisher.py
     - name: Validate deployment boundary scripts
       run: |
         uv run python -m py_compile 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py 06-CONFIG-AND-DEPLOYMENT/verify_human_acceptance.py
@@ -71,6 +75,7 @@ jobs:
         uv run python 01-MAIN-CODE/cli_v3.py --help
         uv run aivf --help
         uv run aivf-folder-publisher --help
+        uv run aivf-publish-queue --help
     - name: Run admission/idempotency load smoke
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
@@ -103,9 +108,10 @@ jobs:
         /tmp/aivf-wheel-test/bin/aivf-content --help
         /tmp/aivf-wheel-test/bin/aivf-v3 --help
         /tmp/aivf-wheel-test/bin/aivf-folder-publisher --help
+        /tmp/aivf-wheel-test/bin/aivf-publish-queue --help
         /tmp/aivf-wheel-test/bin/aivf-ready .
-        /tmp/aivf-wheel-test/bin/python -c "import os; import ai_video_factory; import app.cli; import app.web_app_v3; from app import wsgi; assert os.path.isdir(app.web_app_v3.app.template_folder); assert os.path.isdir(app.web_app_v3.app.static_folder); assert wsgi.app is app.web_app_v3.app; response=wsgi.app.test_client().get('/api/health'); assert response.status_code == 200; print('isolated wheel runtime ok')"
-        /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); names={ep.name:ep.value for ep in group}; assert names['aivf']=='app.cli:main'; assert names['aivf-content']=='app.content_factory_cli:main'; assert names['aivf-v3']=='ai_video_factory.v3_cli:main'; assert names['aivf-folder-publisher']=='ai_video_factory.folder_publisher:main'"
+        /tmp/aivf-wheel-test/bin/python -c "import os; import ai_video_factory; import app.cli; import app.web_app_v3; from app import wsgi; assert os.path.isdir(app.web_app_v3.app.template_folder); assert os.path.isdir(app.web_app_v3.app.static_folder); assert os.path.isfile(os.path.join(app.web_app_v3.app.template_folder, 'publisher.html')); assert wsgi.app is app.web_app_v3.app; response=wsgi.app.test_client().get('/api/health'); assert response.status_code == 200; print('isolated wheel runtime ok')"
+        /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); names={ep.name:ep.value for ep in group}; assert names['aivf']=='app.cli:main'; assert names['aivf-content']=='app.content_factory_cli:main'; assert names['aivf-v3']=='ai_video_factory.v3_cli:main'; assert names['aivf-folder-publisher']=='ai_video_factory.folder_publisher:main'; assert names['aivf-publish-queue']=='ai_video_factory.multi_platform_publisher:main'"
     - name: Run production guardrail regression tests
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
@@ -289,47 +295,57 @@ jobs:
     - name: Install FFmpeg
       shell: pwsh
       run: |
-        $ErrorActionPreference = 'Stop'
-        $installed = $false
-
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
-          try {
-            choco install ffmpeg -y --no-progress --execution-timeout 1200
-            $installed = $true
-            break
-          } catch {
-            if ($attempt -lt 3) {
-              Write-Warning "Chocolatey FFmpeg install failed on attempt ${attempt}: $($_.Exception.Message)"
-              Start-Sleep -Seconds (10 * $attempt)
-            }
-          }
-        }
-
-        if (-not $installed) {
-          Write-Warning "Chocolatey FFmpeg install failed; falling back to Winget."
-          winget install --exact --id Gyan.FFmpeg --accept-source-agreements --accept-package-agreements --disable-interactivity
-        }
-
-        $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
-        $ffprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
-        if (-not $ffmpeg -or -not $ffprobe) {
-          $wingetRoots = @(
+        $ErrorActionPreference = 'Continue'
+        function Find-FFmpegPair {
+          $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+          $ffprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
+          if ($ffmpeg -and $ffprobe) { return $true }
+          $roots = @(
+            "$env:ChocolateyInstall\bin",
+            "$env:ChocolateyInstall\lib",
+            "$env:ProgramData\chocolatey\lib",
             "$env:LOCALAPPDATA\Microsoft\WinGet\Packages",
-            "$env:ProgramFiles\WinGet\Packages"
-          ) | Where-Object { Test-Path $_ }
-
-          foreach ($root in $wingetRoots) {
-            $ffmpegCandidate = Get-ChildItem -Path $root -Filter ffmpeg.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            $ffprobeCandidate = Get-ChildItem -Path $root -Filter ffprobe.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($ffmpegCandidate -and $ffprobeCandidate) {
+            "$env:ProgramFiles\WinGet\Packages",
+            "$env:ProgramFiles\ffmpeg",
+            "$env:ProgramFiles\Gyan.FFmpeg"
+          ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
+          foreach ($root in $roots) {
+            $ffmpegCandidate = Get-ChildItem -LiteralPath $root -Filter ffmpeg.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $ffmpegCandidate) { continue }
+            $ffprobeCandidate = Join-Path $ffmpegCandidate.Directory.FullName "ffprobe.exe"
+            if (Test-Path -LiteralPath $ffprobeCandidate) {
               $env:PATH = "$($ffmpegCandidate.Directory.FullName);$env:PATH"
-              break
+              return $true
             }
           }
+          return $false
         }
 
+        $installed = Find-FFmpegPair
+        for ($attempt = 1; -not $installed -and $attempt -le 3; $attempt++) {
+          Write-Host "Installing FFmpeg with Chocolatey (attempt $attempt/3)."
+          choco install ffmpeg -y --no-progress --execution-timeout 1200
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Chocolatey returned exit code $LASTEXITCODE."
+          }
+          $installed = Find-FFmpegPair
+          if (-not $installed -and $attempt -lt 3) { Start-Sleep -Seconds (10 * $attempt) }
+        }
+
+        if (-not $installed -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+          Write-Warning "Chocolatey did not provide ffmpeg.exe and ffprobe.exe; trying Winget."
+          winget install --exact --id Gyan.FFmpeg --accept-source-agreements --accept-package-agreements --disable-interactivity
+          $installed = Find-FFmpegPair
+        }
+        if (-not $installed) {
+          throw "FFmpeg installation completed without both ffmpeg.exe and ffprobe.exe. Inspect Chocolatey/Winget logs; do not treat a zero-package install as success."
+        }
         ffmpeg -version
+        if ($LASTEXITCODE -ne 0) { throw "ffmpeg -version failed." }
         ffprobe -version
+        if ($LASTEXITCODE -ne 0) { throw "ffprobe -version failed." }
+    - name: Verify locked environment
+      shell: pwsh
     - name: Verify locked environment
       shell: pwsh
       run: uv pip check
