@@ -9,6 +9,7 @@ def test_publisher_task_uses_a_network_capable_default_logon() -> None:
     assert "-LogonType Password" in script
     assert "-LogonType S4U" not in script
     assert "-Password $TaskPassword" in script
+    assert "Credential username must match the current Windows identity" in script
     assert "[switch]$UseInteractiveLogon" in script
 
 
