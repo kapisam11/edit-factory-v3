@@ -10,6 +10,8 @@ import mimetypes
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -35,11 +37,17 @@ class PlatformPublishError(RuntimeError):
         code: str,
         retryable: bool,
         uncertain: bool = False,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
         self.uncertain = uncertain
+        self.retry_after_seconds = (
+            max(0.0, min(float(retry_after_seconds), 86400.0))
+            if retry_after_seconds is not None
+            else None
+        )
 
 
 OperationCallback = Callable[[str, dict[str, Any], str], None]
@@ -110,6 +118,23 @@ def _request_json(
             retryable=True,
         ) from exc
 
+    retry_after_seconds: float | None = None
+    retry_after_header = response.headers.get("Retry-After")
+    if retry_after_header:
+        try:
+            retry_after_seconds = max(0.0, min(float(retry_after_header), 86400.0))
+        except (TypeError, ValueError):
+            try:
+                retry_at = parsedate_to_datetime(retry_after_header)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                retry_after_seconds = max(
+                    0.0,
+                    min((retry_at - datetime.now(timezone.utc)).total_seconds(), 86400.0),
+                )
+            except (TypeError, ValueError, OverflowError):
+                retry_after_seconds = None
+
     try:
         payload = response.json()
     except (ValueError, json.JSONDecodeError):
@@ -132,6 +157,7 @@ def _request_json(
             f"platform returned HTTP {response.status_code}{safe_detail}",
             code=code,
             retryable=retryable,
+            retry_after_seconds=retry_after_seconds,
         )
 
     return payload
