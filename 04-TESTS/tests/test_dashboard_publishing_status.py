@@ -95,4 +95,6 @@ def test_publishing_status_reports_remote_results_and_queue_state(monkeypatch, t
     assert payload["destinations"][0]["job_id"] == job_id
     assert payload["destinations"][0]["remote_post_id"] == "remote-video-123"
     assert payload["destinations"][0]["remote_url"] == "https://www.youtube.com/watch?v=remote-video-123"
+    assert payload["destinations"][0]["events"][0]["event_type"] == "published"
+    assert payload["destinations"][0]["events"][0]["state"] == "published"
     assert payload["last_success_epoch"] == now + 2
