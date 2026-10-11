@@ -383,3 +383,138 @@ def publish_video(
                 "TikTok publish is still processing; the saved publish_id will be reconciled on the next retry"
             )
         time.sleep(max(0.0, min(interval, 30.0)))
+
+
+def authorize_main(argv: Optional[list[str]] = None) -> int:
+    """Complete one interactive TikTok OAuth authorization and save the refresh token."""
+    parser = argparse.ArgumentParser(description="Authorize Edit Factory to publish TikTok videos")
+    parser.add_argument("--timeout", type=int, default=300, help="OAuth callback timeout in seconds")
+    args = parser.parse_args(argv)
+    if args.timeout < 30 or args.timeout > 900:
+        raise SystemExit("--timeout must be between 30 and 900 seconds")
+
+    client_key = os.environ.get("AIVF_TIKTOK_CLIENT_KEY", "").strip()
+    client_secret = os.environ.get("AIVF_TIKTOK_CLIENT_SECRET", "").strip()
+    redirect_uri = os.environ.get("AIVF_TIKTOK_REDIRECT_URI", "").strip()
+    if not client_key or not client_secret:
+        raise SystemExit("Set AIVF_TIKTOK_CLIENT_KEY and AIVF_TIKTOK_CLIENT_SECRET first.")
+    if not redirect_uri:
+        raise SystemExit(
+            "Set AIVF_TIKTOK_REDIRECT_URI to the exact callback URL registered for your TikTok app."
+        )
+    parsed = urlparse(redirect_uri)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+        raise SystemExit(
+            "For this local authorization helper, AIVF_TIKTOK_REDIRECT_URI must be an HTTP loopback URL "
+            "such as http://127.0.0.1:8765/callback and must exactly match the app registration."
+        )
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise SystemExit("The TikTok redirect URI cannot contain credentials, query parameters, or a fragment.")
+    try:
+        port = parsed.port or 80
+    except ValueError as exc:
+        raise SystemExit("AIVF_TIKTOK_REDIRECT_URI contains an invalid port.") from exc
+    callback_path = parsed.path or "/"
+    state = secrets.token_urlsafe(32)
+
+    class CallbackServer(HTTPServer):
+        auth_state = state
+        callback_code: Optional[str] = None
+        callback_error: Optional[str] = None
+        completed = False
+
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:
+            # Never log OAuth callback query strings or authorization codes.
+            return
+
+        def do_GET(self) -> None:
+            query = parse_qs(urlparse(self.path).query)
+            if urlparse(self.path).path != callback_path:
+                self.send_error(404)
+                return
+            if (query.get("state") or [""])[0] != self.server.auth_state:
+                self.server.callback_error = "OAuth state verification failed."
+            elif (query.get("error") or [""])[0]:
+                self.server.callback_error = "TikTok authorization was denied or failed."
+            else:
+                code = (query.get("code") or [""])[0].strip()
+                if not code:
+                    self.server.callback_error = "TikTok returned no authorization code."
+                else:
+                    self.server.callback_code = code
+            self.server.completed = True
+            message = (
+                b"Authorization received. You may close this browser tab."
+                if self.server.callback_code
+                else b"Authorization failed. Return to PowerShell and review the error."
+            )
+            self.send_response(200 if self.server.callback_code else 400)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(message)
+
+    server = CallbackServer(("127.0.0.1", port), CallbackHandler)
+    server.timeout = 1.0
+    authorize_url = "https://www.tiktok.com/v2/auth/authorize/?" + urlencode(
+        {
+            "client_key": client_key,
+            "response_type": "code",
+            "scope": "user.info.basic,video.publish",
+            "redirect_uri": redirect_uri,
+            "state": state,
+        }
+    )
+    print("Opening TikTok authorization in your browser. Do not share the resulting token file.")
+    try:
+        webbrowser.open(authorize_url)
+        deadline = time.monotonic() + args.timeout
+        while not server.completed and time.monotonic() < deadline:
+            server.handle_request()
+    finally:
+        server.server_close()
+    if not server.completed:
+        raise SystemExit("TikTok OAuth timed out without a callback.")
+    if server.callback_error or not server.callback_code:
+        raise SystemExit(server.callback_error or "TikTok OAuth failed.")
+
+    try:
+        response = requests.post(
+            TOKEN_URL,
+            data={
+                "client_key": client_key,
+                "client_secret": client_secret,
+                "code": server.callback_code,
+                "grant_type": "authorization_code",
+                "redirect_uri": redirect_uri,
+            },
+            timeout=(10, 30),
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise SystemExit("TikTok token exchange failed; authorize again after checking app configuration.") from exc
+    if not response.ok or not isinstance(payload, dict) or payload.get("error"):
+        details = payload.get("error_description") or payload.get("error") if isinstance(payload, dict) else "invalid response"
+        raise SystemExit(f"TikTok token exchange was rejected: {str(details)[:300]}")
+    access_token = str(payload.get("access_token") or "").strip()
+    refresh_token = str(payload.get("refresh_token") or "").strip()
+    open_id = str(payload.get("open_id") or "").strip()
+    if not access_token or not refresh_token or not open_id:
+        raise SystemExit("TikTok token exchange did not return access_token, refresh_token, and open_id.")
+    now = time.time()
+    token_record: dict[str, Any] = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "open_id": open_id,
+        "scope": str(payload.get("scope") or ""),
+        "token_type": str(payload.get("token_type") or "Bearer"),
+        "created_at": now,
+        "expires_at": now + float(payload.get("expires_in") or 0),
+        "refresh_expires_at": now + float(payload.get("refresh_expires_in") or 0),
+    }
+    token_path = Path(os.environ.get("AIVF_TIKTOK_TOKEN_PATH", "./state/tiktok-token.json")).expanduser()
+    _write_json(token_path, token_record)
+    print(f"TikTok authorization saved to {token_path}. Keep the file private and outside Git.")
+    print(f"TikTok account identity recorded: {open_id}")
+    return 0
