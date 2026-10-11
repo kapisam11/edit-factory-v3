@@ -586,3 +586,58 @@ def test_manual_reconciliation_rejects_unrelated_permanent_errors(tmp_path: Path
             remote_post_id="must-not-be-accepted",
             now=now + 2,
         )
+
+def _deadline_publisher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MultiPlatformPublisher:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    base = folder.FolderPublisher(
+        folder.FolderPublisherConfig(
+            watch_dir=incoming,
+            db_path=tmp_path / "state" / "publisher.sqlite",
+            settle_seconds=0,
+            poll_seconds=1,
+            publish_enabled=False,
+        )
+    )
+    monkeypatch.setenv("AIVF_REQUIRE_DAILY_PUBLISH", "1")
+    monkeypatch.setenv("AIVF_PUBLISH_DEADLINE_HOUR", "0")
+    monkeypatch.setenv("AIVF_PUBLISH_DEADLINE_MINUTE", "0")
+    monkeypatch.delenv("AIVF_FAILURE_WEBHOOK_URL", raising=False)
+    return MultiPlatformPublisher(base, publish_enabled=False)
+
+
+def test_required_daily_deadline_is_durable_and_alerted_once_per_local_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime
+
+    publisher = _deadline_publisher(tmp_path, monkeypatch)
+    now = datetime.now().astimezone().replace(hour=23, minute=59, second=0, microsecond=0)
+    assert publisher.check_daily_deadline(now) is True
+    assert publisher.check_daily_deadline(now) is True
+    with publisher.store._connect() as connection:
+        rows = connection.execute("SELECT local_date FROM platform_publication_deadline_alerts").fetchall()
+    assert rows == [(now.date().isoformat(),)] or [row[0] for row in rows] == [now.date().isoformat()]
+
+
+def test_required_daily_deadline_passes_only_when_all_destinations_are_confirmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime
+
+    publisher = _deadline_publisher(tmp_path, monkeypatch)
+    now = datetime.now().astimezone().replace(hour=23, minute=59, second=0, microsecond=0)
+    epoch = now.timestamp()
+    yt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("youtube", "default"), now=epoch)
+    tt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("tiktok", "creator"), now=epoch)
+    for expected_id in (yt, tt):
+        claimed = publisher.store.claim_next(max_per_day=10, now=epoch + 1)
+        assert claimed is not None and claimed["id"] == expected_id
+        remote = f"remote-{expected_id}"
+        publisher.store.mark_published(
+            expected_id,
+            str(claimed["lease_owner"]),
+            PublishResult(str(claimed["platform"]), remote, remote, f"https://example.test/{remote}"),
+            now=epoch + 2,
+        )
+    assert publisher.check_daily_deadline(now) is False
