@@ -67,9 +67,11 @@ def test_folder_scan_waits_for_explicit_approval_and_publishes_idempotently(
     assert ready["state"] == "READY"
 
     calls: list[dict[str, object]] = []
+    uploaded_bytes: list[bytes] = []
 
     def fake_upload(path: str, **kwargs: object) -> dict[str, object]:
         calls.append({"path": path, **kwargs})
+        uploaded_bytes.append(Path(path).read_bytes())
         return {"video_id": "test-video-id", "url": "https://youtube.com/watch?v=test-video-id"}
 
     monkeypatch.setattr(folder, "upload_video", fake_upload)
@@ -84,6 +86,9 @@ def test_folder_scan_waits_for_explicit_approval_and_publishes_idempotently(
     assert len(calls) == 1
     assert calls[0]["privacy_status"] == "private"
     assert calls[0]["idempotency_key"].startswith("folder-v1-")
+    assert Path(str(calls[0]["path"])) != video
+    assert Path(str(calls[0]["path"])).parent == publisher.staging_dir.resolve()
+    assert uploaded_bytes == [b"stable fake media for test"]
 
     # A later scan and daemon tick must not enqueue or publish this file again.
     publisher.scan()
@@ -135,3 +140,57 @@ def test_public_upload_requires_an_explicit_opt_in(tmp_path: Path) -> None:
         assert "public upload is blocked" in str(exc)
     else:
         raise AssertionError("public publishing must fail closed by default")
+
+
+def test_source_change_after_review_blocks_first_upload(tmp_path: Path, monkeypatch) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    video = incoming / "changing.mp4"
+    video.write_bytes(b"first version")
+    monkeypatch.setattr(folder, "probe_video", _probe)
+    publisher = _publisher(tmp_path)
+    folder.approve_sidecar(incoming, video.name, ai_generated=False, realistic_alteration=False)
+    publisher.scan()
+    assert publisher.store.items()[0]["state"] == "READY"
+
+    video.write_bytes(b"second version is different")
+
+    def unexpected_upload(*_args, **_kwargs):
+        raise AssertionError("changed source must be blocked before calling the uploader")
+
+    monkeypatch.setattr(folder, "upload_video", unexpected_upload)
+    result = publisher.publish_one()
+    assert result is not None
+    assert result["state"] == "SOURCE_CHANGED"
+    assert "changed after review" in str(result["error"])
+    assert publisher.store.items()[0]["state"] == "SOURCE_CHANGED"
+
+
+def test_editing_source_during_upload_does_not_revoke_active_lease(
+    tmp_path: Path, monkeypatch
+) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    video = incoming / "editing.mp4"
+    video.write_bytes(b"initial version")
+    monkeypatch.setattr(folder, "probe_video", _probe)
+    publisher = _publisher(tmp_path)
+    folder.approve_sidecar(incoming, video.name, ai_generated=False, realistic_alteration=False)
+    publisher.scan()
+    claimed = publisher.store.claim_next(max_per_day=2, now=1_800_000_000)
+    assert claimed is not None
+    old_id = int(claimed["id"])
+    owner = str(claimed["lease_owner"])
+
+    video.write_bytes(b"changed while the old snapshot is uploading")
+    publisher.scan()
+
+    old_item = publisher.store.get_item(old_id)
+    assert old_item is not None
+    assert old_item["state"] == "UPLOADING"
+    assert old_item["lease_owner"] == owner
+    assert any(
+        item["state"] in {"WAITING_STABLE", "READY"}
+        for item in publisher.store.items()
+        if int(item["id"]) != old_id
+    )
