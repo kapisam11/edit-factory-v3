@@ -398,7 +398,9 @@ def _tiktok_chunk_plan(file_size: int) -> tuple[int, int]:
     if size < TIKTOK_MIN_CHUNK_BYTES:
         return size, 1
     chunk_count = (size + TIKTOK_MAX_CHUNK_BYTES - 1) // TIKTOK_MAX_CHUNK_BYTES
-    chunk_size = (size + chunk_count - 1) // chunk_count
+    # Floor division is required by TikTok's total_chunk_count contract. The
+    # final chunk absorbs the remainder and may be a few bytes larger.
+    chunk_size = size // chunk_count
     if not TIKTOK_MIN_CHUNK_BYTES <= chunk_size <= TIKTOK_MAX_CHUNK_BYTES:
         raise PlatformPublishError(
             "video size cannot be represented using TikTok's supported upload chunk sizes",
