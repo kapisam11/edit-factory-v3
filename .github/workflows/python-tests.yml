@@ -341,7 +341,9 @@ jobs:
           [ref]$parseErrors
         ) | Out-Null
         if ($parseErrors.Count -gt 0) {
-          $parseErrors | ForEach-Object { Write-Error $_.Message }
+          $parseErrors | ForEach-Object {
+            Write-Host "PowerShell parse error at line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber): $($_.Message)"
+          }
           exit 1
         }
     - name: Verify dashboard support modules
