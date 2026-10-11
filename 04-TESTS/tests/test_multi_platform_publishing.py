@@ -172,7 +172,7 @@ def test_retryable_destination_failure_does_not_mark_sibling_destinations_failed
     state = store.mark_failure(
         first,
         str(first["lease_owner"]),
-        PlatformPublishError("temporary upstream timeout", code="NETWORK", retryable=True, uncertain=True),
+        PlatformPublishError("temporary upstream timeout before a remote request was sent", code="NETWORK", retryable=True, uncertain=False),
         now=now + 1,
     )
     assert state == "retryable_failed"
@@ -459,3 +459,30 @@ def test_folder_row_and_staging_finalize_only_after_every_destination_publishes(
     base.store.cleanup_terminal_staging(base.staging_dir)
     assert not stage.exists()
     assert base.store.get_item(source_id)["staged_path"] is None
+
+def test_uncertain_create_without_remote_operation_id_fails_closed(
+    tmp_path: Path,
+) -> None:
+    store = PublicationStore(tmp_path / "publish.sqlite")
+    youtube_id = _enqueue(store, tmp_path, "ambiguous-one", Target("youtube", "default"))
+    sibling_id = _enqueue(store, tmp_path, "ambiguous-two", Target("youtube", "default"))
+    now = 1_800_000_000.0
+    job = store.claim_next(max_per_day=10, now=now)
+    assert job is not None and job["id"] == youtube_id
+
+    state = store.mark_failure(
+        job,
+        str(job["lease_owner"]),
+        PlatformPublishError(
+            "connection dropped after create request",
+            code="AMBIGUOUS_CREATE",
+            retryable=True,
+            uncertain=True,
+        ),
+        now=now + 1,
+    )
+    assert state == "permanent_failed"
+    rows = {row["id"]: row for row in store.jobs()}
+    assert rows[youtube_id]["error_code"] == "AMBIGUOUS_OUTCOME_UNTRACKED"
+    assert rows[sibling_id]["state"] == "queued"
+    assert "manually" in rows[youtube_id]["last_error"]
