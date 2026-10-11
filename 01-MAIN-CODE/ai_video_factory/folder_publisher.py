@@ -6,6 +6,7 @@ never treated as evidence of an upload integration. SQLite state survives restar
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import logging
@@ -16,7 +17,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -127,12 +128,20 @@ class FolderPublisher:
         self.config.queue_db.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.config.queue_db), timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _initialize(self) -> None:
         with self._connect() as conn:
@@ -425,6 +434,7 @@ class FolderPublisher:
                 realistic_alteration=bool(metadata.get("realistic_alteration", False)),
                 disclosure_reviewed=bool(metadata.get("disclosure_reviewed", False)),
                 idempotency_key=f"folder-{self.config.account_id}-{job['id']}",
+                idempotency_directory=str(self.config.state_dir / "youtube-idempotency"),
             )
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"[:2000]
