@@ -18,6 +18,7 @@ Before merging a production/hardening branch, all of the following automated che
 - malicious upload/path tests
 - real FFmpeg render integration test
 - SQLite concurrent-write test
+- folder publisher regressions for stable-file detection, explicit approvals, immutable staging, deduplication, opt-in uploads, and retry-state safety
 - final documentation review against implemented code
 
 The repository contains a committed dependency lockfile, and the release CI consumes it with `--frozen`. Dependency changes must update `uv.lock` in the same change set.
