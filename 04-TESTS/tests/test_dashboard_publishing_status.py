@@ -98,3 +98,19 @@ def test_publishing_status_reports_remote_results_and_queue_state(monkeypatch, t
     assert payload["destinations"][0]["events"][0]["event_type"] == "published"
     assert payload["destinations"][0]["events"][0]["state"] == "published"
     assert payload["last_success_epoch"] == now + 2
+
+def test_dashboard_exposes_live_publishing_health_and_destination_results(monkeypatch, tmp_path):
+    client, _database = _load_client(monkeypatch, tmp_path)
+    with client.session_transaction() as session:
+        session["aivf_authenticated"] = True
+
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'id="publishingPanel"' in html
+    assert 'id="publishingStatus"' in html
+    assert 'id="publishingDestinations"' in html
+    assert "refreshPublishingStatus" in html
+    assert "/api/publishing/status" in html
+    assert "Last confirmed publication" in html
+    assert "Token" in html or "token" in html
