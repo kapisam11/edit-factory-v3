@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import uuid
+from datetime import datetime
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -168,6 +169,10 @@ class PublicationStore:
                     event_key TEXT PRIMARY KEY,
                     notified_at REAL NOT NULL,
                     response_code INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS platform_publication_deadline_alerts (
+                    local_date TEXT PRIMARY KEY,
+                    detected_at REAL NOT NULL
                 );
                 """
             )
@@ -712,6 +717,16 @@ class PublicationStore:
             connection.commit()
         return state
 
+    def claim_daily_deadline_alert(self, local_date: str, *, now: float) -> bool:
+        """Return true once per local date when a required daily run is missed."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO platform_publication_deadline_alerts(local_date,detected_at) "
+                "VALUES(?,?)",
+                (str(local_date), now),
+            )
+        return cursor.rowcount == 1
+
     def claim_notification(self, event_key: str, *, now: float) -> bool:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1183,6 +1198,61 @@ class MultiPlatformPublisher:
             "status": self.status(),
         }
 
+    def check_daily_deadline(self, now: datetime | None = None) -> bool:
+        """Alert when a configured local-day deadline passes without all destinations confirmed."""
+        if os.environ.get("AIVF_REQUIRE_DAILY_PUBLISH", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+            return False
+        try:
+            hour = int(os.environ.get("AIVF_PUBLISH_DEADLINE_HOUR", "20"))
+            minute = int(os.environ.get("AIVF_PUBLISH_DEADLINE_MINUTE", "0"))
+            if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+                raise ValueError("hour/minute outside their valid ranges")
+        except ValueError:
+            LOG.error("invalid AIVF_PUBLISH_DEADLINE_HOUR/MINUTE; daily deadline monitoring is disabled")
+            return False
+
+        current = (now or datetime.now().astimezone()).astimezone()
+        deadline = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if current < deadline:
+            return False
+        local_midnight = current.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        with self.store._connect() as connection:
+            completed = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM ("
+                    "SELECT publication_id FROM platform_publications GROUP BY publication_id "
+                    "HAVING COUNT(*)>0 "
+                    "AND SUM(CASE WHEN state='published' THEN 1 ELSE 0 END)=COUNT(*) "
+                    "AND MAX(published_at)>=?"
+                    ")",
+                    (local_midnight,),
+                ).fetchone()[0]
+            )
+        if completed:
+            return False
+
+        local_date = current.date().isoformat()
+        event_key = f"daily-publish-deadline:{local_date}"
+        first_detection = self.store.claim_daily_deadline_alert(local_date, now=current.timestamp())
+        if first_detection:
+            LOG.error(
+                "daily publication deadline missed for %s; no publication with all configured destinations confirmed by %02d:%02d local time",
+                local_date,
+                hour,
+                minute,
+            )
+        self._notify_system_failure(
+            event_key,
+            f"Edit Factory missed the required daily publishing deadline for {local_date}.",
+            {
+                "local_date": local_date,
+                "deadline_local": f"{hour:02d}:{minute:02d}",
+                "reason": "no publication had every configured destination confirmed by the deadline",
+            },
+        )
+        self._write_heartbeat(status="missed_daily_deadline")
+        return True
+
     def run_forever(self, *, poll_seconds: int = 10) -> None:
         self._write_heartbeat(status="starting")
         LOG.info(
@@ -1194,6 +1264,7 @@ class MultiPlatformPublisher:
             try:
                 self.scan_and_enqueue()
                 result = self.process_one()
+                self.check_daily_deadline()
                 if result:
                     LOG.info(
                         "platform publication outcome: job=%s platform=%s account=%s state=%s",
