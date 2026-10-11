@@ -1001,17 +1001,30 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                 code="INVALID_METADATA",
                 retryable=False,
             )
+        brand_content_toggle = overrides.get("brand_content_toggle")
+        if not isinstance(brand_content_toggle, bool):
+            raise PlatformPublishError(
+                "TikTok requires an explicit boolean brand_content_toggle decision in the destination override; set true only for branded content",
+                code="BRAND_DISCLOSURE_REQUIRED",
+                retryable=False,
+            )
         post_info: dict[str, Any] = {
             "title": caption,
             "privacy_level": privacy,
             "disable_duet": bool(overrides.get("disable_duet", False)),
             "disable_comment": bool(overrides.get("disable_comment", False)),
             "disable_stitch": bool(overrides.get("disable_stitch", False)),
+            "brand_content_toggle": brand_content_toggle,
             "is_aigc": metadata.get("ai_generated") is True,
         }
-        for optional_field in ("brand_content_toggle", "brand_organic_toggle"):
-            if optional_field in overrides:
-                post_info[optional_field] = bool(overrides[optional_field])
+        if "brand_organic_toggle" in overrides:
+            if not isinstance(overrides["brand_organic_toggle"], bool):
+                raise PlatformPublishError(
+                    "TikTok brand_organic_toggle must be an explicit JSON boolean",
+                    code="INVALID_METADATA",
+                    retryable=False,
+                )
+            post_info["brand_organic_toggle"] = overrides["brand_organic_toggle"]
         init = self._api(
             "POST",
             "/post/publish/video/init/",
