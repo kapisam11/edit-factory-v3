@@ -66,6 +66,7 @@ jobs:
         uv run python 01-MAIN-CODE/cli.py --help
         uv run python 01-MAIN-CODE/cli_v3.py --help
         uv run aivf --help
+        uv run aivf-folder-publish --help
     - name: Run admission/idempotency load smoke
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
@@ -97,6 +98,7 @@ jobs:
         /tmp/aivf-wheel-test/bin/aivf --help
         /tmp/aivf-wheel-test/bin/aivf-content --help
         /tmp/aivf-wheel-test/bin/aivf-v3 --help
+        /tmp/aivf-wheel-test/bin/aivf-folder-publish --help
         /tmp/aivf-wheel-test/bin/aivf-ready .
         /tmp/aivf-wheel-test/bin/python -c "import os; import ai_video_factory; import app.cli; import app.web_app_v3; from app import wsgi; assert os.path.isdir(app.web_app_v3.app.template_folder); assert os.path.isdir(app.web_app_v3.app.static_folder); assert wsgi.app is app.web_app_v3.app; response=wsgi.app.test_client().get('/api/health'); assert response.status_code == 200; print('isolated wheel runtime ok')"
         /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); names={ep.name:ep.value for ep in group}; assert names['aivf']=='app.cli:main'; assert names['aivf-content']=='app.content_factory_cli:main'; assert names['aivf-v3']=='ai_video_factory.v3_cli:main'"
@@ -330,21 +332,24 @@ jobs:
     - name: Compile spawn-sensitive modules
       shell: pwsh
       run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
-    - name: Validate Windows launcher PowerShell syntax
+    - name: Validate Windows PowerShell scripts
       shell: pwsh
       run: |
-        $tokens = $null
-        $parseErrors = $null
-        [System.Management.Automation.Language.Parser]::ParseFile(
-          (Join-Path $env:GITHUB_WORKSPACE "START-ALL.ps1"),
-          [ref]$tokens,
-          [ref]$parseErrors
-        ) | Out-Null
-        if ($parseErrors.Count -gt 0) {
-          $parseErrors | ForEach-Object {
-            Write-Host "PowerShell parse error at line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber): $($_.Message)"
+        $scriptNames = @("START-ALL.ps1", "RUN-DAILY-PUBLISH.ps1", "REGISTER-DAILY-PUBLISHING.ps1")
+        foreach ($scriptName in $scriptNames) {
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE $scriptName),
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object {
+              Write-Host "$scriptName parse error at line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber): $($_.Message)"
+            }
+            exit 1
           }
-          exit 1
         }
     - name: Verify dashboard support modules
       shell: pwsh
