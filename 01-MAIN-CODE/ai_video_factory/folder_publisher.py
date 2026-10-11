@@ -277,6 +277,51 @@ class FolderQueue:
                 (str(path), now, item_id),
             )
 
+    def reset_source_observation(
+        self, item_id: int, *, size_bytes: int, mtime_ns: int, now: float, reason: str
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE folder_items SET size_bytes=?,mtime_ns=?,stable_since=?,source_sha256=NULL,"
+                "staged_path=NULL,probe_json=NULL,state='WAITING_STABLE',next_attempt_at=0,"
+                "updated_at=?,last_error=? WHERE id=? AND state NOT IN ('UPLOADING','PUBLISHED')",
+                (size_bytes, mtime_ns, now, now, reason[:2000], item_id),
+            )
+
+    def cleanup_terminal_staging(self, staging_root: Path) -> int:
+        root = staging_root.resolve()
+        removed = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id,staged_path FROM folder_items WHERE staged_path IS NOT NULL "
+                "AND state IN ('PUBLISHED','DUPLICATE','SOURCE_CHANGED')"
+            ).fetchall()
+        for row in rows:
+            raw = Path(str(row["staged_path"]))
+            try:
+                candidate = raw.resolve(strict=False)
+                candidate.relative_to(root)
+            except (OSError, ValueError):
+                continue
+            with self._connect() as conn:
+                active = conn.execute(
+                    "SELECT COUNT(*) FROM folder_items WHERE staged_path=? "
+                    "AND state NOT IN ('PUBLISHED','DUPLICATE','SOURCE_CHANGED')",
+                    (str(raw),),
+                ).fetchone()[0]
+            if active:
+                continue
+            if candidate.is_file() and not candidate.is_symlink():
+                candidate.unlink(missing_ok=True)
+                removed += 1
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE folder_items SET staged_path=NULL WHERE staged_path=? "
+                    "AND state IN ('PUBLISHED','DUPLICATE','SOURCE_CHANGED')",
+                    (str(raw),),
+                )
+        return removed
+
     def observe(self, path: Path, *, now: float) -> dict[str, Any]:
         stat_result = path.stat()
         canonical_path = str(path.resolve(strict=True))
@@ -464,6 +509,7 @@ class FolderPublisher:
         self.db_path = config.db_path.expanduser().resolve()
         self.watch_dir.mkdir(parents=True, exist_ok=True)
         self.store = FolderQueue(self.db_path)
+        self.staging_dir = self.db_path.parent / f"{self.db_path.stem}-media"
         if config.privacy_status not in {"private", "unlisted", "public"}:
             raise ValueError("privacy status must be private, unlisted or public")
         if config.privacy_status == "public" and not config.allow_public:
@@ -488,6 +534,82 @@ class FolderPublisher:
 
     def _sidecar(self, video: Path) -> Path:
         return Path(str(video) + ".publish.json")
+
+    def _ensure_staged(
+        self, source: Path, item: dict[str, Any], source_hash: str
+    ) -> tuple[Optional[Path], str]:
+        """Persist an immutable media snapshot so retries use exactly the same bytes."""
+        try:
+            root = self.staging_dir.resolve()
+            root.mkdir(parents=True, exist_ok=True)
+            existing_raw = str(item.get("staged_path") or "")
+            if existing_raw:
+                existing = Path(existing_raw)
+                try:
+                    existing.resolve(strict=True).relative_to(root)
+                    if existing.is_file() and not existing.is_symlink() and _sha256(existing) == source_hash:
+                        return existing, ""
+                except (OSError, ValueError):
+                    pass
+
+            target = root / f"{source_hash}{source.suffix.lower()}"
+            if target.is_file() and not target.is_symlink() and _sha256(target) == source_hash:
+                self.store.set_staged_path(int(item["id"]), target, now=time.time())
+                return target, ""
+
+            before = source.stat()
+            if (
+                before.st_size != int(item["size_bytes"])
+                or before.st_mtime_ns != int(item["mtime_ns"])
+            ):
+                self.store.reset_source_observation(
+                    int(item["id"]),
+                    size_bytes=before.st_size,
+                    mtime_ns=before.st_mtime_ns,
+                    now=time.time(),
+                    reason="source changed before snapshot; waiting for it to settle again",
+                )
+                return None, "staging: source changed before snapshot"
+
+            usage = sum(
+                child.stat().st_size
+                for child in root.iterdir()
+                if child.is_file() and child != target and not child.is_symlink()
+            )
+            if usage + before.st_size > self.config.max_staged_bytes:
+                return None, (
+                    f"staging: queued media snapshots exceed the configured "
+                    f"{self.config.max_staged_bytes}-byte staging quota"
+                )
+            reserve = max(512 * 1024 * 1024, before.st_size // 10)
+            if shutil.disk_usage(root).free < before.st_size + reserve:
+                return None, "staging: insufficient disk headroom for an immutable retry-safe snapshot"
+
+            temporary = root / f".{source_hash}.{uuid.uuid4().hex}.partial"
+            try:
+                with source.open("rb") as input_handle, temporary.open("wb") as output_handle:
+                    shutil.copyfileobj(input_handle, output_handle, length=1024 * 1024)
+                after = source.stat()
+                if (
+                    before.st_size != after.st_size
+                    or before.st_mtime_ns != after.st_mtime_ns
+                    or _sha256(temporary) != source_hash
+                ):
+                    self.store.reset_source_observation(
+                        int(item["id"]),
+                        size_bytes=after.st_size,
+                        mtime_ns=after.st_mtime_ns,
+                        now=time.time(),
+                        reason="source changed during snapshot; waiting for it to settle again",
+                    )
+                    return None, "staging: source changed while snapshot was being copied"
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+            self.store.set_staged_path(int(item["id"]), target, now=time.time())
+            return target, ""
+        except (OSError, ValueError) as exc:
+            return None, f"staging: {exc}"
 
     def _load_metadata(self, video: Path) -> tuple[dict[str, Any], Optional[int], bool, str]:
         sidecar = self._sidecar(video)
@@ -559,6 +681,7 @@ class FolderPublisher:
 
     def scan(self) -> dict[str, Any]:
         now = time.time()
+        self.store.cleanup_terminal_staging(self.staging_dir)
         seen = 0
         for path in self._candidates():
             try:
@@ -568,8 +691,11 @@ class FolderPublisher:
                     continue
                 if (
                     observed["state"] == "NEEDS_REVIEW"
-                    and not observed.get("probe_json")
                     and float(observed.get("next_attempt_at") or 0) > now
+                    and (
+                        not observed.get("probe_json")
+                        or str(observed.get("last_error") or "").startswith("staging:")
+                    )
                 ):
                     continue
                 if now - float(observed["stable_since"]) < self.config.settle_seconds:
@@ -636,6 +762,11 @@ class FolderPublisher:
                 if refreshed is None or refreshed["state"] == "DUPLICATE":
                     continue
                 metadata, sidecar_mtime, ready, reason = self._load_metadata(source)
+                if ready:
+                    staged, staging_error = self._ensure_staged(source, refreshed, file_hash)
+                    if staged is None:
+                        ready = False
+                        reason = staging_error or "staging: immutable media snapshot could not be created"
                 # A source already being uploaded or successfully published is immutable
                 # from the watcher’s point of view; never change its outcome from a sidecar edit.
                 self.store.update_review(
@@ -656,13 +787,24 @@ class FolderPublisher:
             return None
         path = Path(str(item["path"]))
         metadata = json.loads(str(item["metadata_json"]))
-        if not path.is_file() or not self._is_within_root(path):
-            self.store.defer_uncertain(
-                int(item["id"]), str(item["lease_owner"]), "source file disappeared or escaped the watch root",
-                now=time.time(), attempts=int(item["attempts"]),
-            )
-            return {"id": item["id"], "state": "UPLOADING", "error": "source file unavailable"}
         source_hash = str(item.get("source_sha256") or "")
+        staged_raw = str(item.get("staged_path") or "")
+        staged = Path(staged_raw) if staged_raw else None
+        try:
+            if staged is None:
+                raise ValueError("immutable media snapshot path is missing")
+            staged.resolve(strict=True).relative_to(self.staging_dir.resolve())
+            if not staged.is_file() or staged.is_symlink() or _sha256(staged) != source_hash:
+                raise ValueError("immutable media snapshot is missing or failed SHA-256 verification")
+        except (OSError, ValueError) as exc:
+            self.store.defer_uncertain(
+                int(item["id"]),
+                str(item["lease_owner"]),
+                f"snapshot integrity failure: {exc}",
+                now=time.time(),
+                attempts=int(item["attempts"]),
+            )
+            return {"id": int(item["id"]), "state": "UPLOADING", "error": str(exc)}
         if not source_hash:
             self.store.defer_uncertain(
                 int(item["id"]), str(item["lease_owner"]), "validated source SHA-256 is missing",
@@ -686,7 +828,7 @@ class FolderPublisher:
             return str(target)
         try:
             response = upload_video(
-                str(path),
+                str(staged),
                 title=str(metadata["title"]),
                 description=str(metadata.get("description") or ""),
                 tags=metadata.get("tags") or [],
@@ -706,6 +848,7 @@ class FolderPublisher:
             self.store.mark_published(
                 int(item["id"]), str(item["lease_owner"]), response, now=now
             )
+            self.store.cleanup_terminal_staging(self.staging_dir)
             return {
                 "id": int(item["id"]),
                 "state": "PUBLISHED",
@@ -800,6 +943,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--poll-seconds", type=int, default=int(os.environ.get("AIVF_FOLDER_POLL_SECONDS", "10")))
     parser.add_argument("--max-per-day", type=int, default=int(os.environ.get("AIVF_FOLDER_MAX_VIDEOS_PER_DAY", "2")))
     parser.add_argument("--max-file-bytes", type=int, default=int(os.environ.get("AIVF_FOLDER_MAX_FILE_BYTES", str(8 * 1024**3))))
+    parser.add_argument("--max-staged-bytes", type=int, default=int(os.environ.get("AIVF_FOLDER_MAX_STAGED_BYTES", str(20 * 1024**3))))
     parser.add_argument("--max-duration-seconds", type=int, default=int(os.environ.get("AIVF_FOLDER_MAX_DURATION_SECONDS", "7200")))
     parser.add_argument("--privacy", choices=("private", "unlisted", "public"), default=os.environ.get("AIVF_FOLDER_PRIVACY", "private"))
     publish = parser.add_mutually_exclusive_group()
@@ -847,6 +991,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         poll_seconds=max(1, args.poll_seconds),
         max_videos_per_day=max(0, args.max_per_day),
         max_file_bytes=max(1, args.max_file_bytes),
+        max_staged_bytes=max(1, args.max_staged_bytes),
         max_duration_seconds=max(1, args.max_duration_seconds),
         publish_enabled=bool(args.publish_enabled),
         privacy_status=str(args.privacy),
