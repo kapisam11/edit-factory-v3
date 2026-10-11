@@ -217,7 +217,7 @@ def test_public_daily_limit_stops_second_upload(tmp_path):
 
 def test_scan_rejects_invalid_or_oversized_media_before_queueing(tmp_path):
     publisher, video, _ = _make_publisher(tmp_path, _metadata())
-    publisher.config.max_input_bytes = 2  # type: ignore[misc]
+    object.__setattr__(publisher.config, "max_input_bytes", 2)
     result = publisher.scan()
 
     assert result["queued"] == 0
