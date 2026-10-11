@@ -1092,8 +1092,12 @@ class TikTokDirectPostAdapter(PlatformAdapter):
 
         with media_path.open("rb") as handle:
             while offset < size:
+                # A status query can report a partial byte offset inside a
+                # chunk. Finish that chunk's original boundary before sending
+                # the next one, otherwise a restart can exceed total_chunk_count.
+                remaining_in_chunk = chunk_size - (offset % chunk_size)
                 handle.seek(offset)
-                data = handle.read(min(chunk_size, size - offset))
+                data = handle.read(min(remaining_in_chunk, size - offset))
                 if not data:
                     raise PlatformPublishError(
                         "local video ended before the declared upload size",
