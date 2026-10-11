@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-platform Publisher — Edit Factory v3</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/enhancements.css">
+  <style>
+    .publisher-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin:16px 0; }
+    .publisher-card { border:1px solid var(--border-color,#364152); border-radius:10px; padding:14px; min-width:0; }
+    .publisher-card h3 { margin:0 0 8px; font-size:.95rem; }
+    .publisher-value { font-size:1.45rem; font-weight:700; overflow-wrap:anywhere; }
+    .publisher-muted { opacity:.78; font-size:.9rem; }
+    .publisher-scroll { overflow-x:auto; }
+    .publisher-table { width:100%; border-collapse:collapse; }
+    .publisher-table th,.publisher-table td { border-bottom:1px solid var(--border-color,#364152); padding:10px 8px; text-align:left; vertical-align:top; }
+    .publisher-table th { white-space:nowrap; }
+    .publisher-state { font-weight:700; }
+    .publisher-error { color:#ffb4a8; }
+    .publisher-ok { color:#8ae0a5; }
+    .publisher-button { min-height:36px; }
+    code { overflow-wrap:anywhere; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>MULTI-PLATFORM PUBLISHER</h1>
+      <p class="subtitle">Durable per-account queue for approved existing videos. Publishing remains opt-in.</p>
+    </header>
+    <main class="panel">
+      <div class="button-row">
+        <button class="btn-primary publisher-button" id="refresh">Refresh status</button>
+        <a class="btn-secondary" href="/autonomous">Autonomous YouTube</a>
+      </div>
+      <p id="message" class="log-status" aria-live="polite">Loading publisher status…</p>
+      <div class="publisher-grid" id="overview"></div>
+      <h2>Platform configuration</h2>
+      <div class="publisher-grid" id="platforms"></div>
+      <h2>Recent publishing jobs</h2>
+      <p class="publisher-muted">Each row is one source video × platform × account. A remote ID is not treated as proof of final publication until the platform's status is checked.</p>
+      <div class="publisher-scroll">
+        <table class="publisher-table">
+          <thead><tr><th>State</th><th>Destination</th><th>Source</th><th>Attempts</th><th>Remote result</th><th>Last error</th><th>Actions</th></tr></thead>
+          <tbody id="jobs"><tr><td colspan="7">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <h2>Safety reminders</h2>
+      <p>Uploads run only when <code>AIVF_MULTI_PLATFORM_PUBLISH=1</code> or <code>--publish</code> is explicitly enabled. Public publishing additionally requires <code>AIVF_PUBLISH_ALLOW_PUBLIC=1</code>. Instagram audience visibility comes from the account's own privacy settings, which must be acknowledged in each Instagram destination sidecar.</p>
+    </main>
+  </div>
+<script>
+"use strict";
+const byId = (id) => document.getElementById(id);
+function addText(parent, tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.textContent = text == null ? "" : String(text);
+  parent.appendChild(node);
+  return node;
+}
+function formatTime(value) {
+  if (!value) return "—";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  return new Date(number * 1000).toLocaleString();
+}
+function card(parent, title, value, note) {
+  const item = document.createElement("section");
+  item.className = "publisher-card";
+  addText(item, "h3", "", title);
+  addText(item, "div", "publisher-value", value);
+  if (note) addText(item, "div", "publisher-muted", note);
+  parent.appendChild(item);
+}
+async function api(url, options) {
+  const response = await fetch(url, Object.assign({credentials:"same-origin", headers:{"Accept":"application/json"}}, options || {}));
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Request failed (" + response.status + ")");
+  return payload;
+}
+async function loadPublisher() {
+  byId("message").textContent = "Refreshing…";
+  try {
+    const data = await api("/api/publisher/status");
+    const overview = byId("overview");
+    overview.replaceChildren();
+    card(overview, "Uploads", data.publish_enabled ? "ENABLED" : "DRY RUN ONLY", "Public publishing: " + (data.public_publishing_enabled ? "enabled" : "blocked"));
+    card(overview, "Published today (UTC)", data.published_today_utc, "Expected daily posts: " + data.expected_posts_per_day);
+    card(overview, "Free disk", data.disk && data.disk.free_bytes != null ? (Number(data.disk.free_bytes) / (1024 ** 3)).toFixed(1) + " GiB" : "Unavailable", "State/staging filesystem");
+    card(overview, "Deadline", data.deadline_utc || "Not configured", "UTC; missed deadline alert is enabled only when a webhook is configured");
+    card(overview, "Last confirmed publication", data.last_success ? data.last_success.platform + " / " + data.last_success.account_id : "None recorded", data.last_success ? formatTime(data.last_success.published_at) : "No successful job in recent history");
+    const platforms = byId("platforms");
+    platforms.replaceChildren();
+    for (const platform of ["youtube", "instagram", "tiktok"]) {
+      const configured = Boolean(data.configured_platforms && data.configured_platforms[platform]);
+      card(platforms, platform, configured ? "Credentials configured" : "Not configured", configured ? "Configuration presence only; live authorization is not verified." : "Set the required account credentials outside the repository.");
+    }
+    const counts = Object.entries(data.queue_counts || {}).map(([key, value]) => key + ": " + value).join(" · ");
+    byId("message").textContent = "Updated " + new Date().toLocaleTimeString() + " · " + counts;
+    const body = byId("jobs");
+    body.replaceChildren();
+    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    if (!jobs.length) {
+      addText(body.appendChild(document.createElement("tr")), "td", "", "No publishing jobs yet.");
+    } else {
+      for (const job of jobs) {
+        const row = document.createElement("tr");
+        addText(row, "td", "publisher-state", job.state);
+        addText(row, "td", "", job.platform + " / " + job.account_id);
+        addText(row, "td", "", job.source_path);
+        addText(row, "td", "", String(job.attempts) + " / " + String(job.max_attempts));
+        const remote = document.createElement("td");
+        if (job.remote_url && /^https:\/\//i.test(job.remote_url)) {
+          const link = document.createElement("a");
+          link.href = job.remote_url;
+          link.rel = "noopener noreferrer";
+          link.target = "_blank";
+          link.textContent = job.remote_id || "Open remote post";
+          remote.appendChild(link);
+        } else {
+          addText(remote, "span", "", job.remote_id || "—");
+        }
+        row.appendChild(remote);
+        const error = document.createElement("td");
+        if (job.last_error_code) addText(error, "div", "publisher-error", job.last_error_code);
+        if (job.last_error) addText(error, "div", "publisher-muted", job.last_error);
+        if (!job.last_error_code && !job.last_error) addText(error, "span", "", "—");
+        row.appendChild(error);
+        const actions = document.createElement("td");
+        if (["retryable_failed", "permanent_failed"].includes(job.state)) {
+          const button = addText(actions, "button", "btn-secondary publisher-button", "Retry");
+          button.type = "button";
+          button.addEventListener("click", async () => {
+            if (!window.confirm("Retry this job? Ambiguous uploads remain blocked and require manual account verification.")) return;
+            try {
+              await api("/api/publisher/jobs/" + encodeURIComponent(job.id) + "/retry", {method:"POST", headers:{"Content-Type":"application/json","Accept":"application/json"}, body:"{}"});
+              byId("message").textContent = "Retry queued.";
+              await loadPublisher();
+            } catch (error) {
+              byId("message").textContent = error.message;
+            }
+          });
+        } else {
+          addText(actions, "span", "publisher-muted", "—");
+        }
+        const events = addText(actions, "button", "btn-secondary publisher-button", "History");
+        events.type = "button";
+        events.addEventListener("click", async () => {
+          try {
+            const result = await api("/api/publisher/jobs/" + encodeURIComponent(job.id) + "/events");
+            const summary = (result.events || []).map(event => formatTime(event.at) + " · " + event.event + (event.details && event.details.error_code ? " · " + event.details.error_code : "")).join("\n");
+            window.alert(summary || "No events recorded.");
+          } catch (error) {
+            byId("message").textContent = error.message;
+          }
+        });
+        row.appendChild(actions);
+        body.appendChild(row);
+      }
+    }
+  } catch (error) {
+    byId("message").textContent = "Publisher status could not be loaded: " + error.message;
+  }
+}
+byId("refresh").addEventListener("click", loadPublisher);
+loadPublisher();
+window.setInterval(loadPublisher, 15000);
+</script>
+</body>
+</html>
