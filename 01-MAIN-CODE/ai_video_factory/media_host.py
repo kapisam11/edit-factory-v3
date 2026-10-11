@@ -225,6 +225,13 @@ class S3CompatibleMediaHost:
         object_key: str,
         source_sha256: str,
     ) -> HostedMedia:
+        size_bytes = media_path.stat().st_size
+        if size_bytes <= 0 or size_bytes > 5_000_000_000:
+            raise MediaHostError(
+                "single-request S3-compatible hosting requires a non-empty file no larger than 5 GB",
+                code="MEDIA_HOST_SIZE_LIMIT",
+                retryable=False,
+            )
         mime = mimetypes.guess_type(media_path.name)[0]
         if mime not in {"video/mp4", "video/quicktime", "video/webm"}:
             mime = {
@@ -279,7 +286,7 @@ class S3CompatibleMediaHost:
         headers = {
             "Authorization": authorization,
             "Content-Type": mime,
-            "Content-Length": str(media_path.stat().st_size),
+            "Content-Length": str(size_bytes),
             "Host": self.host,
             "x-amz-content-sha256": payload_hash,
             "x-amz-date": amz_date,
