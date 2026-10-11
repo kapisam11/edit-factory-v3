@@ -3,7 +3,8 @@ param(
     [string]$TaskName = "EditFactoryV3-PlatformPublisher",
     [ValidatePattern('^(?:[01]\d|2[0-3]):[0-5]\d$')]
     [string]$DailyWakeTime = "20:00",
-    [switch]$StartNow
+    [switch]$StartNow,
+    [switch]$UseInteractiveLogon
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,17 +33,38 @@ $StartupTrigger = New-ScheduledTaskTrigger -AtStartup
 $LogOnTrigger = New-ScheduledTaskTrigger -AtLogOn -User $Identity
 $DailyWakeTrigger = New-ScheduledTaskTrigger -Daily -At $WakeAt
 $Triggers = @($StartupTrigger, $LogOnTrigger, $DailyWakeTrigger)
-$Principal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType S4U -RunLevel Limited
+if ($UseInteractiveLogon) {
+    $Principal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType Interactive -RunLevel Limited
+} else {
+    # S4U logon deliberately has no network access; publishers need outbound API access.
+    $Principal = New-ScheduledTaskPrincipal -UserId $Identity -LogonType Password -RunLevel Limited
+}
 $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)
 $Task = New-ScheduledTask -Action $Action -Trigger $Triggers -Principal $Principal -Settings $Settings -Description "Runs Edit Factory v3's durable per-platform publishing queue independently of the dashboard. Real uploads remain disabled unless AIVF_MULTI_PUBLISH=1."
 
-Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
+if ($UseInteractiveLogon) {
+    Register-ScheduledTask -TaskName $TaskName -InputObject $Task -Force | Out-Null
+    Write-Host "Interactive logon selected: the task can run only while this user is logged on." -ForegroundColor Yellow
+} else {
+    $Credential = Get-Credential -UserName $Identity -Message "Enter the Windows account password (not the Windows Hello PIN). Task Scheduler stores this credential securely so the publisher can run after reboot without a logged-in session."
+    if (-not $Credential) { throw "No Windows credentials supplied; the scheduled task was not registered." }
+    $TaskPassword = $Credential.GetNetworkCredential().Password
+    try {
+        Register-ScheduledTask -TaskName $TaskName -InputObject $Task -User $Credential.UserName -Password $TaskPassword -Force | Out-Null
+    } finally {
+        $TaskPassword = $null
+        if ($Credential.Password) { $Credential.Password.Dispose() }
+        $Credential = $null
+    }
+}
 Write-Host "Registered scheduled task: $TaskName" -ForegroundColor Green
 Write-Host "Runner: $Runner"
 Write-Host "Logs: <AIVF_STATE_DIR>\logs\platform-publisher.log"
 Write-Host "Daily wake trigger: $DailyWakeTime local time (Windows may still be prevented from waking by power-plan or firmware settings)."
 Write-Host "Network uploads are opt-in. Set AIVF_MULTI_PUBLISH=1 only after reviewing queued destinations and credentials."
-Write-Host "The task uses a least-privilege, passwordless S4U logon for '$Identity'; no administrator elevation is requested."
+Write-Host "The task runs as '$Identity' with least privilege; no administrator elevation is requested."
+if (-not $UseInteractiveLogon) { Write-Host "Task Scheduler stores the supplied logon credential; it is not written to this repository." }
+else { Write-Host "Interactive mode will not run before login; use the default password logon for unattended reboot recovery." }
 Write-Host "Wake-from-sleep additionally requires Windows wake timers and firmware/power settings to permit waking."
 if ($StartNow) {
     Start-ScheduledTask -TaskName $TaskName
