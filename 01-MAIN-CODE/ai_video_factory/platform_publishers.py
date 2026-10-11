@@ -248,6 +248,9 @@ class InstagramReelsAdapter:
         meta = job["metadata"]
         if str(meta.get("privacy_status") or "private") == "public" and os.environ.get("AIVF_PUBLISH_ALLOW_PUBLIC", "0").strip() != "1":
             raise AdapterError("PUBLIC_PUBLISH_BLOCKED", "public publishing is disabled by default")
+        destination_options = meta.get("destination_options") if isinstance(meta.get("destination_options"), dict) else {}
+        if destination_options.get("account_visibility_acknowledged") is not True:
+            raise AdapterError("INSTAGRAM_VISIBILITY_ACK_REQUIRED", "Instagram audience visibility is determined by account settings; explicitly acknowledge the intended account audience in the destination sidecar before publishing")
         payload = self._api(
             f"instagram-container:{job['account_id']}",
             "POST",
@@ -316,9 +319,15 @@ class InstagramReelsAdapter:
         code = str(status.get("status_code") or "").upper()
         if code == "PUBLISHED":
             media_id, permalink = self._lookup_published(str(job["account_id"]), token, base, state)
-            published_id = media_id or str(state.get("published_media_id") or container_id)
-            final_state = {**state, "phase": "published", "published_media_id": published_id}
-            return AdapterUpdate("published", published_id, permalink, final_state)
+            if media_id:
+                final_state = {**state, "phase": "published", "published_media_id": media_id}
+                return AdapterUpdate("published", media_id, permalink, final_state)
+            # Container completion alone does not prove the actual published media
+            # object or its permalink. Reconcile the account before reporting success.
+            started = float(state.get("publish_started_at") or state.get("container_created_at") or time.time())
+            if str(state.get("phase") or "") == "publishing" and time.time() - started > INSTAGRAM_PUBLISH_UNCERTAIN_SECONDS:
+                return AdapterUpdate("permanent_failed", container_id, None, state, "PUBLISH_OUTCOME_UNKNOWN", "Instagram indicates a published container but the actual media object could not be reconciled; inspect the account before retrying")
+            return AdapterUpdate("processing_remote", container_id, None, {**state, "phase": "publishing", "publish_started_at": started})
         if code in {"ERROR", "EXPIRED"}:
             return AdapterUpdate("retryable_failed", None, None, {}, f"INSTAGRAM_CONTAINER_{code}", f"Instagram container reached terminal status {code}; a new container may be created on retry", retryable=True, clear_remote=True)
         if code != "FINISHED":
