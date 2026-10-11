@@ -147,6 +147,20 @@ def test_configured_daily_cap_allows_multiple_posts_when_limit_is_greater_than_o
     assert second is not None and second["id"] == second_id
 
 
+def test_failed_notifications_can_retry_but_successful_notifications_are_deduplicated(
+    tmp_path: Path,
+) -> None:
+    store = PublicationStore(tmp_path / "publish.sqlite")
+    key = "incident:one"
+    assert store.claim_notification(key, now=1000.0) is True
+    assert store.claim_notification(key, now=1001.0) is False
+    store.set_notification_response(key, 503)
+    assert store.claim_notification(key, now=1100.0) is False
+    assert store.claim_notification(key, now=1301.0) is True
+    store.set_notification_response(key, 204)
+    assert store.claim_notification(key, now=99999.0) is False
+
+
 def test_retryable_destination_failure_does_not_mark_sibling_destinations_failed(tmp_path: Path) -> None:
     store = PublicationStore(tmp_path / "publish.sqlite")
     first_id = _enqueue(store, tmp_path, "video-1", Target("youtube", "default"))
