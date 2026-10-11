@@ -242,6 +242,17 @@ class YouTubeAdapter(PlatformAdapter):
                 code="MISSING_CREDENTIALS",
                 retryable=False,
             )
+        overrides = metadata.get("_platform_override")
+        platform_override = overrides if isinstance(overrides, dict) else {}
+        requested_privacy = str(
+            platform_override.get("privacy_status") or metadata.get("privacy_status") or "private"
+        ).strip().lower()
+        if requested_privacy not in {"private", "unlisted", "public"}:
+            raise PlatformPublishError(
+                "YouTube privacy_status must be private, unlisted or public",
+                code="INVALID_METADATA",
+                retryable=False,
+            )
         try:
             from . import youtube_publisher
 
@@ -250,7 +261,7 @@ class YouTubeAdapter(PlatformAdapter):
                 title=str(metadata.get("title") or media_path.stem)[:100],
                 description=str(metadata.get("description") or "")[:5000],
                 tags=[str(tag) for tag in metadata.get("tags", []) if isinstance(tag, str)][:30],
-                privacy_status=str(metadata.get("privacy_status") or "private"),
+                privacy_status=requested_privacy,
                 category_id=str(metadata.get("category_id") or "22"),
                 thumbnail_path=str(metadata["thumbnail_path"]) if metadata.get("thumbnail_path") else None,
                 caption_path=str(metadata["caption_path"]) if metadata.get("caption_path") else None,
@@ -297,6 +308,21 @@ class YouTubeAdapter(PlatformAdapter):
             client_secrets_path=client_secrets,
             token_path=token_path,
         )
+        actual_privacy = str(remote_status.get("privacy_status") or "").strip().lower()
+        if not actual_privacy:
+            raise PlatformPublishError(
+                "YouTube processing finished but the final privacy status was not returned",
+                code="REMOTE_VISIBILITY_UNCONFIRMED",
+                retryable=True,
+                uncertain=True,
+            )
+        if actual_privacy != requested_privacy:
+            raise PlatformPublishError(
+                f"YouTube accepted the video but final visibility is {actual_privacy!r}, expected {requested_privacy!r}",
+                code="REMOTE_VISIBILITY_MISMATCH",
+                retryable=False,
+                uncertain=False,
+            )
         result["verified_remote_status"] = remote_status
         return PublishResult("youtube", post_id, post_id, url)
 
