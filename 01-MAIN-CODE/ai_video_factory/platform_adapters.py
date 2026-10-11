@@ -18,6 +18,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from .platform_auth import TokenRefreshError, get_platform_access_token
+
 
 @dataclass(frozen=True)
 class PublishResult:
@@ -459,7 +461,7 @@ class InstagramReelsAdapter(PlatformAdapter):
     platform = "instagram"
 
     def _config(self, account_id: str) -> tuple[str, str, str]:
-        token = _account_setting(
+        raw_token = _account_setting(
             self.platform,
             account_id,
             "access_token",
@@ -477,7 +479,9 @@ class InstagramReelsAdapter(PlatformAdapter):
             "graph_api_version",
             legacy_name="INSTAGRAM_GRAPH_API_VERSION",
         )
-        if not token or not user_id or not version:
+        app_id = _account_setting(self.platform, account_id, "app_id")
+        app_secret = _account_setting(self.platform, account_id, "app_secret")
+        if not raw_token or not user_id or not version:
             raise PlatformPublishError(
                 f"Instagram account {account_id!r} requires access token, professional account ID, and pinned Graph API version",
                 code="MISSING_CREDENTIALS",
@@ -489,6 +493,22 @@ class InstagramReelsAdapter(PlatformAdapter):
                 code="INVALID_CONFIGURATION",
                 retryable=False,
             )
+        try:
+            token = get_platform_access_token(
+                platform="instagram",
+                account_id=account_id,
+                access_token=raw_token,
+                app_id=app_id,
+                app_secret=app_secret,
+                graph_api_version=version,
+            )
+        except TokenRefreshError as exc:
+            raise PlatformPublishError(
+                str(exc),
+                code=exc.code,
+                retryable=exc.retryable,
+                uncertain=exc.retryable,
+            ) from exc
         return token, user_id, version
 
     def publish(
@@ -666,19 +686,31 @@ class TikTokDirectPostAdapter(PlatformAdapter):
     api_base = "https://open.tiktokapis.com/v2"
 
     def _token(self, account_id: str) -> str:
-        token = _account_setting(
+        access_token = _account_setting(
             self.platform,
             account_id,
             "access_token",
             legacy_name="TIKTOK_ACCESS_TOKEN",
         )
-        if not token:
-            raise PlatformPublishError(
-                f"TikTok access token is not configured for account {account_id!r}",
-                code="MISSING_CREDENTIALS",
-                retryable=False,
+        refresh_token = _account_setting(self.platform, account_id, "refresh_token")
+        client_key = _account_setting(self.platform, account_id, "client_key")
+        client_secret = _account_setting(self.platform, account_id, "client_secret")
+        try:
+            return get_platform_access_token(
+                platform="tiktok",
+                account_id=account_id,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                client_key=client_key,
+                client_secret=client_secret,
             )
-        return token
+        except TokenRefreshError as exc:
+            raise PlatformPublishError(
+                str(exc),
+                code=exc.code,
+                retryable=exc.retryable,
+                uncertain=exc.retryable,
+            ) from exc
 
     def _api(
         self,
