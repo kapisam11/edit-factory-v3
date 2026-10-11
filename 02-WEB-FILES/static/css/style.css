@@ -625,3 +625,16 @@ header h1 {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
+/* Authenticated per-destination publishing status */
+.platform-publishing-panel { min-width: 0; }
+.platform-publishing-panel h3 { font-size: 0.9rem; margin: 14px 0 6px; color: var(--text-secondary); }
+.publishing-meta { color: var(--text-secondary); font-size: 0.76rem; display: grid; gap: 5px; margin: 8px 0 12px; overflow-wrap: anywhere; }
+.publishing-meta strong { color: var(--text-primary); }
+.publishing-destinations, .publishing-errors { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.publishing-job { border-top: 1px solid var(--border); padding-top: 8px; font-size: 0.76rem; color: var(--text-secondary); display: grid; gap: 4px; }
+.publishing-job-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.publishing-job-heading strong { color: var(--text-primary); overflow-wrap: anywhere; }
+.publishing-state { flex: 0 0 auto; border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; font-size: 0.68rem; }
+.publishing-remote { font-size: 0.7rem; overflow-wrap: anywhere; }
+.publishing-error-detail { border-left: 2px solid var(--error); padding-left: 7px; color: var(--error); font-size: 0.72rem; overflow-wrap: anywhere; }
+.publishing-event { color: var(--text-muted); font-size: 0.68rem; overflow-wrap: anywhere; }

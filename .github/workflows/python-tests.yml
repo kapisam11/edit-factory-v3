@@ -45,6 +45,10 @@ jobs:
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
       run: uv run pytest -q 04-TESTS/tests/test_folder_publisher.py
+    - name: Run per-platform publishing state and adapter tests
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: uv run pytest -q 04-TESTS/tests/test_multi_platform_publishing.py 04-TESTS/tests/test_platform_adapters.py 04-TESTS/tests/test_media_host.py
     - name: Validate deployment boundary scripts
       run: |
         uv run python -m py_compile 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py 06-CONFIG-AND-DEPLOYMENT/verify_human_acceptance.py
@@ -71,6 +75,7 @@ jobs:
         uv run python 01-MAIN-CODE/cli_v3.py --help
         uv run aivf --help
         uv run aivf-folder-publisher --help
+        uv run aivf-publish --help
     - name: Run admission/idempotency load smoke
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
@@ -341,16 +346,26 @@ jobs:
       run: |
         $tokens = $null
         $parseErrors = $null
-        [System.Management.Automation.Language.Parser]::ParseFile(
-          (Join-Path $env:GITHUB_WORKSPACE "START-ALL.ps1"),
-          [ref]$tokens,
-          [ref]$parseErrors
-        ) | Out-Null
-        if ($parseErrors.Count -gt 0) {
-          $parseErrors | ForEach-Object {
-            Write-Host "PowerShell parse error at line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber): $($_.Message)"
+        $scripts = @(
+          "START-ALL.ps1",
+          "RUN-PUBLISHER.ps1",
+          "INSTALL-PUBLISHER-TASK.ps1",
+          "REMOVE-PUBLISHER-TASK.ps1"
+        )
+        foreach ($script in $scripts) {
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE $script),
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object {
+              Write-Host "$script parse error at line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber): $($_.Message)"
+            }
+            exit 1
           }
-          exit 1
         }
     - name: Verify dashboard support modules
       shell: pwsh

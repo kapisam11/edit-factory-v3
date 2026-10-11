@@ -18,7 +18,7 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -1713,6 +1713,224 @@ def health_details():
         "max_concurrent_jobs": int(get_settings().get("max_concurrent_jobs", 2)),
         "capabilities": _runtime_capabilities(),
     })
+
+
+@app.route("/api/publishing/status")
+def publishing_status():
+    """Authenticated status for the persistent per-platform publishing worker."""
+    state_dir = Path(os.environ.get("AIVF_STATE_DIR", str(STATE_DIR))).expanduser()
+    database = Path(
+        os.environ.get("AIVF_FOLDER_STATE_DB", str(state_dir / "folder-publisher.sqlite"))
+    ).expanduser().resolve()
+    now_epoch = time.time()
+    current_local = datetime.now().astimezone()
+    require_daily = os.environ.get("AIVF_REQUIRE_DAILY_PUBLISH", "0").strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        deadline_hour = int(os.environ.get("AIVF_PUBLISH_DEADLINE_HOUR", "20"))
+        deadline_minute = int(os.environ.get("AIVF_PUBLISH_DEADLINE_MINUTE", "0"))
+        if not 0 <= deadline_hour <= 23 or not 0 <= deadline_minute <= 59:
+            raise ValueError
+        deadline_today = current_local.replace(hour=deadline_hour, minute=deadline_minute, second=0, microsecond=0)
+        if current_local < deadline_today:
+            next_deadline = deadline_today
+        else:
+            tomorrow = (current_local + timedelta(days=1)).date()
+            next_deadline = datetime.combine(tomorrow, datetime.min.time(), tzinfo=current_local.tzinfo).replace(hour=deadline_hour, minute=deadline_minute)
+    except (TypeError, ValueError, OverflowError):
+        deadline_hour, deadline_minute = 20, 0
+        deadline_today = current_local.replace(hour=20, minute=0, second=0, microsecond=0)
+        next_deadline = deadline_today if current_local < deadline_today else deadline_today + timedelta(days=1)
+
+    try:
+        disk_path = state_dir if state_dir.exists() else OUTPUT_FOLDER
+        disk_free = int(shutil.disk_usage(disk_path).free)
+    except OSError:
+        disk_free = None
+
+    heartbeat_path = Path(
+        os.environ.get(
+            "AIVF_PUBLISH_HEARTBEAT_PATH",
+            str(database.parent / "publishing-heartbeat.json"),
+        )
+    ).expanduser()
+    heartbeat = {}
+    try:
+        raw_heartbeat = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        if isinstance(raw_heartbeat, dict):
+            heartbeat = {
+                key: raw_heartbeat.get(key)
+                for key in ("updated_at_epoch", "last_success_epoch", "status", "publish_enabled", "disk_free_bytes", "queue_counts")
+            }
+    except (OSError, ValueError, TypeError):
+        pass
+
+    base = {
+        "status": "not_configured",
+        "database_configured": database.is_file(),
+        "publish_enabled": os.environ.get("AIVF_MULTI_PUBLISH", "0").strip() == "1",
+        "deadline": {
+            "required": require_daily,
+            "local_time": f"{deadline_hour:02d}:{deadline_minute:02d}",
+            "next_epoch": next_deadline.timestamp(),
+            "missed_today": False,
+        },
+        "disk_free_bytes": disk_free,
+        "heartbeat": heartbeat,
+        "counts_by_state": {},
+        "last_success_epoch": None,
+        "queue_age_seconds": None,
+        "destinations": [],
+        "recent_errors": [],
+        "token_expiries": [],
+    }
+    if not database.is_file():
+        return jsonify(base)
+
+    try:
+        with sqlite3.connect(str(database), timeout=3) as connection:
+            connection.row_factory = sqlite3.Row
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='platform_publications'"
+            ).fetchone()
+            if not exists:
+                return jsonify(base)
+            counts = {
+                str(row["state"]): int(row["count"])
+                for row in connection.execute(
+                    "SELECT state,COUNT(*) AS count FROM platform_publications GROUP BY state"
+                ).fetchall()
+            }
+            latest_success = connection.execute(
+                "SELECT MAX(published_at) FROM platform_publications WHERE state='published'"
+            ).fetchone()[0]
+            oldest_pending = connection.execute(
+                "SELECT MIN(created_at) FROM platform_publications "
+                "WHERE state NOT IN ('published','permanent_failed','cancelled')"
+            ).fetchone()[0]
+            today_start = current_local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            from ai_video_factory.multi_platform_publishing import completed_publications_before_deadline
+
+            publication_rows = connection.execute(
+                "SELECT publication_id,source_sha256,platform,account_id,state,published_at,metadata_json "
+                "FROM platform_publications"
+            ).fetchall()
+            complete_today = completed_publications_before_deadline(
+                publication_rows,
+                window_start=today_start,
+                cutoff=deadline_today.timestamp(),
+            )
+            rows = connection.execute(
+                "SELECT id,publication_id,platform,account_id,state,remote_operation_id,"
+                "remote_post_id,remote_url,attempts,max_attempts,next_attempt_at,created_at,"
+                "updated_at,published_at,error_code,last_error FROM platform_publications "
+                "ORDER BY updated_at DESC,id DESC LIMIT 100"
+            ).fetchall()
+            failed = connection.execute(
+                "SELECT id,publication_id,platform,account_id,state,error_code,last_error,updated_at "
+                "FROM platform_publications WHERE state IN ('retryable_failed','permanent_failed') "
+                "ORDER BY updated_at DESC,id DESC LIMIT 10"
+            ).fetchall()
+            event_history_by_job: dict[int, list[dict[str, Any]]] = {}
+            job_ids = [int(row["id"]) for row in rows]
+            if job_ids:
+                placeholders = ",".join("?" for _ in job_ids)
+                event_rows = connection.execute(
+                    "SELECT publication_job_id,occurred_at,event_type,state,detail_json "
+                    "FROM platform_publication_events "
+                    f"WHERE publication_job_id IN ({placeholders}) ORDER BY id DESC LIMIT 500",
+                    job_ids,
+                ).fetchall()
+                for event in event_rows:
+                    job_id = int(event["publication_job_id"])
+                    events = event_history_by_job.setdefault(job_id, [])
+                    if len(events) >= 8:
+                        continue
+                    try:
+                        detail = json.loads(str(event["detail_json"] or "{}"))
+                        if not isinstance(detail, dict):
+                            detail = {}
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        detail = {}
+                    events.append({
+                        "occurred_at": float(event["occurred_at"]),
+                        "event_type": str(event["event_type"]),
+                        "state": str(event["state"]),
+                        "detail": detail,
+                    })
+    except (sqlite3.Error, OSError):
+        return jsonify({"status": "unavailable", "database_configured": True}), 503
+
+    destinations = []
+    for row in rows:
+        destinations.append({
+            "job_id": int(row["id"]),
+            "publication_id": str(row["publication_id"]),
+            "platform": str(row["platform"]),
+            "account_id": str(row["account_id"]),
+            "state": str(row["state"]),
+            "remote_operation_id": str(row["remote_operation_id"] or ""),
+            "remote_post_id": str(row["remote_post_id"] or ""),
+            "remote_url": str(row["remote_url"] or ""),
+            "attempts": int(row["attempts"]),
+            "max_attempts": int(row["max_attempts"]),
+            "next_attempt_at": row["next_attempt_at"],
+            "created_at": float(row["created_at"]),
+            "updated_at": float(row["updated_at"]),
+            "published_at": row["published_at"],
+            "error_code": str(row["error_code"] or ""),
+            "last_error": str(row["last_error"] or "")[:500],
+            "events": event_history_by_job.get(int(row["id"]), []),
+        })
+    recent_errors = [{
+        "job_id": int(row["id"]),
+        "publication_id": str(row["publication_id"]),
+        "platform": str(row["platform"]),
+        "account_id": str(row["account_id"]),
+        "state": str(row["state"]),
+        "error_code": str(row["error_code"] or ""),
+        "message": str(row["last_error"] or "")[:500],
+        "updated_at": float(row["updated_at"]),
+    } for row in failed]
+    token_database = Path(
+        os.environ.get(
+            "AIVF_PLATFORM_TOKEN_DB",
+            str(state_dir / "platform-secrets" / "platform-tokens.sqlite"),
+        )
+    ).expanduser()
+    token_expiries = []
+    if token_database.is_file():
+        try:
+            with sqlite3.connect(str(token_database), timeout=2) as token_connection:
+                token_table = token_connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='platform_tokens'"
+                ).fetchone()
+                if token_table:
+                    token_expiries = [{
+                        "platform": str(row[0]),
+                        "account_id": str(row[1]),
+                        "expires_at": float(row[2]),
+                        "seconds_until_expiry": round(float(row[2]) - now_epoch),
+                    } for row in token_connection.execute(
+                        "SELECT platform,account_id,expires_at FROM platform_tokens ORDER BY platform,account_id"
+                    ).fetchall()]
+        except sqlite3.Error:
+            token_expiries = []
+
+    base.update({
+        "status": "ok",
+        "publish_enabled": bool(heartbeat.get("publish_enabled")) or base["publish_enabled"],
+        "counts_by_state": counts,
+        "last_success_epoch": float(latest_success) if latest_success is not None else None,
+        "queue_age_seconds": max(0, round(now_epoch - float(oldest_pending))) if oldest_pending is not None else 0,
+        "destinations": destinations,
+        "recent_errors": recent_errors,
+        "token_expiries": token_expiries,
+        "deadline": {
+            **base["deadline"],
+            "missed_today": bool(require_daily and current_local >= deadline_today and complete_today == 0),
+        },
+    })
+    return jsonify(base)
 
 
 init_db()

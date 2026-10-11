@@ -60,6 +60,7 @@ def test_documentation_distinguishes_profiles_from_direct_publishers() -> None:
         REPOSITORY_ROOT / "00-INFO" / "AUTONOMOUS-YOUTUBE.md"
     ).read_text(encoding="utf-8")
 
-    assert "not a promise that each platform can be uploaded to automatically" in upload_guide
+    assert "not proof that your own accounts can publish" in upload_guide
+    assert "controlled real-account acceptance test" in upload_guide
     assert "does not watch a folder of existing videos" in upload_guide
     assert "publishes through the YouTube integration only" in autonomous_guide
