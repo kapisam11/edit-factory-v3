@@ -339,8 +339,14 @@ def fetch_video_reach_metrics(
     }
 
 
-def _idempotency_path(idempotency_key: str) -> Path:
-    root = Path(os.environ.get("YOUTUBE_IDEMPOTENCY_DIR", os.path.expanduser("~/.config/edit-factory/youtube-idempotency")))
+def _idempotency_path(idempotency_key: str, directory: Optional[str] = None) -> Path:
+    root = Path(
+        directory
+        or os.environ.get(
+            "YOUTUBE_IDEMPOTENCY_DIR",
+            os.path.expanduser("~/.config/edit-factory/youtube-idempotency"),
+        )
+    )
     root.mkdir(parents=True, exist_ok=True)
     return root / (re.sub(r"[^a-zA-Z0-9_.-]", "_", idempotency_key) + ".json")
 
@@ -603,6 +609,7 @@ def upload_video(
     realistic_alteration: bool = False,
     disclosure_reviewed: bool = False,
     idempotency_key: Optional[str] = None,
+    idempotency_directory: Optional[str] = None,
     max_upload_attempts: int = 4,
 ) -> Dict[str, Any]:
     """Upload one video with optional thumbnail/captions; upload is always explicit.
@@ -637,7 +644,11 @@ def upload_video(
     except Exception:
         duration_seconds = 0.0
 
-    idem_path = _idempotency_path(str(idempotency_key)) if idempotency_key else None
+    idem_path = (
+        _idempotency_path(str(idempotency_key), idempotency_directory)
+        if idempotency_key and idempotency_directory
+        else _idempotency_path(str(idempotency_key)) if idempotency_key else None
+    )
     previous: Optional[Dict[str, Any]] = None
     previous_attempt_started: Optional[float] = None
     if idem_path:
