@@ -486,3 +486,103 @@ def test_uncertain_create_without_remote_operation_id_fails_closed(
     assert rows[youtube_id]["error_code"] == "AMBIGUOUS_OUTCOME_UNTRACKED"
     assert rows[sibling_id]["state"] == "queued"
     assert "manually" in rows[youtube_id]["last_error"]
+
+def test_manual_reconciliation_records_confirmed_remote_publication(tmp_path: Path) -> None:
+    store = PublicationStore(tmp_path / "publish.sqlite")
+    job_id = _enqueue(store, tmp_path, "reconcile-published", Target("tiktok", "creator"))
+    now = 1_800_000_000.0
+    job = store.claim_next(max_per_day=10, now=now)
+    assert job is not None and job["id"] == job_id
+    assert store.mark_failure(
+        job,
+        str(job["lease_owner"]),
+        PlatformPublishError(
+            "creation response was lost",
+            code="AMBIGUOUS_CREATE",
+            retryable=True,
+            uncertain=True,
+        ),
+        now=now + 1,
+    ) == "permanent_failed"
+
+    state = store.reconcile_failed(
+        job_id,
+        outcome="published",
+        remote_post_id="confirmed-remote-post",
+        remote_url="https://www.tiktok.com/@creator/video/confirmed-remote-post",
+        now=now + 2,
+    )
+    assert state == "published"
+    row = next(job for job in store.jobs() if job["id"] == job_id)
+    assert row["remote_post_id"] == "confirmed-remote-post"
+    assert row["remote_url"] == "https://www.tiktok.com/@creator/video/confirmed-remote-post"
+    assert row["error_code"] is None
+    assert store.history(job_id)[0]["event_type"] == "manual_reconciliation"
+
+
+def test_manual_reconciliation_of_instagram_absence_reuses_container_without_reposting(
+    tmp_path: Path,
+) -> None:
+    store = PublicationStore(tmp_path / "publish.sqlite")
+    job_id = _enqueue(store, tmp_path, "reconcile-instagram", Target("instagram", "brand"))
+    now = 1_800_000_000.0
+    job = store.claim_next(max_per_day=10, now=now)
+    assert job is not None and job["id"] == job_id
+    store.record_operation(
+        job_id,
+        str(job["lease_owner"]),
+        "instagram-container-123",
+        {
+            "container_id": "instagram-container-123",
+            "stage": "publishing",
+            "publish_started": True,
+            "publish_started_at": now,
+        },
+        "processing_remote",
+        now=now + 1,
+    )
+    assert store.mark_failure(
+        job,
+        str(job["lease_owner"]),
+        PlatformPublishError(
+            "publish result not confirmed",
+            code="AMBIGUOUS_OUTCOME",
+            retryable=False,
+            uncertain=True,
+        ),
+        now=now + 2,
+    ) == "permanent_failed"
+
+    state = store.reconcile_failed(job_id, outcome="not-published", now=now + 3)
+    assert state == "processing_remote"
+    with store._connect() as connection:
+        row = connection.execute(
+            "SELECT remote_operation_id,adapter_state_json,state FROM platform_publications WHERE id=?",
+            (job_id,),
+        ).fetchone()
+    adapter_state = json.loads(row["adapter_state_json"])
+    assert row["remote_operation_id"] == "instagram-container-123"
+    assert row["state"] == "processing_remote"
+    assert adapter_state["container_id"] == "instagram-container-123"
+    assert adapter_state["publish_started"] is False
+
+
+def test_manual_reconciliation_rejects_unrelated_permanent_errors(tmp_path: Path) -> None:
+    store = PublicationStore(tmp_path / "publish.sqlite")
+    job_id = _enqueue(store, tmp_path, "not-ambiguous", Target("youtube", "default"))
+    now = 1_800_000_000.0
+    job = store.claim_next(max_per_day=10, now=now)
+    assert job is not None and job["id"] == job_id
+    assert store.mark_failure(
+        job,
+        str(job["lease_owner"]),
+        PlatformPublishError("invalid privacy setting", code="INVALID_METADATA", retryable=False),
+        now=now + 1,
+    ) == "permanent_failed"
+    with pytest.raises(ValueError, match="ambiguous remote publication"):
+        store.reconcile_failed(
+            job_id,
+            outcome="published",
+            remote_post_id="must-not-be-accepted",
+            now=now + 2,
+        )
