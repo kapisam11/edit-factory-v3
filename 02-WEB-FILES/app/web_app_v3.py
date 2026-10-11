@@ -1812,8 +1812,8 @@ def publishing_status():
                 "SELECT COUNT(*) FROM (SELECT publication_id FROM platform_publications "
                 "GROUP BY publication_id HAVING COUNT(*)>0 "
                 "AND SUM(CASE WHEN state='published' THEN 1 ELSE 0 END)=COUNT(*) "
-                "AND MAX(published_at)>=?)",
-                (today_start,),
+                "AND MAX(published_at)>=? AND MAX(published_at)<=?)",
+                (today_start, deadline_today.timestamp()),
             ).fetchone()[0])
             rows = connection.execute(
                 "SELECT id,publication_id,platform,account_id,state,remote_operation_id,"

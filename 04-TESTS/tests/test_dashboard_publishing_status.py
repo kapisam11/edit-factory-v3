@@ -114,3 +114,56 @@ def test_dashboard_exposes_live_publishing_health_and_destination_results(monkey
     assert "/api/publishing/status" in html
     assert "Last confirmed publication" in html
     assert "Token" in html or "token" in html
+
+
+def test_dashboard_marks_publications_after_deadline_as_missed(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIVF_REQUIRE_DAILY_PUBLISH", "1")
+    monkeypatch.setenv("AIVF_PUBLISH_DEADLINE_HOUR", "0")
+    monkeypatch.setenv("AIVF_PUBLISH_DEADLINE_MINUTE", "0")
+    client, database = _load_client(monkeypatch, tmp_path)
+    source = tmp_path / "late-clip.mp4"
+    staged = tmp_path / "stage" / "late-clip.mp4"
+    source.write_bytes(b"late source")
+    staged.parent.mkdir()
+    staged.write_bytes(b"late source")
+
+    store = PublicationStore(database)
+    now = time.time()
+    job_id, created = store.enqueue(
+        publication_id="dashboard-late-deadline",
+        item={
+            "id": 1,
+            "path": str(source),
+            "size_bytes": source.stat().st_size,
+            "mtime_ns": source.stat().st_mtime_ns,
+            "sidecar_mtime_ns": None,
+        },
+        source_sha256="b" * 64,
+        staged_path=staged,
+        target=Target("youtube", "default"),
+        metadata={"title": "Late publication"},
+        max_attempts=3,
+        now=now - 10,
+    )
+    assert created
+    claimed = store.claim_next(max_per_day=2, now=now - 9)
+    assert claimed is not None and claimed["id"] == job_id
+    store.mark_published(
+        job_id,
+        str(claimed["lease_owner"]),
+        PublishResult(
+            "youtube",
+            "late-remote-id",
+            "late-remote-id",
+            "https://www.youtube.com/watch?v=late-remote-id",
+        ),
+        now=now,
+    )
+
+    with client.session_transaction() as session:
+        session["aivf_authenticated"] = True
+    response = client.get("/api/publishing/status")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["deadline"]["required"] is True
+    assert payload["deadline"]["missed_today"] is True
