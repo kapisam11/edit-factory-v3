@@ -5,6 +5,7 @@
     let enhancementTerminal = false;
     let healthTimer = null;
     let statusTimer = null;
+    let publishingTimer = null;
 
     function ensureSystemStatus() {
         if (document.getElementById('systemStatus')) return;
@@ -16,6 +17,141 @@
                 <span class="system-status-text">Checking system…</span>
             </div>`;
         document.querySelector('header')?.appendChild(wrap);
+    }
+
+    function ensurePublishingPanel() {
+        if (document.getElementById('platformPublishingPanel')) return;
+        const sidebar = document.querySelector('.sidebar');
+        if (!sidebar) return;
+        const panel = document.createElement('section');
+        panel.id = 'platformPublishingPanel';
+        panel.className = 'panel platform-publishing-panel';
+        panel.innerHTML =
+            '<h2>Platform Publishing</h2>' +
+            '<div id="platformPublishingSummary" class="queue-badge">Loading…</div>' +
+            '<div id="platformPublishingMeta" class="publishing-meta"></div>' +
+            '<div id="platformPublishingDestinations" class="publishing-destinations"></div>' +
+            '<h3>Recent errors</h3>' +
+            '<div id="platformPublishingErrors" class="publishing-errors"></div>';
+        sidebar.insertBefore(panel, sidebar.children[1] || null);
+    }
+
+    function addPublishingLine(parent, label, value, className) {
+        const line = document.createElement('div');
+        if (className) line.className = className;
+        const strong = document.createElement('strong');
+        strong.textContent = label;
+        line.appendChild(strong);
+        line.appendChild(document.createTextNode(' ' + String(value === null || value === undefined || value === '' ? '—' : value)));
+        parent.appendChild(line);
+    }
+
+    function formatPublishingTime(value) {
+        if (value === null || value === undefined || value === '') return 'Never';
+        const date = new Date(Number(value) * 1000);
+        return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString();
+    }
+
+    async function refreshPublishingStatus() {
+        const summary = document.getElementById('platformPublishingSummary');
+        const meta = document.getElementById('platformPublishingMeta');
+        const destinations = document.getElementById('platformPublishingDestinations');
+        const errors = document.getElementById('platformPublishingErrors');
+        if (!summary || !meta || !destinations || !errors) return;
+        try {
+            const response = await fetch('/api/publishing/status', { cache: 'no-store' });
+            if (!response.ok) throw new Error('publishing status unavailable');
+            const data = await response.json();
+            if (data.status === 'not_configured') {
+                summary.textContent = 'Publisher queue not initialized';
+                meta.textContent = 'Run aivf-publish scan to initialize and inspect the destination queue.';
+                destinations.replaceChildren();
+                errors.replaceChildren();
+                summary.classList.remove('error');
+                return;
+            }
+            if (data.status !== 'ok') throw new Error('publishing status unavailable');
+            const counts = data.counts_by_state || {};
+            const queued = Number(counts.queued || 0) + Number(counts.retryable_failed || 0);
+            const active = Number(counts.uploading || 0) + Number(counts.processing_remote || 0);
+            const failed = Number(counts.permanent_failed || 0);
+            summary.textContent = queued + ' queued/retry · ' + active + ' active · ' +
+                Number(counts.published || 0) + ' published · ' + failed + ' failed';
+            summary.classList.toggle('error', failed > 0 || data.deadline?.missed_today === true);
+            meta.replaceChildren();
+            addPublishingLine(meta, 'Last confirmed publication:', formatPublishingTime(data.last_success_epoch));
+            const deadlineText = data.deadline?.required
+                ? 'Next deadline: ' + formatPublishingTime(data.deadline.next_epoch) +
+                    (data.deadline.missed_today ? ' · MISSED' : '')
+                : 'Daily deadline alert disabled';
+            addPublishingLine(meta, '', deadlineText);
+            const diskText = data.disk_free_bytes === null || data.disk_free_bytes === undefined
+                ? 'Disk space unknown'
+                : (Number(data.disk_free_bytes) / (1024 ** 3)).toFixed(1) + ' GiB free';
+            const heartbeatText = data.heartbeat?.updated_at_epoch
+                ? 'Heartbeat ' + formatPublishingTime(data.heartbeat.updated_at_epoch) +
+                    ' (' + String(data.heartbeat.status || 'unknown') + ')'
+                : 'Heartbeat not seen yet';
+            addPublishingLine(meta, '', diskText + ' · ' + heartbeatText);
+            const tokenValues = (data.token_expiries || []).map(token => {
+                const seconds = Number(token.seconds_until_expiry);
+                const tokenState = seconds <= 0 ? 'EXPIRED' : (seconds < 86400 ? 'expires soon' : 'valid');
+                return String(token.platform) + ':' + String(token.account_id) + ' ' + tokenState;
+            });
+            addPublishingLine(meta, 'Token expiry:', tokenValues.join(' · ') || 'No managed token expiry is stored');
+
+            destinations.replaceChildren();
+            const jobs = (data.destinations || []).slice(0, 12);
+            if (!jobs.length) {
+                destinations.textContent = 'No destination jobs yet.';
+            } else {
+                jobs.forEach(job => {
+                    const item = document.createElement('div');
+                    item.className = 'publishing-job';
+                    const heading = document.createElement('div');
+                    heading.className = 'publishing-job-heading';
+                    const target = document.createElement('strong');
+                    target.textContent = '#' + Number(job.job_id) + ' ' + String(job.platform) + ':' + String(job.account_id);
+                    const state = document.createElement('span');
+                    state.className = 'publishing-state';
+                    state.textContent = String(job.state);
+                    heading.append(target, state);
+                    item.appendChild(heading);
+                    addPublishingLine(item, 'Attempt:', Number(job.attempts || 0) + ' / ' + Number(job.max_attempts || 0));
+                    if (job.remote_post_id) addPublishingLine(item, 'Remote ID:', String(job.remote_post_id), 'publishing-remote');
+                    if (job.remote_url) addPublishingLine(item, 'Remote URL:', String(job.remote_url), 'publishing-remote');
+                    if (Number(job.next_attempt_at) > 0 && job.state !== 'published') {
+                        addPublishingLine(item, 'Next retry:', formatPublishingTime(job.next_attempt_at), 'publishing-remote');
+                    }
+                    if (job.last_error) {
+                        addPublishingLine(item, String(job.error_code || 'ERROR') + ':', String(job.last_error), 'publishing-error-detail');
+                    }
+                    destinations.appendChild(item);
+                });
+            }
+
+            errors.replaceChildren();
+            const recentErrors = (data.recent_errors || []).slice(0, 5);
+            if (!recentErrors.length) {
+                errors.textContent = 'No recent publishing failures.';
+            } else {
+                recentErrors.forEach(error => {
+                    const line = document.createElement('div');
+                    line.className = 'publishing-error-detail';
+                    line.textContent = '#' + Number(error.job_id) + ' ' + String(error.platform) + ':' +
+                        String(error.account_id) + ' — ' + String(error.error_code || error.state) +
+                        ': ' + String(error.message || '');
+                    errors.appendChild(line);
+                });
+            }
+            if (['degraded', 'blocked_low_disk', 'missed_daily_deadline'].includes(String(data.heartbeat?.status || ''))) {
+                summary.classList.add('error');
+            }
+        } catch (_) {
+            summary.textContent = 'Publishing status unavailable';
+            summary.classList.add('error');
+            meta.textContent = 'Check dashboard authentication and the publisher state database.';
+        }
     }
 
     function ensurePreviewPanel() {
@@ -209,9 +345,12 @@
     document.addEventListener('DOMContentLoaded', () => {
         ensureSystemStatus();
         ensurePreviewPanel();
+        ensurePublishingPanel();
         wrapGlobalHandlers();
         refreshHealth();
+        refreshPublishingStatus();
         healthTimer = setInterval(refreshHealth, 10000);
+        publishingTimer = setInterval(refreshPublishingStatus, 15000);
         statusTimer = setInterval(() => {
             if (!enhancementTerminal && enhancementJobId && typeof window.checkJobStatus === 'function') {
                 window.checkJobStatus(enhancementJobId);
@@ -222,5 +361,6 @@
     window.addEventListener('beforeunload', () => {
         if (healthTimer) clearInterval(healthTimer);
         if (statusTimer) clearInterval(statusTimer);
+        if (publishingTimer) clearInterval(publishingTimer);
     });
 })();
