@@ -117,4 +117,74 @@ def register_autonomous_routes(app) -> None:
             return jsonify({"error": "seed_topics must be a list"}), 400
         return jsonify(manager.run_once(seed_topics=[str(item) for item in seeds if str(item).strip()]))
 
+
+    def publisher_store():
+        import os
+        from pathlib import Path
+        from ai_video_factory.publishing_queue import PublisherStore
+
+        state_dir = Path(str(app.config.get("AIVF_STATE_DIR") or os.environ.get("AIVF_STATE_DIR", "./state"))).expanduser().resolve()
+        db_path = Path(os.environ.get("AIVF_PUBLISH_DB", str(state_dir / "multi-platform-publisher.sqlite"))).expanduser().resolve()
+        return PublisherStore(db_path)
+
+    @app.get("/publisher")
+    def publisher_page():
+        require_admin()
+        return render_template("publisher.html")
+
+    @app.get("/api/publisher/status")
+    def publisher_status():
+        require_admin()
+        import os
+        import shutil
+        from pathlib import Path
+        from ai_video_factory.publishing_queue import configured_platforms
+
+        store = publisher_store()
+        state_dir = Path(str(app.config.get("AIVF_STATE_DIR") or os.environ.get("AIVF_STATE_DIR", "./state"))).expanduser().resolve()
+        try:
+            disk = shutil.disk_usage(state_dir)
+            disk_info = {"free_bytes": disk.free, "total_bytes": disk.total}
+        except OSError:
+            disk_info = {"free_bytes": None, "total_bytes": None}
+        jobs = store.list_jobs(200)
+        published = [job for job in jobs if job.get("state") == "published"]
+        latest = max(published, key=lambda job: float(job.get("published_at") or 0), default=None)
+        return jsonify({
+            "publish_enabled": os.environ.get("AIVF_MULTI_PLATFORM_PUBLISH", "0").strip() == "1",
+            "public_publishing_enabled": os.environ.get("AIVF_PUBLISH_ALLOW_PUBLIC", "0").strip() == "1",
+            "configured_platforms": configured_platforms(),
+            "queue_counts": store.counts(),
+            "source_counts": store.source_summary(),
+            "published_today_utc": store.published_today(),
+            "expected_posts_per_day": max(0, int(os.environ.get("AIVF_PUBLISH_EXPECTED_PER_DAY", "1"))),
+            "deadline_utc": os.environ.get("AIVF_PUBLISH_DEADLINE_UTC", ""),
+            "poll_seconds": max(1, int(os.environ.get("AIVF_PUBLISH_POLL_SECONDS", "15"))),
+            "disk": disk_info,
+            "last_success": {key: latest.get(key) for key in ("platform", "account_id", "remote_id", "remote_url", "published_at")} if latest else None,
+            "jobs": jobs[:50],
+        })
+
+    @app.get("/api/publisher/jobs/<job_id>/events")
+    def publisher_job_events(job_id: str):
+        require_admin()
+        store = publisher_store()
+        if store.get_job(job_id) is None:
+            return jsonify({"error": "job not found", "code": "PUBLISH_JOB_NOT_FOUND"}), 404
+        return jsonify({"job_id": job_id, "events": store.events(job_id, request.args.get("limit", default=100, type=int))})
+
+    @app.post("/api/publisher/jobs/<job_id>/retry")
+    def publisher_retry_job(job_id: str):
+        require_admin()
+        origin = request.headers.get("Origin", "").rstrip("/")
+        if not origin or origin != request.host_url.rstrip("/"):
+            return jsonify({"error": "same-origin request required", "code": "CROSS_ORIGIN_REJECTED"}), 403
+        try:
+            publisher_store().retry_job(job_id)
+        except KeyError:
+            return jsonify({"error": "job not found", "code": "PUBLISH_JOB_NOT_FOUND"}), 404
+        except ValueError as exc:
+            return jsonify({"error": str(exc), "code": "PUBLISH_RETRY_REJECTED"}), 409
+        return jsonify({"job_id": job_id, "state": "ready"})
+
 __all__ = ["register_autonomous_routes"]
