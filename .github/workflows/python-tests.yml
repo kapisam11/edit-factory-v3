@@ -41,6 +41,10 @@ jobs:
       run: uv run ruff format --check 01-MAIN-CODE/ai_video_factory/media_metadata.py 01-MAIN-CODE/ai_video_factory/resource_metrics.py 04-TESTS/tests/test_hardening_gap_closure.py
     - name: Compile Python sources
       run: uv run python -m compileall -q 01-MAIN-CODE 02-WEB-FILES 03-SIDE-CODE
+    - name: Run existing-folder publishing safety tests
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: uv run pytest -q 04-TESTS/tests/test_folder_publisher.py
     - name: Validate deployment boundary scripts
       run: |
         uv run python -m py_compile 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py 06-CONFIG-AND-DEPLOYMENT/verify_human_acceptance.py
