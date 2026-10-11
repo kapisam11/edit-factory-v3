@@ -26,6 +26,10 @@ python 02-WEB-FILES/app/cli.py "Minecraft betrayal on SMP" --platform youtube_sh
 
 Supported profiles are `youtube_shorts`, `youtube`, `tiktok`, and `instagram_reels`.
 
+These are **output-format and metadata profiles**, not a promise that each platform can be uploaded to automatically. The current direct authenticated upload implementation is YouTube-only. The repository does not currently provide working direct Instagram Reels or TikTok upload adapters with authorization, remote-processing polling, and duplicate recovery.
+
+The autonomous `aivf-autopublish daemon` is also YouTube-specific and generates content from its persisted topic queue; it does not watch a folder of existing videos. A fully unattended existing-file-to-YouTube/Instagram/TikTok workflow is therefore **not yet implemented or production-verified**.
+
 ## YouTube publishing
 
 Publishing is deliberately explicit. The factory never uploads just because a video finished rendering.
