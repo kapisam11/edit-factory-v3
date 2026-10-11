@@ -61,5 +61,31 @@ def test_documentation_distinguishes_profiles_from_direct_publishers() -> None:
     ).read_text(encoding="utf-8")
 
     assert "not a promise that each platform can be uploaded to automatically" in upload_guide
-    assert "does not watch a folder of existing videos" in upload_guide
+    assert "does not itself watch a folder of existing videos" in upload_guide
     assert "publishes through the YouTube integration only" in autonomous_guide
+
+
+
+def test_existing_file_publisher_has_durable_queue_and_explicit_windows_schedule() -> None:
+    guide = (REPOSITORY_ROOT / "00-INFO" / "FOLDER-PUBLISHING.md").read_text(encoding="utf-8")
+    publisher = (
+        REPOSITORY_ROOT / "01-MAIN-CODE" / "ai_video_factory" / "folder_publisher.py"
+    ).read_text(encoding="utf-8")
+    project = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    runner = (REPOSITORY_ROOT / "RUN-DAILY-PUBLISH.ps1").read_text(encoding="utf-8")
+    scheduler = (
+        REPOSITORY_ROOT / "REGISTER-DAILY-PUBLISHING.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert 'aivf-folder-publish = "ai_video_factory.folder_publisher:main"' in project
+    assert "CREATE TABLE IF NOT EXISTS publishing_jobs" in publisher
+    assert "UNIQUE(platform, account_id, source_sha256)" in publisher
+    assert "BLOCKED_UNSUPPORTED" in publisher
+    assert "idempotency_directory=str(self.config.state_dir / \"youtube-idempotency\")" in publisher
+    assert "ffprobe" in publisher
+    assert "rights_cleared" in publisher
+    assert "StartWhenAvailable" in scheduler
+    assert "WakeToRun" in scheduler
+    assert "aivf-folder-publish run-once" in runner
+    assert "Instagram" in guide and "TikTok" in guide
+    assert "real-account acceptance test" in guide
