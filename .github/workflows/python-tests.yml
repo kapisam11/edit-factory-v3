@@ -346,16 +346,26 @@ jobs:
       run: |
         $tokens = $null
         $parseErrors = $null
-        [System.Management.Automation.Language.Parser]::ParseFile(
-          (Join-Path $env:GITHUB_WORKSPACE "START-ALL.ps1"),
-          [ref]$tokens,
-          [ref]$parseErrors
-        ) | Out-Null
-        if ($parseErrors.Count -gt 0) {
-          $parseErrors | ForEach-Object {
-            Write-Host "PowerShell parse error at line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber): $($_.Message)"
+        $scripts = @(
+          "START-ALL.ps1",
+          "RUN-PUBLISHER.ps1",
+          "INSTALL-PUBLISHER-TASK.ps1",
+          "REMOVE-PUBLISHER-TASK.ps1"
+        )
+        foreach ($script in $scripts) {
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE $script),
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object {
+              Write-Host "$script parse error at line $($_.Extent.StartLineNumber), column $($_.Extent.StartColumnNumber): $($_.Message)"
+            }
+            exit 1
           }
-          exit 1
         }
     - name: Verify dashboard support modules
       shell: pwsh
