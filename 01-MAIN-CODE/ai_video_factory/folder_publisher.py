@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -71,6 +72,26 @@ class FolderPublisherConfig:
             client_secrets_path=os.environ.get("YOUTUBE_CLIENT_SECRETS"),
             token_path=os.environ.get("YOUTUBE_TOKEN_PATH"),
         )
+
+
+def _allows_duplicate_content(path: Path) -> bool:
+    """Require an explicit sidecar identity/override before accepting repeated bytes."""
+    sidecar = Path(str(path) + ".publish.json")
+    if sidecar.is_symlink() or not sidecar.is_file():
+        return False
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    publication_id = str(payload.get("publication_id") or "").strip()
+    valid_identity = bool(
+        publication_id
+        and len(publication_id) <= 128
+        and re.fullmatch(r"[A-Za-z0-9_.:-]+", publication_id)
+    )
+    return valid_identity or payload.get("allow_duplicate_content") is True
 
 
 def _sha256(path: Path) -> str:
@@ -337,10 +358,28 @@ class FolderQueue:
                 "SELECT * FROM folder_items WHERE path=? ORDER BY id DESC LIMIT 1",
                 (canonical_path,),
             ).fetchone()
-            if current is None or (
+            changed_bytes = current is not None and (
                 int(current["size_bytes"]) != stat_result.st_size
                 or int(current["mtime_ns"]) != stat_result.st_mtime_ns
-            ):
+            )
+            changed_publication = False
+            if current is not None and not changed_bytes and current["state"] in TERMINAL_STATES:
+                sidecar = Path(str(path) + ".publish.json")
+                if sidecar.is_file() and not sidecar.is_symlink():
+                    try:
+                        new_metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+                        old_metadata = json.loads(str(current["metadata_json"] or "{}"))
+                        new_id = str(new_metadata.get("publication_id") or "").strip() if isinstance(new_metadata, dict) else ""
+                        old_id = str(old_metadata.get("publication_id") or "").strip() if isinstance(old_metadata, dict) else ""
+                        changed_publication = bool(
+                            new_id
+                            and new_id != old_id
+                            and len(new_id) <= 128
+                            and re.fullmatch(r"[A-Za-z0-9_.:-]+", new_id)
+                        )
+                    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+                        changed_publication = False
+            if current is None or changed_bytes or changed_publication:
                 # Never revoke an upload lease merely because the original input
                 # file was edited. The uploader uses an immutable staged snapshot;
                 # a changed source gets a new row while the existing upload finishes.
@@ -382,6 +421,7 @@ class FolderQueue:
         now: float,
         error: str = "",
         retry_after_seconds: int = 0,
+        allow_duplicate_content: bool = False,
     ) -> None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -389,11 +429,13 @@ class FolderQueue:
             if current is None:
                 conn.rollback()
                 raise KeyError(item_id)
-            duplicate = conn.execute(
-                "SELECT id,state FROM folder_items WHERE source_sha256=? AND id<>? "
-                "AND state IN ('READY','UPLOADING','PUBLISHED') ORDER BY id LIMIT 1",
-                (source_hash, item_id),
-            ).fetchone()
+            duplicate = None
+            if not allow_duplicate_content:
+                duplicate = conn.execute(
+                    "SELECT id,state FROM folder_items WHERE source_sha256=? AND id<>? "
+                    "AND state IN ('READY','UPLOADING','PUBLISHED') ORDER BY id LIMIT 1",
+                    (source_hash, item_id),
+                ).fetchone()
             if duplicate:
                 conn.execute(
                     "UPDATE folder_items SET source_sha256=?, state='DUPLICATE', duplicate_of=?, "
@@ -665,6 +707,10 @@ class FolderPublisher:
             "thumbnail_path": "",
             "caption_path": "",
             "caption_language": "en",
+            "publication_id": "",
+            "allow_duplicate_content": False,
+            "destinations": ["youtube:default"],
+            "platform_overrides": {},
         }
         if sidecar.is_symlink():
             return default, None, False, "publish sidecar must not be a symbolic link"
@@ -688,6 +734,17 @@ class FolderPublisher:
             not isinstance(tag, str) or not tag.strip() or len(tag) > 500 for tag in tags
         ):
             return metadata, sidecar.stat().st_mtime_ns, False, "tags must be a list of at most 30 non-empty strings"
+        publication_id = str(metadata.get("publication_id") or "").strip()
+        if publication_id and (
+            len(publication_id) > 128
+            or not re.fullmatch(r"[A-Za-z0-9_.:-]+", publication_id)
+        ):
+            return metadata, sidecar.stat().st_mtime_ns, False, "publication_id must use 1-128 letters, digits, dot, underscore, colon or hyphen"
+        allow_duplicate = metadata.get("allow_duplicate_content", False)
+        if not isinstance(allow_duplicate, bool):
+            return metadata, sidecar.stat().st_mtime_ns, False, "allow_duplicate_content must be a JSON boolean"
+        metadata["publication_id"] = publication_id
+        metadata["allow_duplicate_content"] = allow_duplicate
         privacy = str(metadata.get("privacy_status") or self.config.privacy_status).lower()
         if privacy not in {"private", "unlisted", "public"}:
             return metadata, sidecar.stat().st_mtime_ns, False, "privacy_status must be private, unlisted or public"
@@ -797,6 +854,7 @@ class FolderPublisher:
                     probe=probe,
                     now=now,
                     error="",
+                    allow_duplicate_content=_allows_duplicate_content(source),
                 )
                 refreshed = self.store.get_item(int(observed["id"]))
                 if refreshed is None or refreshed["state"] == "DUPLICATE":
@@ -942,7 +1000,9 @@ class FolderPublisher:
         account_key = hashlib.sha256(
             (str(self.config.client_secrets_path or os.environ.get("YOUTUBE_CLIENT_SECRETS", "")) + "\0" + token_path).encode("utf-8")
         ).hexdigest()[:16]
-        idempotency_key = f"folder-v1-{account_key}-{source_hash}"
+        publication_id = str(metadata.get("publication_id") or "").strip()
+        publication_identity = publication_id or hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:16]
+        idempotency_key = f"folder-v2-{account_key}-{source_hash}-{publication_identity}"
         def asset_path(field: str) -> Optional[str]:
             raw = str(metadata.get(field) or "").strip()
             if not raw:
@@ -1053,6 +1113,10 @@ def approve_sidecar(
         payload["disclosure_reviewed"] = True
     else:
         payload.setdefault("disclosure_reviewed", False)
+    payload.setdefault("publication_id", "")
+    payload.setdefault("allow_duplicate_content", False)
+    payload.setdefault("destinations", ["youtube:default"])
+    payload.setdefault("platform_overrides", {})
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     temporary = sidecar.with_name(sidecar.name + f".{uuid.uuid4().hex}.partial")
     temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
