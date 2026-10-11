@@ -496,7 +496,16 @@ class PublicationStore:
             uncertain = retryable
 
         if retryable and attempts < max_attempts:
-            delay = retry_after(attempts, base=30.0, cap=3600.0, key=str(job["idempotency_key"]))
+            provider_delay = (
+                error.retry_after_seconds
+                if isinstance(error, PlatformPublishError)
+                else None
+            )
+            delay = (
+                max(1.0, min(float(provider_delay), 86400.0))
+                if provider_delay is not None
+                else retry_after(attempts, base=30.0, cap=3600.0, key=str(job["idempotency_key"]))
+            )
             state = "processing_remote" if remote_operation_id and uncertain else "retryable_failed"
             next_attempt = now + delay
         else:
