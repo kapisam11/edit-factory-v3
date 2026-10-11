@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -23,7 +24,7 @@ from typing import Any, Iterable, Optional
 from .youtube_publisher import upload_video
 
 LOG = logging.getLogger(__name__)
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
 TEMP_SUFFIXES = {".part", ".partial", ".tmp", ".crdownload"}
 TERMINAL_STATES = {"PUBLISHED", "DUPLICATE", "SOURCE_CHANGED"}
@@ -37,6 +38,7 @@ class FolderPublisherConfig:
     poll_seconds: int = 10
     max_videos_per_day: int = 2
     max_file_bytes: int = 8 * 1024 * 1024 * 1024
+    max_staged_bytes: int = 20 * 1024 * 1024 * 1024
     max_duration_seconds: int = 2 * 60 * 60
     publish_enabled: bool = False
     privacy_status: str = "private"
@@ -59,6 +61,7 @@ class FolderPublisherConfig:
             poll_seconds=max(1, int(os.environ.get("AIVF_FOLDER_POLL_SECONDS", "10"))),
             max_videos_per_day=max(0, int(os.environ.get("AIVF_FOLDER_MAX_VIDEOS_PER_DAY", "2"))),
             max_file_bytes=max(1, int(os.environ.get("AIVF_FOLDER_MAX_FILE_BYTES", str(8 * 1024**3)))),
+            max_staged_bytes=max(1, int(os.environ.get("AIVF_FOLDER_MAX_STAGED_BYTES", str(20 * 1024**3)))),
             max_duration_seconds=max(1, int(os.environ.get("AIVF_FOLDER_MAX_DURATION_SECONDS", "7200"))),
             publish_enabled=os.environ.get("AIVF_FOLDER_PUBLISH", "0").strip() == "1",
             privacy_status=os.environ.get("AIVF_FOLDER_PRIVACY", "private").strip().lower(),
@@ -163,6 +166,7 @@ class FolderQueue:
                         mtime_ns INTEGER NOT NULL,
                         stable_since REAL NOT NULL,
                         source_sha256 TEXT,
+                        staged_path TEXT,
                         probe_json TEXT,
                         metadata_json TEXT NOT NULL DEFAULT '{}',
                         sidecar_mtime_ns INTEGER,
@@ -177,20 +181,73 @@ class FolderQueue:
                         video_url TEXT,
                         published_at REAL,
                         duplicate_of INTEGER,
-                        last_error TEXT NOT NULL DEFAULT '',
-                        FOREIGN KEY(duplicate_of) REFERENCES folder_items(id)
+                        last_error TEXT NOT NULL DEFAULT ''
                     );
                     CREATE INDEX folder_items_state_due
                         ON folder_items(state, next_attempt_at, discovered_at);
                     CREATE INDEX folder_items_hash ON folder_items(source_sha256);
                     CREATE INDEX folder_items_path ON folder_items(path, id);
-                    PRAGMA user_version=1;
+                    PRAGMA user_version=2;
                     """
                 )
-            elif not conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='folder_items'"
-            ).fetchone():
-                raise RuntimeError("folder publisher database is marked migrated but required table is missing")
+            elif version == 1:
+                # Explicit one-time migration for databases created by the first
+                # unreleased folder-publisher revision. Rebuild rather than leave
+                # its old UNIQUE(path, source_sha256) constraint in place.
+                conn.execute("PRAGMA foreign_keys=OFF")
+                conn.executescript(
+                    """
+                    CREATE TABLE folder_items_v2 (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path TEXT NOT NULL,
+                        size_bytes INTEGER NOT NULL,
+                        mtime_ns INTEGER NOT NULL,
+                        stable_since REAL NOT NULL,
+                        source_sha256 TEXT,
+                        staged_path TEXT,
+                        probe_json TEXT,
+                        metadata_json TEXT NOT NULL DEFAULT '{}',
+                        sidecar_mtime_ns INTEGER,
+                        state TEXT NOT NULL,
+                        discovered_at REAL NOT NULL,
+                        updated_at REAL NOT NULL,
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        next_attempt_at REAL NOT NULL DEFAULT 0,
+                        lease_owner TEXT,
+                        lease_until REAL,
+                        video_id TEXT,
+                        video_url TEXT,
+                        published_at REAL,
+                        duplicate_of INTEGER,
+                        last_error TEXT NOT NULL DEFAULT ''
+                    );
+                    INSERT INTO folder_items_v2
+                        (id,path,size_bytes,mtime_ns,stable_since,source_sha256,staged_path,
+                         probe_json,metadata_json,sidecar_mtime_ns,state,discovered_at,updated_at,
+                         attempts,next_attempt_at,lease_owner,lease_until,video_id,video_url,
+                         published_at,duplicate_of,last_error)
+                    SELECT id,path,size_bytes,mtime_ns,stable_since,source_sha256,NULL,
+                           probe_json,metadata_json,sidecar_mtime_ns,state,discovered_at,updated_at,
+                           attempts,next_attempt_at,lease_owner,lease_until,video_id,video_url,
+                           published_at,duplicate_of,last_error
+                    FROM folder_items;
+                    DROP TABLE folder_items;
+                    ALTER TABLE folder_items_v2 RENAME TO folder_items;
+                    CREATE INDEX folder_items_state_due
+                        ON folder_items(state, next_attempt_at, discovered_at);
+                    CREATE INDEX folder_items_hash ON folder_items(source_sha256);
+                    CREATE INDEX folder_items_path ON folder_items(path, id);
+                    PRAGMA user_version=2;
+                    """
+                )
+                conn.execute("PRAGMA foreign_keys=ON")
+            elif version == SCHEMA_VERSION:
+                if not conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='folder_items'"
+                ).fetchone():
+                    raise RuntimeError("folder publisher database is marked migrated but required table is missing")
+            else:
+                raise RuntimeError(f"unsupported folder publisher schema version: {version}")
 
     def items(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -211,6 +268,14 @@ class FolderQueue:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM folder_items WHERE id=?", (item_id,)).fetchone()
         return dict(row) if row is not None else None
+
+    def set_staged_path(self, item_id: int, path: Path, *, now: float) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE folder_items SET staged_path=?, updated_at=? WHERE id=? "
+                "AND state NOT IN ('UPLOADING','PUBLISHED','DUPLICATE','SOURCE_CHANGED')",
+                (str(path), now, item_id),
+            )
 
     def observe(self, path: Path, *, now: float) -> dict[str, Any]:
         stat_result = path.stat()
