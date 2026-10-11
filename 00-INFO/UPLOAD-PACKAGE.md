@@ -151,7 +151,7 @@ The database includes a per-event timeline and a heartbeat file. `AIVF_FAILURE_W
 
 ### Windows 11 unattended startup
 
-The repository includes `INSTALL-PUBLISHER-TASK.ps1`, `RUN-PUBLISHER.ps1`, and `REMOVE-PUBLISHER-TASK.ps1`. The scheduled task starts at Windows startup, at user logon, and at a configurable daily wake time (default 20:00 local time). It uses a least-privilege S4U principal, ignores duplicate runner starts, requests wake-from-sleep, starts missed triggers when available, restarts after an unexpected process exit, and writes bounded/secret-redacted runner logs under `<AIVF_STATE_DIR>\logs\platform-publisher.log`. It is independent of whether the dashboard/browser is open.
+By default it uses a least-privilege password-based task principal, ignores duplicate runner starts, requests wake-from-sleep, starts missed triggers when available, restarts after an unexpected process exit, and writes bounded/secret-redacted runner logs under `<AIVF_STATE_DIR>\logs\platform-publisher.log`. The installer prompts for the Windows account password (not the Windows Hello PIN); Task Scheduler stores that credential for non-interactive startup recovery, but the password is not written to the script or repository. Do not use S4U for this network publisher: Windows documents that S4U tasks cannot access the network. If you do not want Task Scheduler to store the account credential, use `-UseInteractiveLogon` instead; that mode can only run while the user is logged in and therefore does not provide pre-login recovery.
 
 Run PowerShell from the repository folder as the ordinary Windows user who owns the app state:
 
