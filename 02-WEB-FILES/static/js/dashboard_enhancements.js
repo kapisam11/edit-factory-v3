@@ -126,6 +126,13 @@
                     if (job.last_error) {
                         addPublishingLine(item, String(job.error_code || 'ERROR') + ':', String(job.last_error), 'publishing-error-detail');
                     }
+                    const eventList = Array.isArray(job.events) ? job.events.slice(0, 3) : [];
+                    eventList.forEach(event => {
+                        const happenedAt = formatPublishingTime(event.occurred_at);
+                        const eventText = happenedAt + ' · ' + String(event.event_type || '') +
+                            ' → ' + String(event.state || '');
+                        addPublishingLine(item, 'History:', eventText, 'publishing-event');
+                    });
                     destinations.appendChild(item);
                 });
             }
