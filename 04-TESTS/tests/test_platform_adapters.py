@@ -448,3 +448,59 @@ def test_tiktok_public_post_without_public_id_remains_unconfirmed(
     assert caught.value.code == "PUBLICATION_VISIBILITY_UNCONFIRMED"
     assert caught.value.retryable is True
     assert caught.value.uncertain is True
+
+def test_youtube_visibility_mismatch_is_not_reported_as_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_video_factory import youtube_publisher
+    from ai_video_factory.platform_adapters import PlatformPublishError, YouTubeAdapter
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"visibility fixture")
+    monkeypatch.setenv("YOUTUBE_CLIENT_SECRETS", "fake-client-secrets.json")
+    monkeypatch.setenv("YOUTUBE_TOKEN_PATH", str(tmp_path / "token.json"))
+    monkeypatch.setattr(
+        youtube_publisher,
+        "upload_video",
+        lambda *_args, **_kwargs: {
+            "video_id": "youtube-private-video",
+            "url": "https://www.youtube.com/watch?v=youtube-private-video",
+        },
+    )
+
+    class FakeRequest:
+        def execute(self) -> dict[str, Any]:
+            return {
+                "items": [
+                    {
+                        "status": {"uploadStatus": "processed", "privacyStatus": "private"},
+                        "processingDetails": {"processingStatus": "succeeded"},
+                    }
+                ]
+            }
+
+    class FakeVideos:
+        def list(self, **_kwargs: Any) -> FakeRequest:
+            return FakeRequest()
+
+    class FakeService:
+        def videos(self) -> FakeVideos:
+            return FakeVideos()
+
+    monkeypatch.setattr(youtube_publisher, "_service", lambda *_args, **_kwargs: FakeService())
+    saved_ids: list[str] = []
+    with pytest.raises(PlatformPublishError) as caught:
+        YouTubeAdapter().publish(
+            media_path=video,
+            metadata={"title": "Test", "privacy_status": "public"},
+            account_id="default",
+            idempotency_key="stable-youtube-key",
+            remote_operation_id=None,
+            adapter_state={},
+            on_operation=lambda *_args: None,
+            on_state=lambda *_args: None,
+            on_remote_post=lambda post_id, _url: saved_ids.append(post_id),
+        )
+    assert caught.value.code == "REMOTE_VISIBILITY_MISMATCH"
+    assert caught.value.retryable is False
+    assert saved_ids == ["youtube-private-video"]
