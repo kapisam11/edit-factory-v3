@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import time
 from pathlib import Path
 
@@ -128,7 +127,9 @@ def test_approval_is_bound_to_exact_bytes_and_declared_destinations(
     result = service.scan()
     assert result["needs_review"] == 1
     assert service.store.counts()["ready"] == 1  # old job remains bound to its immutable snapshot
-    assert "APPROVAL_STALE" in (service.store.source_summary() or {} ) or result["blocked"] == 1
+    with service.store._connect() as conn:
+        row = conn.execute("SELECT last_error_code FROM sources WHERE path=?", (video.name,)).fetchone()
+    assert row is not None and row["last_error_code"] == "APPROVAL_STALE"
 
 
 def test_stable_file_waits_before_queueing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
