@@ -157,6 +157,11 @@ def test_tiktok_refresh_token_is_rotated_and_persisted_outside_the_repository(
             "SELECT access_token,refresh_token FROM platform_tokens WHERE platform='tiktok' AND account_id='creator'"
         ).fetchone()
     assert row == ("rotated-access-token", "rotated-refresh-token")
+    import os
+    import stat
+    if os.name != "nt":
+        assert stat.S_IMODE(db.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(db.stat().st_mode) == 0o600
 
 
 def test_expired_stored_tiktok_token_fails_closed_without_refresh_credentials(
