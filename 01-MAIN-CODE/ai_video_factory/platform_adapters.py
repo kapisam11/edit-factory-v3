@@ -864,7 +864,14 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                 )
             upload_url = str(state.get("upload_url") or "")
             if state.get("stage") == "uploading" and upload_url:
-                self._upload_remaining(media_path, upload_url, token, int(status_data.get("uploaded_bytes") or 0), state, on_state)
+                self._upload_remaining(
+                    media_path,
+                    upload_url,
+                    token,
+                    int(status_data.get("uploaded_bytes", state.get("uploaded_bytes", 0)) or 0),
+                    state,
+                    on_state,
+                )
                 state["stage"] = "submitted"
                 on_state(state, "processing_remote")
             return self._finish_status(token, publish_id, state, on_state, on_remote_post)
