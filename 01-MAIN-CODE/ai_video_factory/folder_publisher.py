@@ -187,6 +187,7 @@ class FolderPublisher:
                     state TEXT NOT NULL,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     next_attempt_epoch REAL,
+                    lease_until_epoch REAL,
                     remote_id TEXT,
                     remote_url TEXT,
                     last_error TEXT,
@@ -201,6 +202,12 @@ class FolderPublisher:
                     ON publishing_jobs(published_at, state);
                 """
             )
+            job_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(publishing_jobs)").fetchall()
+            }
+            if "lease_until_epoch" not in job_columns:
+                conn.execute("ALTER TABLE publishing_jobs ADD COLUMN lease_until_epoch REAL")
 
     def _stable(self, path: Path, now: float) -> bool:
         try:
@@ -425,11 +432,16 @@ class FolderPublisher:
         """Publish at most one eligible job; call from a daily scheduled task."""
         current = time.time() if now is None else now
         with self._connect() as conn:
+            # Take the SQLite write lock before selection so two invocations cannot
+            # claim the same source job at once. Expired leases recover after a killed process.
+            conn.execute("BEGIN IMMEDIATE")
             job = conn.execute(
-                "SELECT * FROM publishing_jobs WHERE state IN ('PENDING','RETRY_WAIT','UPLOADING') "
+                "SELECT * FROM publishing_jobs WHERE "
+                "(state IN ('PENDING','RETRY_WAIT') OR "
+                "(state='UPLOADING' AND (lease_until_epoch IS NULL OR lease_until_epoch<=?))) "
                 "AND (next_attempt_epoch IS NULL OR next_attempt_epoch<=?) "
                 "ORDER BY created_at,id LIMIT 1",
-                (current,),
+                (current, current),
             ).fetchone()
             if job is None:
                 return {"status": "no_eligible_jobs"}
@@ -459,8 +471,9 @@ class FolderPublisher:
                 return {"status": "needs_review", "job_id": job["id"], "reason": "public publishing disabled"}
             attempts = int(job["attempts"]) + 1
             conn.execute(
-                "UPDATE publishing_jobs SET state='UPLOADING',attempts=?,last_error=NULL,updated_at=? WHERE id=?",
-                (attempts, _utc_now(), job["id"]),
+                "UPDATE publishing_jobs SET state='UPLOADING',attempts=?,lease_until_epoch=?,"
+                "last_error=NULL,updated_at=? WHERE id=?",
+                (attempts, current + 3600.0, _utc_now(), job["id"]),
             )
         try:
             common = {
@@ -507,7 +520,8 @@ class FolderPublisher:
             next_attempt = None if terminal else current + min(86400.0, 300.0 * (2 ** (attempts - 1)))
             with self._connect() as conn:
                 conn.execute(
-                    "UPDATE publishing_jobs SET state=?,next_attempt_epoch=?,last_error=?,updated_at=? WHERE id=?",
+                    "UPDATE publishing_jobs SET state=?,next_attempt_epoch=?,lease_until_epoch=NULL,"
+                    "last_error=?,updated_at=? WHERE id=?",
                     (state, next_attempt, message, _utc_now(), job["id"]),
                 )
             return {"status": state.lower(), "job_id": job["id"], "error": message}
@@ -515,7 +529,8 @@ class FolderPublisher:
         if not remote_id:
             with self._connect() as conn:
                 conn.execute(
-                    "UPDATE publishing_jobs SET state='NEEDS_REVIEW',last_error=?,updated_at=? WHERE id=?",
+                    "UPDATE publishing_jobs SET state='NEEDS_REVIEW',lease_until_epoch=NULL,"
+                    "last_error=?,updated_at=? WHERE id=?",
                     ("uploader returned no verified remote video ID", _utc_now(), job["id"]),
                 )
             return {"status": "needs_review", "job_id": job["id"], "reason": "missing remote ID"}
@@ -524,7 +539,7 @@ class FolderPublisher:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE publishing_jobs SET state='PUBLISHED',remote_id=?,remote_url=?,published_at=?,"
-                "next_attempt_epoch=NULL,last_error=NULL,updated_at=? WHERE id=?",
+                "next_attempt_epoch=NULL,lease_until_epoch=NULL,last_error=NULL,updated_at=? WHERE id=?",
                 (remote_id, remote_url, published_at, published_at, job["id"]),
             )
         return {"status": "published", "job_id": job["id"], "remote_id": remote_id, "url": remote_url}
@@ -547,7 +562,11 @@ class FolderPublisher:
         if not self._stable(source, now):
             raise ValueError("source file has not passed the stable-file check")
         metadata = self._read_metadata(source)
-        if platform not in metadata["platforms"]:
+        normalized_platforms = {
+            PLATFORM_ALIASES.get(str(value).strip().lower(), str(value).strip().lower())
+            for value in metadata["platforms"]
+        }
+        if platform not in normalized_platforms:
             raise ValueError("current sidecar no longer includes this destination platform")
         self._probe_video(source)
         source_hash = _sha256_file(source, self.config.max_input_bytes)
