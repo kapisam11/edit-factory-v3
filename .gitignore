@@ -20,3 +20,5 @@ knowledge_base_v3/
 *.jpg
 *.jpeg
 .DS_Store
+
+publish-folder.env
