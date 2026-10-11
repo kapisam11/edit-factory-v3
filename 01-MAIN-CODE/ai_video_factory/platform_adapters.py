@@ -1066,7 +1066,8 @@ class TikTokDirectPostAdapter(PlatformAdapter):
         uploaded_bytes: int,
         state: dict[str, Any],
         on_state: StateCallback,
-    ) -> None:
+    ) -> int:
+        """Resume FILE_UPLOAD using persisted state and TikTok's acknowledged byte range."""
         size = media_path.stat().st_size
         if uploaded_bytes < 0 or uploaded_bytes > size:
             raise PlatformPublishError(
@@ -1082,10 +1083,15 @@ class TikTokDirectPostAdapter(PlatformAdapter):
             ".mov": "video/quicktime",
             ".webm": "video/webm",
         }.get(media_path.suffix.lower(), "application/octet-stream")
+        offset = int(uploaded_bytes)
+        if offset == size:
+            state["uploaded_bytes"] = size
+            on_state(dict(state), "uploading")
+            return size
+
         with media_path.open("rb") as handle:
-            offset = uploaded_bytes
-            handle.seek(offset)
             while offset < size:
+                handle.seek(offset)
                 data = handle.read(min(chunk_size, size - offset))
                 if not data:
                     raise PlatformPublishError(
@@ -1114,17 +1120,78 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                         retryable=True,
                         uncertain=True,
                     ) from exc
-                if response.status_code not in {200, 201, 206, 308}:
-                    retryable = response.status_code in {408, 425, 429} or response.status_code >= 500
+
+                if response.status_code not in {201, 206}:
+                    retryable = (
+                        response.status_code in {408, 425, 429, 416}
+                        or response.status_code >= 500
+                    )
+                    code = "UPLOAD_PROGRESS_MISMATCH" if response.status_code == 416 else f"UPLOAD_HTTP_{response.status_code}"
                     raise PlatformPublishError(
                         f"TikTok media transfer returned HTTP {response.status_code}",
-                        code=f"UPLOAD_HTTP_{response.status_code}",
+                        code=code,
                         retryable=retryable,
-                        uncertain=True,
+                        uncertain=response.status_code == 416 or response.status_code >= 500,
                     )
-                offset += len(data)
+
+                # The upload response's Content-Range is cumulative and uses an
+                # inclusive final byte. Prefer that remote acknowledgement over
+                # local assumptions, so an interrupted/replayed request cannot
+                # skip bytes or resend a range TikTok has already accepted.
+                acknowledged = response.headers.get("Content-Range", "").strip()
+                acknowledged_offset: int | None = None
+                if acknowledged:
+                    match = re.fullmatch(r"bytes\s+0-(\d+)/(\d+)", acknowledged, flags=re.IGNORECASE)
+                    if not match:
+                        raise PlatformPublishError(
+                            "TikTok returned an unrecognized upload Content-Range header",
+                            code="UPLOAD_PROGRESS_MISMATCH",
+                            retryable=True,
+                            uncertain=True,
+                        )
+                    last_byte, total_bytes = int(match.group(1)), int(match.group(2))
+                    if total_bytes != size or last_byte < -1 or last_byte >= size:
+                        raise PlatformPublishError(
+                            "TikTok upload Content-Range did not match the source file size",
+                            code="UPLOAD_PROGRESS_MISMATCH",
+                            retryable=True,
+                            uncertain=True,
+                        )
+                    acknowledged_offset = last_byte + 1
+                    if acknowledged_offset < offset or acknowledged_offset > size:
+                        raise PlatformPublishError(
+                            "TikTok acknowledged an upload offset outside the remaining source range",
+                            code="UPLOAD_PROGRESS_MISMATCH",
+                            retryable=True,
+                            uncertain=True,
+                        )
+
+                if response.status_code == 201:
+                    # TikTok documents 201 as "all parts uploaded". If it also
+                    # returns a range header, it must confirm the complete file.
+                    if acknowledged_offset is not None and acknowledged_offset != size:
+                        raise PlatformPublishError(
+                            "TikTok returned upload-complete status before acknowledging the full file",
+                            code="UPLOAD_PROGRESS_MISMATCH",
+                            retryable=True,
+                            uncertain=True,
+                        )
+                    offset = size
+                else:
+                    minimum_acknowledged = offset + len(data)
+                    offset = acknowledged_offset if acknowledged_offset is not None else minimum_acknowledged
+                    if offset < minimum_acknowledged:
+                        raise PlatformPublishError(
+                            "TikTok acknowledged fewer bytes than the chunk it reported as processed",
+                            code="UPLOAD_PROGRESS_MISMATCH",
+                            retryable=True,
+                            uncertain=True,
+                        )
+
                 state["uploaded_bytes"] = offset
                 on_state(dict(state), "uploading")
+
+        return offset
 
 
 def adapter_for(platform: str) -> PlatformAdapter:
