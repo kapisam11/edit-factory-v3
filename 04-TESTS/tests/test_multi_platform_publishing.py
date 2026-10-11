@@ -600,7 +600,7 @@ def _deadline_publisher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Mult
         )
     )
     monkeypatch.setenv("AIVF_REQUIRE_DAILY_PUBLISH", "1")
-    monkeypatch.setenv("AIVF_PUBLISH_DEADLINE_HOUR", "0")
+    monkeypatch.setenv("AIVF_PUBLISH_DEADLINE_HOUR", "23")
     monkeypatch.setenv("AIVF_PUBLISH_DEADLINE_MINUTE", "0")
     monkeypatch.delenv("AIVF_FAILURE_WEBHOOK_URL", raising=False)
     return MultiPlatformPublisher(base, publish_enabled=False)
@@ -627,20 +627,53 @@ def test_required_daily_deadline_passes_only_when_all_destinations_are_confirmed
 
     publisher = _deadline_publisher(tmp_path, monkeypatch)
     now = datetime.now().astimezone().replace(hour=23, minute=59, second=0, microsecond=0)
-    epoch = now.timestamp()
-    yt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("youtube", "default"), now=epoch)
-    tt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("tiktok", "creator"), now=epoch)
+    deadline_epoch = now.replace(hour=23, minute=0, second=0, microsecond=0).timestamp()
+    created_at = deadline_epoch - 60
+    yt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("youtube", "default"), now=created_at)
+    tt = _enqueue(publisher.store, tmp_path, "daily-complete", Target("tiktok", "creator"), now=created_at)
     for expected_id in (yt, tt):
-        claimed = publisher.store.claim_next(max_per_day=10, now=epoch + 1)
+        claimed = publisher.store.claim_next(max_per_day=10, now=deadline_epoch - 10)
         assert claimed is not None and claimed["id"] == expected_id
         remote = f"remote-{expected_id}"
         publisher.store.mark_published(
             expected_id,
             str(claimed["lease_owner"]),
             PublishResult(str(claimed["platform"]), remote, remote, f"https://example.test/{remote}"),
-            now=epoch + 2,
+            now=deadline_epoch - 2,
         )
     assert publisher.check_daily_deadline(now) is False
+
+
+def test_late_publication_does_not_clear_a_missed_daily_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime
+
+    publisher = _deadline_publisher(tmp_path, monkeypatch)
+    now = datetime.now().astimezone().replace(hour=23, minute=59, second=0, microsecond=0)
+    deadline_epoch = now.replace(hour=23, minute=0, second=0, microsecond=0).timestamp()
+    created_at = deadline_epoch - 60
+    yt = _enqueue(publisher.store, tmp_path, "daily-late", Target("youtube", "default"), now=created_at)
+    tt = _enqueue(publisher.store, tmp_path, "daily-late", Target("tiktok", "creator"), now=created_at)
+    for expected_id in (yt, tt):
+        claimed = publisher.store.claim_next(max_per_day=10, now=deadline_epoch + 1)
+        assert claimed is not None and claimed["id"] == expected_id
+        remote = f"late-remote-{expected_id}"
+        publisher.store.mark_published(
+            expected_id,
+            str(claimed["lease_owner"]),
+            PublishResult(str(claimed["platform"]), remote, remote, f"https://example.test/{remote}"),
+            now=deadline_epoch + 10,
+        )
+
+    # The final destination did publish today, but after the configured cutoff.
+    # The missed-deadline alert must therefore still fire.
+    assert publisher.check_daily_deadline(now) is True
+    with publisher.store._connect() as connection:
+        rows = connection.execute(
+            "SELECT local_date FROM platform_publication_deadline_alerts"
+        ).fetchall()
+    assert [row[0] for row in rows] == [now.date().isoformat()]
 
 def test_instagram_can_use_configured_media_host_for_local_sources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

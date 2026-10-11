@@ -1294,9 +1294,9 @@ class MultiPlatformPublisher:
                     "SELECT publication_id FROM platform_publications GROUP BY publication_id "
                     "HAVING COUNT(*)>0 "
                     "AND SUM(CASE WHEN state='published' THEN 1 ELSE 0 END)=COUNT(*) "
-                    "AND MAX(published_at)>=?"
+                    "AND MAX(published_at)>=? AND MAX(published_at)<=?"
                     ")",
-                    (local_midnight,),
+                    (local_midnight, deadline.timestamp()),
                 ).fetchone()[0]
             )
         if completed:
