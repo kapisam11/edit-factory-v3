@@ -504,3 +504,105 @@ def test_youtube_visibility_mismatch_is_not_reported_as_published(
     assert caught.value.code == "REMOTE_VISIBILITY_MISMATCH"
     assert caught.value.retryable is False
     assert saved_ids == ["youtube-private-video"]
+
+def test_tiktok_chunk_transfer_tracks_server_acknowledgements_and_stops_on_201(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_video_factory.platform_adapters import (
+        TIKTOK_MAX_CHUNK_BYTES,
+        TikTokDirectPostAdapter,
+        _tiktok_chunk_plan,
+    )
+
+    size = 65 * 1024 * 1024
+    video = tmp_path / "chunked.mp4"
+    video.write_bytes(b"x" * size)
+    chunk_size, chunk_count = _tiktok_chunk_plan(size)
+    assert chunk_count == 2
+    responses = [
+        FakeResponse({}, status_code=206),
+        FakeResponse({}, status_code=201),
+    ]
+    responses[0].headers["Content-Range"] = f"bytes 0-{chunk_size - 1}/{size}"
+    responses[1].headers["Content-Range"] = f"bytes 0-{size - 1}/{size}"
+    sent: list[dict[str, Any]] = []
+    persisted: list[int] = []
+
+    def put(_url: str, **kwargs: Any) -> FakeResponse:
+        sent.append(kwargs)
+        return responses[len(sent) - 1]
+
+    monkeypatch.setattr(platform.requests, "put", put)
+    state: dict[str, Any] = {"stage": "uploading", "uploaded_bytes": 0}
+    final_offset = TikTokDirectPostAdapter._upload_remaining(
+        video,
+        "https://open-upload.tiktokapis.com/video/?opaque=token",
+        "not-used-for-upload-auth",
+        0,
+        state,
+        lambda updated, _state: persisted.append(int(updated["uploaded_bytes"])),
+    )
+
+    assert final_offset == size
+    assert state["uploaded_bytes"] == size
+    assert persisted == [chunk_size, size]
+    assert len(sent) == 2
+    assert sent[0]["headers"]["Content-Range"] == f"bytes 0-{chunk_size - 1}/{size}"
+    assert sent[1]["headers"]["Content-Range"] == f"bytes {chunk_size}-{size - 1}/{size}"
+    assert len(sent[0]["data"]) == chunk_size
+    assert len(sent[1]["data"]) == size - chunk_size
+    assert len(sent[0]["data"]) <= TIKTOK_MAX_CHUNK_BYTES
+    assert responses[-1].status_code == 201
+
+
+def test_tiktok_reconciles_partial_upload_from_server_content_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_video_factory.platform_adapters import TikTokDirectPostAdapter
+
+    size = 65 * 1024 * 1024
+    uploaded = 5 * 1024 * 1024
+    video = tmp_path / "resume.mp4"
+    video.write_bytes(b"x" * size)
+    calls: list[dict[str, Any]] = []
+
+    def put(_url: str, **kwargs: Any) -> FakeResponse:
+        calls.append(kwargs)
+        response = FakeResponse({}, status_code=201)
+        response.headers["Content-Range"] = f"bytes 0-{size - 1}/{size}"
+        return response
+
+    monkeypatch.setattr(platform.requests, "put", put)
+    state: dict[str, Any] = {"stage": "uploading", "uploaded_bytes": uploaded}
+    final_offset = TikTokDirectPostAdapter._upload_remaining(
+        video,
+        "https://open-upload.tiktokapis.com/video/?opaque=token",
+        "not-used-for-upload-auth",
+        uploaded,
+        state,
+        lambda *_args: None,
+    )
+    assert final_offset == size
+    assert len(calls) == 1
+    assert calls[0]["headers"]["Content-Range"] == f"bytes {uploaded}-{size - 1}/{size}"
+
+
+def test_tiktok_rejects_unrecognized_success_codes_in_media_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_video_factory.platform_adapters import TikTokDirectPostAdapter
+
+    video = tmp_path / "unsupported-transfer-status.mp4"
+    video.write_bytes(b"x" * (5 * 1024 * 1024))
+    monkeypatch.setattr(platform.requests, "put", lambda *_args, **_kwargs: FakeResponse({}, status_code=308))
+    with pytest.raises(PlatformPublishError) as caught:
+        TikTokDirectPostAdapter._upload_remaining(
+            video,
+            "https://open-upload.tiktokapis.com/video/?opaque=token",
+            "not-used-for-upload-auth",
+            0,
+            {},
+            lambda *_args: None,
+        )
+    assert caught.value.code == "UPLOAD_HTTP_308"
+    assert caught.value.retryable is False
