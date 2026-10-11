@@ -71,7 +71,7 @@ Start with a dry scan. `destinations` is an array in the adjacent `clip.mp4.publ
   "destinations": ["youtube:default", "instagram:brand", "tiktok:creator"],
   "platform_overrides": {
     "instagram:brand": {"video_url": "https://media.example.com/clip.mp4"},
-    "tiktok:creator": {"privacy_level": "SELF_ONLY"}
+    "tiktok:creator": {"privacy_level": "SELF_ONLY", "brand_content_toggle": false}
   }
 }
 ```
