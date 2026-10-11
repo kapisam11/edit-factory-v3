@@ -371,6 +371,36 @@ def _require_https_public_url(value: Any, *, field: str) -> str:
     return raw
 
 
+TIKTOK_MIN_CHUNK_BYTES = 5 * 1024 * 1024
+TIKTOK_MAX_CHUNK_BYTES = 64 * 1024 * 1024
+
+
+def _tiktok_chunk_plan(file_size: int) -> tuple[int, int]:
+    """Choose chunks that respect TikTok's 5–64 MiB per-chunk contract."""
+    size = int(file_size)
+    if size < TIKTOK_MIN_CHUNK_BYTES:
+        raise PlatformPublishError(
+            "TikTok Direct Post requires a video of at least 5 MiB for file upload",
+            code="MEDIA_SIZE_LIMIT",
+            retryable=False,
+        )
+    if size > 4 * 1024 * 1024 * 1024:
+        raise PlatformPublishError(
+            "TikTok Direct Post file upload is limited to 4 GiB",
+            code="MEDIA_SIZE_LIMIT",
+            retryable=False,
+        )
+    chunk_count = (size + TIKTOK_MAX_CHUNK_BYTES - 1) // TIKTOK_MAX_CHUNK_BYTES
+    chunk_size = (size + chunk_count - 1) // chunk_count
+    if not TIKTOK_MIN_CHUNK_BYTES <= chunk_size <= TIKTOK_MAX_CHUNK_BYTES:
+        raise PlatformPublishError(
+            "video size cannot be represented using TikTok's supported upload chunk sizes",
+            code="MEDIA_SIZE_LIMIT",
+            retryable=False,
+        )
+    return chunk_size, chunk_count
+
+
 def _wait_settings(platform: str) -> tuple[float, float]:
     try:
         timeout = float(os.environ.get(f"AIVF_{platform.upper()}_REMOTE_WAIT_SECONDS", "180"))
@@ -846,12 +876,7 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                 retryable=False,
             )
         file_size = media_path.stat().st_size
-        if file_size <= 0 or file_size > 4 * 1024 * 1024 * 1024:
-            raise PlatformPublishError(
-                "TikTok video must be greater than zero bytes and no larger than 4 GiB",
-                code="MEDIA_SIZE_LIMIT",
-                retryable=False,
-            )
+        chunk_size, chunk_count = _tiktok_chunk_plan(file_size)
 
         creator = self._api(
             "POST",
@@ -905,10 +930,6 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                 code="INVALID_METADATA",
                 retryable=False,
             )
-        # TikTok permits a single chunk smaller than 5 MiB; for larger files
-        # use a bounded 64 MiB chunk and let the final chunk be smaller.
-        chunk_size = min(64 * 1024 * 1024, file_size)
-        chunk_count = (file_size + chunk_size - 1) // chunk_size
         post_info: dict[str, Any] = {
             "title": caption,
             "privacy_level": privacy,
@@ -984,7 +1005,7 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                 retryable=False,
                 uncertain=True,
             )
-        chunk_size = min(64 * 1024 * 1024, size)
+        chunk_size, _chunk_count = _tiktok_chunk_plan(size)
         mime = mimetypes.guess_type(media_path.name)[0]
         mime = mime if mime in {"video/mp4", "video/quicktime", "video/webm"} else {
             ".mp4": "video/mp4",
