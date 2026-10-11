@@ -127,6 +127,26 @@ def test_claim_fences_same_account_but_allows_other_destinations(tmp_path: Path)
     assert store.claim_next(max_per_day=10, now=now) is None
 
 
+def test_configured_daily_cap_allows_multiple_posts_when_limit_is_greater_than_one(
+    tmp_path: Path,
+) -> None:
+    store = PublicationStore(tmp_path / "publish.sqlite")
+    target = Target("youtube", "default")
+    first_id = _enqueue(store, tmp_path, "first", target)
+    second_id = _enqueue(store, tmp_path, "second", target)
+    now = 1_800_000_000.0
+    first = store.claim_next(max_per_day=2, now=now)
+    assert first is not None and first["id"] == first_id
+    store.mark_published(
+        first_id,
+        str(first["lease_owner"]),
+        PublishResult("youtube", "remote-1", "remote-1", "https://youtube.test/remote-1"),
+        now=now + 1,
+    )
+    second = store.claim_next(max_per_day=2, now=now + 2)
+    assert second is not None and second["id"] == second_id
+
+
 def test_retryable_destination_failure_does_not_mark_sibling_destinations_failed(tmp_path: Path) -> None:
     store = PublicationStore(tmp_path / "publish.sqlite")
     first_id = _enqueue(store, tmp_path, "video-1", Target("youtube", "default"))
