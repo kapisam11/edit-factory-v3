@@ -59,7 +59,58 @@ Set `YOUTUBE_CLIENT_SECRETS` and `YOUTUBE_TOKEN_PATH` to the already-authorized 
 
 The queue records remote IDs and refuses to retry ambiguous outcomes without re-entering the existing uploader's idempotency reconciliation. Recovery is deliberately fail-closed: a corrupted or missing staged snapshot blocks automated retry rather than uploading different bytes under the same identity. This does not substitute for verifying the remote video on the actual account.
 
-## YouTube publishing
+## Per-platform/account publisher
+
+The opt-in `aivf-publish` command runs the durable multi-destination queue. Each destination is a separate job; failure or retry on one account does not overwrite a completed result on another.
+
+Start with a dry scan. `destinations` is an array in the adjacent `clip.mp4.publish.json` sidecar:
+
+```json
+{
+  "publication_id": "clip-2026-10-11-a",
+  "destinations": ["youtube:default", "instagram:brand", "tiktok:creator"],
+  "platform_overrides": {
+    "instagram:brand": {"video_url": "https://media.example.com/clip.mp4"},
+    "tiktok:creator": {"privacy_level": "SELF_ONLY"}
+  }
+}
+```
+
+Use a new `publication_id` to intentionally republish identical bytes. The same publication ID is idempotent for a given destination account. Without an explicit ID, the stable identity includes the canonical local source path as well as the content hash. The older YouTube-only folder command continues to support its single-account workflow.
+
+```powershell
+uv run aivf-publish --watch-dir .\incoming scan
+uv run aivf-publish --watch-dir .\incoming status
+# Only after reviewing queue state and destination metadata:
+uv run aivf-publish --watch-dir .\incoming --publish run-once
+uv run aivf-publish --watch-dir .\incoming --publish daemon
+```
+
+Actual network publishing is disabled unless `--publish` or `AIVF_MULTI_PUBLISH=1` is explicitly set. `scan` and `status` do not upload.
+
+### Destination credentials
+
+Configure an account-specific environment prefix. Account IDs are uppercased; punctuation is replaced with underscores.
+
+| Platform | Required configuration | Notes |
+| --- | --- | --- |
+| YouTube | `AIVF_YOUTUBE_DEFAULT_CLIENT_SECRETS`, `AIVF_YOUTUBE_DEFAULT_TOKEN_PATH` | Existing authorized OAuth token; YouTube's uploader refreshes it when possible. Legacy `YOUTUBE_CLIENT_SECRETS` and `YOUTUBE_TOKEN_PATH` work for `youtube:default`. |
+| Instagram Reels | `AIVF_INSTAGRAM_BRAND_ACCESS_TOKEN`, `AIVF_INSTAGRAM_BRAND_USER_ID`, `AIVF_INSTAGRAM_BRAND_GRAPH_API_VERSION` | Requires an eligible professional account, the app's approved permissions, and media at a publicly accessible HTTPS URL. This project does not host the local file for Meta; provide the URL through the `video_url` override. |
+| TikTok Direct Post | `AIVF_TIKTOK_CREATOR_ACCESS_TOKEN` | Requires a TikTok developer app/user authorization with `video.publish` permission and any applicable app audit. Set a creator-supported `privacy_level` override; public posts also require `AIVF_TIKTOK_ALLOW_PUBLIC=1`. |
+
+Use your OS's protected secret storage or a private service environment for account credentials; do not commit tokens or put them in a publish sidecar. This integration consumes configured Meta/TikTok access tokens and does not provide the initial OAuth consent/onboarding flow or automatically refresh those providers' tokens. Rotate or re-authorize them before expiry. Unreviewed/unaudited apps can be restricted by the platforms, independent of this code.
+
+### State, retries and recovery
+
+The publisher stores per-destination state in the same persistent SQLite file as the folder watcher. States include `queued`, `uploading`, `processing_remote`, `published`, `retryable_failed`, and `permanent_failed`. Remote operation IDs and post IDs are persisted independently. Retryable failures have bounded attempts and capped exponential backoff with deterministic jitter. A destination that is already published is not re-uploaded because a sibling destination failed.
+
+TikTok's `publish_id` is used to poll/reconcile remote status. Instagram does not expose a universal idempotency key for `media_publish`; when the publish response is ambiguous after that operation began, the queue fails closed and requires account-side manual reconciliation rather than automatically issuing a second publish request. A remote operation ID alone is not treated as a confirmed post.
+
+The database includes a per-event timeline and a heartbeat file. `AIVF_FAILURE_WEBHOOK_URL` can receive HTTPS failure notifications; notification payloads omit access tokens. Keep the state directory on persistent local storage, restrict it to the service account, and include it in encrypted backups.
+
+A successful mocked test or HTTP response is not a substitute for account acceptance. Before enabling unattended publishing, complete a private/controlled real-account upload for each configured destination, verify remote processing and the final post ID/URL, then test a restart and an ambiguous timeout. Instagram's externally hosted-media requirement and platform-specific API approval must be satisfied separately.
+
+\n\n## YouTube publishing
 
 Publishing is deliberately explicit. The factory never uploads just because a video finished rendering.
 
