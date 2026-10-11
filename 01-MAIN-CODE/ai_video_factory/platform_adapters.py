@@ -816,6 +816,22 @@ class TikTokDirectPostAdapter(PlatformAdapter):
             data = self._status(token, publish_id)
             status = str(data.get("status") or "").upper()
             if status == "PUBLISH_COMPLETE":
+                public_ids = (
+                    data.get("publicaly_available_post_id")
+                    or data.get("publicly_available_post_id")
+                    or []
+                )
+                if adapter_state.get("privacy_level") == "PUBLIC_TO_EVERYONE" and not public_ids:
+                    if time.monotonic() >= deadline:
+                        on_state(adapter_state, "processing_remote")
+                        raise PlatformPublishError(
+                            "TikTok reports the post complete but has not supplied a publicly available post ID; public visibility remains unconfirmed",
+                            code="PUBLICATION_VISIBILITY_UNCONFIRMED",
+                            retryable=True,
+                            uncertain=True,
+                        )
+                    time.sleep(interval)
+                    continue
                 return self._published_result(publish_id, data, adapter_state, on_remote_post)
             if status == "FAILED":
                 reason = str(data.get("fail_reason") or "unspecified")[:180]
@@ -863,6 +879,18 @@ class TikTokDirectPostAdapter(PlatformAdapter):
             status_data = self._status(token, publish_id)
             status = str(status_data.get("status") or "").upper()
             if status == "PUBLISH_COMPLETE":
+                public_ids = (
+                    status_data.get("publicaly_available_post_id")
+                    or status_data.get("publicly_available_post_id")
+                    or []
+                )
+                if state.get("privacy_level") == "PUBLIC_TO_EVERYONE" and not public_ids:
+                    # TikTok does not expose a public post ID until moderation
+                    # has completed. Reconcile the saved publish_id; never upload
+                    # the media again just because public visibility is pending.
+                    return self._finish_status(
+                        token, publish_id, state, on_state, on_remote_post
+                    )
                 return self._published_result(publish_id, status_data, state, on_remote_post)
             if status == "FAILED":
                 reason = str(status_data.get("fail_reason") or "unspecified")[:180]
