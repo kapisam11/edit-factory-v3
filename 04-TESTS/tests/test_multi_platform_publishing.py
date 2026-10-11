@@ -294,3 +294,93 @@ def test_folder_publisher_allows_explicit_repost_identity(
     assert len(calls) == 2
     assert calls[0] != calls[1]
     assert calls[0].startswith("folder-v2-")
+
+def test_shared_staging_survives_source_change_until_all_destinations_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    video = incoming / "source.mp4"
+    video.write_bytes(b"original immutable input")
+
+    monkeypatch.setattr(
+        folder,
+        "probe_video",
+        lambda _path, *, max_duration_seconds: {
+            "duration_seconds": 12.0,
+            "width": 720,
+            "height": 1280,
+            "video_codec": "h264",
+            "format_name": "mp4",
+            "audio_streams": 1,
+        },
+    )
+    sidecar = folder.approve_sidecar(
+        incoming,
+        video.name,
+        ai_generated=False,
+        realistic_alteration=False,
+    )
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload["publication_id"] = "shared-staging-001"
+    payload["destinations"] = ["youtube:default", "tiktok:creator"]
+    payload["platform_overrides"] = {"tiktok:creator": {"privacy_level": "SELF_ONLY"}}
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    base = folder.FolderPublisher(
+        folder.FolderPublisherConfig(
+            watch_dir=incoming,
+            db_path=tmp_path / "state" / "publisher.sqlite",
+            settle_seconds=0,
+            poll_seconds=1,
+            publish_enabled=False,
+        )
+    )
+    multi = MultiPlatformPublisher(base, publish_enabled=False)
+    prepared = multi.scan_and_enqueue()
+    assert prepared["publication_jobs_added"] == 2
+
+    original_item = next(item for item in base.store.items() if item["path"] == str(video.resolve()))
+    original_id = int(original_item["id"])
+    original_stage = Path(str(original_item["staged_path"]))
+    assert original_stage.is_file()
+
+    # Once a source is routed to the per-destination queue, the legacy single
+    # destination publisher must not independently claim the same source row.
+    assert base.store.claim_next(max_per_day=10, now=1_800_000_000.0) is None
+
+    video.write_bytes(b"edited input is a different publication")
+    base.scan()
+    base.scan()
+    old_item = base.store.get_item(original_id)
+    assert old_item is not None and old_item["state"] == "SOURCE_CHANGED"
+    assert original_stage.is_file()
+
+    # Even though the watch-folder row is terminal, the old immutable bytes are
+    # still referenced by two destination jobs and cannot be collected yet.
+    assert base.store.cleanup_terminal_staging(base.staging_dir) == 0
+    assert original_stage.is_file()
+
+    now = time.time() + 10
+    for index in range(2):
+        claimed = multi.store.claim_next(max_per_day=10, now=now + index * 2)
+        assert claimed is not None
+        destination = f"{claimed['platform']}-{claimed['account_id']}"
+        remote_id = f"remote-{destination}"
+        multi.store.mark_published(
+            int(claimed["id"]),
+            str(claimed["lease_owner"]),
+            PublishResult(
+                str(claimed["platform"]),
+                remote_id,
+                remote_id,
+                f"https://example.test/{remote_id}",
+            ),
+            now=now + index * 2 + 1,
+        )
+
+    # Once every destination has confirmed publication, cleanup can safely
+    # remove the snapshot even though the local source has since changed.
+    base.store.cleanup_terminal_staging(base.staging_dir)
+    assert not original_stage.exists()
+    assert base.store.get_item(original_id)["staged_path"] is None
