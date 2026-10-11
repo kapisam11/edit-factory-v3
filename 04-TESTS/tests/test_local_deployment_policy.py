@@ -29,6 +29,14 @@ def test_default_job_concurrency_is_one(compose_name: str) -> None:
     assert "AIVF_MAX_CONCURRENT_JOBS: ${AIVF_MAX_CONCURRENT_JOBS:-1}" in compose
 
 
+def test_dev_memory_admission_is_below_default_container_limit() -> None:
+    compose = (DEPLOYMENT_ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
+
+    assert 'mem_limit: "${AIVF_CONTAINER_MEMORY:-8g}"' in compose
+    assert "AIVF_MAX_JOB_MEMORY_MB: ${AIVF_MAX_JOB_MEMORY_MB:-6144}" in compose
+    assert "AIVF_MAX_RESERVED_MEMORY_MB: ${AIVF_MAX_RESERVED_MEMORY_MB:-7168}" in compose
+
+
 def test_windows_launcher_uses_buildable_development_compose() -> None:
     launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
     compose_assignment = next(
