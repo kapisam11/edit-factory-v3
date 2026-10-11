@@ -435,31 +435,40 @@ class FolderPublisher:
             # Take the SQLite write lock before selection so two invocations cannot
             # claim the same source job at once. Expired leases recover after a killed process.
             conn.execute("BEGIN IMMEDIATE")
-            job = conn.execute(
+            candidates = conn.execute(
                 "SELECT * FROM publishing_jobs WHERE "
                 "(state IN ('PENDING','RETRY_WAIT') OR "
                 "(state='UPLOADING' AND (lease_until_epoch IS NULL OR lease_until_epoch<=?))) "
                 "AND (next_attempt_epoch IS NULL OR next_attempt_epoch<=?) "
-                "ORDER BY created_at,id LIMIT 1",
+                "ORDER BY created_at,id",
                 (current, current),
-            ).fetchone()
-            if job is None:
+            ).fetchall()
+            if not candidates:
                 return {"status": "no_eligible_jobs"}
+            day = datetime.fromtimestamp(current, timezone.utc).date().isoformat()
+            job = None
+            capped: list[dict[str, Any]] = []
+            for candidate in candidates:
+                candidate_platform = str(candidate["platform"])
+                candidate_account_id = str(candidate["account_id"])
+                published = conn.execute(
+                    "SELECT COUNT(*) FROM publishing_jobs WHERE state='PUBLISHED' AND platform=? "
+                    "AND account_id=? AND substr(published_at,1,10)=?",
+                    (candidate_platform, candidate_account_id, day),
+                ).fetchone()[0]
+                if int(published) >= self.config.max_videos_per_day:
+                    capped.append({
+                        "platform": candidate_platform,
+                        "account_id": candidate_account_id,
+                        "published_today": int(published),
+                    })
+                    continue
+                job = candidate
+                break
+            if job is None:
+                return {"status": "daily_limit_reached", "capped_destinations": capped}
             platform = str(job["platform"])
             platform_account_id = str(job["account_id"])
-            day = datetime.fromtimestamp(current, timezone.utc).date().isoformat()
-            published = conn.execute(
-                "SELECT COUNT(*) FROM publishing_jobs WHERE state='PUBLISHED' AND platform=? "
-                "AND account_id=? AND substr(published_at,1,10)=?",
-                (platform, platform_account_id, day),
-            ).fetchone()[0]
-            if int(published) >= self.config.max_videos_per_day:
-                return {
-                    "status": "daily_limit_reached",
-                    "platform": platform,
-                    "account_id": platform_account_id,
-                    "published_today": int(published),
-                }
             if platform not in IMPLEMENTED_UPLOADERS:
                 return {"status": "blocked", "job_id": job["id"], "reason": "no uploader"}
             metadata = json.loads(job["metadata_json"])
