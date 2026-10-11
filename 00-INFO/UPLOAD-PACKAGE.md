@@ -26,9 +26,11 @@ python 02-WEB-FILES/app/cli.py "Minecraft betrayal on SMP" --platform youtube_sh
 
 Supported profiles are `youtube_shorts`, `youtube`, `tiktok`, and `instagram_reels`.
 
-These are **output-format and metadata profiles**, not a promise that each platform can be uploaded to automatically. The current direct authenticated upload implementation is YouTube-only. The repository does not currently provide working direct Instagram Reels or TikTok upload adapters with authorization, remote-processing polling, and duplicate recovery.
+These are **output-format and metadata profiles**, not a promise that each platform can be uploaded to automatically. YouTube is the only direct authenticated uploader currently implemented.
 
-The autonomous `aivf-autopublish daemon` is also YouTube-specific and generates content from its persisted topic queue; it does not watch a folder of existing videos. A fully unattended existing-file-to-YouTube/Instagram/TikTok workflow is therefore **not yet implemented or production-verified**.
+For existing MP4 files, the separate `aivf-folder-publish` CLI now provides stable-file intake, ffprobe preflight checks, a durable SQLite queue with one independent job per destination/account, approval and rights gates, daily upload caps, and Windows Task Scheduler scripts. Its detailed setup is in [FOLDER-PUBLISHING.md](FOLDER-PUBLISHING.md). That path can publish existing files to YouTube; it explicitly records Instagram and TikTok jobs as blocked because those direct upload adapters are not implemented yet.
+
+The autonomous `aivf-autopublish daemon` remains YouTube-specific and generates content from its persisted topic queue; it does not itself watch a folder of existing videos. The complete unattended existing-file-to-YouTube/Instagram/TikTok workflow is **not yet implemented or production-verified**.
 
 ## YouTube publishing
 
