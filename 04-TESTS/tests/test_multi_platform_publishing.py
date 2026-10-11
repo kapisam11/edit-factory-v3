@@ -199,7 +199,9 @@ def test_folder_ingestion_can_seed_three_independent_destinations(
         ("instagram", "brand", "queued"),
         ("tiktok", "creator", "queued"),
     }
-    assert len({row["idempotency_key"] for row in rows}) == 3
+    with multi.store._connect() as connection:
+        keys = [row[0] for row in connection.execute("SELECT idempotency_key FROM platform_publications")]
+    assert len(set(keys)) == 3
 
 
 def test_folder_publisher_allows_explicit_repost_identity(
