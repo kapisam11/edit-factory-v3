@@ -376,11 +376,16 @@ TIKTOK_MAX_CHUNK_BYTES = 64 * 1024 * 1024
 
 
 def _tiktok_chunk_plan(file_size: int) -> tuple[int, int]:
-    """Choose chunks that respect TikTok's 5–64 MiB per-chunk contract."""
+    """Plan TikTok upload chunks according to its current media-transfer contract.
+
+    Videos smaller than 5 MiB are uploaded as one whole-file chunk. For larger
+    files, each chunk is between 5 and 64 MiB; files above 64 MiB use multiple
+    sequential chunks. The provider's final chunk may absorb the trailing bytes.
+    """
     size = int(file_size)
-    if size < TIKTOK_MIN_CHUNK_BYTES:
+    if size <= 0:
         raise PlatformPublishError(
-            "TikTok Direct Post requires a video of at least 5 MiB for file upload",
+            "TikTok Direct Post requires a non-empty video file",
             code="MEDIA_SIZE_LIMIT",
             retryable=False,
         )
@@ -390,6 +395,8 @@ def _tiktok_chunk_plan(file_size: int) -> tuple[int, int]:
             code="MEDIA_SIZE_LIMIT",
             retryable=False,
         )
+    if size < TIKTOK_MIN_CHUNK_BYTES:
+        return size, 1
     chunk_count = (size + TIKTOK_MAX_CHUNK_BYTES - 1) // TIKTOK_MAX_CHUNK_BYTES
     chunk_size = (size + chunk_count - 1) // chunk_count
     if not TIKTOK_MIN_CHUNK_BYTES <= chunk_size <= TIKTOK_MAX_CHUNK_BYTES:
