@@ -138,6 +138,72 @@ def test_tiktok_resume_queries_saved_publish_id_without_creating_another_post(
     assert posts == []
 
 
+def test_youtube_waits_for_processing_and_persists_remote_id_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_video_factory import youtube_publisher
+    from ai_video_factory.platform_adapters import YouTubeAdapter
+
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"youtube test media")
+    monkeypatch.setenv("YOUTUBE_CLIENT_SECRETS", "fake-client-secrets.json")
+    monkeypatch.setenv("YOUTUBE_TOKEN_PATH", str(tmp_path / "token.json"))
+    monkeypatch.setenv("AIVF_YOUTUBE_REMOTE_WAIT_SECONDS", "5")
+    monkeypatch.setenv("AIVF_YOUTUBE_POLL_SECONDS", "1")
+    monkeypatch.setattr(
+        youtube_publisher,
+        "upload_video",
+        lambda *_args, **_kwargs: {
+            "video_id": "youtube-video-123",
+            "url": "https://www.youtube.com/watch?v=youtube-video-123",
+        },
+    )
+
+    class FakeRequest:
+        def execute(self) -> dict[str, Any]:
+            return {
+                "items": [
+                    {
+                        "status": {
+                            "uploadStatus": "processed",
+                            "privacyStatus": "private",
+                        },
+                        "processingDetails": {"processingStatus": "succeeded"},
+                    }
+                ]
+            }
+
+    class FakeVideos:
+        def list(self, **kwargs: Any) -> FakeRequest:
+            assert kwargs["id"] == "youtube-video-123"
+            assert kwargs["part"] == "processingDetails,status"
+            return FakeRequest()
+
+    class FakeService:
+        def videos(self) -> FakeVideos:
+            return FakeVideos()
+
+    monkeypatch.setattr(youtube_publisher, "_service", lambda *_args, **_kwargs: FakeService())
+    saved_operations: list[tuple[str, str]] = []
+    saved_posts: list[tuple[str, str]] = []
+    result = YouTubeAdapter().publish(
+        media_path=video,
+        metadata={"title": "Test", "privacy_status": "private"},
+        account_id="default",
+        idempotency_key="stable-youtube-key",
+        remote_operation_id=None,
+        adapter_state={},
+        on_operation=lambda op, _state, state: saved_operations.append((op, state)),
+        on_state=lambda _state, _state_name: None,
+        on_remote_post=lambda post_id, url: saved_posts.append((post_id, url)),
+    )
+    assert result.remote_operation_id == "youtube-video-123"
+    assert result.remote_post_id == "youtube-video-123"
+    assert result.remote_url == "https://www.youtube.com/watch?v=youtube-video-123"
+    assert saved_operations == [("youtube-video-123", "processing_remote")]
+    assert saved_posts == [("youtube-video-123", "https://www.youtube.com/watch?v=youtube-video-123")]
+
+
 def test_instagram_ambiguous_media_publish_is_never_reissued_automatically(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
