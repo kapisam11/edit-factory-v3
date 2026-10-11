@@ -213,7 +213,7 @@ def test_http_429_retry_after_is_preserved_for_the_durable_queue(
     assert caught.value.retry_after_seconds == 120.0
 
 
-def test_tiktok_chunk_plan_respects_minimum_and_maximum_chunk_size() -> None:
+def test_tiktok_chunk_plan_matches_current_transfer_contract() -> None:
     from ai_video_factory.platform_adapters import (
         PlatformPublishError,
         TIKTOK_MAX_CHUNK_BYTES,
@@ -221,13 +221,19 @@ def test_tiktok_chunk_plan_respects_minimum_and_maximum_chunk_size() -> None:
         _tiktok_chunk_plan,
     )
 
+    # TikTok's current guide explicitly permits a file smaller than 5 MiB as
+    # one whole-file request; the 5 MiB minimum applies to multi-part chunks.
+    small_size = TIKTOK_MIN_CHUNK_BYTES - 1
+    assert _tiktok_chunk_plan(small_size) == (small_size, 1)
     with pytest.raises(PlatformPublishError) as caught:
-        _tiktok_chunk_plan(TIKTOK_MIN_CHUNK_BYTES - 1)
+        _tiktok_chunk_plan(0)
     assert caught.value.code == "MEDIA_SIZE_LIMIT"
-    chunk_size, chunks = _tiktok_chunk_plan(65 * 1024 * 1024)
+
+    size = 65 * 1024 * 1024
+    chunk_size, chunks = _tiktok_chunk_plan(size)
     assert TIKTOK_MIN_CHUNK_BYTES <= chunk_size <= TIKTOK_MAX_CHUNK_BYTES
     assert chunks > 1
-    assert (chunks - 1) * chunk_size < 65 * 1024 * 1024 <= chunks * chunk_size
+    assert (chunks - 1) * chunk_size < size <= chunks * chunk_size
 
 
 def test_tiktok_resume_queries_saved_publish_id_without_creating_another_post(
