@@ -4,6 +4,8 @@ Edit Factory v3 includes an opt-in, single-host autonomous YouTube operating loo
 
 The loop persists the content queue in SQLite, researches topics, produces upload packages, checks rights/factuality/media readiness, rejects generic or repetitive scripts, schedules publication, uploads with duplicate protection, collects analytics, and feeds measured outcomes back into the channel-learning store.
 
+**Scope boundary:** this daemon publishes through the YouTube integration only. It is not a directory watcher for existing MP4s and does not upload to Instagram Reels or TikTok. Those names are supported creative/output profiles; they are not direct publishing integrations. Do not describe the project as an unattended multi-platform publisher until per-platform authorization, upload completion, retry reconciliation, and crash-recovery tests exist.
+
 ## Human-quality guard
 
 Autonomous publishing is blocked when the content looks too templated. The guard checks for repeated scripts, high n-gram similarity to recent uploads, filler/cliche openings, excessive clickbait, low specificity, and weak script/metadata quality.
