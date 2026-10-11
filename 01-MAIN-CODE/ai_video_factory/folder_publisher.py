@@ -111,10 +111,15 @@ def probe_video(path: Path, *, max_duration_seconds: int) -> dict[str, Any]:
     if not videos:
         raise ValueError("file contains no video stream")
     fmt = payload.get("format") if isinstance(payload.get("format"), dict) else {}
+    raw_duration = fmt.get("duration")
+    raw_width = videos[0].get("width")
+    raw_height = videos[0].get("height")
+    if raw_duration is None or raw_width is None or raw_height is None:
+        raise ValueError("video duration or dimensions are missing/invalid")
     try:
-        duration = float(fmt.get("duration"))
-        width = int(videos[0].get("width"))
-        height = int(videos[0].get("height"))
+        duration = float(raw_duration)
+        width = int(raw_width)
+        height = int(raw_height)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("video duration or dimensions are missing/invalid") from exc
     if not math.isfinite(duration) or duration <= 0:
@@ -646,7 +651,7 @@ class FolderPublisher:
 
     def _load_metadata(self, video: Path) -> tuple[dict[str, Any], Optional[int], bool, str]:
         sidecar = self._sidecar(video)
-        default = {
+        default: dict[str, Any] = {
             "title": video.stem[:100],
             "description": "",
             "tags": [],
@@ -994,9 +999,9 @@ class FolderPublisher:
             result = self.scan()
             LOG.info("folder scan: %s", json.dumps(result, sort_keys=True))
             if self.config.publish_enabled:
-                result = self.publish_one()
-                if result:
-                    LOG.info("folder publish: %s", json.dumps(result, sort_keys=True))
+                publish_result = self.publish_one()
+                if publish_result:
+                    LOG.info("folder publish: %s", json.dumps(publish_result, sort_keys=True))
             time.sleep(max(1, self.config.poll_seconds))
 
 
