@@ -66,6 +66,7 @@ jobs:
         uv run python 01-MAIN-CODE/cli.py --help
         uv run python 01-MAIN-CODE/cli_v3.py --help
         uv run aivf --help
+        uv run aivf-folder-publisher --help
     - name: Run admission/idempotency load smoke
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
@@ -97,9 +98,10 @@ jobs:
         /tmp/aivf-wheel-test/bin/aivf --help
         /tmp/aivf-wheel-test/bin/aivf-content --help
         /tmp/aivf-wheel-test/bin/aivf-v3 --help
+        /tmp/aivf-wheel-test/bin/aivf-folder-publisher --help
         /tmp/aivf-wheel-test/bin/aivf-ready .
         /tmp/aivf-wheel-test/bin/python -c "import os; import ai_video_factory; import app.cli; import app.web_app_v3; from app import wsgi; assert os.path.isdir(app.web_app_v3.app.template_folder); assert os.path.isdir(app.web_app_v3.app.static_folder); assert wsgi.app is app.web_app_v3.app; response=wsgi.app.test_client().get('/api/health'); assert response.status_code == 200; print('isolated wheel runtime ok')"
-        /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); names={ep.name:ep.value for ep in group}; assert names['aivf']=='app.cli:main'; assert names['aivf-content']=='app.content_factory_cli:main'; assert names['aivf-v3']=='ai_video_factory.v3_cli:main'"
+        /tmp/aivf-wheel-test/bin/python -c "from importlib import metadata as m; eps=m.entry_points(); group=eps.select(group='console_scripts') if hasattr(eps,'select') else eps.get('console_scripts', ()); names={ep.name:ep.value for ep in group}; assert names['aivf']=='app.cli:main'; assert names['aivf-content']=='app.content_factory_cli:main'; assert names['aivf-v3']=='ai_video_factory.v3_cli:main'; assert names['aivf-folder-publisher']=='ai_video_factory.folder_publisher:main'"
     - name: Run production guardrail regression tests
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
