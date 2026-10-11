@@ -229,11 +229,12 @@ def test_tiktok_chunk_plan_matches_current_transfer_contract() -> None:
         _tiktok_chunk_plan(0)
     assert caught.value.code == "MEDIA_SIZE_LIMIT"
 
-    size = 65 * 1024 * 1024
-    chunk_size, chunks = _tiktok_chunk_plan(size)
-    assert TIKTOK_MIN_CHUNK_BYTES <= chunk_size <= TIKTOK_MAX_CHUNK_BYTES
-    assert chunks > 1
-    assert (chunks - 1) * chunk_size < size <= chunks * chunk_size
+    for size in (5 * 1024 * 1024, 65 * 1024 * 1024, 65 * 1024 * 1024 + 1, 128 * 1024 * 1024 + 7):
+        chunk_size, chunks = _tiktok_chunk_plan(size)
+        assert TIKTOK_MIN_CHUNK_BYTES <= chunk_size <= TIKTOK_MAX_CHUNK_BYTES
+        assert chunks == size // chunk_size
+        assert 1 <= chunks <= 1000
+        assert (chunks - 1) * chunk_size < size <= chunks * chunk_size + chunks
 
 
 def test_tiktok_resume_queries_saved_publish_id_without_creating_another_post(
