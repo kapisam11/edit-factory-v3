@@ -60,7 +60,14 @@ if (-not $DashboardPort) {
 if (-not $DashboardPort) {
     $DashboardPort = "5000"
 }
-if ($DashboardPort -notmatch '^\d{1,5}
+if ($DashboardPort -notmatch '^\d{1,5}$') {
+    throw "AIVF_DASHBOARD_PORT must be a TCP port number between 1 and 65535."
+}
+$DashboardPortNumber = [int]$DashboardPort
+if ($DashboardPortNumber -lt 1 -or $DashboardPortNumber -gt 65535) {
+    throw "AIVF_DASHBOARD_PORT must be a TCP port number between 1 and 65535."
+}
+$BaseUrl = "http://127.0.0.1:$DashboardPortNumber"
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Magenta
 Write-Host "       EDIT FACTORY V3 - START ALL" -ForegroundColor Magenta
