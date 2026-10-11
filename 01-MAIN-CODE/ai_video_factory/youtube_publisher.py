@@ -752,7 +752,7 @@ def upload_video(
     status = {
         "privacyStatus": privacy_status,
         "selfDeclaredMadeForKids": False,
-        "containsSyntheticMedia": bool(realistic_alteration),
+        "containsSyntheticMedia": bool(ai_generated or realistic_alteration),
     }
     body = {
         "snippet": {
@@ -977,7 +977,7 @@ def fetch_channel_uploads(
 def fetch_video_statistics(video_id: str, *, client_secrets_path: Optional[str] = None, token_path: Optional[str] = None) -> Dict[str, Any]:
     client_secrets_path, token_path = _paths(client_secrets_path, token_path)
     youtube = _service("youtube", "v3", client_secrets_path, token_path, UPLOAD_SCOPES + ANALYTICS_SCOPES)
-    response = youtube.videos().list(part="snippet,statistics,status", id=video_id).execute()
+    response = youtube.videos().list(part="snippet,statistics,status,processingDetails", id=video_id).execute()
     items = response.get("items") or []
     if not items:
         raise LookupError(f"YouTube video not found: {video_id}")
