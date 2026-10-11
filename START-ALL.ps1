@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
-$ComposeFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\docker-compose.yml"
+$ComposeFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\docker-compose.dev.yml"
 $EnvFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\.env"
 $BaseUrl = "http://127.0.0.1:5000"
 
@@ -108,7 +108,7 @@ Invoke-Native "docker" @(
 )
 Write-Ok "Docker Compose configuration is valid."
 
-Write-Step "Starting the full Edit Factory stack"
+Write-Step "Starting the local development dashboard stack"
 
 $composeUpArgs = @(
     "compose",
@@ -124,7 +124,7 @@ if (-not $NoBuild) {
 }
 
 Invoke-Native "docker" $composeUpArgs
-Write-Ok "Edit Factory dashboard container started."
+Write-Ok "Local Edit Factory dashboard container started."
 
 Write-Step "Waiting for the dashboard health check"
 
