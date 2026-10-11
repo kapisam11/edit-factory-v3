@@ -34,7 +34,7 @@ def test_direct_post_upload_persists_remote_id_and_is_idempotent(tmp_path, monke
     video = tmp_path / "story.mp4"
     video.write_bytes(b"video bytes")
     monkeypatch.setattr(
-        tiktok.subprocess,
+        subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(stdout="30.0"),
         raising=False,
