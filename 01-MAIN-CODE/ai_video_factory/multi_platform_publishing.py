@@ -74,7 +74,25 @@ def _compact_json(value: Any) -> str:
 def _safe_error_message(exc: Exception) -> str:
     if isinstance(exc, requests.RequestException):
         return type(exc).__name__
-    return " ".join(str(exc).split())[:1200] or type(exc).__name__
+    message = " ".join(str(exc).split())
+    for name, value in os.environ.items():
+        if value and len(value) >= 5 and re.search(
+            r"(TOKEN|SECRET|PASSWORD|CLIENT_KEY|ACCESS_KEY|REFRESH)",
+            name,
+            re.IGNORECASE,
+        ):
+            message = message.replace(value, "<REDACTED>")
+    message = re.sub(
+        r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+",
+        r"\1<REDACTED>",
+        message,
+    )
+    message = re.sub(
+        r"(?i)(access_token|refresh_token|client_secret|client_key|password)\s*[:=]\s*[^,\s&]+",
+        r"\1=<REDACTED>",
+        message,
+    )
+    return message[:1200] or type(exc).__name__
 
 
 class PublicationStore:
@@ -538,11 +556,31 @@ class PublicationStore:
 
     def claim_notification(self, event_key: str, *, now: float) -> bool:
         with self._connect() as connection:
-            cursor = connection.execute(
-                "INSERT OR IGNORE INTO platform_publication_notifications(event_key,notified_at) VALUES(?,?)",
-                (event_key, now),
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT notified_at,response_code FROM platform_publication_notifications WHERE event_key=?",
+                (event_key,),
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    "INSERT INTO platform_publication_notifications(event_key,notified_at,response_code) VALUES(?,?,NULL)",
+                    (event_key, now),
+                )
+                connection.commit()
+                return True
+            response_code = row[1]
+            was_successful = response_code is not None and 200 <= int(response_code) < 300
+            # Successful notifications are de-duplicated forever. Failed or
+            # interrupted attempts are eligible for retry after a cool-down.
+            if was_successful or now - float(row[0]) < 300:
+                connection.commit()
+                return False
+            connection.execute(
+                "UPDATE platform_publication_notifications SET notified_at=?,response_code=NULL WHERE event_key=?",
+                (now, event_key),
             )
-        return cursor.rowcount == 1
+            connection.commit()
+            return True
 
     def set_notification_response(self, event_key: str, status_code: int | None) -> None:
         with self._connect() as connection:
@@ -901,6 +939,12 @@ class MultiPlatformPublisher:
             self.heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 pending = self.store.counts()
+                with self.store._connect() as connection:
+                    latest_success = connection.execute(
+                        "SELECT MAX(published_at) FROM platform_publications WHERE state='published'"
+                    ).fetchone()[0]
+                if latest_success is not None:
+                    self.last_success_epoch = float(latest_success)
             except sqlite3.Error:
                 pending = {}
             payload = {
@@ -977,7 +1021,7 @@ class MultiPlatformPublisher:
                         result.get("state"),
                     )
             except Exception as exc:
-                LOG.exception("platform publisher loop encountered an error (%s)", type(exc).__name__)
+                LOG.error("platform publisher loop encountered an error (%s)", type(exc).__name__)
                 self._notify_system_failure(
                     f"publisher-loop:{type(exc).__name__}",
                     "The platform publisher loop encountered an unexpected error.",
