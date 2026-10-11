@@ -28,7 +28,7 @@ PLATFORM_ALIASES = {
     "instagram_reels": "instagram",
     "tiktok": "tiktok",
 }
-IMPLEMENTED_UPLOADERS = {"youtube"}
+IMPLEMENTED_UPLOADERS = {"youtube", "instagram", "tiktok"}
 VIDEO_SUFFIXES = {".mp4"}
 MAX_METADATA_BYTES = 256 * 1024
 
@@ -70,6 +70,8 @@ class FolderPublisherConfig:
     max_fps: float = 120.0
     max_videos_per_day: int = 1
     account_id: str = "default"
+    instagram_account_id: str = "default"
+    tiktok_account_id: str = "default"
     client_secrets_path: Optional[str] = None
     token_path: Optional[str] = None
     allow_public: bool = False
@@ -112,6 +114,16 @@ class FolderPublisherConfig:
             max_fps=positive_float("AIVF_FOLDER_MAX_FPS", 120.0),
             max_videos_per_day=positive_int("AIVF_FOLDER_MAX_VIDEOS_PER_DAY", 1),
             account_id=os.environ.get("AIVF_YOUTUBE_ACCOUNT_ID", "default").strip() or "default",
+            instagram_account_id=(
+                os.environ.get("AIVF_INSTAGRAM_ACCOUNT_ID")
+                or os.environ.get("AIVF_INSTAGRAM_USER_ID")
+                or "default"
+            ).strip(),
+            tiktok_account_id=(
+                os.environ.get("AIVF_TIKTOK_ACCOUNT_ID")
+                or os.environ.get("AIVF_TIKTOK_OPEN_ID")
+                or "default"
+            ).strip(),
             client_secrets_path=os.environ.get("YOUTUBE_CLIENT_SECRETS"),
             token_path=os.environ.get("YOUTUBE_TOKEN_PATH"),
             allow_public=os.environ.get("AIVF_FOLDER_ALLOW_PUBLIC", "0").strip() == "1",
@@ -129,6 +141,15 @@ class FolderPublisher:
         self._initialize()
 
     @contextmanager
+    def account_for(self, platform: str) -> str:
+        if platform == "youtube":
+            return self.config.account_id
+        if platform == "instagram":
+            return self.config.instagram_account_id
+        if platform == "tiktok":
+            return self.config.tiktok_account_id
+        raise ValueError(f"unsupported publishing platform: {platform}")
+
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.config.queue_db), timeout=30)
         conn.row_factory = sqlite3.Row
@@ -313,7 +334,11 @@ class FolderPublisher:
                     overrides = platform_metadata.get(platform) or {}
                     if not isinstance(overrides, dict):
                         raise ValueError(f"platform_metadata.{platform} must be a JSON object")
-                    unexpected = set(overrides) - {"title", "description", "tags", "privacy_status"}
+                    allowed_override_keys = {
+                        "title", "description", "tags", "privacy_status",
+                        "video_url", "share_to_feed",
+                    }
+                    unexpected = set(overrides) - allowed_override_keys
                     if unexpected:
                         raise ValueError(
                             f"platform_metadata.{platform} contains unsupported overrides: {sorted(unexpected)}"
@@ -339,9 +364,19 @@ class FolderPublisher:
                         review_reason.append("AI/altered-media disclosure has not been reviewed")
                     if effective.get("privacy_status") == "public" and not self.config.allow_public:
                         review_reason.append("public publishing requires AIVF_FOLDER_ALLOW_PUBLIC=1")
+                    if platform == "instagram":
+                        from urllib.parse import urlparse
+                        parsed_url = urlparse(str(effective.get("video_url") or "").strip())
+                        if parsed_url.scheme != "https" or not parsed_url.hostname:
+                            review_reason.append("Instagram requires platform_metadata.instagram.video_url to be a public HTTPS video URL")
+                        if effective.get("privacy_status") != "public":
+                            review_reason.append("Instagram Reels publishing requires public visibility")
+                    if platform == "tiktok" and effective.get("privacy_status") == "unlisted":
+                        review_reason.append("TikTok Direct Post does not support unlisted visibility")
                     needs_review = bool(review_reason)
+                    platform_account_id = self.account_for(platform)
                     job_id = hashlib.sha256(
-                        f"{platform}\0{self.config.account_id}\0{source_hash}".encode("utf-8")
+                        f"{platform}\0{platform_account_id}\0{source_hash}".encode("utf-8")
                     ).hexdigest()
                     if platform not in IMPLEMENTED_UPLOADERS:
                         state = "BLOCKED_UNSUPPORTED"
@@ -355,7 +390,7 @@ class FolderPublisher:
                     with self._connect() as conn:
                         existing = conn.execute(
                             "SELECT * FROM publishing_jobs WHERE platform=? AND account_id=? AND source_sha256=?",
-                            (platform, self.config.account_id, source_hash),
+                            (platform, platform_account_id, source_hash),
                         ).fetchone()
                         if existing:
                             if existing["metadata_sha256"] != metadata_hash and existing["state"] != "PUBLISHED":
@@ -375,7 +410,7 @@ class FolderPublisher:
                             "metadata_sha256,metadata_json,state,last_error,created_at,updated_at) "
                             "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                             (
-                                job_id, platform, self.config.account_id, str(path.resolve()), source_hash,
+                                job_id, platform, platform_account_id, str(path.resolve()), source_hash,
                                 metadata_hash, json.dumps(effective, ensure_ascii=False), state, error,
                                 _utc_now(), _utc_now(),
                             ),
@@ -390,13 +425,6 @@ class FolderPublisher:
         """Publish at most one eligible job; call from a daily scheduled task."""
         current = time.time() if now is None else now
         with self._connect() as conn:
-            day = datetime.fromtimestamp(current, timezone.utc).date().isoformat()
-            published = conn.execute(
-                "SELECT COUNT(*) FROM publishing_jobs WHERE state='PUBLISHED' AND substr(published_at,1,10)=?",
-                (day,),
-            ).fetchone()[0]
-            if int(published) >= self.config.max_videos_per_day:
-                return {"status": "daily_limit_reached", "published_today": int(published)}
             job = conn.execute(
                 "SELECT * FROM publishing_jobs WHERE state IN ('PENDING','RETRY_WAIT','UPLOADING') "
                 "AND (next_attempt_epoch IS NULL OR next_attempt_epoch<=?) "
@@ -405,7 +433,22 @@ class FolderPublisher:
             ).fetchone()
             if job is None:
                 return {"status": "no_eligible_jobs"}
-            if job["platform"] != "youtube":
+            platform = str(job["platform"])
+            platform_account_id = str(job["account_id"])
+            day = datetime.fromtimestamp(current, timezone.utc).date().isoformat()
+            published = conn.execute(
+                "SELECT COUNT(*) FROM publishing_jobs WHERE state='PUBLISHED' AND platform=? "
+                "AND account_id=? AND substr(published_at,1,10)=?",
+                (platform, platform_account_id, day),
+            ).fetchone()[0]
+            if int(published) >= self.config.max_videos_per_day:
+                return {
+                    "status": "daily_limit_reached",
+                    "platform": platform,
+                    "account_id": platform_account_id,
+                    "published_today": int(published),
+                }
+            if platform not in IMPLEMENTED_UPLOADERS:
                 return {"status": "blocked", "job_id": job["id"], "reason": "no uploader"}
             metadata = json.loads(job["metadata_json"])
             if metadata.get("privacy_status", "private") == "public" and not self.config.allow_public:
@@ -420,22 +463,38 @@ class FolderPublisher:
                 (attempts, _utc_now(), job["id"]),
             )
         try:
-            from .youtube_publisher import upload_video
-
-            result = upload_video(
-                job["source_path"],
-                title=str(metadata["title"]),
-                description=str(metadata.get("description") or ""),
-                tags=metadata.get("tags") or [],
-                privacy_status=str(metadata.get("privacy_status") or "private"),
-                client_secrets_path=self.config.client_secrets_path,
-                token_path=self.config.token_path,
-                ai_generated=bool(metadata.get("ai_generated", False)),
-                realistic_alteration=bool(metadata.get("realistic_alteration", False)),
-                disclosure_reviewed=bool(metadata.get("disclosure_reviewed", False)),
-                idempotency_key=f"folder-{self.config.account_id}-{job['id']}",
-                idempotency_directory=str(self.config.state_dir / "youtube-idempotency"),
-            )
+            common = {
+                "title": str(metadata["title"]),
+                "description": str(metadata.get("description") or ""),
+                "tags": metadata.get("tags") or [],
+                "privacy_status": str(metadata.get("privacy_status") or "private"),
+                "idempotency_key": f"folder-{platform_account_id}-{job['id']}",
+                "idempotency_directory": str(self.config.state_dir / f"{platform}-idempotency"),
+            }
+            if platform == "youtube":
+                from .youtube_publisher import upload_video
+                result = upload_video(
+                    job["source_path"],
+                    **common,
+                    client_secrets_path=self.config.client_secrets_path,
+                    token_path=self.config.token_path,
+                    ai_generated=bool(metadata.get("ai_generated", False)),
+                    realistic_alteration=bool(metadata.get("realistic_alteration", False)),
+                    disclosure_reviewed=bool(metadata.get("disclosure_reviewed", False)),
+                )
+            elif platform == "tiktok":
+                from .tiktok_publisher import publish_video
+                result = publish_video(job["source_path"], **common)
+            elif platform == "instagram":
+                from .instagram_publisher import publish_video
+                result = publish_video(
+                    job["source_path"],
+                    **common,
+                    video_url=str(metadata.get("video_url") or ""),
+                    share_to_feed=bool(metadata.get("share_to_feed", True)),
+                )
+            else:
+                raise RuntimeError(f"No direct publisher is implemented for {platform}")
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"[:2000]
             # Ambiguous upload errors are retained and retried through the uploader's
@@ -461,7 +520,7 @@ class FolderPublisher:
                 )
             return {"status": "needs_review", "job_id": job["id"], "reason": "missing remote ID"}
         published_at = _utc_now()
-        remote_url = str(result.get("url") or f"https://www.youtube.com/watch?v={remote_id}")
+        remote_url = str(result["url"]) if result.get("url") else None
         with self._connect() as conn:
             conn.execute(
                 "UPDATE publishing_jobs SET state='PUBLISHED',remote_id=?,remote_url=?,published_at=?,"
@@ -496,7 +555,10 @@ class FolderPublisher:
             raise ValueError("source content changed; refusing to reuse the old publishing job")
         effective = dict(metadata)
         overrides = (metadata.get("platform_metadata") or {}).get(platform) or {}
-        if not isinstance(overrides, dict) or set(overrides) - {"title", "description", "tags", "privacy_status"}:
+        allowed_override_keys = {
+            "title", "description", "tags", "privacy_status", "video_url", "share_to_feed"
+        }
+        if not isinstance(overrides, dict) or set(overrides) - allowed_override_keys:
             raise ValueError("invalid platform-specific metadata")
         effective.update(overrides)
         if not effective.get("approved", False) or not effective.get("rights_cleared", False):
@@ -505,6 +567,15 @@ class FolderPublisher:
             raise ValueError("AI/altered-media disclosure must be reviewed before approval")
         if effective.get("privacy_status") == "public" and not self.config.allow_public:
             raise ValueError("set AIVF_FOLDER_ALLOW_PUBLIC=1 explicitly before approving public publication")
+        if platform == "instagram":
+            from urllib.parse import urlparse
+            parsed_url = urlparse(str(effective.get("video_url") or "").strip())
+            if parsed_url.scheme != "https" or not parsed_url.hostname:
+                raise ValueError("Instagram requires a public HTTPS video_url in its sidecar")
+            if effective.get("privacy_status") != "public":
+                raise ValueError("Instagram Reels publishing requires public visibility")
+        if platform == "tiktok" and effective.get("privacy_status") == "unlisted":
+            raise ValueError("TikTok Direct Post does not support unlisted visibility")
         if not str(effective.get("title") or "").strip() or len(str(effective["title"])) > 100:
             raise ValueError("title must be 1–100 characters")
         if len(str(effective.get("description") or "")) > 5000:
