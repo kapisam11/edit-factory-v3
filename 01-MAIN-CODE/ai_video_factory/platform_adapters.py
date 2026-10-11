@@ -215,9 +215,9 @@ class YouTubeAdapter(PlatformAdapter):
                 retryable=False,
             )
         try:
-            from .youtube_publisher import upload_video
+            from . import youtube_publisher
 
-            result = upload_video(
+            result = youtube_publisher.upload_video(
                 str(media_path),
                 title=str(metadata.get("title") or media_path.stem)[:100],
                 description=str(metadata.get("description") or "")[:5000],
@@ -237,11 +237,10 @@ class YouTubeAdapter(PlatformAdapter):
         except PlatformPublishError:
             raise
         except Exception as exc:
-            # upload_video uses a separate durable idempotency record. Repeating
-            # this exact key reconciles an uncertain response before a new insert.
+            # upload_video's durable idempotency record reconciles uncertain inserts.
             retryable = _looks_transient(str(exc), type(exc).__name__)
             raise PlatformPublishError(
-                f"YouTube upload failed ({type(exc).__name__}): {_redacted_message(exc)}",
+                f"YouTube upload failed ({type(exc).__name__})",
                 code="YOUTUBE_UPLOAD_FAILED",
                 retryable=retryable,
                 uncertain=retryable,
@@ -255,8 +254,22 @@ class YouTubeAdapter(PlatformAdapter):
                 retryable=True,
                 uncertain=True,
             )
-        url = str(result.get("url") or "")
+        url = str(result.get("url") or f"https://www.youtube.com/watch?v={post_id}")
+        # Persist the ID before waiting for remote transcoding. If polling times
+        # out or the worker restarts, the durable YouTube idempotency record and
+        # this queue entry both point at the same remote video.
+        on_operation(
+            post_id,
+            {"stage": "processing_remote", "video_id": post_id},
+            "processing_remote",
+        )
         on_remote_post(post_id, url)
+        remote_status = _verify_youtube_processing(
+            post_id,
+            client_secrets_path=client_secrets,
+            token_path=token_path,
+        )
+        result["verified_remote_status"] = remote_status
         return PublishResult("youtube", post_id, post_id, url)
 
 
@@ -340,6 +353,80 @@ def _wait_settings(platform: str) -> tuple[float, float]:
     except ValueError:
         interval = 5.0
     return max(1.0, min(timeout, 1800.0)), max(1.0, min(interval, 60.0))
+
+
+def _verify_youtube_processing(
+    video_id: str,
+    *,
+    client_secrets_path: str,
+    token_path: str,
+) -> dict[str, Any]:
+    """Poll the owner-only YouTube processing state before marking a job published."""
+    from .youtube_publisher import UPLOAD_SCOPES, _service
+
+    timeout, interval = _wait_settings("youtube")
+    deadline = time.monotonic() + timeout
+    service = _service(
+        "youtube",
+        "v3",
+        client_secrets_path,
+        token_path,
+        UPLOAD_SCOPES,
+    )
+    while True:
+        try:
+            response = service.videos().list(
+                part="processingDetails,status",
+                id=video_id,
+            ).execute()
+        except Exception as exc:
+            raise PlatformPublishError(
+                f"YouTube processing-status lookup failed ({type(exc).__name__})",
+                code="REMOTE_STATUS_LOOKUP_FAILED",
+                retryable=True,
+                uncertain=True,
+            ) from exc
+        items = response.get("items") or []
+        if not items:
+            raise PlatformPublishError(
+                "YouTube did not return the uploaded video while verifying processing",
+                code="REMOTE_VIDEO_NOT_FOUND",
+                retryable=True,
+                uncertain=True,
+            )
+        item = items[0]
+        processing = item.get("processingDetails") or {}
+        status = item.get("status") or {}
+        processing_state = str(processing.get("processingStatus") or "").lower()
+        upload_state = str(status.get("uploadStatus") or "").lower()
+        if processing_state == "failed" or upload_state in {"failed", "rejected", "deleted"}:
+            reason = str(
+                processing.get("processingFailureReason")
+                or status.get("failureReason")
+                or status.get("rejectionReason")
+                or "remote processing failed"
+            )[:180]
+            raise PlatformPublishError(
+                f"YouTube rejected or failed to process the upload ({reason})",
+                code="YOUTUBE_PROCESSING_FAILED",
+                retryable=False,
+                uncertain=False,
+            )
+        if processing_state == "succeeded" or upload_state == "processed":
+            return {
+                "processing_status": processing_state or "succeeded",
+                "upload_status": upload_state,
+                "privacy_status": str(status.get("privacyStatus") or ""),
+                "failure_reason": "",
+            }
+        if time.monotonic() >= deadline:
+            raise PlatformPublishError(
+                "YouTube has not finished processing the uploaded video; the saved video ID will be checked again",
+                code="REMOTE_PROCESSING",
+                retryable=True,
+                uncertain=True,
+            )
+        time.sleep(interval)
 
 
 class InstagramReelsAdapter(PlatformAdapter):
