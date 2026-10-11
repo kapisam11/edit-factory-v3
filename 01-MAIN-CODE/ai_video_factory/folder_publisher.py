@@ -365,7 +365,8 @@ class FolderQueue:
                     platform_refs = int(conn.execute(
                         "SELECT COUNT(*) FROM platform_publications WHERE staged_path=? AND ("
                         "state NOT IN ('published','permanent_failed','cancelled') OR "
-                        "(state='permanent_failed' AND (updated_at>=? OR error_code='AMBIGUOUS_OUTCOME'))"
+                        "(state='permanent_failed' AND (updated_at>=? OR error_code IN "
+                        "('AMBIGUOUS_OUTCOME','PUBLICATION_VISIBILITY_UNCONFIRMED')))"
                         ")",
                         (str(raw), failed_retention_cutoff),
                     ).fetchone()[0])
