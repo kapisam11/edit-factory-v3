@@ -407,3 +407,44 @@ def test_instagram_requires_public_https_media_url_before_creating_container(
             on_remote_post=lambda *_args: None,
         )
     assert caught.value.code == "PUBLIC_MEDIA_URL_REQUIRED"
+
+
+def test_tiktok_public_post_without_public_id_remains_unconfirmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x" * (5 * 1024 * 1024))
+    monkeypatch.setenv("AIVF_TIKTOK_TEST_ACCESS_TOKEN", "test-access-token")
+    monkeypatch.setenv("AIVF_TIKTOK_REMOTE_WAIT_SECONDS", "1")
+    monkeypatch.setenv("AIVF_TIKTOK_POLL_SECONDS", "1")
+
+    ticks = iter((0.0, 2.0))
+    monkeypatch.setattr(platform.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(platform.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        platform.requests,
+        "request",
+        lambda *_args, **_kwargs: FakeResponse(
+            _ok({"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": []})
+        ),
+    )
+
+    with pytest.raises(PlatformPublishError) as caught:
+        TikTokDirectPostAdapter().publish(
+            media_path=video,
+            metadata={},
+            account_id="test",
+            idempotency_key="public-post-key",
+            remote_operation_id="persisted-public-publish-id",
+            adapter_state={
+                "publish_id": "persisted-public-publish-id",
+                "stage": "submitted",
+                "privacy_level": "PUBLIC_TO_EVERYONE",
+            },
+            on_operation=lambda *_args: None,
+            on_state=lambda *_args: None,
+            on_remote_post=lambda *_args: None,
+        )
+    assert caught.value.code == "PUBLICATION_VISIBILITY_UNCONFIRMED"
+    assert caught.value.retryable is True
+    assert caught.value.uncertain is True
