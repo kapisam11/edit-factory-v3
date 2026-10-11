@@ -6,6 +6,7 @@ responses are reconciled or failed closed instead of blindly starting a new post
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
@@ -13,8 +14,11 @@ import os
 import stat
 import time
 import secrets
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
@@ -63,6 +67,9 @@ def _load_token() -> tuple[str, dict[str, Any]]:
         if not access:
             raise RuntimeError("TikTok token file has no access_token; re-authorize before publishing")
         if expires_at and expires_at <= time.time() + 120:
+            refresh_expiry = float(record.get("refresh_expires_at") or 0)
+            if refresh_expiry and refresh_expiry <= time.time() + 120:
+                raise RuntimeError("TikTok refresh token is expired; run aivf-tiktok-authorize again")
             refresh_token = str(record.get("refresh_token") or "").strip()
             client_key = os.environ.get("AIVF_TIKTOK_CLIENT_KEY", "").strip()
             client_secret = os.environ.get("AIVF_TIKTOK_CLIENT_SECRET", "").strip()
@@ -240,7 +247,9 @@ def publish_video(
             raise RuntimeError("TikTok idempotency journal is invalid; refusing a duplicate post")
         if record.get("state") == "published":
             return dict(record.get("result") or {})
-        if record.get("source_size") != size:
+        if record.get("source_size") != size or (
+            record.get("source_sha256") and record.get("source_sha256") != _file_sha256(path)
+        ):
             raise RuntimeError("TikTok source changed after initialization; refusing to reuse the upload session")
         if record.get("privacy_level") != privacy:
             raise RuntimeError("TikTok destination visibility changed after initialization; review this job manually")
