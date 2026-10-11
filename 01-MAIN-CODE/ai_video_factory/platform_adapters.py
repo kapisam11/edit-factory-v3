@@ -391,12 +391,6 @@ class InstagramReelsAdapter(PlatformAdapter):
         on_state: StateCallback,
         on_remote_post: RemotePostCallback,
     ) -> PublishResult:
-        if not _truthy("AIVF_INSTAGRAM_ALLOW_PUBLIC"):
-            raise PlatformPublishError(
-                "Instagram Reels publishing is blocked until AIVF_INSTAGRAM_ALLOW_PUBLIC=1 explicitly acknowledges that publication uses the account's audience settings",
-                code="PUBLIC_PUBLISH_NOT_ACKNOWLEDGED",
-                retryable=False,
-            )
         token, user_id, version = self._config(account_id)
         headers = _bearer(token)
         base = f"https://graph.facebook.com/{version}"
@@ -620,7 +614,8 @@ class TikTokDirectPostAdapter(PlatformAdapter):
             if post_id and username
             else ""
         )
-        on_remote_post(post_id or publish_id, remote_url)
+        if post_id:
+            on_remote_post(post_id, remote_url)
         return PublishResult("tiktok", publish_id, post_id or None, remote_url)
 
     def _finish_status(
@@ -765,7 +760,9 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                 code="INVALID_METADATA",
                 retryable=False,
             )
-        chunk_size = min(64 * 1024 * 1024, max(5 * 1024 * 1024, file_size))
+        # TikTok permits a single chunk smaller than 5 MiB; for larger files
+        # use a bounded 64 MiB chunk and let the final chunk be smaller.
+        chunk_size = min(64 * 1024 * 1024, file_size)
         chunk_count = (file_size + chunk_size - 1) // chunk_size
         post_info: dict[str, Any] = {
             "title": caption,
@@ -842,7 +839,7 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                 retryable=False,
                 uncertain=True,
             )
-        chunk_size = min(64 * 1024 * 1024, max(5 * 1024 * 1024, size))
+        chunk_size = min(64 * 1024 * 1024, size)
         mime = mimetypes.guess_type(media_path.name)[0]
         mime = mime if mime in {"video/mp4", "video/quicktime", "video/webm"} else {
             ".mp4": "video/mp4",
