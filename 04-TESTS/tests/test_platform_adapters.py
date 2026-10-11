@@ -565,12 +565,16 @@ def test_tiktok_reconciles_partial_upload_from_server_content_range(
     video = tmp_path / "resume.mp4"
     video.write_bytes(b"x" * size)
     calls: list[dict[str, Any]] = []
+    chunk_size, _chunk_count = _tiktok_chunk_plan(size)
+    first = FakeResponse({}, status_code=206)
+    first.headers["Content-Range"] = f"bytes 0-{chunk_size - 1}/{size}"
+    second = FakeResponse({}, status_code=201)
+    second.headers["Content-Range"] = f"bytes 0-{size - 1}/{size}"
+    responses = [first, second]
 
     def put(_url: str, **kwargs: Any) -> FakeResponse:
         calls.append(kwargs)
-        response = FakeResponse({}, status_code=201)
-        response.headers["Content-Range"] = f"bytes 0-{size - 1}/{size}"
-        return response
+        return responses[len(calls) - 1]
 
     monkeypatch.setattr(platform.requests, "put", put)
     state: dict[str, Any] = {"stage": "uploading", "uploaded_bytes": uploaded}
@@ -583,8 +587,11 @@ def test_tiktok_reconciles_partial_upload_from_server_content_range(
         lambda *_args: None,
     )
     assert final_offset == size
-    assert len(calls) == 1
-    assert calls[0]["headers"]["Content-Range"] == f"bytes {uploaded}-{size - 1}/{size}"
+    assert len(calls) == 2
+    assert calls[0]["headers"]["Content-Range"] == f"bytes {uploaded}-{chunk_size - 1}/{size}"
+    assert calls[1]["headers"]["Content-Range"] == f"bytes {chunk_size}-{size - 1}/{size}"
+    assert len(calls[0]["data"]) == chunk_size - uploaded
+    assert len(calls[1]["data"]) == size - chunk_size
 
 
 def test_tiktok_rejects_unrecognized_success_codes_in_media_transfer(
