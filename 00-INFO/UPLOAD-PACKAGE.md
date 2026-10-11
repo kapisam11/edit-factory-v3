@@ -88,6 +88,28 @@ uv run aivf-publish --watch-dir .\incoming --publish daemon
 
 Actual network publishing is disabled unless `--publish` or `AIVF_MULTI_PUBLISH=1` is explicitly set. `scan` and `status` do not upload.
 
+### Daily deadline and missed-run alert
+
+For a daily acceptance target, set `AIVF_REQUIRE_DAILY_PUBLISH=1` and configure `AIVF_PUBLISH_DEADLINE_HOUR` (0–23) and `AIVF_PUBLISH_DEADLINE_MINUTE` (0–59) in the publisher's local environment. The deadline uses the Windows host's local timezone. It alerts when a publication has not reached **published on every configured destination** by that time. The alert is written to the log and, when `AIVF_FAILURE_WEBHOOK_URL` is configured, sent to the HTTPS failure webhook. Detection is persisted per local date to avoid repeated log spam after a restart. This can detect a missed day; it cannot keep publishing while the PC is powered off or disconnected.
+
+### Recovering an ambiguous upload without editing SQLite
+
+An ambiguous result is intentionally blocked from blind retries. First run `uv run aivf-publish status`, open the indicated account on the destination platform, and establish whether the post actually exists.
+
+If it exists, record the provider's actual post ID and URL:
+
+```powershell
+uv run aivf-publish reconcile 12 --result published --remote-post-id "REAL_REMOTE_ID" --remote-url "https://platform.example/actual-post"
+```
+
+If you have checked and confirmed it does **not** exist, record that fact:
+
+```powershell
+uv run aivf-publish reconcile 12 --result not-published
+```
+
+Replace `12` with the job ID from `status`. The command only accepts failure states marked as ambiguous/reconciliation-required and appends a durable event. For Instagram, it retains the existing media container and clears the saved publish intent so the same container can be published after the operator confirms absence. For other platforms, it resets the unknown remote session and queues a new attempt. Do not use `not-published` unless you actually checked the destination; it is an operator assertion, not automatic platform proof.
+
 ### Destination credentials
 
 Configure an account-specific environment prefix. Account IDs are uppercased; punctuation is replaced with underscores.
