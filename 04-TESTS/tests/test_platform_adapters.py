@@ -99,6 +99,113 @@ def test_tiktok_direct_post_upload_saves_operation_and_waits_for_remote_completi
     assert not any(url.endswith("/video/init/") for _, url, _ in calls) is False
 
 
+def test_tiktok_refresh_token_is_rotated_and_persisted_outside_the_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_video_factory import platform_auth
+
+    monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "private-state"))
+    refresh_requests: list[dict[str, Any]] = []
+
+    def post(url: str, **kwargs: Any) -> FakeResponse:
+        assert url == "https://open.tiktokapis.com/v2/oauth/token/"
+        refresh_requests.append(kwargs["data"])
+        return FakeResponse(
+            {
+                "access_token": "rotated-access-token",
+                "refresh_token": "rotated-refresh-token",
+                "expires_in": 86400,
+                "refresh_expires_in": 8640000,
+                "token_type": "Bearer",
+            }
+        )
+
+    monkeypatch.setattr(platform_auth.requests, "post", post)
+    access = platform_auth.get_platform_access_token(
+        platform="tiktok",
+        account_id="creator",
+        access_token="old-access-token",
+        refresh_token="initial-refresh-token",
+        client_key="test-client-key",
+        client_secret="test-client-secret",
+    )
+    assert access == "rotated-access-token"
+    assert refresh_requests == [
+        {
+            "client_key": "test-client-key",
+            "client_secret": "test-client-secret",
+            "grant_type": "refresh_token",
+            "refresh_token": "initial-refresh-token",
+        }
+    ]
+
+    second = platform_auth.get_platform_access_token(
+        platform="tiktok",
+        account_id="creator",
+        access_token="stale-environment-token",
+        refresh_token="stale-environment-refresh-token",
+        client_key="test-client-key",
+        client_secret="test-client-secret",
+    )
+    assert second == "rotated-access-token"
+    assert len(refresh_requests) == 1
+    db = tmp_path / "private-state" / "platform-tokens.sqlite"
+    import sqlite3
+
+    with sqlite3.connect(db) as connection:
+        row = connection.execute(
+            "SELECT access_token,refresh_token FROM platform_tokens WHERE platform='tiktok' AND account_id='creator'"
+        ).fetchone()
+    assert row == ("rotated-access-token", "rotated-refresh-token")
+
+
+def test_expired_stored_tiktok_token_fails_closed_without_refresh_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_video_factory import platform_auth
+    import sqlite3
+    import time
+
+    monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
+    db = tmp_path / "state" / "platform-tokens.sqlite"
+    db.parent.mkdir(parents=True)
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "CREATE TABLE platform_tokens(platform TEXT NOT NULL,account_id TEXT NOT NULL,"
+            "access_token TEXT NOT NULL,refresh_token TEXT NOT NULL DEFAULT '',"
+            "expires_at REAL NOT NULL DEFAULT 0,updated_at REAL NOT NULL,"
+            "PRIMARY KEY(platform,account_id))"
+        )
+        connection.execute(
+            "INSERT INTO platform_tokens VALUES('tiktok','creator','expired-token','',?,?)",
+            (time.time() - 60, time.time() - 100),
+        )
+    with pytest.raises(platform_auth.TokenRefreshError) as caught:
+        platform_auth.get_platform_access_token(
+            platform="tiktok",
+            account_id="creator",
+            access_token="expired-environment-token",
+        )
+    assert caught.value.code == "AUTH_REFRESH_REQUIRED"
+
+
+def test_http_429_retry_after_is_preserved_for_the_durable_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = FakeResponse({"error": {"message": "slow down"}}, status_code=429)
+    response.headers["Retry-After"] = "120"
+    monkeypatch.setattr(platform.requests, "request", lambda *_args, **_kwargs: response)
+    with pytest.raises(PlatformPublishError) as caught:
+        platform._request_json(
+            "GET",
+            "https://api.example.test/resource",
+            headers={"Accept": "application/json"},
+        )
+    assert caught.value.code == "HTTP_429"
+    assert caught.value.retryable is True
+    assert caught.value.retry_after_seconds == 120.0
+
+
 def test_tiktok_resume_queries_saved_publish_id_without_creating_another_post(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
