@@ -1826,6 +1826,33 @@ def publishing_status():
                 "FROM platform_publications WHERE state IN ('retryable_failed','permanent_failed') "
                 "ORDER BY updated_at DESC,id DESC LIMIT 10"
             ).fetchall()
+            event_history_by_job: dict[int, list[dict[str, Any]]] = {}
+            job_ids = [int(row["id"]) for row in rows]
+            if job_ids:
+                placeholders = ",".join("?" for _ in job_ids)
+                event_rows = connection.execute(
+                    "SELECT publication_job_id,occurred_at,event_type,state,detail_json "
+                    "FROM platform_publication_events "
+                    f"WHERE publication_job_id IN ({placeholders}) ORDER BY id DESC LIMIT 500",
+                    job_ids,
+                ).fetchall()
+                for event in event_rows:
+                    job_id = int(event["publication_job_id"])
+                    events = event_history_by_job.setdefault(job_id, [])
+                    if len(events) >= 8:
+                        continue
+                    try:
+                        detail = json.loads(str(event["detail_json"] or "{}"))
+                        if not isinstance(detail, dict):
+                            detail = {}
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        detail = {}
+                    events.append({
+                        "occurred_at": float(event["occurred_at"]),
+                        "event_type": str(event["event_type"]),
+                        "state": str(event["state"]),
+                        "detail": detail,
+                    })
     except (sqlite3.Error, OSError):
         return jsonify({"status": "unavailable", "database_configured": True}), 503
 
@@ -1848,6 +1875,7 @@ def publishing_status():
             "published_at": row["published_at"],
             "error_code": str(row["error_code"] or ""),
             "last_error": str(row["last_error"] or "")[:500],
+            "events": event_history_by_job.get(int(row["id"]), []),
         })
     recent_errors = [{
         "job_id": int(row["id"]),
