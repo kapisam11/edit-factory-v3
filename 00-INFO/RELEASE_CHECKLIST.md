@@ -4,7 +4,7 @@
 
 Before merging a production/hardening branch, all of the following automated checks must be green:
 
-- Python 3.10–3.12 CI test matrix
+- Python 3.10–3.14 CI test matrix
 - repository-wide Ruff checks for production Python
 - `python 01-MAIN-CODE/cli.py --help`, `python 01-MAIN-CODE/cli_v3.py --help`, `aivf --help`, and `aivf-v3 --help`
 - dependency audit against the committed `uv.lock`
@@ -12,6 +12,7 @@ Before merging a production/hardening branch, all of the following automated che
 - Docker build and dashboard health/import smoke test
 - deployment-boundary Python and shell syntax validation
 - dashboard authentication test
+- static deployment-policy regression: dashboard ports bound to loopback, Windows launcher uses local buildable Compose, one heavy job by default
 - same-origin login/logout POST checks (reject missing or cross-origin origin signals; allow same-origin requests)
 - secret persistence/API redaction tests
 - malicious upload/path tests
@@ -26,6 +27,11 @@ The repository contains a committed dependency lockfile, and the release CI cons
 These require the actual deployment target and cannot be certified by source inspection alone:
 
 - end-to-end cancellation test on the deployment operating system (`target_recovery_smoke.sh`)
+- verify a Windows reboot and sleep/wake cycle against the intended schedule, including recovery of missed and interrupted work
+- verify the dashboard cannot be reached from another LAN device in the single-PC deployment
+- for every enabled platform/account, complete a real authorized test upload and verify its remote ID and final remote state
+- inject an ambiguous upload timeout for each enabled platform and prove the job reconciles remote status before retrying, without duplicating already successful destinations
+- verify source-folder ingestion waits for stable/copy-complete files and does not process the same source twice
 - restart/reconciliation test on the deployment operating system (`target_recovery_smoke.sh`)
 - orphan-FFmpeg verification after cancellation/restart
 - one real end-to-end render using the target host's FFmpeg/FFprobe installation

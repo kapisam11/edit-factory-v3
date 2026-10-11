@@ -40,6 +40,8 @@ The production pipeline also includes a video-only **Thinking AI** creative-dire
 
 The repository also retains the previously implemented production features: scene intelligence, captions/subtitles, music intelligence and mixing, thumbnail tooling, upload packaging, channel/style learning, checkpoint/retry hardening, YouTube publishing support, dashboard/job handling, FFmpeg validation, Docker deployment, and CI.
 
+**Publishing scope:** YouTube is the current direct authenticated uploader. `tiktok` and `instagram_reels` are output/metadata profiles, not direct API uploaders. The autonomous publisher is a YouTube-specific topic-to-publish daemon; it does not watch a folder of existing MP4s or independently publish one file to all three platforms. See [00-INFO/UPLOAD-PACKAGE.md](00-INFO/UPLOAD-PACKAGE.md). Do not treat platform format support as evidence of a working uploader.
+
 ## Quick start
 
 From the repository root:
@@ -105,13 +107,13 @@ It will:
 1. Check that Docker Desktop is installed and running.
 2. Create a local development `06-CONFIG-AND-DEPLOYMENT/.env` with generated secrets when one does not exist.
 3. Validate the Docker Compose configuration.
-4. Build and start the complete Edit Factory dashboard stack.
+4. Build and start the local development dashboard stack using `docker-compose.dev.yml` (the launcher does not require a pre-published immutable production image).
 5. Wait for `/api/health` to become healthy.
 6. Open the dashboard login page in your browser and show the local dashboard token in the launcher window.
 7. When `uv` is installed, run dependency, Python compilation, Ruff, mypy, and the full pytest suite.
 8. Run a final dashboard health check and report failures with a non-zero exit code.
 
-The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` for a faster startup, or `docker compose ... down` to stop the stack.
+The local Compose profile publishes the dashboard only on `127.0.0.1` by default and limits admission to one concurrent job by default. Set `AIVF_DASHBOARD_PORT` in `06-CONFIG-AND-DEPLOYMENT/.env` to choose another host port; the launcher follows the same setting. The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` for a faster startup, or `docker compose ... down` to stop the stack. These defaults protect a single-PC setup; they do not configure unattended multi-platform uploads.
 
 The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**.
 

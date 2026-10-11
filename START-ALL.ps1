@@ -10,9 +10,8 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
-$ComposeFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\docker-compose.yml"
+$ComposeFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\docker-compose.dev.yml"
 $EnvFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\.env"
-$BaseUrl = "http://127.0.0.1:5000"
 
 function Write-Step([string]$Message) {
     Write-Host ""
@@ -54,6 +53,21 @@ function Get-EnvValue([string]$Name) {
     return ($line -replace "^\s*$([regex]::Escape($Name))\s*=\s*", "")
 }
 
+$DashboardPort = $env:AIVF_DASHBOARD_PORT
+if (-not $DashboardPort) {
+    $DashboardPort = Get-EnvValue "AIVF_DASHBOARD_PORT"
+}
+if (-not $DashboardPort) {
+    $DashboardPort = "5000"
+}
+if ($DashboardPort -notmatch '^\d{1,5}$') {
+    throw "AIVF_DASHBOARD_PORT must be a TCP port number between 1 and 65535."
+}
+$DashboardPortNumber = [int]$DashboardPort
+if ($DashboardPortNumber -lt 1 -or $DashboardPortNumber -gt 65535) {
+    throw "AIVF_DASHBOARD_PORT must be a TCP port number between 1 and 65535."
+}
+$BaseUrl = "http://127.0.0.1:$DashboardPortNumber"
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Magenta
 Write-Host "       EDIT FACTORY V3 - START ALL" -ForegroundColor Magenta
@@ -108,7 +122,7 @@ Invoke-Native "docker" @(
 )
 Write-Ok "Docker Compose configuration is valid."
 
-Write-Step "Starting the full Edit Factory stack"
+Write-Step "Starting the local development dashboard stack"
 
 $composeUpArgs = @(
     "compose",
@@ -124,7 +138,7 @@ if (-not $NoBuild) {
 }
 
 Invoke-Native "docker" $composeUpArgs
-Write-Ok "Edit Factory dashboard container started."
+Write-Ok "Local Edit Factory dashboard container started."
 
 Write-Step "Waiting for the dashboard health check"
 
