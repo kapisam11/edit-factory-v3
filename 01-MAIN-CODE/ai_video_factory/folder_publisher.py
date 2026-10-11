@@ -317,13 +317,30 @@ class FolderQueue:
             )
 
     def cleanup_terminal_staging(self, staging_root: Path) -> int:
+        """Remove a snapshot only after every durable consumer is done with it.
+
+        The per-platform queue stores immutable staging paths independently of
+        the folder watcher. A source edit must not delete bytes still needed by
+        another destination or by crash-recovery reconciliation.
+        """
         root = staging_root.resolve()
         removed = 0
+        try:
+            failed_retention_days = max(
+                1, int(os.environ.get("AIVF_PUBLISH_FAILED_STAGING_RETENTION_DAYS", "30"))
+            )
+        except ValueError:
+            failed_retention_days = 30
+        failed_retention_cutoff = time.time() - failed_retention_days * 86400
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id,staged_path FROM folder_items WHERE staged_path IS NOT NULL "
                 "AND state IN ('PUBLISHED','DUPLICATE','SOURCE_CHANGED')"
             ).fetchall()
+            has_platform_queue = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='platform_publications'"
+            ).fetchone() is not None
         for row in rows:
             raw = Path(str(row["staged_path"]))
             try:
@@ -332,13 +349,28 @@ class FolderQueue:
             except (OSError, ValueError):
                 continue
             with self._connect() as conn:
-                active = conn.execute(
+                active = int(conn.execute(
                     "SELECT COUNT(*) FROM folder_items WHERE staged_path=? "
                     "AND state NOT IN ('PUBLISHED','DUPLICATE','SOURCE_CHANGED')",
                     (str(raw),),
-                ).fetchone()[0]
-            if active:
-                continue
+                ).fetchone()[0])
+                if active:
+                    continue
+                if has_platform_queue:
+                    # Published destinations no longer need the bytes. In-flight
+                    # or queued destinations do. Recently failed jobs keep their
+                    # evidence/snapshot for a bounded manual-recovery window;
+                    # ambiguous publication outcomes retain it until explicitly
+                    # reconciled, because switching bytes would be unsafe.
+                    platform_refs = int(conn.execute(
+                        "SELECT COUNT(*) FROM platform_publications WHERE staged_path=? AND ("
+                        "state NOT IN ('published','permanent_failed','cancelled') OR "
+                        "(state='permanent_failed' AND (updated_at>=? OR error_code='AMBIGUOUS_OUTCOME'))"
+                        ")",
+                        (str(raw), failed_retention_cutoff),
+                    ).fetchone()[0])
+                    if platform_refs:
+                        continue
             if candidate.is_file() and not candidate.is_symlink():
                 candidate.unlink(missing_ok=True)
                 removed += 1
@@ -521,13 +553,28 @@ class FolderQueue:
             if sent_today >= max_per_day:
                 conn.commit()
                 return None
-            row = conn.execute(
-                "SELECT * FROM folder_items WHERE "
-                "(state='READY' AND next_attempt_at<=?) OR "
-                "(state='UPLOADING' AND COALESCE(lease_until,0)<=? AND next_attempt_at<=?) "
-                "ORDER BY CASE state WHEN 'UPLOADING' THEN 0 ELSE 1 END, discovered_at, id LIMIT 1",
-                (now, now, now),
-            ).fetchone()
+            has_platform_queue = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='platform_publications'"
+            ).fetchone() is not None
+            if has_platform_queue:
+                row = conn.execute(
+                    "SELECT * FROM folder_items WHERE ("
+                    "(state='READY' AND next_attempt_at<=?) OR "
+                    "(state='UPLOADING' AND COALESCE(lease_until,0)<=? AND next_attempt_at<=?)"
+                    ") AND NOT EXISTS ("
+                    "SELECT 1 FROM platform_publications p WHERE p.source_item_id=folder_items.id"
+                    ") ORDER BY CASE state WHEN 'UPLOADING' THEN 0 ELSE 1 END, discovered_at, id LIMIT 1",
+                    (now, now, now),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM folder_items WHERE "
+                    "(state='READY' AND next_attempt_at<=?) OR "
+                    "(state='UPLOADING' AND COALESCE(lease_until,0)<=? AND next_attempt_at<=?) "
+                    "ORDER BY CASE state WHEN 'UPLOADING' THEN 0 ELSE 1 END, discovered_at, id LIMIT 1",
+                    (now, now, now),
+                ).fetchone()
             if row is None:
                 conn.commit()
                 return None
