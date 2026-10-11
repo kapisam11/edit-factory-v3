@@ -107,13 +107,21 @@ def _request(
     data: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     try:
-        response = requests.request(
-            method,
-            url,
-            params=params,
-            data={**(data or {}), "access_token": token},
-            timeout=(10, 45),
-        )
+        if method.upper() == "GET":
+            response = requests.request(
+                method,
+                url,
+                params={**(params or {}), "access_token": token},
+                timeout=(10, 45),
+            )
+        else:
+            response = requests.request(
+                method,
+                url,
+                params=params,
+                data={**(data or {}), "access_token": token},
+                timeout=(10, 45),
+            )
     except requests.RequestException as exc:
         raise RuntimeError("Instagram API request failed before its result could be verified") from exc
     try:
@@ -186,6 +194,14 @@ def _recent_matching_media(
     return found
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def publish_video(
     video_path: str,
     *,
@@ -224,7 +240,7 @@ def publish_video(
     user_id = _user_id()
     token = _access_token()
     journal = _journal_path(idempotency_key, idempotency_directory)
-    source_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    source_sha256 = _file_sha256(path)
     if journal.exists():
         try:
             record = json.loads(journal.read_text(encoding="utf-8"))
