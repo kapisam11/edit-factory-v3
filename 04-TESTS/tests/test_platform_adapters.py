@@ -149,7 +149,7 @@ def test_tiktok_refresh_token_is_rotated_and_persisted_outside_the_repository(
     )
     assert second == "rotated-access-token"
     assert len(refresh_requests) == 1
-    db = tmp_path / "private-state" / "platform-tokens.sqlite"
+    db = tmp_path / "private-state" / "platform-secrets" / "platform-tokens.sqlite"
     import sqlite3
 
     with sqlite3.connect(db) as connection:
@@ -167,7 +167,7 @@ def test_expired_stored_tiktok_token_fails_closed_without_refresh_credentials(
     import time
 
     monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
-    db = tmp_path / "state" / "platform-tokens.sqlite"
+    db = tmp_path / "state" / "platform-secrets" / "platform-tokens.sqlite"
     db.parent.mkdir(parents=True)
     with sqlite3.connect(db) as connection:
         connection.execute(
