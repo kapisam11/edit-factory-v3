@@ -459,10 +459,15 @@ class FolderQueue:
         lease_until = now + 10 * 60
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            # Count successful posts and pending ambiguous uploads for today's
+            # cap. A slot is reserved while an upload is active or awaiting
+            # reconciliation, preventing concurrent daemons from overshooting.
             sent_today = int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM folder_items WHERE state='PUBLISHED' AND published_at>=?",
-                    (day,),
+                    "SELECT COUNT(*) FROM folder_items WHERE "
+                    "(state='PUBLISHED' AND published_at>=?) OR "
+                    "(state='UPLOADING' AND (updated_at>=? OR COALESCE(lease_until,0)>?))",
+                    (day, day, now),
                 ).fetchone()[0]
             )
             if sent_today >= max_per_day:
@@ -806,6 +811,42 @@ class FolderPublisher:
         item = self.store.claim_next(max_per_day=self.config.max_videos_per_day, now=time.time())
         if item is None:
             return None
+        stop_heartbeat = threading.Event()
+        heartbeat = threading.Thread(
+            target=self._renew_upload_lease,
+            args=(int(item["id"]), str(item["lease_owner"]), stop_heartbeat),
+            name=f"folder-publish-lease-{item['id']}",
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            return self._publish_claimed(item)
+        finally:
+            stop_heartbeat.set()
+            heartbeat.join(timeout=2)
+
+    def _renew_upload_lease(
+        self, item_id: int, owner: str, stop: threading.Event
+    ) -> None:
+        while not stop.wait(30):
+            try:
+                now = time.time()
+                with self.store._connect() as conn:
+                    cursor = conn.execute(
+                        "UPDATE folder_items SET lease_until=?,updated_at=? "
+                        "WHERE id=? AND state='UPLOADING' AND lease_owner=?",
+                        (now + 10 * 60, now, item_id, owner),
+                    )
+                if cursor.rowcount != 1:
+                    LOG.warning("upload lease lost for folder item %s", item_id)
+                    return
+            except sqlite3.Error:
+                # A transient busy/disk error should not kill the heartbeat
+                # thread. The bounded lease still lets another daemon recover
+                # if database writes remain unavailable.
+                LOG.exception("failed to renew upload lease for folder item %s", item_id)
+
+    def _publish_claimed(self, item: dict[str, Any]) -> Optional[dict[str, Any]]:
         path = Path(str(item["path"]))
         metadata = json.loads(str(item["metadata_json"]))
         source_hash = str(item.get("source_sha256") or "")
