@@ -831,8 +831,11 @@ class MultiPlatformPublisher:
                     int(job["id"]), owner, post_id, url, now=time.time()
                 ),
             )
-            self.store.mark_published(int(job["id"]), owner, result, now=time.time())
-            self.last_success_epoch = time.time()
+            completed_at = time.time()
+            self.store.mark_published(int(job["id"]), owner, result, now=completed_at)
+            self._finalize_source_if_complete(int(job["source_item_id"]), now=completed_at)
+            self.folder.store.cleanup_terminal_staging(self.folder.staging_dir)
+            self.last_success_epoch = completed_at
             self._write_heartbeat(disk_free_bytes=shutil.disk_usage(self.folder.staging_dir).free)
             return {
                 "id": int(job["id"]),
@@ -891,6 +894,27 @@ class MultiPlatformPublisher:
                     return
             except sqlite3.Error:
                 LOG.exception("publication lease renewal failed for job %s", job_id)
+
+    def _finalize_source_if_complete(self, source_item_id: int, *, now: float) -> bool:
+        """Finalize a folder row only after every destination has confirmed success."""
+        with self.store._connect() as connection:
+            rows = connection.execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN state='published' THEN 1 ELSE 0 END) AS published "
+                "FROM platform_publications WHERE source_item_id=?",
+                (int(source_item_id),),
+            ).fetchone()
+            total = int(rows["total"] or 0) if rows is not None else 0
+            published = int(rows["published"] or 0) if rows is not None else 0
+            if total == 0 or published != total:
+                return False
+            connection.execute(
+                "UPDATE folder_items SET state='PUBLISHED',published_at=?,updated_at=?,"
+                "last_error='' WHERE id=? AND state='READY'",
+                (now, now, int(source_item_id)),
+            )
+        return True
+
 
     def _notify_system_failure(self, event_key: str, message: str, details: dict[str, Any]) -> None:
         webhook = os.environ.get("AIVF_FAILURE_WEBHOOK_URL", "").strip()
