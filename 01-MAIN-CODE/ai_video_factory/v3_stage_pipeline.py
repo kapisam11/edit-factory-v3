@@ -1413,9 +1413,9 @@ class V3PipelineRunner:
                         if failed_final.is_file() or failed_final.is_symlink():
                             failed_final.unlink(missing_ok=True)
                     raise
-                finally:
-                    if backup_path is not None:
-                        backup_path.unlink(missing_ok=True)
+                # Snapshot helpers consume their file on success/restore. If restoration
+                # itself fails, retain the orphaned snapshot rather than deleting the only
+                # recoverable copy of the previous final.
         except WorkspaceBusyError as exc:
             # The workspace belongs to another active job. Never mutate its artifacts
             # or readiness state from the losing caller.
