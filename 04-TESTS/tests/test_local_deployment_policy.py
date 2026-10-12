@@ -107,8 +107,8 @@ def test_external_drive_backup_performs_archive_verification_and_restore_drill()
     assert '"restore",' in script
     assert "$RestoreCheckArgs" in script
     assert "restore drill passed" in script
-    assert "--uploads /app/uploads" in script
-    assert "--state /app/state" in script
+    assert '"--uploads", "/app/uploads"' in script
+    assert '"--state", "/app/state"' in script
     assert "BitLocker" in script
     assert "Remove-Item -Force" in script
 
