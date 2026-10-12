@@ -553,7 +553,7 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
     if expected_fps_value is not None:
         actual_fps = _parse_frame_rate(info.get("fps"))
         try:
-            expected_fps_number = float(expected_fps_value)
+            expected_fps_number = float(str(expected_fps_value))
             fps_tolerance = float(
                 platform_profile.get(
                     "frame_rate_tolerance_fps",
