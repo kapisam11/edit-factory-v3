@@ -140,25 +140,61 @@ if (-not (Test-Path $ComposeFile)) {
     throw "Docker Compose file not found: $ComposeFile"
 }
 
+function Test-UsableSecret([string]$Value) {
+    $candidate = if ($null -eq $Value) { "" } else { $Value.Trim() }
+    if ($candidate.Length -lt 32) {
+        return $false
+    }
+    if ($candidate -match "(?i)change[\s_-]*me|changeme|placeholder|replace[\s_-]*me|your[-_ ]?(secret|token)|^(secret|password|local-development)$") {
+        return $false
+    }
+    return $true
+}
+
+function Set-EnvValue([string]$Name, [string]$Value) {
+    $pattern = "^\s*$([regex]::Escape($Name))\s*="
+    $updated = New-Object System.Collections.Generic.List[string]
+    $found = $false
+    if (Test-Path $EnvFile) {
+        foreach ($line in Get-Content -Path $EnvFile) {
+            if ($line -match $pattern) {
+                if (-not $found) {
+                    $updated.Add("$Name=$Value")
+                    $found = $true
+                }
+            } else {
+                $updated.Add($line)
+            }
+        }
+    }
+    if (-not $found) {
+        $updated.Add("$Name=$Value")
+    }
+    $updated.ToArray() | Set-Content -Path $EnvFile -Encoding UTF8
+}
+
 Write-Step "Preparing local dashboard configuration"
 
 if (-not (Test-Path $EnvFile)) {
-    $dashboardToken = (([guid]::NewGuid().ToString("N")) + ([guid]::NewGuid().ToString("N")))
-    $flaskSecret = (([guid]::NewGuid().ToString("N")) + ([guid]::NewGuid().ToString("N")))
-
     @"
 # Auto-created by START-ALL.ps1 for local Windows development.
 # This file is intentionally local and should not be committed.
-FLASK_SECRET_KEY=$flaskSecret
-AIVF_DASHBOARD_TOKEN=$dashboardToken
 AIVF_COOKIE_SECURE=0
 AIVF_ENV=development
 "@ | Set-Content -Path $EnvFile -Encoding UTF8
-
-    Write-Ok "Created local .env with generated development secrets."
-} else {
-    Write-Ok "Using existing 06-CONFIG-AND-DEPLOYMENT\.env."
 }
+
+if (-not (Test-UsableSecret (Get-EnvValue "FLASK_SECRET_KEY"))) {
+    $flaskSecret = (([guid]::NewGuid().ToString("N")) + ([guid]::NewGuid().ToString("N")))
+    Set-EnvValue "FLASK_SECRET_KEY" $flaskSecret
+    Write-Ok "Generated a valid FLASK_SECRET_KEY in the local .env."
+}
+if (-not (Test-UsableSecret (Get-EnvValue "AIVF_DASHBOARD_TOKEN"))) {
+    $dashboardToken = (([guid]::NewGuid().ToString("N")) + ([guid]::NewGuid().ToString("N")))
+    Set-EnvValue "AIVF_DASHBOARD_TOKEN" $dashboardToken
+    Write-Ok "Generated a valid AIVF_DASHBOARD_TOKEN in the local .env."
+}
+Write-Ok "Local dashboard configuration is ready."
 
 # Preserve valid secrets across restarts, but repair absent or known placeholder
 # values before Docker Compose sees the environment.

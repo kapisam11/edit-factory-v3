@@ -2,6 +2,21 @@
 import os
 import sys
 
+from app.runtime_secrets import require_runtime_secret
+
+# Fail before importing the dashboard application or initializing its runtime.
+runtime_environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+flask_secret_key = require_runtime_secret(
+    "FLASK_SECRET_KEY",
+    os.environ.get("FLASK_SECRET_KEY"),
+    environment=runtime_environment,
+)
+require_runtime_secret(
+    "AIVF_DASHBOARD_TOKEN",
+    os.environ.get("AIVF_DASHBOARD_TOKEN"),
+    environment=runtime_environment,
+)
+
 from ai_video_factory.security_config import validate_dashboard_secrets
 
 validate_dashboard_secrets()
