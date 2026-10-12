@@ -138,6 +138,7 @@ def test_strict_render_check_enforces_fps_audio_and_output_size(monkeypatch):
     }
     monkeypatch.setattr(v3_quality, "probe_media", lambda _path: info)
     monkeypatch.setattr(v3_quality, "_sample_visual_changes", lambda *_args, **_kwargs: {"max_gap": 1.0})
+    monkeypatch.setattr(v3_quality, "_run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setenv("AIVF_MAX_OUTPUT_BYTES", "400")
     monkeypatch.setenv("AIVF_OUTPUT_FPS_TOLERANCE", "0.5")
     monkeypatch.setenv("AIVF_REQUIRE_OUTPUT_AUDIO", "1")
@@ -170,6 +171,7 @@ def test_strict_render_check_does_not_require_audio_when_policy_says_optional(mo
     }
     monkeypatch.setattr(v3_quality, "probe_media", lambda _path: info)
     monkeypatch.setattr(v3_quality, "_sample_visual_changes", lambda *_args, **_kwargs: {"max_gap": 1.0})
+    monkeypatch.setattr(v3_quality, "_run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setenv("AIVF_MAX_OUTPUT_BYTES", "2000")
     monkeypatch.setenv("AIVF_REQUIRE_OUTPUT_AUDIO", "0")
 
