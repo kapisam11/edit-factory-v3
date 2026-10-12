@@ -392,6 +392,7 @@ def _finalize_v3_media(
             retention_events=payload.get("retention_map", []),
             retention_baseline=str(baseline_path),
             require_independent_retention=True,
+            require_audio=bool((payload.get("qc") or {}).get("require_audio", False)),
         )
         if not report["ok"]:
             raise RenderContractError("; ".join(str(error) for error in report.get("errors", [])) or "V3 render QC failed")
