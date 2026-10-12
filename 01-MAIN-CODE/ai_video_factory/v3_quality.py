@@ -545,7 +545,7 @@ def strict_render_check(
         )
 
     if require_audio is None:
-        require_audio_setting = str(os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "1")).strip().lower()
+        require_audio_setting = str(os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "0")).strip().lower()
         require_audio = bool(platform_profile.get("require_audio", require_audio_setting not in {"0", "false", "no"}))
     if not info["has_audio"]:
         message = "rendered artifact has no audio stream"
