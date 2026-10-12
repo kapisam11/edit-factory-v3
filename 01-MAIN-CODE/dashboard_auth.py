@@ -111,8 +111,10 @@ def _validate_dashboard_secrets() -> None:
 
 
 def validate_dashboard_secrets() -> None:
-    """Public validation entrypoint used by WSGI startup checks and deployment tests."""
-    _validate_dashboard_secrets()
+    """Public compatibility entrypoint using the canonical production secret policy."""
+    from ai_video_factory.security_config import validate_dashboard_secrets as _validate
+
+    _validate()
 
 
 def configure_dashboard_auth(app):
