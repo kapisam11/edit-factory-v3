@@ -45,23 +45,24 @@ $ArchiveName = 'edit-factory-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '
 $ArchiveHostPath = Join-Path $ResolvedBackupRoot $ArchiveName
 $Volume = $ResolvedBackupRoot + ':/backup'
 $ComposePrefix = @('compose', '--env-file', $EnvFile, '-f', $ComposeFile, 'run', '--rm', '--no-deps', '--volume', $Volume, 'web')
-$BackupCommand = "mkdir -p /app/state/tmp && export TMPDIR=/app/state/tmp && aivf-backup backup --db /app/state/jobs.db --state /app/state --knowledge /app/knowledge_base_v3 --output /app/output --uploads /app/uploads --backup /backup/$ArchiveName"
+$BackupCommand = "mkdir -p /backup/.work && export TMPDIR=/backup/.work && aivf-backup backup --db /app/state/jobs.db --state /app/state --knowledge /app/knowledge_base_v3 --output /app/output --uploads /app/uploads --backup /backup/$ArchiveName"
 
 Write-Host "Creating backup on $ResolvedBackupRoot ..." -ForegroundColor Cyan
 Invoke-Docker ($ComposePrefix + @('sh', '-ec', $BackupCommand))
 
-$VerifyCommand = "mkdir -p /app/state/tmp && export TMPDIR=/app/state/tmp && aivf-backup verify --backup /backup/$ArchiveName --marker /app/state/backup-restore-verified.json"
+$VerifyCommand = "mkdir -p /backup/.work && export TMPDIR=/backup/.work && aivf-backup verify --backup /backup/$ArchiveName --marker /app/state/backup-restore-verified.json"
 Write-Host 'Verifying archive hashes and SQLite integrity ...' -ForegroundColor Cyan
 Invoke-Docker ($ComposePrefix + @('sh', '-ec', $VerifyCommand))
 
 $RestoreCommand = @'
 set -eu
-mkdir -p /app/state/tmp
-export TMPDIR=/app/state/tmp
-trap 'rm -rf /app/state/tmp/aivf-backup-restore-smoke' EXIT
-aivf-backup restore --backup '/backup/ARCHIVE_PLACEHOLDER' --destination /app/state/tmp/aivf-backup-restore-smoke
-python -c 'import hashlib,json; from pathlib import Path; root=Path("/app/state/tmp/aivf-backup-restore-smoke"); manifest=json.loads((root/"backup-manifest.json").read_text(encoding="utf-8")); bad=[str(e.get("name")) for e in manifest.get("files",[]) if not (root/str(e.get("name"))).is_file() or hashlib.sha256((root/str(e.get("name"))).read_bytes()).hexdigest() != str(e.get("sha256"))]; assert not bad, "restored files differ from backup manifest: "+", ".join(bad[:10]); assert (root/"jobs.db").is_file(); print("restore drill passed; verified files:",len(manifest.get("files",[])))'
-'@ -replace 'ARCHIVE_PLACEHOLDER', $ArchiveName
+mkdir -p /backup/.work
+export TMPDIR=/backup/.work
+trap 'rm -rf /backup/.restore-smoke' EXIT
+aivf-backup restore --backup '/backup/ARCHIVE_PLACEHOLDER' --destination /backup/.restore-smoke
+python -c 'import hashlib,json; from pathlib import Path; root=Path("/backup/.restore-smoke"); manifest=json.loads((root/"backup-manifest.json").read_text(encoding="utf-8")); bad=[str(e.get("name")) for e in manifest.get("files",[]) if not (root/str(e.get("name"))).is_file() or hashlib.sha256((root/str(e.get("name"))).read_bytes()).hexdigest() != str(e.get("sha256"))]; assert not bad, "restored files differ from backup manifest: "+", ".join(bad[:10]); assert (root/"jobs.db").is_file(); print("restore drill passed; verified files:",len(manifest.get("files",[])))'
+'@
+$RestoreCommand = $RestoreCommand -replace 'ARCHIVE_PLACEHOLDER', $ArchiveName
 Write-Host 'Running an isolated restore drill (no live volume is overwritten) ...' -ForegroundColor Cyan
 Invoke-Docker ($ComposePrefix + @('sh', '-ec', $RestoreCommand))
 
