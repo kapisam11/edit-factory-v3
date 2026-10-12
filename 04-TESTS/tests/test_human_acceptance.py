@@ -64,6 +64,10 @@ def test_human_acceptance_verifier_matches_manifest_and_explicit_review(tmp_path
         "artifact_manifest_sha256": manifest["manifest_sha256"],
         "video_reviewed": True,
         "video_acceptance": "accepted",
+        "opening_reviewed": True,
+        "aspect_ratio_reviewed": True,
+        "captions_reviewed": True,
+        "ending_reviewed": True,
         "audio_reviewed": True,
         "audio_acceptance": "accepted",
         "rights_reviewed": True,
@@ -73,6 +77,20 @@ def test_human_acceptance_verifier_matches_manifest_and_explicit_review(tmp_path
     }), encoding="utf-8")
 
     script = Path("06-CONFIG-AND-DEPLOYMENT/verify_human_acceptance.py")
+    review_record = json.loads(acceptance.read_text(encoding="utf-8"))
+    review_record["captions_reviewed"] = False
+    acceptance.write_text(json.dumps(review_record), encoding="utf-8")
+    incomplete = subprocess.run(
+        [sys.executable, str(script), str(package), str(acceptance)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert incomplete.returncode != 0
+    assert "captions_reviewed" in incomplete.stderr
+
+    review_record["captions_reviewed"] = True
+    acceptance.write_text(json.dumps(review_record), encoding="utf-8")
     result = subprocess.run(
         [sys.executable, str(script), str(package), str(acceptance)],
         check=False,
