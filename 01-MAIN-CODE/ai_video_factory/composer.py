@@ -279,10 +279,12 @@ def compose_short_from_video(
 
     vo_path = os.path.join(package_dir, "voice.mp3")
     has_vo = False
-    # CI can opt out of network-backed speech synthesis while still exercising the
-    # real media render. This is limited to the explicit test environment.
+    # CI exercises the actual renderer with generated media fixtures. Do not
+    # make that acceptance test depend on Microsoft's external Edge TTS service;
+    # production V3 runs remain strict unless an operator explicitly selects test mode.
     test_tts_disabled = (
-        os.environ.get("AIVF_ENV", "development").strip().lower() == "test"
+        is_v3
+        and os.environ.get("AIVF_ENV", "development").strip().lower() == "test"
         and os.environ.get("AIVF_TEST_DISABLE_EXTERNAL_TTS", "0").strip() == "1"
     )
     if test_tts_disabled:
