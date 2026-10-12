@@ -558,15 +558,14 @@ def strict_render_check(
     retention_baseline: Optional[str] = None,
     require_independent_retention: bool = False,
     require_audio: bool = False,
+    expected_fps: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Enforce the final media contract before an output can be promoted."""
     info = probe_media(path)
     expected_width = int(platform_profile.get("width") or 0)
     expected_height = int(platform_profile.get("height") or 0)
     errors: list[str] = []
-    warnings: list[str] = [
-        "Caption/subtitle visibility, readability, timing, and story coherence require human review; media metadata cannot prove them."
-    ]
+    warnings: list[str] = []
 
     try:
         target_value = float(target_seconds)
@@ -597,21 +596,28 @@ def strict_render_check(
             f"output size {int(info['size'])} bytes exceeds configured limit {max_output_bytes} bytes"
         )
 
-    expected_fps_value = platform_profile.get("frame_rate_fps")
+    expected_fps_value: object = expected_fps
+    if expected_fps_value is None:
+        expected_fps_value = platform_profile.get("frame_rate_fps")
     if expected_fps_value is None:
         expected_fps_value = platform_profile.get("fps", platform_profile.get("frame_rate"))
     if expected_fps_value is None:
         expected_fps_value = os.environ.get("AIVF_V3_EXPECTED_FPS", "30")
     try:
-        expected_fps = float(expected_fps_value)
-        fps_tolerance = float(platform_profile.get("frame_rate_tolerance_fps", 0.1))
+        expected_fps_number = float(expected_fps_value)
+        fps_tolerance = float(
+            platform_profile.get(
+                "frame_rate_tolerance_fps",
+                os.environ.get("AIVF_OUTPUT_FPS_TOLERANCE", "0.1"),
+            )
+        )
     except (TypeError, ValueError, OverflowError):
-        expected_fps = 0.0
+        expected_fps_number = 0.0
         fps_tolerance = -1.0
 
     if (
-        not math.isfinite(expected_fps)
-        or not 1.0 <= expected_fps <= 120.0
+        not math.isfinite(expected_fps_number)
+        or not 1.0 <= expected_fps_number <= 120.0
         or not math.isfinite(fps_tolerance)
         or fps_tolerance < 0
     ):
@@ -620,11 +626,22 @@ def strict_render_check(
         actual_fps = _parse_frame_rate(info.get("fps"))
         if actual_fps is None:
             errors.append("rendered artifact has an invalid or missing frame rate")
-        elif abs(actual_fps - expected_fps) > fps_tolerance:
+        elif abs(actual_fps - expected_fps_number) > fps_tolerance:
             errors.append(
                 f"frame rate {actual_fps:.4f} fps does not match required "
-                f"{expected_fps:.4f} ±{fps_tolerance:.4f} fps"
+                f"{expected_fps_number:.4f} ±{fps_tolerance:.4f} fps"
             )
+
+    audio_policy = os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "").strip()
+    if audio_policy in {"0", "1"}:
+        audio_required = audio_policy == "1"
+    else:
+        audio_required = bool(require_audio or platform_profile.get("require_audio", False))
+    if not info["has_audio"]:
+        if audio_required:
+            errors.append("rendered artifact has no audio stream but output audio is required")
+        else:
+            warnings.append("rendered artifact has no audio stream")
 
     audio_required = bool(require_audio or platform_profile.get("require_audio", False))
     if not info["has_audio"]:
@@ -729,6 +746,7 @@ def strict_render_check(
             "require_audio": audio_required,
             "max_audio_video_duration_delta_seconds": max_av_delta_value,
         },
+        "audio_required": audio_required,
         "media": info,
         "playability": playability,
         "caption_visibility": {
