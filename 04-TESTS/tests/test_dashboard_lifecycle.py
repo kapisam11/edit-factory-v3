@@ -8,6 +8,7 @@ import pytest
 
 
 def _load_dashboard(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIVF_ENV", "test")
     monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("AIVF_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("AIVF_OUTPUT_DIR", str(tmp_path / "output"))

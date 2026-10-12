@@ -19,8 +19,8 @@ jobs:
         run: |
           docker run -d --name edit-factory-v3-smoke \
             -e AIVF_ALLOW_INSECURE_LOCAL=1 \
-            -e FLASK_SECRET_KEY=ci-smoke-test-secret-key \
-            -e AIVF_DASHBOARD_TOKEN=ci-smoke-test-token \
+            -e FLASK_SECRET_KEY=ci-smoke-test-secret-key-0123456789abcdef \
+            -e AIVF_DASHBOARD_TOKEN=ci-smoke-test-token-0123456789abcdef \
             -p 18080:5000 \
             edit-factory-v3:test
       - name: Wait for health endpoint
