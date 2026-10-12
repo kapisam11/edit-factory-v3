@@ -152,15 +152,81 @@ def test_media_qc_rejects_non_monotonic_retention_events(tmp_path):
         enforce_retention_events(str(source), str(tmp_path / "out.mp4"), [{"time": 0.0}, {"time": 0.0}])
 
 
+def test_strict_render_contract_rejects_wrong_fps_and_audio_video_duration(monkeypatch):
+    from ai_video_factory import v3_quality
+
+    monkeypatch.setattr(
+        v3_quality,
+        "probe_media",
+        lambda _path: {
+            "duration": 5.0, "size": 1024, "width": 1080, "height": 1920,
+            "fps": "24000/1001", "has_audio": True,
+            "video_duration": 5.0, "audio_duration": 4.0,
+            "audio_video_duration_delta_seconds": -1.0,
+        },
+    )
+    monkeypatch.setattr(
+        v3_quality, "_sample_visual_changes",
+        lambda *_args, **_kwargs: {"max_gap": None, "change_events": []},
+    )
+    monkeypatch.setattr(v3_quality, "_run", lambda *_args, **_kwargs: None)
+
+    report = v3_quality.strict_render_check(
+        "fixture.mp4",
+        target_seconds=5.0,
+        platform_profile={
+            "width": 1080, "height": 1920, "max_seconds": 60,
+            "frame_rate_fps": 30, "frame_rate_tolerance_fps": 0.1,
+            "max_av_duration_delta_seconds": 0.25,
+        },
+        retention_events=[{"time": 0.0}, {"time": 2.0}],
+    )
+    assert report["ok"] is False
+    assert any("frame rate" in error for error in report["errors"])
+    assert any("audio/video stream durations differ" in error for error in report["errors"])
+
+
+def test_strict_render_contract_blocks_failed_full_decode(monkeypatch):
+    from ai_video_factory import v3_quality
+
+    monkeypatch.setattr(
+        v3_quality,
+        "probe_media",
+        lambda _path: {
+            "duration": 5.0, "size": 1024, "width": 1080, "height": 1920,
+            "fps": "30/1", "has_audio": False,
+            "video_duration": 5.0, "audio_duration": None,
+            "audio_video_duration_delta_seconds": None,
+        },
+    )
+    monkeypatch.setattr(
+        v3_quality, "_sample_visual_changes",
+        lambda *_args, **_kwargs: {"max_gap": None, "change_events": []},
+    )
+
+    def failed_decode(*_args, **_kwargs):
+        raise RenderContractError("simulated decode failure")
+
+    monkeypatch.setattr(v3_quality, "_run", failed_decode)
+    report = v3_quality.strict_render_check(
+        "fixture.mp4",
+        target_seconds=5.0,
+        platform_profile={"width": 1080, "height": 1920, "frame_rate_fps": 30},
+        retention_events=[{"time": 0.0}, {"time": 2.0}],
+    )
+    assert report["ok"] is False
+    assert any("full media decode failed" in error for error in report["errors"])
+
+
 @pytest.mark.integration
 def test_render_contract_normalizes_enforces_and_validates_duration(tmp_path):
     source = tmp_path / "source.mp4"; retained = tmp_path / "retained.mp4"; final = tmp_path / "final.mp4"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=1080x1920:rate=30", "-t", "3", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "3", "-shortest", "-c:v", "libx264", "-c:a", "aac", str(source)], check=True)
-    enforce_retention_events(str(source), str(retained), [{"time": 0.0, "kind": "zoom"}, {"time": 2.0, "kind": "motion"}])
+    enforce_retention_events(str(source), str(retained), [{"time": 0.0, "kind": "zoom"}, {"time": 2.0, "kind": "motion"}], frame_rate_fps=30.0)
     with pytest.raises(RenderContractError, match="exceeds controlled correction limit"):
         normalize_duration(str(retained), str(final), 5.0)
     normalize_duration(str(retained), str(final), 5.0, allow_large_repair=True)
-    report = strict_render_check(str(final), target_seconds=5.0, platform_profile={"width": 1080, "height": 1920, "max_seconds": 60}, retention_events=[{"time": 0.0}, {"time": 2.0}])
+    report = strict_render_check(str(final), target_seconds=5.0, platform_profile={"width": 1080, "height": 1920, "max_seconds": 60, "frame_rate_fps": 30.0}, retention_events=[{"time": 0.0}, {"time": 2.0}])
     assert report["ok"] is True
     assert abs(report["media"]["duration"] - 5.0) <= 0.08
     assert report["media"]["width"] == 1080
