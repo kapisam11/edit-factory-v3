@@ -45,6 +45,28 @@ jobs:
           AIVF_MIN_FREE_DISK_BYTES: "1073741824"
           PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
         run: |
+          # The E2E covers dashboard admission, rendering, packaging and playback;
+          # use a deterministic local audio source rather than an external TTS API.
+          mkdir -p "$RUNNER_TEMP/aivf-test-bin"
+          cat > "$RUNNER_TEMP/aivf-test-bin/edge-tts" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          output=""
+          while (($#)); do
+            if [[ "$1" == "--write-media" ]]; then
+              shift
+              output="${1:-}"
+            fi
+            shift
+          done
+          test -n "$output"
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=20" \
+            -c:a libmp3lame -q:a 6 "$output"
+          SH
+          chmod +x "$RUNNER_TEMP/aivf-test-bin/edge-tts"
+          export PATH="$RUNNER_TEMP/aivf-test-bin:$PATH"
+          echo "$RUNNER_TEMP/aivf-test-bin" >> "$GITHUB_PATH"
           mkdir -p "$AIVF_STATE_DIR" "$AIVF_UPLOAD_DIR" "$AIVF_OUTPUT_DIR"
           echo "AIVF_MAX_JOB_SECONDS=$AIVF_MAX_JOB_SECONDS"
           echo "AIVF_MAX_JOB_MEMORY_MB=$AIVF_MAX_JOB_MEMORY_MB"
