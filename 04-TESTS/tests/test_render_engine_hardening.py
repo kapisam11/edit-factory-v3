@@ -176,3 +176,91 @@ def test_run_ffmpeg_capture_caps_stdout_and_terminates_tree(monkeypatch, tmp_pat
             capture_output=True,
         )
     assert calls["terminated"] == [7890]
+
+
+def test_ffmpeg_budget_caps_captured_stdout_and_terminates_tree(monkeypatch):
+    from ai_video_factory import ffmpeg_budget
+    import contextlib
+    import io
+
+    calls = []
+
+    class FakeProcess:
+        pid = 8932
+        returncode = 0
+
+        def __init__(self, *args, **kwargs):
+            self.stdout = io.BytesIO(b"x" * 2048)
+            self.stderr = io.BytesIO(b"")
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    def terminate(process, *, grace_seconds=2.0):
+        calls.append(process.pid)
+        process.returncode = -9
+
+    monkeypatch.setenv("AIVF_FFMPEG_SUBPROCESS_CAPTURE_LIMIT_BYTES", "1024")
+    monkeypatch.setattr(ffmpeg_budget.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(ffmpeg_budget, "slot", contextlib.nullcontext)
+    monkeypatch.setattr("ai_video_factory.production_guardrails.terminate_process_tree", terminate)
+
+    with pytest.raises(RuntimeError, match="capture limit of 1024 bytes"):
+        ffmpeg_budget.run_ffmpeg_subprocess(
+            ["ffmpeg", "-i", "input.mp4", "-f", "null", "-"],
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+    assert calls == [8932]
+
+
+def test_ffmpeg_budget_timeout_terminates_process_tree(monkeypatch):
+    from ai_video_factory import ffmpeg_budget
+    import contextlib
+    import io
+
+    calls = {"waits": 0, "terminated": []}
+
+    class FakeProcess:
+        pid = 8933
+        returncode = None
+
+        def __init__(self, *args, **kwargs):
+            self.stdout = io.BytesIO(b"partial")
+            self.stderr = io.BytesIO(b"stalled")
+
+        def wait(self, timeout=None):
+            calls["waits"] += 1
+            if calls["waits"] <= 2:
+                raise subprocess.TimeoutExpired("ffmpeg", timeout)
+            return self.returncode
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    def terminate(process, *, grace_seconds=2.0):
+        calls["terminated"].append(process.pid)
+
+    monkeypatch.setattr(ffmpeg_budget.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(ffmpeg_budget, "slot", contextlib.nullcontext)
+    monkeypatch.setattr("ai_video_factory.production_guardrails.terminate_process_tree", terminate)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        ffmpeg_budget.run_ffmpeg_subprocess(
+            ["ffmpeg", "-i", "input.mp4", "-f", "null", "-"],
+            check=True,
+            capture_output=True,
+            text=False,
+            timeout=1,
+        )
+    assert calls["terminated"] == [8933]
