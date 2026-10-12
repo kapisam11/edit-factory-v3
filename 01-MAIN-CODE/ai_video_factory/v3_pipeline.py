@@ -51,20 +51,37 @@ def _source_rights_status(source_metadata: Optional[Dict[str, Any]]) -> str:
 
 
 def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
-    """Promote required artifact-readiness failures into the V3 job result."""
+    """Apply final artifact readiness to the result without hiding blockers."""
     result.artifacts = getattr(result, "artifacts", {}) or {}
-    result.artifacts["v3_readiness_state"] = str(getattr(readiness, "state", "") or "")
-    errors = getattr(readiness, "errors", None) or []
-    if errors:
-        result.errors.extend(
-            f"V3 artifact readiness: {error}"
-            for error in errors
-            if f"V3 artifact readiness: {error}" not in result.errors
+    state = str(getattr(readiness, "state", "") or "")
+    result.artifacts["v3_readiness_state"] = state
+    blocking_errors = list(getattr(readiness, "errors", []) or [])
+    for error in blocking_errors:
+        text = str(error)
+        if text and text not in result.errors:
+            result.errors.append(text)
+
+    checks = getattr(readiness, "checks", {}) or {}
+    acceptable_states = {"UPLOAD_PACKAGE_VALID", "PUBLISH_READY"}
+    if state not in acceptable_states and not blocking_errors:
+        result.errors.append(
+            "V3 artifact readiness is blocking completion: "
+            f"state {state or 'unknown'} is below upload-package readiness"
         )
-    if str(getattr(readiness, "state", "") or "") != "UPLOAD_PACKAGE_VALID":
-        result.warnings.append(
-            "V3 artifact readiness is not upload-package valid"
+    elif checks.get("UPLOAD_PACKAGE_VALID") is False and not blocking_errors:
+        result.errors.append(
+            "V3 artifact readiness is blocking completion: "
+            "UPLOAD_PACKAGE_VALID check is false"
         )
+
+    for warning in list(getattr(readiness, "warnings", []) or []):
+        text = str(warning)
+        if text and text not in result.warnings:
+            result.warnings.append(text)
+    if state not in acceptable_states:
+        warning = f"V3 artifact readiness is {state or 'unknown'}; output is not release-ready"
+        if warning not in result.warnings:
+            result.warnings.append(warning)
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
