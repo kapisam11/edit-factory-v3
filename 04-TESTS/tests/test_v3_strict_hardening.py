@@ -211,11 +211,15 @@ def test_strict_render_contract_blocks_failed_full_decode(monkeypatch):
     report = v3_quality.strict_render_check(
         "fixture.mp4",
         target_seconds=5.0,
-        platform_profile={"width": 1080, "height": 1920, "frame_rate_fps": 30},
+        platform_profile={
+            "width": 1080, "height": 1920, "frame_rate_fps": 30,
+            "require_audio": True,
+        },
         retention_events=[{"time": 0.0}, {"time": 2.0}],
     )
     assert report["ok"] is False
     assert any("full media decode failed" in error for error in report["errors"])
+    assert any("missing required audio" in error for error in report["errors"])
 
 
 @pytest.mark.integration
