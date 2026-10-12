@@ -14,7 +14,7 @@ $EnvFile = Join-Path $Root '06-CONFIG-AND-DEPLOYMENT\.env'
 function Invoke-Docker([string[]]$Arguments) {
     & docker @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Docker command failed with exit code $LASTEXITCODE: docker $($Arguments -join ' ')"
+        throw "Docker command failed with exit code ${LASTEXITCODE}: docker $($Arguments -join ' ')"
     }
 }
 
@@ -37,7 +37,7 @@ New-Item -ItemType Directory -Path $Destination -Force | Out-Null
 $ResolvedBackupRoot = (Resolve-Path -LiteralPath $Destination).Path
 $RepoDrive = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($Root))
 $BackupDrive = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($ResolvedBackupRoot))
-if ([string]::IsNullOrWhiteSpace($BackupDrive) -or -not [string]::IsNullOrWhiteSpace($RepoDrive) -and $RepoDrive.Equals($BackupDrive, [System.StringComparison]::OrdinalIgnoreCase)) {
+if ([string]::IsNullOrWhiteSpace($BackupDrive) -or $RepoDrive.Equals($BackupDrive, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Choose a backup destination on another drive. Repository drive: $RepoDrive; destination drive: $BackupDrive"
 }
 
