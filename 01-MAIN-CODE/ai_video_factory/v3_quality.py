@@ -217,6 +217,7 @@ def enforce_retention_events(
     *,
     target_seconds: float | None = None,
     normalize_audio: bool = False,
+    frame_rate_fps: float | None = None,
 ) -> str:
     """Compile semantic retention events into one FFmpeg render pass."""
     info = probe_media(input_path)
@@ -271,6 +272,20 @@ def enforce_retention_events(
             duration_arg = f"{target:.3f}"
     else:
         duration_arg = None
+
+    if frame_rate_fps is not None:
+        try:
+            target_fps = float(frame_rate_fps)
+        except (TypeError, ValueError) as exc:
+            raise RenderContractError("frame_rate_fps must be numeric") from exc
+        if not math.isfinite(target_fps) or not 1.0 <= target_fps <= 120.0:
+            raise RenderContractError("frame_rate_fps must be between 1 and 120")
+        if filter_complex and video_output_label:
+            fps_label = "v_aivf_fps"
+            filter_complex += f";[{video_output_label}]fps={target_fps:g}[{fps_label}]"
+            video_output_label = fps_label
+        else:
+            filters.append(f"fps={target_fps:g}")
 
     fd, temp_path = tempfile.mkstemp(
         suffix=".mp4",
