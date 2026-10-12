@@ -439,11 +439,25 @@ def _write_failed_evidence(
         },
     )
 
-def _preserve_existing_final(package: Path) -> Path | None:
+def _preserve_existing_final(
+    package: Path,
+    *,
+    input_video: str | None = None,
+) -> Path | None:
     """Move an existing final MP4 outside the package before destructive rerun cleanup."""
     canonical = package / "final.v3.mp4"
     if canonical.is_symlink() or not canonical.is_file():
         return None
+    if input_video:
+        source = Path(input_video)
+        try:
+            # Do not move the exact file (or a symlink resolving to it) that the
+            # caller selected as source media. The reset guard will preserve it.
+            if source.absolute() == canonical.absolute() or source.resolve() == canonical.resolve():
+                return None
+        except OSError:
+            if source.absolute() == canonical.absolute():
+                return None
     try:
         if canonical.stat().st_size <= 0:
             return None
@@ -1349,7 +1363,10 @@ class V3PipelineRunner:
         )
         try:
             _guard_workspace_isolation(self.request, source_metadata=self.source_metadata)
-            context.preserved_previous_final = _preserve_existing_final(context.package)
+            context.preserved_previous_final = _preserve_existing_final(
+                context.package,
+                input_video=self.request.input_video,
+            )
             _reset_v3_package(
                 context.package,
                 input_video=self.request.input_video,
