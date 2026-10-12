@@ -40,7 +40,7 @@ The production pipeline also includes a video-only **Thinking AI** creative-dire
 
 The repository also retains the previously implemented production features: scene intelligence, captions/subtitles, music intelligence and mixing, thumbnail tooling, upload packaging, channel/style learning, checkpoint/retry hardening, YouTube publishing support, dashboard/job handling, FFmpeg validation, Docker deployment, and CI.
 
-**Publishing scope:** YouTube is the current direct authenticated uploader. `tiktok` and `instagram_reels` are output/metadata profiles, not direct API uploaders. The separate `aivf-folder-publisher` command can watch a folder of existing videos and publish approved files to YouTube with stable-file detection, FFprobe validation, a durable SQLite queue, immutable media snapshots, and retry idempotency. It is opt-in and private-by-default; platform/account acceptance testing is still required. The topic-generation autonomous daemon remains separate. Instagram Reels and TikTok direct publishing are not implemented. See [00-INFO/UPLOAD-PACKAGE.md](00-INFO/UPLOAD-PACKAGE.md). Do not treat platform format support as evidence of a working uploader.
+**Publishing scope:** The repository has two separate existing-video workflows. `aivf-folder-publisher` is the opt-in, private-by-default YouTube-only folder watcher, with stable-file detection, FFprobe validation, a durable SQLite queue, immutable snapshots, and retry idempotency. `aivf-publish` is the opt-in per-platform/account queue and includes YouTube, Instagram Reels, and TikTok Direct Post adapters, durable per-destination state, bounded retry/reconciliation, and publication history. These adapters are implemented and covered by mocked tests; that does not prove your particular accounts are eligible or that your apps have approved permissions. Complete a controlled upload and verify the final remote post on every enabled account before unattended use. The topic-generation autonomous daemon remains separate. See [00-INFO/UPLOAD-PACKAGE.md](00-INFO/UPLOAD-PACKAGE.md).
 
 ## Quick start
 
@@ -48,7 +48,7 @@ From the repository root:
 
 ```bash
 python -m venv .venv
-python -m pip install -e '.[web,dev]'
+uv sync --frozen --python 3.12 --extra web --extra dev
 ```
 
 Generate a v3 creative blueprint before rendering:
@@ -113,7 +113,7 @@ It will:
 7. When `uv` is installed, run dependency, Python compilation, Ruff, mypy, and the full pytest suite.
 8. Run a final dashboard health check and report failures with a non-zero exit code.
 
-The local Compose profile publishes the dashboard only on `127.0.0.1` by default and limits admission to one concurrent job by default. Set `AIVF_DASHBOARD_PORT` in `06-CONFIG-AND-DEPLOYMENT/.env` to choose another host port; the launcher follows the same setting. The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` for a faster startup, or `docker compose ... down` to stop the stack. These defaults protect a single-PC setup; they do not configure unattended multi-platform uploads.
+The local Compose profile publishes the dashboard only on `127.0.0.1` by default and limits admission to one concurrent job by default. On the intended 32 GB Windows PC, the development container currently defaults to a 4-CPU limit and 8 GB memory; keep those conservative settings and concurrency of one until a representative 60-second render has been measured. Set `AIVF_DASHBOARD_PORT` in `06-CONFIG-AND-DEPLOYMENT/.env` to choose another host port; the launcher follows the same setting. The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` only for later faster starts, not the initial verification, or use Docker Compose to stop the stack. These defaults protect a single-PC setup; they do not configure unattended multi-platform uploads.
 
 The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**.
 
