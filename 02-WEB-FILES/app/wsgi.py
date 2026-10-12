@@ -2,9 +2,9 @@
 import os
 import sys
 
-from dashboard_auth import validate_dashboard_secrets
+from dashboard_auth import _validate_dashboard_secrets
 
-validate_dashboard_secrets()
+_validate_dashboard_secrets()
 
 from app import web_app_v3 as _web_app_v3
 from ai_video_factory import configure_logging, bootstrap_runtime
