@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol
@@ -94,6 +95,7 @@ class V3ExecutionContext:
     source_manifest: dict[str, Any] = field(default_factory=dict)
     creative_provenance: dict[str, Any] = field(default_factory=dict)
     baseline_path: Path | None = None
+    preserved_previous_final: Path | None = None
     score_bundle: V3ScoreBundle | None = None
     stage_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -405,17 +407,23 @@ def _write_failed_evidence(
     package: Path,
     errors: list[str],
     stage_timings_ms: dict[str, float] | None = None,
+    *,
+    preserved_final_path: Path | None = None,
 ) -> None:
     package.mkdir(parents=True, exist_ok=True)
     timings = dict(stage_timings_ms or {})
-    atomic_write_json(
-        package / "v3_failure.json",
-        {
-            "ok": False,
-            "errors": list(errors),
-            "stage_timings_ms": timings,
-        },
-    )
+    failure = {
+        "ok": False,
+        "errors": list(errors),
+        "stage_timings_ms": timings,
+    }
+    if preserved_final_path is not None and preserved_final_path.is_file():
+        failure["preserved_previous_final"] = str(preserved_final_path)
+        failure["recovery_note"] = (
+            "A pre-existing output was moved outside the package before rerun cleanup. "
+            "Inspect it before manually deleting the recovery copy."
+        )
+    atomic_write_json(package / "v3_failure.json", failure)
     atomic_write_json(
         package / "v3_readiness.json",
         {
@@ -430,6 +438,43 @@ def _write_failed_evidence(
             "warnings": [],
         },
     )
+
+def _preserve_existing_final(package: Path) -> Path | None:
+    """Move an existing final MP4 outside the package before destructive rerun cleanup."""
+    canonical = package / "final.v3.mp4"
+    if canonical.is_symlink() or not canonical.is_file():
+        return None
+    try:
+        if canonical.stat().st_size <= 0:
+            return None
+    except OSError as exc:
+        raise V3ArtifactError(f"cannot inspect existing final video before rerun: {exc}") from exc
+
+    recovery_root = package.parent / ".aivf-recovery"
+    try:
+        if recovery_root.is_symlink():
+            raise V3ArtifactError(
+                "recovery directory is a symlink; refusing to move an existing final outside the workspace"
+            )
+        recovery_root.mkdir(parents=True, exist_ok=True)
+        recovery_dir = recovery_root / package.name
+        if recovery_dir.is_symlink():
+            raise V3ArtifactError(
+                "package recovery directory is a symlink; refusing to follow it"
+            )
+        recovery_dir.mkdir(parents=True, exist_ok=True)
+        if recovery_dir.resolve().parent != recovery_root.resolve():
+            raise V3ArtifactError("package recovery directory escapes the recovery root")
+        backup = recovery_dir / f"final.v3.{time.time_ns()}.{uuid.uuid4().hex[:12]}.mp4"
+        os.replace(canonical, backup)
+        return backup
+    except V3PipelineError:
+        raise
+    except OSError as exc:
+        raise V3ArtifactError(
+            f"could not preserve the pre-existing final video; refusing destructive rerun: {exc}"
+        ) from exc
+
 
 def _reset_v3_package(
     package: Path,
@@ -1304,6 +1349,7 @@ class V3PipelineRunner:
         )
         try:
             _guard_workspace_isolation(self.request, source_metadata=self.source_metadata)
+            context.preserved_previous_final = _preserve_existing_final(context.package)
             _reset_v3_package(
                 context.package,
                 input_video=self.request.input_video,
@@ -1314,11 +1360,19 @@ class V3PipelineRunner:
                 context.package,
                 context.result.errors,
                 context.stage_timings_ms,
+                preserved_final_path=context.preserved_previous_final,
             )
             context.result.artifacts.update({
                 "v3_failure": str(context.package / "v3_failure.json"),
                 "v3_readiness": str(context.package / "v3_readiness.json"),
             })
+            if context.preserved_previous_final is not None:
+                context.result.warnings.append(
+                    f"Previous final video preserved for recovery: {context.preserved_previous_final}"
+                )
+                context.result.artifacts["preserved_previous_final"] = str(
+                    context.preserved_previous_final
+                )
             return context.result
 
         try:
@@ -1370,6 +1424,7 @@ class V3PipelineRunner:
                     context.package,
                     context.result.errors,
                     context.stage_timings_ms,
+                    preserved_final_path=context.preserved_previous_final,
                 )
 
         artifact_names = (
@@ -1413,6 +1468,22 @@ class V3PipelineRunner:
                 )).is_file()
             }
         )
+        if context.preserved_previous_final is not None:
+            context.result.artifacts["preserved_previous_final"] = str(
+                context.preserved_previous_final
+            )
+            context.result.warnings.append(
+                "The previous final video was preserved outside the current package at "
+                + str(context.preserved_previous_final)
+                + ". Keep it until the replacement output has been manually inspected."
+            )
+            if context.result.errors:
+                _write_failed_evidence(
+                    context.package,
+                    context.result.errors,
+                    context.stage_timings_ms,
+                    preserved_final_path=context.preserved_previous_final,
+                )
         _cleanup_transients(context.package, preserve=bool(context.result.errors) or os.environ.get("AIVF_DEBUG_ARTIFACTS", "0") == "1")
         return context.result
 
