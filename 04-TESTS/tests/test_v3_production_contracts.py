@@ -74,6 +74,47 @@ def test_readiness_valid_state_does_not_create_error():
     assert result.artifacts["v3_readiness_state"] == "UPLOAD_PACKAGE_VALID"
 
 
+
+def test_incomplete_readiness_state_cannot_report_success_without_error_details():
+    result = ProductionResult(package_dir="out", final_video="out/final.v3.mp4")
+    readiness = artifact_readiness.ReadinessReport(
+        "MEDIA_CONTRACT_VALID",
+        {
+            "MEDIA_VALID": True,
+            "MEDIA_CONTRACT_VALID": True,
+            "UPLOAD_PACKAGE_VALID": False,
+            "PUBLISH_READY": False,
+        },
+        [],
+        [],
+    )
+
+    v3_pipeline._apply_readiness_contract(result, readiness)
+
+    assert result.ok is False
+    assert any("below upload-package readiness" in error for error in result.errors)
+
+
+def test_valid_readiness_preserves_optional_warnings_without_blocking_success():
+    result = ProductionResult(package_dir="out", final_video="out/final.v3.mp4")
+    readiness = artifact_readiness.ReadinessReport(
+        "UPLOAD_PACKAGE_VALID",
+        {
+            "MEDIA_VALID": True,
+            "MEDIA_CONTRACT_VALID": True,
+            "UPLOAD_PACKAGE_VALID": True,
+            "PUBLISH_READY": False,
+        },
+        [],
+        ["Optional preview generation was skipped"],
+    )
+
+    v3_pipeline._apply_readiness_contract(result, readiness)
+
+    assert result.ok is True
+    assert "Optional preview generation was skipped" in result.warnings
+
+
 def test_resolve_final_video_rejects_invalid_v3_artifact(monkeypatch, tmp_path):
     package = Path(tmp_path)
     (package / "v3_blueprint.json").write_text("{}", encoding="utf-8")
