@@ -110,6 +110,11 @@ def _validate_dashboard_secrets() -> None:
             )
 
 
+def validate_dashboard_secrets() -> None:
+    """Public validation entrypoint used by WSGI startup checks and deployment tests."""
+    _validate_dashboard_secrets()
+
+
 def configure_dashboard_auth(app):
     _validate_dashboard_secrets()
     if app.config.get("_AIVF_AUTH_CONFIGURED"):
