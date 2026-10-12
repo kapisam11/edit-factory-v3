@@ -16,7 +16,10 @@ Before merging a production/hardening branch, all of the following automated che
 - same-origin login/logout POST checks (reject missing or cross-origin origin signals; allow same-origin requests)
 - secret persistence/API redaction tests
 - malicious upload/path tests
-- real FFmpeg render integration test
+- real FFmpeg render integration test, including full decode, configured frame-rate and required-audio contract checks
+- explicit test that failed V3 reruns preserve the previous final video outside the package
+- dashboard startup rejects missing or known development-default secrets
+- verified external-drive backup/restore script parses on Windows
 - SQLite concurrent-write test
 - folder publisher regressions for stable-file detection, explicit approvals, immutable staging, deduplication, opt-in uploads, and retry-state safety
 - final documentation review against implemented code
@@ -38,7 +41,7 @@ These require the actual deployment target and cannot be certified by source ins
 - one real end-to-end render using the target host's FFmpeg/FFprobe installation
 - verification of persistent `/app/state` storage (or the equivalent configured state directory)
 - verification that production secrets are supplied through the deployment environment
-- human visual/audio/rights acceptance of the rendered result for framing, readability, pacing, synchronization, and artistic quality
+- human visual/audio/rights acceptance of the rendered result for the opening two seconds, intended footage, framing/aspect ratio, caption/subtitle readability and timing, pacing, audio/synchronization, ending/payoff, black/frozen frames, and rights/provenance
 - record that acceptance with `human_acceptance.template.json` and validate it with `verify_human_acceptance.py`
 
 Do not label a deployment "10/10 verified" until both the automated release gates and the target-host acceptance gates have actually passed. Source changes alone are not evidence that the runtime is healthy.
