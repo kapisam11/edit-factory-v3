@@ -538,6 +538,18 @@ def verify_retention_against_baseline(
     }
 
 
+def _verify_full_decode(path: str) -> None:
+    """Decode the complete media streams and raise when any packet is corrupt."""
+    _run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-xerror",
+            "-err_detect", "explode", "-i", path,
+            "-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-",
+        ],
+        timeout=_timeout("AIVF_FINAL_DECODE_TIMEOUT_SECONDS", 600),
+    )
+
+
 def strict_render_check(path: str, *, target_seconds: float, platform_profile: Mapping[str, Any], retention_events: Sequence[Mapping[str, Any]] = (), retention_baseline: Optional[str] = None, require_independent_retention: bool = False, expected_fps: float | None = None, require_audio: bool | None = None) -> Dict[str, Any]:
     info = probe_media(path); expected_width = int(platform_profile.get("width") or 0); expected_height = int(platform_profile.get("height") or 0); errors: list[str] = []; warnings: list[str] = []
     if abs(info["duration"] - float(target_seconds)) > 0.08: errors.append(f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s")
@@ -626,14 +638,7 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
     # Decode the complete final file with errors promoted to a hard failure.
     playability: dict[str, Any] = {"ok": False, "error": "not checked"}
     try:
-        _run(
-            [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-xerror",
-                "-err_detect", "explode", "-i", path,
-                "-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-",
-            ],
-            timeout=_timeout("AIVF_FINAL_DECODE_TIMEOUT_SECONDS", 600),
-        )
+        _verify_full_decode(path)
     except RenderContractError as exc:
         playability["error"] = str(exc)
         errors.append(f"full media decode failed: {exc}")
