@@ -350,7 +350,8 @@ jobs:
           "START-ALL.ps1",
           "RUN-PUBLISHER.ps1",
           "INSTALL-PUBLISHER-TASK.ps1",
-          "REMOVE-PUBLISHER-TASK.ps1"
+          "REMOVE-PUBLISHER-TASK.ps1",
+          "BACKUP-EDIT-FACTORY.ps1"
         )
         foreach ($script in $scripts) {
           $tokens = $null
