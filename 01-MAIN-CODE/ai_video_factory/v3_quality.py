@@ -4,6 +4,7 @@ from .v3_exceptions import V3ValidationError
 
 import json
 import math
+from fractions import Fraction
 import os
 import subprocess
 import tempfile
@@ -78,7 +79,7 @@ def probe_media(path: str) -> Dict[str, Any]:
     duration = float(payload.get("format", {}).get("duration") or 0.0); width = int(video.get("width") or 0); height = int(video.get("height") or 0)
     if duration <= 0 or width <= 0 or height <= 0: raise RenderContractError("rendered artifact has invalid duration or dimensions")
     return {"duration": duration, "size": int(payload.get("format", {}).get("size") or os.path.getsize(path)), "width": width, "height": height,
-            "fps": video.get("r_frame_rate") or video.get("avg_frame_rate") or "0/0", "has_audio": audio is not None,
+            "fps": video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/0", "avg_frame_rate": video.get("avg_frame_rate") or "0/0", "r_frame_rate": video.get("r_frame_rate") or "0/0", "has_audio": audio is not None,
             "video_codec": video.get("codec_name"), "audio_codec": audio.get("codec_name") if audio else None,
             "format_name": payload.get("format", {}).get("format_name")}
 
@@ -462,32 +463,153 @@ def verify_retention_against_baseline(
     }
 
 
-def strict_render_check(path: str, *, target_seconds: float, platform_profile: Mapping[str, Any], retention_events: Sequence[Mapping[str, Any]] = (), retention_baseline: Optional[str] = None, require_independent_retention: bool = False) -> Dict[str, Any]:
-    info = probe_media(path); expected_width = int(platform_profile.get("width") or 0); expected_height = int(platform_profile.get("height") or 0); errors: list[str] = []; warnings: list[str] = []
-    if abs(info["duration"] - float(target_seconds)) > 0.08: errors.append(f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s")
-    if expected_width and info["width"] != expected_width: errors.append(f"width {info['width']} != required {expected_width}")
-    if expected_height and info["height"] != expected_height: errors.append(f"height {info['height']} != required {expected_height}")
-    if not info["has_audio"]: warnings.append("rendered artifact has no audio stream")
-    visual = _sample_visual_changes(path, sample_hz=10.0); events = []; retention_verification = None
+def _parse_fps(value: object) -> float:
+    """Parse FFprobe's rational frame rate without inventing a fallback."""
+    try:
+        parsed = float(Fraction(str(value or "0/0").strip()))
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return 0.0
+    return parsed if math.isfinite(parsed) and parsed > 0 else 0.0
+
+
+def strict_render_check(
+    path: str,
+    *,
+    target_seconds: float,
+    platform_profile: Mapping[str, Any],
+    retention_events: Sequence[Mapping[str, Any]] = (),
+    retention_baseline: Optional[str] = None,
+    require_independent_retention: bool = False,
+    expected_fps: float | None = None,
+    require_audio: bool | None = None,
+) -> Dict[str, Any]:
+    """Verify that an encoded file matches the requested technical output contract.
+
+    FFprobe establishes stream/container metadata; sampled FFmpeg decoding tests
+    actual readability. Caption legibility and narrative correctness still need
+    human review and must not be inferred from this report.
+    """
+    info = probe_media(path)
+    expected_width = int(platform_profile.get("width") or 0)
+    expected_height = int(platform_profile.get("height") or 0)
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if abs(float(info["duration"]) - float(target_seconds)) > 0.08:
+        errors.append(
+            f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s"
+        )
+    if expected_width and info["width"] != expected_width:
+        errors.append(f"width {info['width']} != required {expected_width}")
+    if expected_height and info["height"] != expected_height:
+        errors.append(f"height {info['height']} != required {expected_height}")
+
+    fps_text = info.get("avg_frame_rate") or info.get("fps") or info.get("r_frame_rate")
+    actual_fps = _parse_fps(fps_text)
+    configured_fps: float
+    raw_expected = (
+        expected_fps
+        if expected_fps is not None
+        else platform_profile.get("frame_rate_fps", os.environ.get("AIVF_OUTPUT_FPS", "30"))
+    )
+    try:
+        configured_fps = float(raw_expected)
+    except (TypeError, ValueError, OverflowError):
+        configured_fps = 0.0
+    if not math.isfinite(configured_fps) or configured_fps <= 0:
+        errors.append("expected output frame rate must be a finite positive number")
+    elif actual_fps <= 0:
+        errors.append("rendered artifact has a missing or invalid frame rate")
+    else:
+        try:
+            fps_tolerance = float(os.environ.get("AIVF_OUTPUT_FPS_TOLERANCE", "1.0"))
+        except (TypeError, ValueError, OverflowError):
+            fps_tolerance = -1.0
+        if not math.isfinite(fps_tolerance) or fps_tolerance < 0:
+            errors.append("AIVF_OUTPUT_FPS_TOLERANCE must be a finite non-negative number")
+        elif abs(actual_fps - configured_fps) > fps_tolerance:
+            errors.append(
+                f"frame rate {actual_fps:.3f} fps does not match expected "
+                f"{configured_fps:.3f} fps (tolerance {fps_tolerance:.3f})"
+            )
+
+    try:
+        max_output_bytes = int(os.environ.get("AIVF_MAX_OUTPUT_BYTES", str(5 * 1024**3)))
+    except (TypeError, ValueError, OverflowError):
+        max_output_bytes = 0
+    if max_output_bytes <= 0:
+        errors.append("AIVF_MAX_OUTPUT_BYTES must be a positive integer")
+    elif int(info.get("size") or 0) > max_output_bytes:
+        errors.append(
+            f"output size {int(info['size'])} bytes exceeds configured limit {max_output_bytes} bytes"
+        )
+
+    if require_audio is None:
+        require_audio_setting = str(os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "1")).strip().lower()
+        require_audio = bool(platform_profile.get("require_audio", require_audio_setting not in {"0", "false", "no"}))
+    if not info["has_audio"]:
+        message = "rendered artifact has no audio stream"
+        if require_audio:
+            errors.append(message)
+        else:
+            warnings.append(message)
+
+    visual = _sample_visual_changes(path, sample_hz=10.0)
+    events: list[float] = []
+    retention_verification = None
     for item in retention_events:
         if isinstance(item, Mapping):
-            try: events.append(float(item.get("time", 0.0)))
-            except (TypeError, ValueError): errors.append("retention map contains a non-numeric event time")
-    if not events: errors.append("retention map is empty")
+            try:
+                events.append(float(item.get("time", 0.0)))
+            except (TypeError, ValueError, OverflowError):
+                errors.append("retention map contains a non-numeric event time")
+
+    if not events:
+        errors.append("retention map is empty")
     else:
-        if events[0] > 0.25: errors.append("retention map does not begin near the opening")
-        if any(b <= a for a, b in zip(events, events[1:])): errors.append("retention map contains non-increasing event times")
-        if any(not math.isfinite(t) or t < 0.0 or t > float(target_seconds) + 0.05 for t in events): errors.append("retention map contains events outside target duration")
+        if events[0] > 0.25:
+            errors.append("retention map does not begin near the opening")
+        if any(b <= a for a, b in zip(events, events[1:])):
+            errors.append("retention map contains non-increasing event times")
+        if any(not math.isfinite(t) or t < 0.0 or t > float(target_seconds) + 0.05 for t in events):
+            errors.append("retention map contains events outside target duration")
         if require_independent_retention:
             if not retention_baseline:
                 errors.append("independent retention baseline is required")
             else:
                 try:
-                    verification = verify_retention_against_baseline(retention_baseline, path, retention_events)
+                    verification = verify_retention_against_baseline(
+                        retention_baseline, path, retention_events
+                    )
                     retention_verification = verification
                     if not verification["ok"]:
-                        errors.extend("independent retention QC: " + error for error in verification["errors"])
+                        errors.extend(
+                            "independent retention QC: " + error
+                            for error in verification["errors"]
+                        )
                 except RenderContractError as exc:
                     errors.append(f"independent retention QC failed: {exc}")
-    if visual.get("max_gap") is not None and visual["max_gap"] > 3.0: errors.append(f"coarse visual sampling found a change gap of {visual['max_gap']:.2f}s; maximum allowed gap is 3.00s")
-    return {"ok": not errors, "errors": errors, "warnings": warnings, "media": info, "visual_sampling": visual, "retention_verification": retention_verification}
+
+    if visual.get("max_gap") is not None and visual["max_gap"] > 3.0:
+        errors.append(
+            f"coarse visual sampling found a change gap of {visual['max_gap']:.2f}s; "
+            "maximum allowed gap is 3.00s"
+        )
+
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "media": info,
+        "frame_rate_validation": {
+            "actual_fps": actual_fps,
+            "expected_fps": configured_fps,
+            "tolerance_fps": (
+                fps_tolerance if "fps_tolerance" in locals() and fps_tolerance >= 0 else None
+            ),
+        },
+        "output_size_limit_bytes": max_output_bytes,
+        "audio_required": bool(require_audio),
+        "visual_sampling": visual,
+        "retention_verification": retention_verification,
+    }
