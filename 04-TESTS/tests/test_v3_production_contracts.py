@@ -381,6 +381,24 @@ def test_v3_audio_normalization_preserves_source_when_normalizer_fails(monkeypat
     assert list(tmp_path.glob(".aivf-final-audio-normalized-*")) == []
 
 
+
+def test_v3_audio_normalization_rejects_missing_and_empty_outputs(monkeypatch, tmp_path):
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"previous-good-video")
+    monkeypatch.setenv("AIVF_EBU_R128", "1")
+    _install_audio_normalization_fakes(monkeypatch, source)
+
+    for writer in (
+        lambda _source, _destination: None,
+        lambda _source, destination: Path(destination).write_bytes(b""),
+    ):
+        monkeypatch.setattr(v3_pipeline, "normalize_loudness", writer)
+        with pytest.raises(v3_pipeline.RenderContractError, match="missing or empty"):
+            v3_pipeline._normalize_final_audio(tmp_path, str(source))
+        assert source.read_bytes() == b"previous-good-video"
+        assert list(tmp_path.glob(".aivf-final-audio-normalized-*")) == []
+
+
 def test_v3_audio_normalization_rejects_invalid_candidate_and_preserves_source(monkeypatch, tmp_path):
     source = tmp_path / "final.mp4"
     source.write_bytes(b"previous-good-video")
