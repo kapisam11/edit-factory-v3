@@ -54,8 +54,8 @@ def test_readiness_failure_is_promoted_to_v3_error():
     assert result.artifacts["v3_readiness_state"] == "MEDIA_CONTRACT_VALID"
 
 
-def test_readiness_valid_state_does_not_create_error():
-    result = ProductionResult(package_dir="out")
+def test_readiness_valid_state_keeps_optional_warnings_nonblocking():
+    result = ProductionResult(package_dir="out", final_video="out/final.v3.mp4")
     readiness = artifact_readiness.ReadinessReport(
         "UPLOAD_PACKAGE_VALID",
         {
@@ -65,13 +65,34 @@ def test_readiness_valid_state_does_not_create_error():
             "PUBLISH_READY": False,
         },
         [],
-        [],
+        ["Optional thumbnail not generated"],
     )
 
     v3_pipeline._apply_readiness_contract(result, readiness)
 
     assert result.errors == []
+    assert result.ok is True
     assert result.artifacts["v3_readiness_state"] == "UPLOAD_PACKAGE_VALID"
+
+
+def test_readiness_state_without_errors_still_blocks_success():
+    result = ProductionResult(package_dir="out", final_video="out/final.v3.mp4")
+    readiness = artifact_readiness.ReadinessReport(
+        "MEDIA_CONTRACT_VALID",
+        {
+            "MEDIA_VALID": True,
+            "MEDIA_CONTRACT_VALID": True,
+            "UPLOAD_PACKAGE_VALID": False,
+            "PUBLISH_READY": False,
+        },
+        [],
+        [],
+    )
+
+    v3_pipeline._apply_readiness_contract(result, readiness)
+
+    assert result.ok is False
+    assert any("required=UPLOAD_PACKAGE_VALID" in error for error in result.errors)
 
 
 def test_resolve_final_video_rejects_invalid_v3_artifact(monkeypatch, tmp_path):
@@ -282,27 +303,125 @@ def test_v3_audio_normalization_returns_original_when_disabled(monkeypatch, tmp_
     assert v3_pipeline._normalize_final_audio(tmp_path, str(source)) == str(source)
 
 
-def test_v3_audio_normalization_replaces_source_on_success(monkeypatch, tmp_path):
+def test_v3_audio_normalization_replaces_source_only_after_validation(monkeypatch, tmp_path):
     source = tmp_path / "final.mp4"
     source.write_bytes(b"source")
-    normalized = tmp_path / ".final.v3.audio-normalized.mp4"
-
     monkeypatch.setenv("AIVF_EBU_R128", "1")
-    monkeypatch.setattr(
-        v3_pipeline,
-        "analyze_media",
-        lambda *args, **kwargs: {"summary": {"has_audio": True}},
-    )
+    calls = []
+
+    def media_report(path, **kwargs):
+        if Path(path).read_bytes() == b"corrupt":
+            raise v3_pipeline.MediaHealthError("corrupt normalized media")
+        return {
+            "ok": True,
+            "summary": {
+                "has_video": True,
+                "has_audio": True,
+                "width": 1080,
+                "height": 1920,
+                "duration": 8.0,
+                "fps": "30/1",
+                "video_codec": "h264",
+                "video_duration": 8.0,
+                "audio_duration": 8.0,
+            },
+            "timing": {"av_sync_delta_seconds": 0.0},
+        }
+
+    monkeypatch.setattr(v3_pipeline, "analyze_media", media_report)
 
     def fake_normalize(_source, destination):
         Path(destination).write_bytes(b"normalized")
 
     monkeypatch.setattr(v3_pipeline, "normalize_loudness", fake_normalize)
+    monkeypatch.setattr(v3_pipeline, "run_ffmpeg", lambda command, **kwargs: calls.append(command))
 
     assert v3_pipeline._normalize_final_audio(tmp_path, str(source)) == str(source)
     assert source.read_bytes() == b"normalized"
-    assert not normalized.exists()
+    assert len(calls) == 1
+    assert "-xerror" in calls[0]
+    assert not list(tmp_path.glob(".aivf-final-audio-normalized-*.mp4"))
 
+
+@pytest.mark.parametrize(
+    "failure",
+    ["ffmpeg", "missing", "empty", "corrupt", "dimensions", "duration", "decode", "replace"],
+)
+def test_v3_audio_normalization_preserves_original_on_failure(monkeypatch, tmp_path, failure):
+    source = tmp_path / "final.mp4"
+    original_bytes = b"known-good-original"
+    source.write_bytes(original_bytes)
+    monkeypatch.setenv("AIVF_EBU_R128", "1")
+
+    def media_report(path, **kwargs):
+        if Path(path) != source:
+            candidate_bytes = Path(path).read_bytes()
+            if candidate_bytes == b"corrupt":
+                raise v3_pipeline.MediaHealthError("corrupt normalized media")
+            summary = {
+                "has_video": True,
+                "has_audio": True,
+                "width": 1080,
+                "height": 1920,
+                "duration": 8.0,
+                "fps": "30/1",
+                "video_codec": "h264",
+                "video_duration": 8.0,
+                "audio_duration": 8.0,
+            }
+            if candidate_bytes == b"bad-dimensions":
+                summary["width"] = 720
+            if candidate_bytes == b"bad-duration":
+                summary["duration"] = 9.0
+            return {"ok": True, "summary": summary, "timing": {"av_sync_delta_seconds": 0.0}}
+        return {
+            "ok": True,
+            "summary": {
+                "has_video": True,
+                "has_audio": True,
+                "width": 1080,
+                "height": 1920,
+                "duration": 8.0,
+                "fps": "30/1",
+                "video_codec": "h264",
+                "video_duration": 8.0,
+                "audio_duration": 8.0,
+            },
+            "timing": {"av_sync_delta_seconds": 0.0},
+        }
+
+    monkeypatch.setattr(v3_pipeline, "analyze_media", media_report)
+
+    def fake_normalize(_source, destination):
+        if failure == "ffmpeg":
+            raise RuntimeError("FFmpeg failed")
+        if failure == "missing":
+            return
+        content = {
+            "empty": b"",
+            "corrupt": b"corrupt",
+            "dimensions": b"bad-dimensions",
+            "duration": b"bad-duration",
+            "replace": b"normalized",
+            "decode": b"normalized",
+        }.get(failure, b"normalized")
+        Path(destination).write_bytes(content)
+
+    monkeypatch.setattr(v3_pipeline, "normalize_loudness", fake_normalize)
+
+    def fake_decode(*args, **kwargs):
+        if failure == "decode":
+            raise RuntimeError("decoder found corrupt packets")
+
+    monkeypatch.setattr(v3_pipeline, "run_ffmpeg", fake_decode)
+    if failure == "replace":
+        monkeypatch.setattr(v3_pipeline.os, "replace", lambda *_args: (_ for _ in ()).throw(PermissionError("replacement blocked")))
+
+    with pytest.raises(v3_pipeline.RenderContractError, match="normalization failed"):
+        v3_pipeline._normalize_final_audio(tmp_path, str(source))
+
+    assert source.read_bytes() == original_bytes
+    assert not list(tmp_path.glob(".aivf-final-audio-normalized-*.mp4"))
 
 def test_stage_runner_overwrites_stale_readiness_after_failure(tmp_path):
     from ai_video_factory.v3_exceptions import V3PipelineError
