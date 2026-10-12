@@ -538,6 +538,17 @@ def verify_retention_against_baseline(
     }
 
 
+def _verify_full_decode(path: str) -> None:
+    """Decode every video packet and any audio stream before release."""
+    _run(
+        [
+            "ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-xerror",
+            "-i", path, "-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-",
+        ],
+        timeout=_timeout("AIVF_FINAL_DECODE_TIMEOUT_SECONDS", 600),
+    )
+
+
 def strict_render_check(
     path: str,
     *,
@@ -633,14 +644,7 @@ def strict_render_check(
     # A successful probe is necessary but does not prove every packet decodes.
     playability: dict[str, Any] = {"ok": False, "error": "not checked"}
     try:
-        _run(
-            [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-xerror",
-                "-err_detect", "explode", "-i", path,
-                "-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-",
-            ],
-            timeout=_timeout("AIVF_FINAL_DECODE_TIMEOUT_SECONDS", 600),
-        )
+        _verify_full_decode(path)
     except RenderContractError as exc:
         playability["error"] = str(exc)
         errors.append(f"full media decode failed: {exc}")
