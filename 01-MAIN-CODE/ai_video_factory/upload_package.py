@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
+from fractions import Fraction
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -486,17 +488,163 @@ def _sha256(path: Path) -> str:
 
 
 def _probe_media(video_path: Path) -> Dict[str, Any]:
+    """Probe enough stream/container detail to support a publish-readiness gate."""
     try:
         result = run_ffprobe([
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
-            "-show_entries", "stream=index,codec_type,codec_name,width,height,duration",
+            "ffprobe", "-v", "error",
+            "-show_entries",
+            "format=duration,size,format_name:stream=index,codec_type,codec_name,width,height,duration,avg_frame_rate,r_frame_rate",
             "-of", "json", str(video_path),
-        ], timeout=20)
+        ], timeout=30)
         if result.returncode != 0:
             raise RuntimeError((result.stderr or "ffprobe failed").strip())
-        return json.loads(result.stdout or "{}")
+        payload = json.loads(result.stdout or "{}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("ffprobe returned a non-object JSON payload")
+        return payload
     except Exception as exc:
-        return {"available": False, "warning": f"ffprobe unavailable: {exc}"}
+        return {"available": False, "warning": f"ffprobe could not validate media: {type(exc).__name__}: {exc}"}
+
+
+def _rate_fps(value: object) -> float | None:
+    try:
+        parsed = float(Fraction(str(value or "").strip()))
+    except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) and parsed > 0 else None
+
+
+def _media_contract_report(video_path: Path, probe: Mapping[str, Any], profile: OutputProfile) -> Dict[str, Any]:
+    """Fail closed when the final media cannot meet the selected output profile."""
+    checks: Dict[str, bool] = {}
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not video_path.is_file() or video_path.is_symlink():
+        return {
+            "passed": False,
+            "checks": {"file_present": False},
+            "errors": ["final video is missing or is not a regular non-symlink file"],
+            "warnings": [],
+            "expected": {"width": profile.width, "height": profile.height},
+        }
+    checks["file_present"] = video_path.stat().st_size > 0
+    if not checks["file_present"]:
+        errors.append("final video is empty")
+
+    available = probe.get("available") is not False
+    checks["ffprobe_available"] = available
+    if not available:
+        errors.append(str(probe.get("warning") or "ffprobe media inspection failed"))
+
+    raw_streams = probe.get("streams") if available else []
+    streams = [item for item in raw_streams if isinstance(item, Mapping)] if isinstance(raw_streams, list) else []
+    video_stream = next((item for item in streams if item.get("codec_type") == "video"), None)
+    audio_streams = [item for item in streams if item.get("codec_type") == "audio"]
+    checks["video_stream_present"] = video_stream is not None
+    if video_stream is None:
+        errors.append("final video has no video stream")
+
+    fmt = probe.get("format") if isinstance(probe.get("format"), Mapping) else {}
+    try:
+        duration = float(fmt.get("duration") or (video_stream or {}).get("duration") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        duration = 0.0
+    checks["duration_valid"] = math.isfinite(duration) and duration > 0
+    if not checks["duration_valid"]:
+        errors.append("final video duration is missing or invalid")
+
+    try:
+        width = int((video_stream or {}).get("width") or 0)
+        height = int((video_stream or {}).get("height") or 0)
+    except (TypeError, ValueError, OverflowError):
+        width = height = 0
+    checks["dimensions_match_profile"] = width == profile.width and height == profile.height
+    if not checks["dimensions_match_profile"]:
+        errors.append(
+            f"final video dimensions {width}x{height} do not match "
+            f"{profile.name} profile {profile.width}x{profile.height}"
+        )
+
+    actual_fps = None
+    for candidate in ((video_stream or {}).get("avg_frame_rate"), (video_stream or {}).get("r_frame_rate")):
+        actual_fps = _rate_fps(candidate)
+        if actual_fps is not None:
+            break
+    try:
+        expected_fps = float(os.environ.get("AIVF_OUTPUT_FPS", "30"))
+        fps_tolerance = float(os.environ.get("AIVF_OUTPUT_FPS_TOLERANCE", "1.0"))
+    except (TypeError, ValueError, OverflowError):
+        expected_fps = 0.0
+        fps_tolerance = -1.0
+    fps_config_valid = math.isfinite(expected_fps) and expected_fps > 0 and math.isfinite(fps_tolerance) and fps_tolerance >= 0
+    checks["frame_rate_configuration_valid"] = fps_config_valid
+    if not fps_config_valid:
+        errors.append("AIVF_OUTPUT_FPS must be positive and AIVF_OUTPUT_FPS_TOLERANCE must be non-negative")
+    checks["frame_rate_matches_policy"] = bool(actual_fps is not None and fps_config_valid and abs(actual_fps - expected_fps) <= fps_tolerance)
+    if actual_fps is None:
+        errors.append("final video frame rate is missing or invalid")
+    elif fps_config_valid and not checks["frame_rate_matches_policy"]:
+        errors.append(
+            f"final video frame rate {actual_fps:.3f} fps is outside the configured "
+            f"{expected_fps:.3f} fps ± {fps_tolerance:.3f} fps"
+        )
+
+    try:
+        max_output_bytes = int(os.environ.get("AIVF_MAX_OUTPUT_BYTES", str(5 * 1024**3)))
+    except (TypeError, ValueError, OverflowError):
+        max_output_bytes = 0
+    try:
+        size_bytes = int(fmt.get("size") or video_path.stat().st_size)
+    except (TypeError, ValueError, OverflowError, OSError):
+        size_bytes = 0
+    checks["output_size_known"] = size_bytes > 0
+    if size_bytes <= 0:
+        errors.append("final video size is missing or invalid")
+    checks["output_size_within_limit"] = size_bytes > 0 and max_output_bytes > 0 and size_bytes <= max_output_bytes
+    if max_output_bytes <= 0:
+        errors.append("AIVF_MAX_OUTPUT_BYTES must be a positive integer")
+    elif size_bytes > max_output_bytes:
+        errors.append(f"final video size {size_bytes} exceeds configured {max_output_bytes}-byte limit")
+
+    audio_required = str(os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "0")).strip().lower() not in {"0", "false", "no"}
+    checks["audio_present_when_required"] = not audio_required or bool(audio_streams)
+    if audio_required and not audio_streams:
+        errors.append("output audio is required but the final video has no audio stream")
+    elif not audio_streams:
+        warnings.append("final video has no audio stream; audio is optional under current configuration")
+
+    format_names = str(fmt.get("format_name") or "")
+    checks["container_identified"] = bool(format_names)
+    if not format_names:
+        errors.append("final video container format is missing")
+
+    return {
+        "passed": not errors,
+        "checks": checks,
+        "errors": errors,
+        "warnings": warnings,
+        "probe": {
+            "duration_seconds": duration,
+            "size_bytes": size_bytes,
+            "width": width,
+            "height": height,
+            "frame_rate_fps": actual_fps,
+            "has_audio": bool(audio_streams),
+            "video_codec": (video_stream or {}).get("codec_name"),
+            "audio_codecs": [item.get("codec_name") for item in audio_streams],
+            "format_name": format_names,
+        },
+        "expected": {
+            "profile": profile.name,
+            "width": profile.width,
+            "height": profile.height,
+            "frame_rate_fps": expected_fps,
+            "frame_rate_tolerance_fps": fps_tolerance,
+            "max_output_bytes": max_output_bytes,
+            "audio_required": audio_required,
+        },
+        "human_caption_visibility_review_required": True,
+    }
 
 
 def _ass_to_srt(ass_text: str) -> str:
@@ -618,6 +766,14 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "captions_srt": str(srt_path.relative_to(root)) if srt_path and srt_path.exists() else None,
     }
     media_probe = _probe_media(video) if video.exists() else {"available": False, "warning": "final video not found"}
+    media_contract = _media_contract_report(video, media_probe, profile)
+    if caption_path is not None and not (srt_path is not None and srt_path.is_file() and srt_path.stat().st_size > 0):
+        media_contract["passed"] = False
+        media_contract["checks"]["caption_file_valid"] = False
+        media_contract["errors"].append("a caption file was supplied but no non-empty validated SRT was produced")
+    else:
+        media_contract["checks"]["caption_file_valid"] = True
+    media_contract["human_caption_visibility_review_required"] = True
     disclosure = {
         "status": "review_required",
         "reason": "Review AI/altered-content disclosure controls before publishing.",
@@ -633,13 +789,15 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "tags": tags,
         "files": files,
         "media_probe": media_probe,
+        "media_contract": media_contract,
         "ai_disclosure": disclosure,
         "media_rights": rights,
         "metadata_quality": metadata_quality,
         "factuality": factuality,
         "human_review": human_review,
         "publish_ready": (
-            bool(metadata_quality["passed"])
+            bool(media_contract["passed"])
+            and bool(metadata_quality["passed"])
             and not rights["publish_blocked"]
             and not factuality["publish_blocked"]
             and (not require_human_review or human_review["status"] == "approved")
