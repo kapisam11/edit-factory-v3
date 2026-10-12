@@ -122,6 +122,16 @@ jobs:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
       run: uv run --with setuptools python -c "from ai_video_factory.reproducible_build import build_twice; result=build_twice('.'); assert result['byte_identical'], result"
 
+    - name: Run production review closure regressions
+      env:
+        PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
+      run: >-
+        uv run pytest -q
+        04-TESTS/tests/test_security_config.py
+        04-TESTS/tests/test_review_media_contract.py
+        04-TESTS/tests/test_last_good_final_protection.py
+        04-TESTS/tests/test_backup_state_restore.py
+
     - name: Run V3 test group with explicit coverage accounting
       env:
         PYTHONPATH: 01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE
@@ -351,7 +361,8 @@ jobs:
           "START-ALL.ps1",
           "RUN-PUBLISHER.ps1",
           "INSTALL-PUBLISHER-TASK.ps1",
-          "REMOVE-PUBLISHER-TASK.ps1"
+          "REMOVE-PUBLISHER-TASK.ps1",
+          "BACKUP-EDIT-FACTORY.ps1"
         )
         foreach ($script in $scripts) {
           $tokens = $null
