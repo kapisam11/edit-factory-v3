@@ -1310,7 +1310,14 @@ def _finish_rerun_with_last_good_protection(
 ) -> ProductionResult:
     """Keep a previous final if the rerun fails, and reject false-success results."""
     final_path = package / "final.v3.mp4"
-    success = not result.errors and final_path.is_file() and not final_path.is_symlink() and final_path.stat().st_size > 0
+    reported_final = Path(result.final_video).resolve() if result.final_video else None
+    success = (
+        not result.errors
+        and reported_final == final_path.resolve()
+        and final_path.is_file()
+        and not final_path.is_symlink()
+        and final_path.stat().st_size > 0
+    )
     if success:
         try:
             probe_media(str(final_path))
