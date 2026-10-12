@@ -64,3 +64,35 @@ def test_documentation_distinguishes_profiles_from_direct_publishers() -> None:
     assert "controlled real-account acceptance test" in upload_guide
     assert "does not watch a folder of existing videos" in upload_guide
     assert "publishes through the YouTube integration only" in autonomous_guide
+
+
+def test_dev_compose_does_not_supply_known_development_secret_defaults() -> None:
+    compose = (DEPLOYMENT_ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
+    assert "FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}" in compose
+    assert "AIVF_DASHBOARD_TOKEN: ${AIVF_DASHBOARD_TOKEN:-}" in compose
+    assert "dev-secret-change-me" not in compose
+    assert "dev-token-change-me" not in compose
+
+
+def test_wsgi_runtime_rejects_missing_or_placeholder_secrets_outside_tests(monkeypatch) -> None:
+    from dashboard_auth import validate_dashboard_secrets
+
+    monkeypatch.setenv("AIVF_ENV", "development")
+    monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+    monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "a-real-looking-token")
+    with pytest.raises(RuntimeError, match="FLASK_SECRET_KEY is required"):
+        validate_dashboard_secrets()
+
+    monkeypatch.setenv("FLASK_SECRET_KEY", "dev-secret-change-me")
+    with pytest.raises(RuntimeError, match="known development placeholder"):
+        validate_dashboard_secrets()
+
+    monkeypatch.setenv("FLASK_SECRET_KEY", "a-generated-local-secret")
+    monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "dev-token-change-me")
+    with pytest.raises(RuntimeError, match="known development placeholder"):
+        validate_dashboard_secrets()
+
+    monkeypatch.setenv("AIVF_ENV", "test")
+    monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+    monkeypatch.delenv("AIVF_DASHBOARD_TOKEN", raising=False)
+    validate_dashboard_secrets()
