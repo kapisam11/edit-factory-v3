@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from ai_video_factory import v3_stage_pipeline
@@ -18,6 +19,25 @@ def _request(source: Path, package: Path) -> v3_stage_pipeline.V3Request:
     )
 
 
+def _seed_compatible_identity(source: Path, package: Path) -> v3_stage_pipeline.V3Request:
+    """Represent a previous artifact owned by the same logical V3 job."""
+    request = _request(source, package)
+    identity = v3_stage_pipeline._expected_job_identity(request)
+    blueprint_hash = "test-blueprint-hash"
+    identity["blueprint_hash"] = blueprint_hash
+    identity["job_id"] = v3_stage_pipeline.job_identity(
+        source_hash=identity["source_hash"],
+        blueprint_hash=blueprint_hash,
+        config_hash=identity["configuration_hash"],
+        renderer_version=identity["renderer_version"],
+        platform_policy_version=identity["platform_policy_version"],
+    )
+    (package / "job_identity.json").write_text(
+        json.dumps(identity), encoding="utf-8"
+    )
+    return request
+
+
 def test_failed_rerun_restores_previous_final_v3_file(monkeypatch, tmp_path):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"source fixture")
@@ -25,6 +45,7 @@ def test_failed_rerun_restores_previous_final_v3_file(monkeypatch, tmp_path):
     package.mkdir()
     final = package / "final.v3.mp4"
     final.write_bytes(b"previous-known-good-final")
+    request = _seed_compatible_identity(source, package)
 
     class SeedThenFailStage:
         name = "injected_failure"
@@ -34,7 +55,7 @@ def test_failed_rerun_restores_previous_final_v3_file(monkeypatch, tmp_path):
             raise RenderContractError("injected render failure")
 
     result = v3_stage_pipeline.V3PipelineRunner(
-        _request(source, package),
+        request,
         stages=(SeedThenFailStage(),),
     ).run()
 
@@ -83,6 +104,7 @@ def test_successful_rerun_replaces_last_good_final_and_removes_snapshot(monkeypa
     package.mkdir()
     final = package / "final.v3.mp4"
     final.write_bytes(b"previous final")
+    request = _seed_compatible_identity(source, package)
 
     class SuccessfulStage:
         name = "successful_render"
@@ -98,7 +120,7 @@ def test_successful_rerun_replaces_last_good_final_and_removes_snapshot(monkeypa
         lambda _path: {"duration": 8.0, "width": 1080, "height": 1920, "has_video": True},
     )
     result = v3_stage_pipeline.V3PipelineRunner(
-        _request(source, package),
+        request,
         stages=(SuccessfulStage(),),
     ).run()
 
@@ -114,6 +136,7 @@ def test_failed_final_restore_retains_emergency_snapshot(monkeypatch, tmp_path):
     package.mkdir()
     final = package / "final.v3.mp4"
     final.write_bytes(b"previous-known-good-final")
+    request = _seed_compatible_identity(source, package)
 
     class SeedThenFailStage:
         name = "injected_failure"
