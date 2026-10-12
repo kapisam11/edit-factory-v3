@@ -805,6 +805,7 @@ class MediaValidationStage:
             retention_events=context.payload.get("retention_map", []),
             retention_baseline=str(baseline),
             require_independent_retention=True,
+            require_audio=bool((context.payload.get("qc") or {}).get("require_audio", False)),
         )
         if not report["ok"]:
             raise RenderContractError(
