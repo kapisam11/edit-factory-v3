@@ -648,7 +648,7 @@ def strict_render_check(
     audio_required = bool(require_audio or platform_profile.get("require_audio", False))
     if not info["has_audio"]:
         if audio_required:
-            errors.append("rendered artifact is missing the required audio stream (no audio stream present)")
+            errors.append("rendered artifact is missing required audio; the required audio stream is absent")
         else:
             warnings.append("rendered artifact has no audio stream")
 
