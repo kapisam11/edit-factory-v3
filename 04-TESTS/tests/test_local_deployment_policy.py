@@ -96,3 +96,28 @@ def test_wsgi_runtime_rejects_missing_or_placeholder_secrets_outside_tests(monke
     monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
     monkeypatch.delenv("AIVF_DASHBOARD_TOKEN", raising=False)
     validate_dashboard_secrets()
+
+
+def test_external_drive_backup_performs_archive_verification_and_restore_drill() -> None:
+    script = (REPOSITORY_ROOT / "BACKUP-EDIT-FACTORY.ps1").read_text(encoding="utf-8")
+    assert "[System.IO.Path]::GetPathRoot" in script
+    assert "aivf-backup backup" in script
+    assert "aivf-backup verify" in script
+    assert "aivf-backup restore" in script
+    assert "--uploads /app/uploads" in script
+    assert "--state /app/state" in script
+    assert "BitLocker" in script
+    assert "Remove-Item -Force" in script
+
+
+def test_install_guide_picks_python_312_as_windows_production_baseline() -> None:
+    guide = (REPOSITORY_ROOT / "00-INFO" / "01-INSTALL.md").read_text(encoding="utf-8")
+    assert "Python 3.12" in guide
+    assert "3.10–3.14" in guide
+
+
+def test_hardware_runbook_keeps_concurrency_one_until_benchmarked() -> None:
+    guide = (REPOSITORY_ROOT / "00-INFO" / "HARDWARE-BENCHMARK.md").read_text(encoding="utf-8")
+    assert "60-second" in guide
+    assert "AIVF_MAX_CONCURRENT_JOBS=1" in guide
+    assert "Do not raise CPU limits" in guide
