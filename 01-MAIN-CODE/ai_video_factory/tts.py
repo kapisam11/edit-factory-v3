@@ -88,6 +88,46 @@ def _validate_audio_output(path: str) -> str:
     return path
 
 
+def _generate_test_tone(text: str, out_path: str) -> str:
+    """Create deterministic local audio for explicitly isolated test runs.
+
+    This path is enabled only by AIVF_ENV=test and
+    AIVF_TEST_DISABLE_EXTERNAL_TTS=1. It intentionally emits a tone rather
+    than speech: integration tests should exercise media handling without
+    depending on an online TTS provider or a locally installed voice engine.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is required for deterministic test audio")
+    duration = max(1.0, min(20.0, len(text.split()) / 2.5))
+    try:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"sine=frequency=440:sample_rate=48000:duration={duration:.3f}",
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "6",
+                out_path,
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError("Could not generate deterministic test audio") from exc
+    return _validate_audio_output(out_path)
+
+
 def generate_voiceover(text: str, out_path: str, voice: Optional[str] = None) -> str:
     """Generate voiceover using the best available backend.
 
@@ -96,6 +136,14 @@ def generate_voiceover(text: str, out_path: str, voice: Optional[str] = None) ->
     if not isinstance(text, str) or not text.strip():
         raise ValueError("TTS text must be a non-empty string")
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+
+    # The explicit test-only flag keeps media integration tests deterministic
+    # and prevents accidental network calls to an external voice provider.
+    if (
+        os.environ.get("AIVF_ENV", "").strip().lower() == "test"
+        and os.environ.get("AIVF_TEST_DISABLE_EXTERNAL_TTS", "").strip() == "1"
+    ):
+        return _generate_test_tone(text, out_path)
 
     # Try Edge TTS
     if _edge_tts_available():
