@@ -445,7 +445,7 @@ def test_strict_render_check_blocks_missing_required_audio(monkeypatch):
         require_audio=True,
     )
     assert report["ok"] is False
-    assert any("missing the required audio stream" in error for error in report["errors"])
+    assert any("required audio stream" in error for error in report["errors"])
 
 
 def test_strict_render_check_blocks_frame_rate_mismatch(monkeypatch):
