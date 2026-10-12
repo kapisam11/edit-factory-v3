@@ -4,7 +4,6 @@ from .v3_exceptions import V3ValidationError
 
 import json
 import math
-from fractions import Fraction
 import os
 import subprocess
 import tempfile
@@ -68,6 +67,49 @@ def _atomic_copy(input_path: str, target_path: str) -> str:
         raise
 
 
+def _parse_frame_rate(value: object) -> Optional[float]:
+    """Parse decimal or rational FPS without inventing a fallback value."""
+    text = str(value or "").strip()
+    try:
+        if "/" in text:
+            numerator_text, denominator_text = text.split("/", 1)
+            numerator, denominator = float(numerator_text), float(denominator_text)
+            if denominator == 0:
+                return None
+            fps = numerator / denominator
+        else:
+            fps = float(text)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return fps if math.isfinite(fps) and fps > 0 else None
+
+
+def _stream_duration_seconds(stream: Mapping[str, Any] | None) -> Optional[float]:
+    """Read stream duration when ffprobe exposes it, including duration_ts/time_base."""
+    if not isinstance(stream, Mapping):
+        return None
+    try:
+        duration = float(stream.get("duration") or 0.0)
+        if math.isfinite(duration) and duration > 0:
+            return duration
+    except (TypeError, ValueError):
+        pass
+    try:
+        raw_ticks = stream.get("duration_ts")
+        if raw_ticks is None or raw_ticks == "":
+            return None
+        ticks = float(raw_ticks)
+        numerator_text, denominator_text = str(stream.get("time_base", "")).split("/", 1)
+        numerator, denominator = float(numerator_text), float(denominator_text)
+        if denominator != 0:
+            duration = ticks * numerator / denominator
+            if math.isfinite(duration) and duration > 0:
+                return duration
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    return None
+
+
 def probe_media(path: str) -> Dict[str, Any]:
     if not os.path.isfile(path) or os.path.getsize(path) <= 0: raise RenderContractError(f"rendered media is missing or empty: {path}")
     result = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration,size,format_name,bit_rate", "-show_streams", "-of", "json", path],
@@ -78,10 +120,28 @@ def probe_media(path: str) -> Dict[str, Any]:
     if not video: raise RenderContractError("rendered artifact contains no video stream")
     duration = float(payload.get("format", {}).get("duration") or 0.0); width = int(video.get("width") or 0); height = int(video.get("height") or 0)
     if duration <= 0 or width <= 0 or height <= 0: raise RenderContractError("rendered artifact has invalid duration or dimensions")
-    return {"duration": duration, "size": int(payload.get("format", {}).get("size") or os.path.getsize(path)), "width": width, "height": height,
-            "fps": video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/0", "avg_frame_rate": video.get("avg_frame_rate") or "0/0", "r_frame_rate": video.get("r_frame_rate") or "0/0", "has_audio": audio is not None,
-            "video_codec": video.get("codec_name"), "audio_codec": audio.get("codec_name") if audio else None,
-            "format_name": payload.get("format", {}).get("format_name")}
+    fps = video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/0"
+    video_duration = _stream_duration_seconds(video)
+    audio_duration = _stream_duration_seconds(audio)
+    av_delta = (
+        round(audio_duration - video_duration, 4)
+        if audio_duration is not None and video_duration is not None
+        else None
+    )
+    return {
+        "duration": duration,
+        "size": int(payload.get("format", {}).get("size") or os.path.getsize(path)),
+        "width": width,
+        "height": height,
+        "fps": fps,
+        "video_duration": video_duration,
+        "audio_duration": audio_duration,
+        "audio_video_duration_delta_seconds": av_delta,
+        "has_audio": audio is not None,
+        "video_codec": video.get("codec_name"),
+        "audio_codec": audio.get("codec_name") if audio else None,
+        "format_name": payload.get("format", {}).get("format_name"),
+    }
 
 
 def duration_delta_policy(delta_seconds: float) -> str:
@@ -160,6 +220,7 @@ def enforce_retention_events(
     *,
     target_seconds: float | None = None,
     normalize_audio: bool = False,
+    frame_rate_fps: float | None = None,
 ) -> str:
     """Compile semantic retention events into one FFmpeg render pass."""
     info = probe_media(input_path)
@@ -214,6 +275,20 @@ def enforce_retention_events(
             duration_arg = f"{target:.3f}"
     else:
         duration_arg = None
+
+    if frame_rate_fps is not None:
+        try:
+            target_fps = float(frame_rate_fps)
+        except (TypeError, ValueError) as exc:
+            raise RenderContractError("frame_rate_fps must be numeric") from exc
+        if not math.isfinite(target_fps) or not 1.0 <= target_fps <= 120.0:
+            raise RenderContractError("frame_rate_fps must be between 1 and 120")
+        if filter_complex and video_output_label:
+            fps_label = "v_aivf_fps"
+            filter_complex += f";[{video_output_label}]fps={target_fps:g}[{fps_label}]"
+            video_output_label = fps_label
+        else:
+            filters.append(f"fps={target_fps:g}")
 
     fd, temp_path = tempfile.mkstemp(
         suffix=".mp4",
@@ -463,15 +538,6 @@ def verify_retention_against_baseline(
     }
 
 
-def _parse_fps(value: object) -> float:
-    """Parse FFprobe's rational frame rate without inventing a fallback."""
-    try:
-        parsed = float(Fraction(str(value or "0/0").strip()))
-    except (ValueError, ZeroDivisionError, OverflowError):
-        return 0.0
-    return parsed if math.isfinite(parsed) and parsed > 0 else 0.0
-
-
 def strict_render_check(
     path: str,
     *,
@@ -480,61 +546,34 @@ def strict_render_check(
     retention_events: Sequence[Mapping[str, Any]] = (),
     retention_baseline: Optional[str] = None,
     require_independent_retention: bool = False,
-    expected_fps: float | None = None,
-    require_audio: bool | None = None,
+    require_audio: bool = False,
 ) -> Dict[str, Any]:
-    """Verify that an encoded file matches the requested technical output contract.
-
-    FFprobe establishes stream/container metadata; sampled FFmpeg decoding tests
-    actual readability. Caption legibility and narrative correctness still need
-    human review and must not be inferred from this report.
-    """
+    """Enforce the final media contract before an output can be promoted."""
     info = probe_media(path)
     expected_width = int(platform_profile.get("width") or 0)
     expected_height = int(platform_profile.get("height") or 0)
     errors: list[str] = []
-    warnings: list[str] = []
+    warnings: list[str] = [
+        "Caption/subtitle visibility, readability, timing, and story coherence require human review; media metadata cannot prove them."
+    ]
 
-    if abs(float(info["duration"]) - float(target_seconds)) > 0.08:
+    try:
+        target_value = float(target_seconds)
+    except (TypeError, ValueError, OverflowError):
+        target_value = 0.0
+        errors.append("target duration must be a finite positive number")
+    if not math.isfinite(target_value) or target_value <= 0:
+        if "target duration must be a finite positive number" not in errors:
+            errors.append("target duration must be a finite positive number")
+    elif abs(info["duration"] - target_value) > 0.08:
         errors.append(
-            f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s"
+            f"duration {info['duration']:.3f}s does not match target {target_value:.3f}s"
         )
+
     if expected_width and info["width"] != expected_width:
         errors.append(f"width {info['width']} != required {expected_width}")
     if expected_height and info["height"] != expected_height:
         errors.append(f"height {info['height']} != required {expected_height}")
-
-    actual_fps = 0.0
-    for candidate in (info.get("avg_frame_rate"), info.get("fps"), info.get("r_frame_rate")):
-        actual_fps = _parse_fps(candidate)
-        if actual_fps > 0:
-            break
-    configured_fps: float
-    raw_expected = (
-        expected_fps
-        if expected_fps is not None
-        else platform_profile.get("frame_rate_fps", os.environ.get("AIVF_OUTPUT_FPS", "30"))
-    )
-    try:
-        configured_fps = float(raw_expected)
-    except (TypeError, ValueError, OverflowError):
-        configured_fps = 0.0
-    if not math.isfinite(configured_fps) or configured_fps <= 0:
-        errors.append("expected output frame rate must be a finite positive number")
-    elif actual_fps <= 0:
-        errors.append("rendered artifact has a missing or invalid frame rate")
-    else:
-        try:
-            fps_tolerance = float(os.environ.get("AIVF_OUTPUT_FPS_TOLERANCE", "1.0"))
-        except (TypeError, ValueError, OverflowError):
-            fps_tolerance = -1.0
-        if not math.isfinite(fps_tolerance) or fps_tolerance < 0:
-            errors.append("AIVF_OUTPUT_FPS_TOLERANCE must be a finite non-negative number")
-        elif abs(actual_fps - configured_fps) > fps_tolerance:
-            errors.append(
-                f"frame rate {actual_fps:.3f} fps does not match expected "
-                f"{configured_fps:.3f} fps (tolerance {fps_tolerance:.3f})"
-            )
 
     try:
         max_output_bytes = int(os.environ.get("AIVF_MAX_OUTPUT_BYTES", str(5 * 1024**3)))
@@ -547,25 +586,98 @@ def strict_render_check(
             f"output size {int(info['size'])} bytes exceeds configured limit {max_output_bytes} bytes"
         )
 
-    if require_audio is None:
-        require_audio_setting = str(os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "0")).strip().lower()
-        require_audio = bool(platform_profile.get("require_audio", require_audio_setting not in {"0", "false", "no"}))
-    if not info["has_audio"]:
-        message = "rendered artifact has no audio stream"
-        if require_audio:
-            errors.append(message)
-        else:
-            warnings.append(message)
+    expected_fps_value = platform_profile.get("frame_rate_fps")
+    if expected_fps_value is None:
+        expected_fps_value = platform_profile.get("fps", platform_profile.get("frame_rate"))
+    if expected_fps_value is None:
+        expected_fps_value = os.environ.get("AIVF_V3_EXPECTED_FPS", "30")
+    try:
+        expected_fps = float(expected_fps_value)
+        fps_tolerance = float(platform_profile.get("frame_rate_tolerance_fps", 0.1))
+    except (TypeError, ValueError, OverflowError):
+        expected_fps = 0.0
+        fps_tolerance = -1.0
 
-    visual = _sample_visual_changes(path, sample_hz=10.0)
+    if (
+        not math.isfinite(expected_fps)
+        or not 1.0 <= expected_fps <= 120.0
+        or not math.isfinite(fps_tolerance)
+        or fps_tolerance < 0
+    ):
+        errors.append("platform profile has an invalid frame-rate contract")
+    else:
+        actual_fps = _parse_frame_rate(info.get("fps"))
+        if actual_fps is None:
+            errors.append("rendered artifact has an invalid or missing frame rate")
+        elif abs(actual_fps - expected_fps) > fps_tolerance:
+            errors.append(
+                f"frame rate {actual_fps:.4f} fps does not match required "
+                f"{expected_fps:.4f} ±{fps_tolerance:.4f} fps"
+            )
+
+    audio_required = bool(require_audio or platform_profile.get("require_audio", False))
+    if not info["has_audio"]:
+        if audio_required:
+            errors.append("rendered artifact is missing required audio")
+        else:
+            warnings.append("rendered artifact has no audio stream")
+
+    av_delta = info.get("audio_video_duration_delta_seconds")
+    max_av_delta_value = platform_profile.get("max_av_duration_delta_seconds", 0.5)
+    try:
+        max_av_delta = float(max_av_delta_value)
+    except (TypeError, ValueError, OverflowError):
+        max_av_delta = -1.0
+    if not math.isfinite(max_av_delta) or max_av_delta < 0:
+        errors.append("platform profile has an invalid audio/video duration tolerance")
+    elif info["has_audio"] and av_delta is not None:
+        try:
+            actual_av_delta = float(av_delta)
+        except (TypeError, ValueError, OverflowError):
+            actual_av_delta = float("inf")
+        if not math.isfinite(actual_av_delta) or abs(actual_av_delta) > max_av_delta:
+            errors.append(
+                f"audio/video stream durations differ by {abs(actual_av_delta):.3f}s; "
+                f"maximum allowed is {max_av_delta:.3f}s"
+            )
+
+    playability: dict[str, Any] = {"ok": False, "error": "not checked"}
+    try:
+        _run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-xerror",
+                "-err_detect", "explode", "-i", path,
+                "-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-",
+            ],
+            timeout=_timeout("AIVF_FINAL_DECODE_TIMEOUT_SECONDS", 600),
+        )
+    except RenderContractError as exc:
+        playability["error"] = str(exc)
+        errors.append(f"full media decode failed: {exc}")
+    else:
+        playability = {"ok": True, "error": ""}
+
+    visual: Dict[str, Any] = {"frames": 0, "change_events": [], "max_gap": None}
+    try:
+        visual = _sample_visual_changes(path, sample_hz=10.0)
+    except (RenderContractError, OSError, ValueError) as exc:
+        errors.append(f"visual sampling failed: {exc}")
+
     events: list[float] = []
     retention_verification = None
     for item in retention_events:
-        if isinstance(item, Mapping):
-            try:
-                events.append(float(item.get("time", 0.0)))
-            except (TypeError, ValueError, OverflowError):
-                errors.append("retention map contains a non-numeric event time")
+        if not isinstance(item, Mapping):
+            errors.append("retention map contains an invalid event")
+            continue
+        try:
+            event_time = float(item.get("time", 0.0))
+        except (TypeError, ValueError, OverflowError):
+            errors.append("retention map contains a non-numeric event time")
+            continue
+        if not math.isfinite(event_time):
+            errors.append("retention map contains a non-finite event time")
+            continue
+        events.append(event_time)
 
     if not events:
         errors.append("retention map is empty")
@@ -574,8 +686,9 @@ def strict_render_check(
             errors.append("retention map does not begin near the opening")
         if any(b <= a for a, b in zip(events, events[1:])):
             errors.append("retention map contains non-increasing event times")
-        if any(not math.isfinite(t) or t < 0.0 or t > float(target_seconds) + 0.05 for t in events):
+        if any(t < 0.0 or t > target_value + 0.05 for t in events):
             errors.append("retention map contains events outside target duration")
+
         if require_independent_retention:
             if not retention_baseline:
                 errors.append("independent retention baseline is required")
@@ -603,16 +716,22 @@ def strict_render_check(
         "ok": not errors,
         "errors": errors,
         "warnings": warnings,
-        "media": info,
-        "frame_rate_validation": {
-            "actual_fps": actual_fps,
-            "expected_fps": configured_fps,
-            "tolerance_fps": (
-                fps_tolerance if "fps_tolerance" in locals() and fps_tolerance >= 0 else None
-            ),
+        "contract": {
+            "expected_width": expected_width,
+            "expected_height": expected_height,
+            "expected_frame_rate_fps": expected_fps_value,
+            "frame_rate_tolerance_fps": platform_profile.get("frame_rate_tolerance_fps", 0.1),
+            "output_size_limit_bytes": max_output_bytes,
+            "require_audio": audio_required,
+            "max_audio_video_duration_delta_seconds": max_av_delta_value,
         },
-        "output_size_limit_bytes": max_output_bytes,
-        "audio_required": bool(require_audio),
+        "media": info,
+        "playability": playability,
+        "caption_visibility": {
+            "status": "manual_review_required",
+            "automated_ocr": "not_claimed",
+        },
         "visual_sampling": visual,
         "retention_verification": retention_verification,
     }
+
