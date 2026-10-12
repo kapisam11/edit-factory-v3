@@ -75,12 +75,12 @@ def test_dev_compose_does_not_supply_known_development_secret_defaults() -> None
 
 
 def test_wsgi_runtime_rejects_missing_or_placeholder_secrets_outside_tests(monkeypatch) -> None:
-    from dashboard_auth import validate_dashboard_secrets
+    from ai_video_factory.security_config import validate_dashboard_secrets
 
     monkeypatch.setenv("AIVF_ENV", "development")
     monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
     monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "a-real-looking-token")
-    with pytest.raises(RuntimeError, match="FLASK_SECRET_KEY must be configured"):
+    with pytest.raises(RuntimeError, match="FLASK_SECRET_KEY must be explicitly configured"):
         validate_dashboard_secrets()
 
     monkeypatch.setenv("FLASK_SECRET_KEY", "dev-secret-change-me")
@@ -101,9 +101,12 @@ def test_wsgi_runtime_rejects_missing_or_placeholder_secrets_outside_tests(monke
 def test_external_drive_backup_performs_archive_verification_and_restore_drill() -> None:
     script = (REPOSITORY_ROOT / "BACKUP-EDIT-FACTORY.ps1").read_text(encoding="utf-8")
     assert "[System.IO.Path]::GetPathRoot" in script
-    assert "aivf-backup backup" in script
-    assert "aivf-backup verify" in script
-    assert "aivf-backup restore" in script
+    assert '"--entrypoint", "aivf-backup", "web"' in script
+    assert '"backup",' in script
+    assert '"verify",' in script
+    assert '"restore",' in script
+    assert "$RestoreCheckArgs" in script
+    assert "restore drill passed" in script
     assert "--uploads /app/uploads" in script
     assert "--state /app/state" in script
     assert "BitLocker" in script
