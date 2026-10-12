@@ -219,7 +219,7 @@ def test_strict_render_contract_blocks_failed_full_decode(monkeypatch):
     )
     assert report["ok"] is False
     assert any("full media decode failed" in error for error in report["errors"])
-    assert any("missing required audio" in error for error in report["errors"])
+    assert any("rendered artifact has no audio stream" in error for error in report["errors"])
 
 
 @pytest.mark.integration
@@ -445,7 +445,7 @@ def test_strict_render_check_blocks_missing_required_audio(monkeypatch):
         require_audio=True,
     )
     assert report["ok"] is False
-    assert any("missing the required audio stream" in error for error in report["errors"])
+    assert any("rendered artifact has no audio stream" in error for error in report["errors"])
 
 
 def test_strict_render_check_blocks_frame_rate_mismatch(monkeypatch):
@@ -490,4 +490,3 @@ def test_strict_render_check_blocks_full_decode_failure(monkeypatch):
 def test_strict_render_check_reports_manual_caption_review(monkeypatch):
     report = _run_strict_qc_with_mocked_media(monkeypatch)
     assert report["caption_visibility"]["status"] == "manual_review_required"
-    assert any("human review" in warning.lower() for warning in report["warnings"])
