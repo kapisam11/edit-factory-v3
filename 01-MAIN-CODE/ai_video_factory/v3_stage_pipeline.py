@@ -823,6 +823,25 @@ class MediaValidationStage:
         except (OSError, RuntimeError, ValueError) as exc:
             context.result.warnings.append(f"Final metadata stamping skipped: {exc}")
 
+        # Revalidate the exact promoted artifact after the metadata remux. The
+        # pre-promotion report alone is not evidence about bytes written afterward.
+        post_stamp_report = strict_render_check(
+            str(context.result.final_video),
+            target_seconds=context.request.target_seconds,
+            platform_profile=profile,
+            retention_events=context.payload.get("retention_map", []),
+            retention_baseline=str(baseline),
+            require_independent_retention=True,
+        )
+        context.render_report["post_metadata_stamp_validation"] = post_stamp_report
+        context.render_report["ok"] = bool(context.render_report.get("ok") and post_stamp_report.get("ok"))
+        if not post_stamp_report.get("ok"):
+            errors = list(post_stamp_report.get("errors") or [])
+            raise RenderContractError(
+                "post-metadata-stamp final media validation failed: "
+                + ("; ".join(str(error) for error in errors) if errors else "media contract returned not-ok")
+            )
+
         try:
             context.final_health = analyze_media(
                 context.result.final_video,
