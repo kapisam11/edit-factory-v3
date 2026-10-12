@@ -9,6 +9,7 @@ from ai_video_factory.platform_adapters import PublishResult
 
 
 def _load_client(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AIVF_ENV", "test")
     state = tmp_path / "state"
     database = state / "folder-publisher.sqlite"
     monkeypatch.setenv("AIVF_STATE_DIR", str(state))
