@@ -67,6 +67,46 @@ def _atomic_copy(input_path: str, target_path: str) -> str:
         raise
 
 
+def _parse_frame_rate(value: object) -> Optional[float]:
+    """Parse decimal or rational FPS without inventing a fallback value."""
+    text = str(value or "").strip()
+    try:
+        if "/" in text:
+            numerator_text, denominator_text = text.split("/", 1)
+            numerator, denominator = float(numerator_text), float(denominator_text)
+            if denominator == 0:
+                return None
+            fps = numerator / denominator
+        else:
+            fps = float(text)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return fps if math.isfinite(fps) and fps > 0 else None
+
+
+def _stream_duration_seconds(stream: Mapping[str, Any] | None) -> Optional[float]:
+    """Read stream duration when ffprobe exposes it, including duration_ts/time_base."""
+    if not isinstance(stream, Mapping):
+        return None
+    try:
+        duration = float(stream.get("duration") or 0.0)
+        if math.isfinite(duration) and duration > 0:
+            return duration
+    except (TypeError, ValueError):
+        pass
+    try:
+        ticks = float(stream.get("duration_ts"))
+        numerator_text, denominator_text = str(stream.get("time_base", "")).split("/", 1)
+        numerator, denominator = float(numerator_text), float(denominator_text)
+        if denominator != 0:
+            duration = ticks * numerator / denominator
+            if math.isfinite(duration) and duration > 0:
+                return duration
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    return None
+
+
 def probe_media(path: str) -> Dict[str, Any]:
     if not os.path.isfile(path) or os.path.getsize(path) <= 0: raise RenderContractError(f"rendered media is missing or empty: {path}")
     result = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration,size,format_name,bit_rate", "-show_streams", "-of", "json", path],
@@ -77,10 +117,28 @@ def probe_media(path: str) -> Dict[str, Any]:
     if not video: raise RenderContractError("rendered artifact contains no video stream")
     duration = float(payload.get("format", {}).get("duration") or 0.0); width = int(video.get("width") or 0); height = int(video.get("height") or 0)
     if duration <= 0 or width <= 0 or height <= 0: raise RenderContractError("rendered artifact has invalid duration or dimensions")
-    return {"duration": duration, "size": int(payload.get("format", {}).get("size") or os.path.getsize(path)), "width": width, "height": height,
-            "fps": video.get("r_frame_rate") or video.get("avg_frame_rate") or "0/0", "has_audio": audio is not None,
-            "video_codec": video.get("codec_name"), "audio_codec": audio.get("codec_name") if audio else None,
-            "format_name": payload.get("format", {}).get("format_name")}
+    fps = video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/0"
+    video_duration = _stream_duration_seconds(video)
+    audio_duration = _stream_duration_seconds(audio)
+    av_delta = (
+        round(audio_duration - video_duration, 4)
+        if audio_duration is not None and video_duration is not None
+        else None
+    )
+    return {
+        "duration": duration,
+        "size": int(payload.get("format", {}).get("size") or os.path.getsize(path)),
+        "width": width,
+        "height": height,
+        "fps": fps,
+        "video_duration": video_duration,
+        "audio_duration": audio_duration,
+        "audio_video_duration_delta_seconds": av_delta,
+        "has_audio": audio is not None,
+        "video_codec": video.get("codec_name"),
+        "audio_codec": audio.get("codec_name") if audio else None,
+        "format_name": payload.get("format", {}).get("format_name"),
+    }
 
 
 def duration_delta_policy(delta_seconds: float) -> str:
@@ -467,7 +525,63 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
     if abs(info["duration"] - float(target_seconds)) > 0.08: errors.append(f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s")
     if expected_width and info["width"] != expected_width: errors.append(f"width {info['width']} != required {expected_width}")
     if expected_height and info["height"] != expected_height: errors.append(f"height {info['height']} != required {expected_height}")
-    if not info["has_audio"]: warnings.append("rendered artifact has no audio stream")
+    expected_fps_value = platform_profile.get("frame_rate_fps")
+    if expected_fps_value is not None:
+        actual_fps = _parse_frame_rate(info.get("fps"))
+        try:
+            expected_fps = float(expected_fps_value)
+            fps_tolerance = float(platform_profile.get("frame_rate_tolerance_fps", 0.1))
+        except (TypeError, ValueError):
+            expected_fps = 0.0
+            fps_tolerance = -1.0
+        if (
+            not math.isfinite(expected_fps)
+            or expected_fps <= 0
+            or not math.isfinite(fps_tolerance)
+            or fps_tolerance < 0
+        ):
+            errors.append("platform profile has an invalid frame-rate contract")
+        elif actual_fps is None:
+            errors.append("rendered artifact has an invalid or missing frame rate")
+        elif abs(actual_fps - expected_fps) > fps_tolerance:
+            errors.append(
+                f"frame rate {actual_fps:.4f} fps does not match required "
+                f"{expected_fps:.4f} ±{fps_tolerance:.4f} fps"
+            )
+
+    if not info["has_audio"]:
+        if bool(platform_profile.get("require_audio", False)):
+            errors.append("rendered artifact is missing required audio")
+        else:
+            warnings.append("rendered artifact has no audio stream")
+    av_delta = info.get("audio_video_duration_delta_seconds")
+    if info["has_audio"] and av_delta is not None:
+        try:
+            max_av_delta = float(platform_profile.get("max_av_duration_delta_seconds", 0.5))
+        except (TypeError, ValueError):
+            max_av_delta = -1.0
+        if not math.isfinite(max_av_delta) or max_av_delta < 0:
+            errors.append("platform profile has an invalid audio/video duration tolerance")
+        elif abs(float(av_delta)) > max_av_delta:
+            errors.append(
+                f"audio/video stream durations differ by {abs(float(av_delta)):.3f}s; "
+                f"maximum allowed is {max_av_delta:.3f}s"
+            )
+
+    # A successful probe is necessary but does not prove every packet decodes.
+    # Decode the complete final file with errors promoted to a hard failure.
+    try:
+        _run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-xerror",
+                "-err_detect", "explode", "-i", path,
+                "-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-",
+            ],
+            timeout=_timeout("AIVF_FINAL_DECODE_TIMEOUT_SECONDS", 600),
+        )
+    except RenderContractError as exc:
+        errors.append(f"full media decode failed: {exc}")
+
     visual = _sample_visual_changes(path, sample_hz=10.0); events = []; retention_verification = None
     for item in retention_events:
         if isinstance(item, Mapping):
