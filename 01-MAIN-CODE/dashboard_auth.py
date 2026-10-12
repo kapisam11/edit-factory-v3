@@ -12,6 +12,34 @@ from flask import abort, g, redirect, render_template, request, session, url_for
 from ai_video_factory.authorization import Role, normalize_role, role_allows
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+_KNOWN_DEVELOPMENT_SECRETS = {
+    "dev-secret-change-me",
+    "dev-token-change-me",
+    "change-me",
+    "change_me",
+    "changeme",
+    "your-secret-key",
+    "replace-me",
+}
+
+
+def validate_dashboard_secrets() -> None:
+    """Fail closed on missing or known placeholder secrets outside explicit tests."""
+    environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+    if environment == "test":
+        return
+
+    secret = os.environ.get("FLASK_SECRET_KEY", "").strip()
+    token = os.environ.get("AIVF_DASHBOARD_TOKEN", "").strip()
+    if not secret:
+        raise RuntimeError("FLASK_SECRET_KEY is required; refusing to start the dashboard without a stable session secret.")
+    if secret.casefold() in _KNOWN_DEVELOPMENT_SECRETS:
+        raise RuntimeError("FLASK_SECRET_KEY still uses a known development placeholder; replace it with a generated secret.")
+    if not token:
+        raise RuntimeError("AIVF_DASHBOARD_TOKEN is required; refusing to start an unauthenticated dashboard.")
+    if token.casefold() in _KNOWN_DEVELOPMENT_SECRETS:
+        raise RuntimeError("AIVF_DASHBOARD_TOKEN still uses a known development placeholder; replace it with a generated token.")
 PUBLIC_PATHS = {"/login", "/logout", "/api/health", "/readyz"}
 _LOGIN_LIMIT = 10
 _LOGIN_WINDOW_SECONDS = 60.0
