@@ -1,6 +1,7 @@
 """Stage-oriented V3 execution without changing the public pipeline API."""
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -1276,13 +1277,385 @@ class ReleaseEvidenceStage:
 
 
 
-def _snapshot_last_good_final(package: Path) -> Path | None:
-    """Copy the existing canonical output before any rerun can reset the workspace.
+def _last_good_snapshot_paths(package: Path) -> tuple[Path, Path, Path]:
+    """Return package-specific durable snapshot, manifest, and in-progress-copy paths."""
+    package_root = package.resolve()
+    token = hashlib.sha256(os.fsencode(str(package_root))).hexdigest()[:20]
+    snapshot = package_root.parent / f".aivf-v3-last-good-{token}.mp4"
+    manifest = snapshot.with_name(snapshot.name + ".json")
+    partial = snapshot.with_name(snapshot.name + ".partial")
+    return snapshot, manifest, partial
 
-    The snapshot lives beside the package so workspace cleanup cannot delete it.
-    Refuse a rerun instead of risking the last output when the file is suspicious
-    or the same volume lacks enough space for a conservative copy.
+
+def _fsync_directory(directory: Path) -> None:
+    """Best-effort directory fsync so adjacent atomic renames survive a hard reset."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(str(directory), flags)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        # Windows does not expose directory fsync in the same way as POSIX.
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _remove_snapshot_artifacts(snapshot: Path) -> None:
+    """Remove only this package's snapshot files; never follow symlinks."""
+    for path in (
+        snapshot,
+        snapshot.with_name(snapshot.name + ".json"),
+        snapshot.with_name(snapshot.name + ".partial"),
+    ):
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink(missing_ok=True)
+        except OSError:
+            # Retaining an orphan is safer than allowing a cleanup error to hide a good copy.
+            continue
+    _fsync_directory(snapshot.parent)
+
+
+def _probe_and_decode_video(
+    path: Path,
+    *,
+    target_seconds: float | None = None,
+    expected_width: int | None = None,
+    expected_height: int | None = None,
+) -> bool:
+    """Return true only for a regular, probeable video that fully decodes."""
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        if path.stat().st_size <= 0:
+            return False
+        media = probe_media(str(path))
+        duration = float(media.get("duration") or 0.0)
+        width = int(media.get("width") or 0)
+        height = int(media.get("height") or 0)
+        if not math.isfinite(duration) or duration <= 0 or width <= 0 or height <= 0:
+            return False
+        if target_seconds is not None and (
+            not math.isfinite(float(target_seconds))
+            or abs(duration - float(target_seconds)) > 0.08
+        ):
+            return False
+        if expected_width is not None and width != int(expected_width):
+            return False
+        if expected_height is not None and height != int(expected_height):
+            return False
+        from .v3_quality import _verify_full_decode
+        _verify_full_decode(str(path))
+        return True
+    except Exception:
+        return False
+
+
+def _has_verified_completed_workspace(package: Path) -> bool:
+    """Recognize a newer completed result before attempting to restore an older snapshot."""
+    final_path = package / "final.v3.mp4"
+    identity_path = package / "job_identity.json"
+    readiness_path = package / "v3_readiness.json"
+    manifest_path = package / "artifact_manifest.json"
+    if not all(path.is_file() and not path.is_symlink() for path in (
+        final_path, identity_path, readiness_path, manifest_path
+    )):
+        return False
+    try:
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(identity, Mapping) or not isinstance(readiness, Mapping) or not isinstance(manifest, Mapping):
+        return False
+    if not all(str(identity.get(key) or "") for key in (
+        "job_id", "source_hash", "request_hash", "configuration_hash", "blueprint_hash"
+    )):
+        return False
+    checks = readiness.get("checks") or {}
+    if (
+        readiness.get("state") not in {"UPLOAD_PACKAGE_VALID", "PUBLISH_READY"}
+        or not isinstance(checks, Mapping)
+        or checks.get("UPLOAD_PACKAGE_VALID") is not True
+        or bool(readiness.get("errors"))
+    ):
+        return False
+    integrity = verify_artifact_manifest(package, manifest, verify_hashes=True)
+    if not integrity.get("ok"):
+        return False
+    final_entries = [
+        entry for entry in (manifest.get("files") or [])
+        if isinstance(entry, Mapping) and entry.get("path") == "final.v3.mp4"
+    ]
+    if len(final_entries) != 1:
+        return False
+    recorded_hash = str(final_entries[0].get("sha256") or "")
+    try:
+        if not recorded_hash or sha256_file(final_path) != recorded_hash:
+            return False
+    except (OSError, ValueError):
+        return False
+
+    target_seconds = None
+    expected_width = None
+    expected_height = None
+    fingerprint_path = package / "environment_fingerprint.json"
+    try:
+        fingerprint = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+        target = fingerprint.get("target_seconds")
+        if target is not None:
+            target_seconds = float(target)
+        profile = fingerprint.get("platform_profile") or {}
+        if isinstance(profile, Mapping):
+            if profile.get("width") is not None:
+                expected_width = int(profile["width"])
+            if profile.get("height") is not None:
+                expected_height = int(profile["height"])
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        # Older successful packages may not contain this optional fingerprint.
+        pass
+    return _probe_and_decode_video(
+        final_path,
+        target_seconds=target_seconds,
+        expected_width=expected_width,
+        expected_height=expected_height,
+    )
+
+
+def _snapshot_manifest_is_valid(
+    package: Path,
+    snapshot: Path,
+    manifest_path: Path,
+) -> tuple[bool, dict[str, Any] | None, str]:
+    """Authenticate the durable snapshot against its fsynced sidecar before restore."""
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return False, None, "snapshot manifest is missing or is not a regular file"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False, None, "snapshot manifest is unreadable"
+    if not isinstance(manifest, Mapping):
+        return False, None, "snapshot manifest is not an object"
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("package_path") != str(package.resolve())
+        or manifest.get("snapshot_filename") != snapshot.name
+    ):
+        return False, None, "snapshot manifest does not belong to this package"
+    if snapshot.is_symlink() or not snapshot.is_file():
+        return False, dict(manifest), "snapshot file is missing or is not a regular file"
+    try:
+        expected_size = int(manifest.get("snapshot_size_bytes") or 0)
+        expected_hash = str(manifest.get("snapshot_sha256") or "").lower()
+        original_size = int(manifest.get("original_size_bytes") or 0)
+        original_hash = str(manifest.get("original_sha256") or "").lower()
+        actual_size = snapshot.stat().st_size
+        actual_hash = sha256_file(snapshot).lower()
+    except (OSError, TypeError, ValueError):
+        return False, dict(manifest), "snapshot could not be inspected"
+    if (
+        expected_size <= 0
+        or expected_size != actual_size
+        or original_size != expected_size
+        or len(expected_hash) != 64
+        or any(character not in "0123456789abcdef" for character in expected_hash)
+        or expected_hash != actual_hash
+        or original_hash != expected_hash
+    ):
+        return False, dict(manifest), "snapshot size or SHA-256 does not match its durable manifest"
+    return True, dict(manifest), ""
+
+
+def _recover_result(package: Path, message: str, *, snapshot: Path | None = None) -> ProductionResult:
+    """Build a failure result for interrupted recovery so callers cannot report success."""
+    result = ProductionResult(package_dir=str(package))
+    result.errors.append(message)
+    if snapshot is not None and (snapshot.exists() or snapshot.is_symlink()):
+        result.artifacts["last_good_snapshot"] = str(snapshot)
+    final_path = package / "final.v3.mp4"
+    if final_path.is_file() and not final_path.is_symlink():
+        result.artifacts["last_good_final_preserved"] = str(final_path)
+    try:
+        _write_failed_evidence(package, result.errors)
+        result.artifacts["v3_failure"] = str(package / "v3_failure.json")
+        result.artifacts["v3_readiness"] = str(package / "v3_readiness.json")
+    except Exception as exc:
+        result.errors.append(
+            f"CRITICAL: could not persist interrupted-render failure state: {type(exc).__name__}: {exc}"
+        )
+    return result
+
+
+def _restore_recovered_snapshot(
+    package: Path,
+    snapshot: Path,
+    *,
+    manifest_path: Path | None = None,
+    partial_path: Path | None = None,
+) -> ProductionResult:
+    """Atomically restore a validated old final and require an explicit retry."""
+    final_path = package / "final.v3.mp4"
+    if final_path.exists() and final_path.is_dir() and not final_path.is_symlink():
+        return _recover_result(
+            package,
+            "Cannot restore the previous final because final.v3.mp4 is a directory; recovery files were retained.",
+            snapshot=snapshot,
+        )
+    try:
+        os.replace(snapshot, final_path)
+        _fsync_directory(final_path.parent)
+        _fsync_directory(snapshot.parent)
+    except OSError as exc:
+        return _recover_result(
+            package,
+            f"CRITICAL: could not restore the last-known-good video after an interrupted render: {type(exc).__name__}: {exc}",
+            snapshot=snapshot,
+        )
+    # The video is now restored; leftover metadata must never make the failed attempt look successful.
+    if manifest_path is not None:
+        try:
+            manifest_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if partial_path is not None:
+        try:
+            partial_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    _fsync_directory(snapshot.parent)
+    return _recover_result(
+        package,
+        "An interrupted V3 render was detected. The previous final.v3.mp4 was restored; retry the job to render again.",
+    )
+
+
+def _recover_abandoned_last_good_snapshot(package: Path) -> ProductionResult | None:
+    """Recover durable/legacy last-good snapshots before rerunning or reusing the package.
+
+    A fully verified completed package always wins over an older snapshot. This prevents
+    a crash after publishing a new successful result but before deleting its backup from
+    rolling the package back to an older video.
     """
+    package = package.resolve()
+    snapshot, manifest_path, partial_path = _last_good_snapshot_paths(package)
+    final_path = package / "final.v3.mp4"
+    stable_artifacts = (
+        snapshot.exists() or snapshot.is_symlink()
+        or manifest_path.exists() or manifest_path.is_symlink()
+        or partial_path.exists() or partial_path.is_symlink()
+    )
+    legacy_snapshots = [
+        path for path in sorted(snapshot.parent.glob(".aivf-v3-last-good-*.mp4"))
+        if path != snapshot and (path.is_file() or path.is_symlink())
+    ]
+    if not stable_artifacts and not legacy_snapshots:
+        return None
+
+    if _has_verified_completed_workspace(package):
+        _remove_snapshot_artifacts(snapshot)
+        # Legacy snapshots have no owner manifest. Keep them rather than risk deleting a
+        # different package's only backup when callers use a shared parent directory.
+        return None
+
+    if len(legacy_snapshots) > 1:
+        return _recover_result(
+            package,
+            "Multiple orphaned legacy last-good snapshots were found. Automatic recovery refused to guess which file belongs to this package; all snapshots were retained.",
+        )
+    if legacy_snapshots:
+        legacy = legacy_snapshots[0]
+        if not _probe_and_decode_video(legacy):
+            return _recover_result(
+                package,
+                f"An orphaned legacy snapshot could not be validated as a playable video; it was retained at {legacy}.",
+                snapshot=legacy,
+            )
+        return _restore_recovered_snapshot(package, legacy)
+
+    if not manifest_path.exists() and not manifest_path.is_symlink():
+        # The durable implementation does not reset the package until the manifest is
+        # written. If the copy/manifest was interrupted while the original is still in
+        # place, compare bytes before discarding the incomplete transaction.
+        if partial_path.exists() or partial_path.is_symlink():
+            if snapshot.exists() or snapshot.is_symlink():
+                if final_path.is_file() and not final_path.is_symlink():
+                    try:
+                        same_as_original = (
+                            snapshot.is_file()
+                            and not snapshot.is_symlink()
+                            and sha256_file(final_path) == sha256_file(snapshot)
+                        )
+                    except OSError:
+                        same_as_original = False
+                    if same_as_original:
+                        _remove_snapshot_artifacts(snapshot)
+                        return None
+                return _recover_result(
+                    package,
+                    "An incomplete last-good snapshot has no durable manifest and cannot be restored safely; the recovery file was retained.",
+                    snapshot=snapshot,
+                )
+            if final_path.is_file() and not final_path.is_symlink():
+                _remove_snapshot_artifacts(snapshot)
+                return None
+            return _recover_result(
+                package,
+                "An interrupted snapshot copy was found but the original final is missing and no durable manifest exists; recovery files were retained.",
+                snapshot=snapshot,
+            )
+        if snapshot.exists() or snapshot.is_symlink():
+            if final_path.is_file() and not final_path.is_symlink():
+                try:
+                    same_as_original = (
+                        snapshot.is_file()
+                        and not snapshot.is_symlink()
+                        and sha256_file(final_path) == sha256_file(snapshot)
+                    )
+                except OSError:
+                    same_as_original = False
+                if same_as_original:
+                    _remove_snapshot_artifacts(snapshot)
+                    return None
+            return _recover_result(
+                package,
+                "A last-good snapshot exists without its durable manifest. Automatic restore refused to trust an untracked copy; the snapshot was retained.",
+                snapshot=snapshot,
+            )
+        return None
+
+    valid, manifest, reason = _snapshot_manifest_is_valid(package, snapshot, manifest_path)
+    if not valid or manifest is None:
+        return _recover_result(
+            package,
+            f"Last-good snapshot verification failed: {reason}. Recovery files were retained and the rerun was blocked.",
+            snapshot=snapshot,
+        )
+
+    # A crash before workspace reset leaves the old canonical bytes intact. In that case
+    # the snapshot is redundant and may be discarded; the next run will make a fresh copy.
+    if final_path.is_file() and not final_path.is_symlink():
+        try:
+            current_hash = sha256_file(final_path).lower()
+        except OSError:
+            current_hash = ""
+        if current_hash and current_hash == str(manifest["original_sha256"]).lower():
+            _remove_snapshot_artifacts(snapshot)
+            return None
+
+    return _restore_recovered_snapshot(
+        package,
+        snapshot,
+        manifest_path=manifest_path,
+        partial_path=partial_path,
+    )
+
+
+def _snapshot_last_good_final(package: Path) -> Path | None:
+    """Durably snapshot the current final before destructive rerun work begins."""
     final_path = package / "final.v3.mp4"
     if not final_path.exists() and not final_path.is_symlink():
         return None
@@ -1302,24 +1675,53 @@ def _snapshot_last_good_final(package: Path) -> Path | None:
             f"{original_size + reserve_bytes} bytes free for a safe snapshot; have {free_bytes}"
         )
 
-    fd, name = tempfile.mkstemp(
-        prefix=".aivf-v3-last-good-",
-        suffix=".mp4",
-        dir=str(package.parent),
-    )
-    os.close(fd)
-    backup_path = Path(name)
+    snapshot, manifest_path, partial_path = _last_good_snapshot_paths(package)
+    if any(path.exists() or path.is_symlink() for path in (snapshot, manifest_path, partial_path)):
+        raise V3InputError(
+            "an abandoned last-good snapshot exists and must be recovered before another rerun"
+        )
+    original_hash = sha256_file(final_path)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(str(partial_path), flags, 0o600)
     try:
-        original_hash = sha256_file(final_path)
-        with final_path.open("rb") as src, backup_path.open("wb") as dst:
-            shutil.copyfileobj(src, dst, length=1024 * 1024)
-            dst.flush()
-            os.fsync(dst.fileno())
-        if backup_path.stat().st_size != original_size or sha256_file(backup_path) != original_hash:
+        with final_path.open("rb") as source, os.fdopen(descriptor, "wb") as destination:
+            shutil.copyfileobj(source, destination, length=1024 * 1024)
+            destination.flush()
+            os.fsync(destination.fileno())
+        if (
+            partial_path.stat().st_size != original_size
+            or sha256_file(partial_path) != original_hash
+        ):
             raise V3InputError("last-good final changed during snapshot; refusing to start rerun")
-        return backup_path
+        os.replace(partial_path, snapshot)
+        _fsync_directory(snapshot.parent)
+        manifest = {
+            "schema_version": 1,
+            "package_path": str(package.resolve()),
+            "final_path": str(final_path.resolve()),
+            "snapshot_filename": snapshot.name,
+            "snapshot_size_bytes": original_size,
+            "snapshot_sha256": original_hash,
+            "original_size_bytes": original_size,
+            "original_sha256": original_hash,
+            "created_at_unix": time.time(),
+        }
+        atomic_write_json(manifest_path, manifest)
+        _fsync_directory(snapshot.parent)
+        return snapshot
     except BaseException:
-        backup_path.unlink(missing_ok=True)
+        # Before this function returns, the destructive workspace reset has not started.
+        # Clean only if the original canonical bytes are still present and unchanged.
+        try:
+            unchanged = (
+                final_path.is_file()
+                and not final_path.is_symlink()
+                and sha256_file(final_path) == original_hash
+            )
+        except OSError:
+            unchanged = False
+        if unchanged:
+            _remove_snapshot_artifacts(snapshot)
         raise
 
 
@@ -1348,12 +1750,15 @@ def _finish_rerun_with_last_good_protection(
             success = False
     if success:
         if backup_path is not None:
-            backup_path.unlink(missing_ok=True)
+            _remove_snapshot_artifacts(backup_path)
         return result
 
     try:
         if backup_path is not None:
             os.replace(backup_path, final_path)
+            _fsync_directory(final_path.parent)
+            _fsync_directory(backup_path.parent)
+            _remove_snapshot_artifacts(backup_path)
             result.artifacts["last_good_final_preserved"] = str(final_path)
             result.warnings.append(
                 "The rerun failed; the previous final.v3.mp4 was restored and preserved."
@@ -1362,13 +1767,13 @@ def _finish_rerun_with_last_good_protection(
             if final_path.is_file() or final_path.is_symlink():
                 final_path.unlink(missing_ok=True)
             result.artifacts["failed_final_removed"] = str(final_path)
-        result.final_video = None
     except OSError as exc:
         result.errors.append(
             f"CRITICAL: failed to restore the previous final video safely: {type(exc).__name__}: {exc}"
         )
         result.artifacts["last_good_snapshot"] = str(backup_path) if backup_path else ""
         return result
+    result.final_video = None
     if not result.errors:
         result.errors.append("render did not produce a validated canonical final video")
     if backup_path is None:
@@ -1406,6 +1811,9 @@ class V3PipelineRunner:
         package = Path(self.request.package_dir)
         try:
             with WorkspaceLock(self.request.package_dir):
+                recovered = _recover_abandoned_last_good_snapshot(package)
+                if recovered is not None:
+                    return recovered
                 reused = _reuse_existing_job(
                     self.request,
                     source_metadata=self.source_metadata,
@@ -1428,6 +1836,8 @@ class V3PipelineRunner:
                 except BaseException:
                     if backup_path is not None and backup_path.exists():
                         os.replace(backup_path, package / "final.v3.mp4")
+                        _fsync_directory((package / "final.v3.mp4").parent)
+                        _remove_snapshot_artifacts(backup_path)
                     else:
                         failed_final = package / "final.v3.mp4"
                         if failed_final.is_file() or failed_final.is_symlink():
