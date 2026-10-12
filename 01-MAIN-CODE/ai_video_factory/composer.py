@@ -283,7 +283,7 @@ def compose_short_from_video(
     # make that acceptance test depend on Microsoft's external Edge TTS service;
     # production V3 runs remain strict unless an operator explicitly selects test mode.
     test_tts_disabled = (
-        is_v3
+        os.environ.get("AIVF_ENV", "development").strip().lower() == "test"
         and os.environ.get("AIVF_TEST_DISABLE_EXTERNAL_TTS", "0").strip() == "1"
     )
     if test_tts_disabled:
