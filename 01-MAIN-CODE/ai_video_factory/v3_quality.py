@@ -523,11 +523,15 @@ def strict_render_check(
     warnings: list[str] = [
         "Caption/subtitle visibility, readability, timing, and story coherence require human review; media metadata cannot prove them."
     ]
-    if not math.isfinite(float(target_seconds)) or float(target_seconds) <= 0:
+    try:
+        target_value = float(target_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RenderContractError("target duration must be a finite positive number") from exc
+    if not math.isfinite(target_value) or target_value <= 0:
         errors.append("target duration must be finite and positive")
-    elif abs(info["duration"] - float(target_seconds)) > 0.08:
+    elif abs(info["duration"] - target_value) > 0.08:
         errors.append(
-            f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s"
+            f"duration {info['duration']:.3f}s does not match target {target_value:.3f}s"
         )
     if expected_width and info["width"] != expected_width:
         errors.append(f"width {info['width']} != required {expected_width}")
@@ -581,7 +585,7 @@ def strict_render_check(
             errors.append("retention map contains a non-finite event time")
         if any(b <= a for a, b in zip(events, events[1:])):
             errors.append("retention map contains non-increasing event times")
-        if any(t < 0.0 or t > float(target_seconds) + 0.05 for t in events):
+        if any(t < 0.0 or t > target_value + 0.05 for t in events):
             errors.append("retention map contains events outside target duration")
         if require_independent_retention:
             if not retention_baseline:
@@ -608,6 +612,15 @@ def strict_render_check(
         "ok": not errors,
         "errors": errors,
         "warnings": warnings,
+        "contract": {
+            "target_seconds": target_value,
+            "width": expected_width or None,
+            "height": expected_height or None,
+            "frame_rate_fps": expected_fps,
+            "require_audio": bool(require_audio),
+            "duration_tolerance_seconds": 0.08,
+            "frame_rate_tolerance_fps": 0.5,
+        },
         "media": info,
         "playability": playability,
         "caption_visibility": {
