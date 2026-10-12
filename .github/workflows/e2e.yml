@@ -35,6 +35,7 @@ jobs:
           AIVF_REQUIRE_HUMAN_REVIEW: "0"
           AIVF_COOKIE_SECURE: "0"
           AIVF_ENV: "test"
+          AIVF_TEST_DISABLE_EXTERNAL_TTS: "1"
           AIVF_STATE_DIR: ${{ runner.temp }}/aivf-state
           AIVF_UPLOAD_DIR: ${{ runner.temp }}/aivf-uploads
           AIVF_OUTPUT_DIR: ${{ runner.temp }}/aivf-output
