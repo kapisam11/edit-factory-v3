@@ -41,7 +41,7 @@ def require_runtime_secret(name: str, value: str | None, *, environment: str) ->
     )
     if placeholder:
         raise RuntimeError(
-            f"{name} contains a known placeholder value; generate a new secret before starting the dashboard."
+            f"{name} contains a known unsafe development value; generate a new secret before starting the dashboard."
         )
     if len(secret) < 32:
         raise RuntimeError(
