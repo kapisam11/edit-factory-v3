@@ -634,7 +634,15 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
                         errors.extend("independent retention QC: " + error for error in verification["errors"])
                 except RenderContractError as exc:
                     errors.append(f"independent retention QC failed: {exc}")
-    if visual.get("max_gap") is not None and float(visual["max_gap"]) > 3.0: errors.append(f"coarse visual sampling found a change gap of {float(visual['max_gap']):.2f}s; maximum allowed gap is 3.00s")
+    max_gap = visual.get("max_gap")
+    if max_gap is not None:
+        if not isinstance(max_gap, (int, float)) or not math.isfinite(max_gap):
+            errors.append("coarse visual sampling returned an invalid change gap")
+        elif max_gap > 3.0:
+            errors.append(
+                f"coarse visual sampling found a change gap of {max_gap:.2f}s; "
+                "maximum allowed gap is 3.00s"
+            )
     return {
         "ok": not errors,
         "errors": errors,
