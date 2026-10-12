@@ -462,32 +462,158 @@ def verify_retention_against_baseline(
     }
 
 
-def strict_render_check(path: str, *, target_seconds: float, platform_profile: Mapping[str, Any], retention_events: Sequence[Mapping[str, Any]] = (), retention_baseline: Optional[str] = None, require_independent_retention: bool = False) -> Dict[str, Any]:
-    info = probe_media(path); expected_width = int(platform_profile.get("width") or 0); expected_height = int(platform_profile.get("height") or 0); errors: list[str] = []; warnings: list[str] = []
-    if abs(info["duration"] - float(target_seconds)) > 0.08: errors.append(f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s")
-    if expected_width and info["width"] != expected_width: errors.append(f"width {info['width']} != required {expected_width}")
-    if expected_height and info["height"] != expected_height: errors.append(f"height {info['height']} != required {expected_height}")
-    if not info["has_audio"]: warnings.append("rendered artifact has no audio stream")
-    visual = _sample_visual_changes(path, sample_hz=10.0); events = []; retention_verification = None
+def _strict_fps_value(raw_fps: object) -> float:
+    """Parse an FFprobe frame rate without inventing a fallback value."""
+    text = str(raw_fps or "").strip()
+    if not text:
+        raise RenderContractError("rendered artifact has no reported frame rate")
+    try:
+        if "/" in text:
+            numerator, denominator = text.split("/", 1)
+            denominator_value = float(denominator)
+            if not math.isfinite(denominator_value) or denominator_value == 0:
+                raise ValueError("invalid frame-rate denominator")
+            value = float(numerator) / denominator_value
+        else:
+            value = float(text)
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError) as exc:
+        raise RenderContractError("rendered artifact has an invalid frame rate") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise RenderContractError("rendered artifact has an invalid frame rate")
+    return value
+
+
+def _verify_full_decode(path: str) -> None:
+    """Decode the full video and any audio stream; ffprobe metadata alone is insufficient."""
+    _run(
+        [
+            "ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-xerror",
+            "-i", path, "-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-",
+        ],
+        timeout=_timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600),
+    )
+
+
+def strict_render_check(
+    path: str,
+    *,
+    target_seconds: float,
+    platform_profile: Mapping[str, Any],
+    retention_events: Sequence[Mapping[str, Any]] = (),
+    retention_baseline: Optional[str] = None,
+    require_independent_retention: bool = False,
+    require_audio: bool = False,
+) -> Dict[str, Any]:
+    """Enforce the final media contract before an output can be promoted."""
+    info = probe_media(path)
+    expected_width = int(platform_profile.get("width") or 0)
+    expected_height = int(platform_profile.get("height") or 0)
+    try:
+        expected_fps = float(
+            platform_profile.get("fps")
+            or platform_profile.get("frame_rate")
+            or os.environ.get("AIVF_V3_EXPECTED_FPS", "30")
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RenderContractError("expected frame rate must be a finite positive number") from exc
+    if not math.isfinite(expected_fps) or not 1.0 <= expected_fps <= 120.0:
+        raise RenderContractError("expected frame rate must be between 1 and 120 fps")
+
+    errors: list[str] = []
+    warnings: list[str] = [
+        "Caption/subtitle visibility, readability, timing, and story coherence require human review; media metadata cannot prove them."
+    ]
+    if not math.isfinite(float(target_seconds)) or float(target_seconds) <= 0:
+        errors.append("target duration must be finite and positive")
+    elif abs(info["duration"] - float(target_seconds)) > 0.08:
+        errors.append(
+            f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s"
+        )
+    if expected_width and info["width"] != expected_width:
+        errors.append(f"width {info['width']} != required {expected_width}")
+    if expected_height and info["height"] != expected_height:
+        errors.append(f"height {info['height']} != required {expected_height}")
+
+    try:
+        actual_fps = _strict_fps_value(info.get("fps"))
+    except RenderContractError as exc:
+        actual_fps = None
+        errors.append(str(exc))
+    if actual_fps is not None and abs(actual_fps - expected_fps) > 0.5:
+        errors.append(
+            f"frame rate {actual_fps:.3f} fps does not match expected {expected_fps:g} fps"
+        )
+    if not info["has_audio"]:
+        if require_audio:
+            errors.append("rendered artifact is missing the required audio stream")
+        else:
+            warnings.append("rendered artifact has no audio stream; the active profile does not require one")
+
+    playability: dict[str, Any] = {"ok": False, "error": "not checked"}
+    try:
+        _verify_full_decode(path)
+    except RenderContractError as exc:
+        playability["error"] = str(exc)
+        errors.append(f"full media decode failed: {exc}")
+    else:
+        playability = {"ok": True, "error": ""}
+
+    visual: Dict[str, Any] = {"frames": 0, "change_events": [], "max_gap": None}
+    try:
+        visual = _sample_visual_changes(path, sample_hz=10.0)
+    except (RenderContractError, OSError, ValueError) as exc:
+        errors.append(f"visual sampling failed: {exc}")
+
+    events: list[float] = []
+    retention_verification = None
     for item in retention_events:
         if isinstance(item, Mapping):
-            try: events.append(float(item.get("time", 0.0)))
-            except (TypeError, ValueError): errors.append("retention map contains a non-numeric event time")
-    if not events: errors.append("retention map is empty")
+            try:
+                events.append(float(item.get("time", 0.0)))
+            except (TypeError, ValueError, OverflowError):
+                errors.append("retention map contains a non-numeric event time")
+    if not events:
+        errors.append("retention map is empty")
     else:
-        if events[0] > 0.25: errors.append("retention map does not begin near the opening")
-        if any(b <= a for a, b in zip(events, events[1:])): errors.append("retention map contains non-increasing event times")
-        if any(not math.isfinite(t) or t < 0.0 or t > float(target_seconds) + 0.05 for t in events): errors.append("retention map contains events outside target duration")
+        if events[0] > 0.25:
+            errors.append("retention map does not begin near the opening")
+        if any(not math.isfinite(t) for t in events):
+            errors.append("retention map contains a non-finite event time")
+        if any(b <= a for a, b in zip(events, events[1:])):
+            errors.append("retention map contains non-increasing event times")
+        if any(t < 0.0 or t > float(target_seconds) + 0.05 for t in events):
+            errors.append("retention map contains events outside target duration")
         if require_independent_retention:
             if not retention_baseline:
                 errors.append("independent retention baseline is required")
             else:
                 try:
-                    verification = verify_retention_against_baseline(retention_baseline, path, retention_events)
+                    verification = verify_retention_against_baseline(
+                        retention_baseline, path, retention_events
+                    )
                     retention_verification = verification
                     if not verification["ok"]:
-                        errors.extend("independent retention QC: " + error for error in verification["errors"])
+                        errors.extend(
+                            "independent retention QC: " + error
+                            for error in verification["errors"]
+                        )
                 except RenderContractError as exc:
                     errors.append(f"independent retention QC failed: {exc}")
-    if visual.get("max_gap") is not None and visual["max_gap"] > 3.0: errors.append(f"coarse visual sampling found a change gap of {visual['max_gap']:.2f}s; maximum allowed gap is 3.00s")
-    return {"ok": not errors, "errors": errors, "warnings": warnings, "media": info, "visual_sampling": visual, "retention_verification": retention_verification}
+    if visual.get("max_gap") is not None and visual["max_gap"] > 3.0:
+        errors.append(
+            f"coarse visual sampling found a change gap of {visual['max_gap']:.2f}s; "
+            "maximum allowed gap is 3.00s"
+        )
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "media": info,
+        "playability": playability,
+        "caption_visibility": {
+            "status": "manual_review_required",
+            "automated_ocr": "not_claimed",
+        },
+        "visual_sampling": visual,
+        "retention_verification": retention_verification,
+    }
