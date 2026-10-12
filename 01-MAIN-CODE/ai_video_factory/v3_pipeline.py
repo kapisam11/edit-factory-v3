@@ -24,7 +24,8 @@ from .v3_stage_pipeline import (
     _reset_v3_package,
     _write_failed_evidence,
 )
-from .media_health import MediaHealthError, analyze_media
+from .media_health import MediaHealthError, analyze_media, parse_fps
+from .render_engine import run_ffmpeg
 from .media_metadata import extract_media_metadata
 from .audio_normalization import AudioNormalizationError, normalize_loudness
 from .render_engine import stamp_media_metadata
@@ -51,20 +52,28 @@ def _source_rights_status(source_metadata: Optional[Dict[str, Any]]) -> str:
 
 
 def _apply_readiness_contract(result: ProductionResult, readiness: Any) -> None:
-    """Promote required artifact-readiness failures into the V3 job result."""
+    """Enforce the release contract while retaining nonblocking warnings."""
     result.artifacts = getattr(result, "artifacts", {}) or {}
-    result.artifacts["v3_readiness_state"] = str(getattr(readiness, "state", "") or "")
-    errors = getattr(readiness, "errors", None) or []
-    if errors:
-        result.errors.extend(
-            f"V3 artifact readiness: {error}"
-            for error in errors
-            if f"V3 artifact readiness: {error}" not in result.errors
+    state = str(getattr(readiness, "state", "") or "")
+    result.artifacts["v3_readiness_state"] = state
+    errors = [str(error) for error in (getattr(readiness, "errors", None) or [])]
+    for error in errors:
+        message = f"V3 artifact readiness: {error}"
+        if message not in result.errors:
+            result.errors.append(message)
+
+    # A lower readiness state is a blocking release-contract failure even if a
+    # malformed/incomplete report forgot to include an error explaining why.
+    if state not in {"UPLOAD_PACKAGE_VALID", "PUBLISH_READY"}:
+        message = (
+            "V3 artifact readiness did not satisfy the required release contract "
+            f"(state={state or 'UNKNOWN'}; required=UPLOAD_PACKAGE_VALID)."
         )
-    if str(getattr(readiness, "state", "") or "") != "UPLOAD_PACKAGE_VALID":
-        result.warnings.append(
-            "V3 artifact readiness is not upload-package valid"
-        )
+        if message not in result.errors:
+            result.errors.append(message)
+        warning = "V3 artifact readiness is not upload-package valid"
+        if warning not in result.warnings:
+            result.warnings.append(warning)
 
 
 def _audience_profile(audience: str) -> Dict[str, Any]:
@@ -180,23 +189,88 @@ def _validate_v3_inputs(
 
 
 def _normalize_final_audio(package: Path, final_video: str) -> str:
-    """Normalize final-program audio while preserving the video stream."""
+    """Normalize final audio without replacing a known-good video until validation passes."""
     if os.environ.get("AIVF_EBU_R128", "1").strip() == "0":
         return final_video
+
     source = Path(final_video)
-    normalized = package / ".final.v3.audio-normalized.mp4"
+    normalized: Optional[Path] = None
     try:
-        media = analyze_media(source, deep=False, max_duration=3600.0)
-        if not media["summary"].get("has_audio"):
+        original_report = analyze_media(source, deep=False, max_duration=3600.0)
+        original = original_report.get("summary") or {}
+        if not original.get("has_audio"):
             return final_video
+        if not original.get("has_video"):
+            raise AudioNormalizationError("source final artifact has no video stream")
+
+        # Create the candidate beside the destination: os.replace is atomic only
+        # when source and destination live on the same filesystem.
+        fd, candidate_name = tempfile.mkstemp(
+            prefix=".aivf-final-audio-normalized-",
+            suffix=".mp4",
+            dir=str(source.parent),
+        )
+        os.close(fd)
+        normalized = Path(candidate_name)
         normalize_loudness(source, normalized)
         if not normalized.is_file() or normalized.stat().st_size <= 0:
-            raise AudioNormalizationError("normalized final audio artifact is missing")
+            raise AudioNormalizationError("normalized final audio artifact is missing or empty")
+
+        candidate_report = analyze_media(normalized, deep=False, max_duration=3600.0)
+        candidate = candidate_report.get("summary") or {}
+        if not candidate.get("has_video") or not candidate.get("has_audio"):
+            raise AudioNormalizationError("normalized final artifact must contain video and audio streams")
+        for dimension in ("width", "height"):
+            if int(candidate.get(dimension) or 0) != int(original.get(dimension) or 0):
+                raise AudioNormalizationError(
+                    f"normalized final video changed {dimension}: "
+                    f"{original.get(dimension)} -> {candidate.get(dimension)}"
+                )
+
+        source_duration = float(original.get("duration") or 0.0)
+        candidate_duration = float(candidate.get("duration") or 0.0)
+        source_fps = parse_fps(str(original.get("fps") or "0/0"))
+        duration_tolerance = max(0.08, 1.0 / source_fps + 0.02) if source_fps > 0 else 0.12
+        if source_duration <= 0 or candidate_duration <= 0:
+            raise AudioNormalizationError("source or normalized final artifact has invalid duration")
+        if abs(candidate_duration - source_duration) > duration_tolerance:
+            raise AudioNormalizationError(
+                f"normalized final duration changed unexpectedly "
+                f"({source_duration:.3f}s -> {candidate_duration:.3f}s; "
+                f"tolerance {duration_tolerance:.3f}s)"
+            )
+        source_codec = str(original.get("video_codec") or "")
+        candidate_codec = str(candidate.get("video_codec") or "")
+        if source_codec and candidate_codec and source_codec != candidate_codec:
+            raise AudioNormalizationError(
+                f"normalized final video codec changed unexpectedly ({source_codec} -> {candidate_codec})"
+            )
+        if candidate_report.get("ok") is False:
+            raise AudioNormalizationError("normalized final artifact failed media-health validation")
+
+        # ffprobe alone does not prove that every packet is decodable. Decode the
+        # complete candidate before publishing it over the original file.
+        run_ffmpeg(
+            [
+                "ffmpeg", "-hide_banner", "-v", "error", "-xerror", "-i", str(normalized),
+                "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-",
+            ],
+            timeout=1800,
+        )
         os.replace(normalized, source)
         return str(source)
-    except (AudioNormalizationError, MediaHealthError, OSError, ValueError) as exc:
-        normalized.unlink(missing_ok=True)
+    except Exception as exc:
+        if isinstance(exc, RenderContractError):
+            raise
         raise RenderContractError(f"EBU R128 final audio normalization failed: {exc}") from exc
+    finally:
+        if normalized is not None:
+            try:
+                normalized.unlink(missing_ok=True)
+            except OSError:
+                # Cleanup failure must not mask the validation error or a successful
+                # atomic replacement; the next workspace janitor can remove leftovers.
+                pass
 
 
 def _cleanup_v3_transients(package: Path, *, preserve: bool = False) -> None:
