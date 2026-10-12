@@ -182,5 +182,6 @@ def test_strict_render_check_does_not_require_audio_when_policy_says_optional(mo
         retention_events=[{"time": 0.0}, {"time": 2.0}],
     )
     assert report["ok"] is True
-    assert report["warnings"] == ["rendered artifact has no audio stream"]
+    assert "rendered artifact has no audio stream" in report["warnings"]
+    assert any("human review" in warning.lower() for warning in report["warnings"])
     assert report["audio_required"] is False
