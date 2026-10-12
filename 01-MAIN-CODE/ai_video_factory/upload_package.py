@@ -565,8 +565,11 @@ def _media_contract_report(video_path: Path, probe: Mapping[str, Any], profile: 
             f"{profile.name} profile {profile.width}x{profile.height}"
         )
 
-    raw_fps = (video_stream or {}).get("avg_frame_rate") or (video_stream or {}).get("r_frame_rate")
-    actual_fps = _rate_fps(raw_fps)
+    actual_fps = None
+    for candidate in ((video_stream or {}).get("avg_frame_rate"), (video_stream or {}).get("r_frame_rate")):
+        actual_fps = _rate_fps(candidate)
+        if actual_fps is not None:
+            break
     try:
         expected_fps = float(os.environ.get("AIVF_OUTPUT_FPS", "30"))
         fps_tolerance = float(os.environ.get("AIVF_OUTPUT_FPS_TOLERANCE", "1.0"))
@@ -590,8 +593,14 @@ def _media_contract_report(video_path: Path, probe: Mapping[str, Any], profile: 
         max_output_bytes = int(os.environ.get("AIVF_MAX_OUTPUT_BYTES", str(5 * 1024**3)))
     except (TypeError, ValueError, OverflowError):
         max_output_bytes = 0
-    size_bytes = int(fmt.get("size") or video_path.stat().st_size)
-    checks["output_size_within_limit"] = max_output_bytes > 0 and size_bytes <= max_output_bytes
+    try:
+        size_bytes = int(fmt.get("size") or video_path.stat().st_size)
+    except (TypeError, ValueError, OverflowError, OSError):
+        size_bytes = 0
+    checks["output_size_known"] = size_bytes > 0
+    if size_bytes <= 0:
+        errors.append("final video size is missing or invalid")
+    checks["output_size_within_limit"] = size_bytes > 0 and max_output_bytes > 0 and size_bytes <= max_output_bytes
     if max_output_bytes <= 0:
         errors.append("AIVF_MAX_OUTPUT_BYTES must be a positive integer")
     elif size_bytes > max_output_bytes:
