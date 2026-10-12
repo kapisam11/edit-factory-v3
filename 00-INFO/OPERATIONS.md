@@ -2,11 +2,7 @@
 
 ## Local development
 
-Install from the repository-root `pyproject.toml` with the extras required for the features you use. The supported
-Python floor is 3.10. FFmpeg and optional model/OCR assets are runtime dependencies; generated
-media, uploads, knowledge data, SQLite state, and local tool bundles are not source artifacts.
-
-The repository contains a committed `uv.lock`, and CI consumes it with `uv sync --frozen` for reproducible dependency resolution.
+Use **Python 3.12** as the production runtime for the Windows target and the Docker image. The package supports Python 3.10+, and CI checks 3.10–3.14, but do not treat the compatibility matrix as a substitute for selecting one known runtime. From a checkout, install with `uv sync --frozen --python 3.12 --extra web --extra dev`. Keep `uv.lock` in sync with dependency changes. FFmpeg and optional model/OCR assets are runtime dependencies; generated media, uploads, knowledge data, SQLite state, and local tool bundles are runtime data.
 
 ## Dashboard authentication
 
@@ -38,11 +34,22 @@ Use `docker compose up --build`. The container expects `FLASK_SECRET_KEY` and
 `AIVF_DASHBOARD_TOKEN` to be supplied through the environment. Named volumes persist output,
 uploads, knowledge data, and `/app/state/jobs.db` across container replacement.
 
+## Windows backup and restore
+
+For the Windows Docker Compose development stack, run `.\\BACKUP-EDIT-FACTORY.ps1 -Destination "E:\\EditFactoryBackups"` after choosing a destination on a different trusted NTFS drive. The script builds the backup utility without restarting the running dashboard, backs up the main job database, auxiliary non-secret state databases, knowledge, output and uploads, copies the archive to the destination drive, and verifies the copy. Provider token/secret files are deliberately excluded and must be reauthorized after recovery. The local archive is **not encrypted**; it is ACL-restricted, so do not store it on a shared or untrusted drive. Use the encrypted off-host helper for off-host copies.
+
+Test restoration into a new, empty directory and never over the live application data:
+
+```powershell
+uv sync --frozen --python 3.12 --extra web --extra dev
+uv run aivf-backup restore --backup "E:\\EditFactoryBackups\\edit-factory-v3-<timestamp>.tar.gz" --destination "E:\\EditFactoryRestoreTest"
+```
+
+Replace the example filename with the archive produced by the script. Inspect the restored `jobs.db`, auxiliary `state/*.sqlite` databases, output, uploads, and knowledge files. Restore validation checks manifest hashes and every SQLite database before extraction.
+
 ## Release gate
 
-Before a production release, CI must pass Python tests, lint, dependency audit, CLI smoke tests,
-and the Docker build. A release should also include a real end-to-end render, cancellation/restart
-smoke tests, and human visual acceptance on the target operating system.
+Before a production release, CI must pass Python tests, lint, dependency audit, CLI smoke tests, and the Docker build. For the personal Windows target, follow [WINDOWS-11-PRODUCTION-ACCEPTANCE.md](WINDOWS-11-PRODUCTION-ACCEPTANCE.md): run the full launcher checks, render one representative 60-second video, review the final MP4 manually, test a failure/restart, and make and restore a verified backup.
 
 ## V3 contract and job-state guarantees
 
