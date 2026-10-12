@@ -585,7 +585,7 @@ def test_v3_preflight_failure_replaces_stale_readiness(monkeypatch, tmp_path):
 
 
 
-def test_failed_v3_rerun_preserves_previous_final_outside_package(tmp_path):
+def test_failed_v3_rerun_preserves_previous_final_in_place(tmp_path):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"test input media")
     package = tmp_path / "job-package"
@@ -611,10 +611,10 @@ def test_failed_v3_rerun_preserves_previous_final_outside_package(tmp_path):
     result = v3_stage_pipeline.V3PipelineRunner(request, stages=(FailingStage(),)).run()
 
     assert result.errors
-    assert not previous_final.exists()
-    recovery_copy = Path(result.artifacts["preserved_previous_final"])
-    assert recovery_copy.is_file()
-    assert recovery_copy.read_bytes() == b"last known final video"
-    assert any("preserved outside the current package" in warning for warning in result.warnings)
+    # The failed rerun must not delete or replace the last known-good artifact.
+    # Readiness is FAILED, so the existing file is preserved for recovery but is
+    # not implicitly approved for publication.
+    assert previous_final.is_file()
+    assert previous_final.read_bytes() == b"last known final video"
     failure = json.loads((package / "v3_failure.json").read_text(encoding="utf-8"))
-    assert failure["preserved_previous_final"] == str(recovery_copy)
+    assert failure["status"] == "FAILED"
