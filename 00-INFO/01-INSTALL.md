@@ -4,11 +4,11 @@ This is the easiest installation path for someone seeing the project for the fir
 
 ## What you need
 
-- Python 3.10 or newer
+- Python 3.12 for the documented Windows 11 production baseline
 - FFmpeg and FFprobe installed and available on your PATH
 - Git, if you are cloning the project
 
-Optional AI/media features may need extra packages or API keys. Those are explained later.
+Optional AI/media features may need extra packages or API keys. Those are explained later. The package metadata still declares Python 3.10 or newer, and CI checks Python 3.10–3.14, but the Windows production runbook selects Python 3.12 so the deployed runtime is explicit and repeatable.
 
 ## Install
 
@@ -37,6 +37,8 @@ Install the project from the repository root, where `pyproject.toml` lives:
 ```bash
 python -m pip install -e '.[web,dev]'
 ```
+
+For the locked repository environment used by the production Windows launcher, prefer `uv sync --frozen --python 3.12 --extra web --extra dev`. Do not update dependencies independently of `uv.lock`.
 
 ## Check that it installed
 
