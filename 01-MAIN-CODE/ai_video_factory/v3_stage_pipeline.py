@@ -1443,6 +1443,7 @@ def _snapshot_manifest_is_valid(
     if (
         manifest.get("schema_version") != 1
         or manifest.get("package_path") != str(package.resolve())
+        or manifest.get("final_path") != str((package / "final.v3.mp4").resolve())
         or manifest.get("snapshot_filename") != snapshot.name
     ):
         return False, None, "snapshot manifest does not belong to this package"
@@ -1567,6 +1568,23 @@ def _recover_abandoned_last_good_snapshot(package: Path) -> ProductionResult | N
             "Multiple orphaned legacy last-good snapshots were found. Automatic recovery refused to guess which file belongs to this package; all snapshots were retained.",
         )
     if legacy_snapshots:
+        # Older snapshots did not carry an owner manifest. Only associate one when this
+        # package is the sole child workspace in its parent (the dashboard's per-attempt layout).
+        try:
+            sibling_workspaces = [
+                item for item in snapshot.parent.iterdir()
+                if item.is_dir() and not item.is_symlink()
+            ]
+        except OSError:
+            sibling_workspaces = []
+        if len(sibling_workspaces) > 1 or (
+            len(sibling_workspaces) == 1 and sibling_workspaces[0].resolve() != package
+        ):
+            return _recover_result(
+                package,
+                "An orphaned legacy snapshot has no owner manifest and this parent contains multiple workspaces; recovery refused to guess. The snapshot was retained.",
+                snapshot=legacy_snapshots[0],
+            )
         legacy = legacy_snapshots[0]
         if not _probe_and_decode_video(legacy):
             return _recover_result(
