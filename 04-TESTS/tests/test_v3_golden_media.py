@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from ai_video_factory.media_health import probe_media, stream_summary
+from ai_video_factory import tts
 from ai_video_factory.v3_pipeline import run_v3_pipeline
 
 
@@ -26,6 +27,25 @@ def test_v3_golden_media_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("AIVF_EBU_R128", "0")
     monkeypatch.setenv("AIVF_REQUIRE_HUMAN_REVIEW", "0")
     monkeypatch.setenv("AIVF_MIN_FREE_DISK_MB", "256")
+
+    # This is a deterministic media integration test, not a test of Microsoft's
+    # online voice service. Generate a local audio fixture to avoid turning CI
+    # network/provider outages into false render-pipeline failures.
+    def offline_voiceover(_text: str, output_path: str, voice: str | None = None) -> str:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=10",
+                "-c:a", "libmp3lame", "-q:a", "6", output_path,
+            ],
+            check=True,
+            timeout=30,
+        )
+        return output_path
+
+    monkeypatch.setattr(tts, "_edge_tts_available", lambda: False)
+    monkeypatch.setattr(tts, "_generate_pyttsx3", offline_voiceover)
 
     source = tmp_path / "golden-source.mp4"
     package = tmp_path / "golden-package"
