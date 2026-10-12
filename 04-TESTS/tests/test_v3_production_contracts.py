@@ -611,10 +611,12 @@ def test_failed_v3_rerun_preserves_previous_final_outside_package(tmp_path):
     result = v3_stage_pipeline.V3PipelineRunner(request, stages=(FailingStage(),)).run()
 
     assert result.errors
-    assert not previous_final.exists()
-    recovery_copy = Path(result.artifacts["preserved_previous_final"])
-    assert recovery_copy.is_file()
-    assert recovery_copy.read_bytes() == b"last known final video"
-    assert any("preserved outside the current package" in warning for warning in result.warnings)
+    # The current production runner restores the last known-good file in place;
+    # it no longer moves it outside the package or leaves a blank canonical output.
+    assert previous_final.is_file()
+    assert previous_final.read_bytes() == b"last known final video"
+    assert result.artifacts["last_good_final_preserved"] == str(previous_final)
+    assert any("previous final.v3.mp4 was restored and preserved" in warning for warning in result.warnings)
     failure = json.loads((package / "v3_failure.json").read_text(encoding="utf-8"))
-    assert failure["preserved_previous_final"] == str(recovery_copy)
+    assert failure["ok"] is False
+    assert any("injected failure" in error for error in failure["errors"])
