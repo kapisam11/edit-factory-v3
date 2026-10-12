@@ -279,13 +279,22 @@ def compose_short_from_video(
 
     vo_path = os.path.join(package_dir, "voice.mp3")
     has_vo = False
-    try:
-        generate_voiceover(script, vo_path)
-        has_vo = True
-    except Exception as e:
-        if strict_voiceover:
-            raise RuntimeError(f"Voiceover generation failed: {e}") from e
-        logger.warning("TTS voiceover failed: %s", e)
+    # CI can opt out of network-backed speech synthesis while still exercising the
+    # real media render. This is limited to the explicit test environment.
+    test_tts_disabled = (
+        os.environ.get("AIVF_ENV", "development").strip().lower() == "test"
+        and os.environ.get("AIVF_TEST_DISABLE_EXTERNAL_TTS", "0").strip() == "1"
+    )
+    if test_tts_disabled:
+        logger.info("Skipping external TTS in test environment; source audio remains in the render.")
+    else:
+        try:
+            generate_voiceover(script, vo_path)
+            has_vo = True
+        except Exception as e:
+            if strict_voiceover:
+                raise RuntimeError(f"Voiceover generation failed: {e}") from e
+            logger.warning("TTS voiceover failed: %s", e)
 
     concat_out = os.path.join(temp_dir, "concatenated.mp4")
     write_concat_list(seq_files, os.path.join(temp_dir, "concat.txt"))
