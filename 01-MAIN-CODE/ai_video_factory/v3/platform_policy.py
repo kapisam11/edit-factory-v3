@@ -21,6 +21,10 @@ class PlatformPolicy:
     safe_bottom: int
     cta: str
     supported_aspect_ratios: tuple[str,...]=( "16:9","9:16","1:1" )
+    frame_rate_fps: float = 30.0
+    frame_rate_tolerance_fps: float = 0.1
+    max_av_duration_delta_seconds: float = 0.5
+    require_audio: bool = False
 
     @property
     def aspect_ratio(self)->str:
@@ -35,6 +39,10 @@ class PlatformPolicy:
             "width":self.width,"height":self.height,"max_seconds":self.max_seconds,
             "safe_bottom":self.safe_bottom,"cta":self.cta,
             "aspect_ratio":self.aspect_ratio,"supported_aspect_ratios":list(self.supported_aspect_ratios),
+            "frame_rate_fps":self.frame_rate_fps,
+            "frame_rate_tolerance_fps":self.frame_rate_tolerance_fps,
+            "max_av_duration_delta_seconds":self.max_av_duration_delta_seconds,
+            "require_audio":self.require_audio,
         }
 
 POLICIES: Mapping[str,PlatformPolicy]={

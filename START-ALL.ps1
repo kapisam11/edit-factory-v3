@@ -53,6 +53,56 @@ function Get-EnvValue([string]$Name) {
     return ($line -replace "^\s*$([regex]::Escape($Name))\s*=\s*", "")
 }
 
+function Set-EnvValue([string]$Name, [string]$Value) {
+    $lines = @()
+    if (Test-Path $EnvFile) {
+        $lines = @(Get-Content -Path $EnvFile)
+    }
+
+    $updated = New-Object System.Collections.Generic.List[string]
+    $found = $false
+    foreach ($line in $lines) {
+        if ($line -match "^\s*$([regex]::Escape($Name))\s*=") {
+            if (-not $found) {
+                $updated.Add("$Name=$Value")
+                $found = $true
+            }
+        } else {
+            $updated.Add([string]$line)
+        }
+    }
+    if (-not $found) {
+        $updated.Add("$Name=$Value")
+    }
+
+    $temporaryEnvFile = "$EnvFile.tmp"
+    Set-Content -Path $temporaryEnvFile -Value $updated.ToArray() -Encoding UTF8
+    Move-Item -Path $temporaryEnvFile -Destination $EnvFile -Force
+}
+
+function Test-SecretValue([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+    $candidate = $Value.Trim()
+    if ($candidate.Length -lt 32) {
+        return $false
+    }
+    $lower = $candidate.ToLowerInvariant()
+    if ($lower -in @(
+        "change-me", "changeme", "dev-secret-change-me", "dev-token-change-me",
+        "replace-me", "your-secret", "your-token", "secret", "password"
+    )) {
+        return $false
+    }
+    if ($lower.StartsWith("change-me-") -or $lower.StartsWith("changeme-") -or
+        $lower.StartsWith("replace-me-") -or $lower.StartsWith("your-") -or
+        $lower.StartsWith("example-")) {
+        return $false
+    }
+    return $true
+}
+
 $DashboardPort = $env:AIVF_DASHBOARD_PORT
 if (-not $DashboardPort) {
     $DashboardPort = Get-EnvValue "AIVF_DASHBOARD_PORT"
@@ -108,6 +158,17 @@ AIVF_ENV=development
     Write-Ok "Created local .env with generated development secrets."
 } else {
     Write-Ok "Using existing 06-CONFIG-AND-DEPLOYMENT\.env."
+}
+
+# Preserve valid secrets across restarts, but repair absent or known placeholder
+# values before Docker Compose sees the environment.
+foreach ($secretName in @("FLASK_SECRET_KEY", "AIVF_DASHBOARD_TOKEN")) {
+    $secretValue = Get-EnvValue $secretName
+    if (-not (Test-SecretValue $secretValue)) {
+        $generatedSecret = (([guid]::NewGuid().ToString("N")) + ([guid]::NewGuid().ToString("N")))
+        Set-EnvValue $secretName $generatedSecret
+        Write-Warn "Generated a new local secret for $secretName because the existing value was missing or a placeholder."
+    }
 }
 
 $env:AIVF_COOKIE_SECURE = "0"
