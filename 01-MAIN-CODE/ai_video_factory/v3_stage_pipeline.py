@@ -797,6 +797,7 @@ class MediaValidationStage:
             context.payload.get("retention_map", []),
             target_seconds=context.request.target_seconds,
             normalize_audio=os.environ.get("AIVF_EBU_R128", "1").strip() != "0",
+            frame_rate_fps=float(profile.get("frame_rate_fps") or 30.0),
         )
         report = strict_render_check(
             str(retention),
@@ -1349,6 +1350,14 @@ class V3PipelineRunner:
                     "stages_ms": context.stage_timings_ms,
                     "total_ms": performance.total_ms,
                     "bottleneck": performance.bottleneck,
+                    "resource_limits": {
+                        "container_cpus": os.environ.get("AIVF_CONTAINER_CPUS", "not-configured"),
+                        "container_memory": os.environ.get("AIVF_CONTAINER_MEMORY", "not-configured"),
+                        "container_pids": os.environ.get("AIVF_CONTAINER_PIDS", "not-configured"),
+                        "max_concurrent_jobs": os.environ.get("AIVF_MAX_CONCURRENT_JOBS", "1"),
+                        "max_job_memory_mb": os.environ.get("AIVF_MAX_JOB_MEMORY_MB", "not-configured"),
+                        "max_reserved_memory_mb": os.environ.get("AIVF_MAX_RESERVED_MEMORY_MB", "not-configured"),
+                    },
                     "stages": [
                         {
                             "name": item.name,
