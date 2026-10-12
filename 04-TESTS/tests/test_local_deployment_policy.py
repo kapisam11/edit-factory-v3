@@ -87,7 +87,7 @@ def test_wsgi_runtime_rejects_missing_or_placeholder_secrets_outside_tests(monke
     with pytest.raises(RuntimeError, match="known development placeholder"):
         validate_dashboard_secrets()
 
-    monkeypatch.setenv("FLASK_SECRET_KEY", "a-generated-local-secret")
+    monkeypatch.setenv("FLASK_SECRET_KEY", "a-generated-local-session-secret-1234567890")
     monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "dev-token-change-me")
     with pytest.raises(RuntimeError, match="known development placeholder"):
         validate_dashboard_secrets()
