@@ -61,11 +61,22 @@ docker compose @ComposeArgs run --rm --no-deps -v "${BackupHostPath}:/backups" w
 
 The restore command validates the archive before writing a separate restored copy. To recover the active installation, stop the dashboard first, restore into an isolated directory, and only then copy its `jobs.db`, `output`, and `knowledge_base_v3` contents into their corresponding volume paths. Verify the restored videos and restart the stack after the copy. Keep at least one verified backup outside the PC; a backup on the same disk does not protect against disk failure.
 
+## Windows backup and restore
+
+For the Windows Docker Compose development stack, run `.\\BACKUP-EDIT-FACTORY.ps1 -Destination "E:\\EditFactoryBackups"` after choosing a destination on a different trusted NTFS drive. The script builds the backup utility without restarting the running dashboard, backs up the main job database, auxiliary non-secret state databases, knowledge, output and uploads, copies the archive to the destination drive, and verifies the copy. Provider token/secret files are deliberately excluded and must be reauthorized after recovery. The local archive is **not encrypted**; it is ACL-restricted, so do not store it on a shared or untrusted drive. Use the encrypted off-host helper for off-host copies.
+
+Test restoration into a new, empty directory and never over the live application data:
+
+```powershell
+uv sync --frozen --python 3.12 --extra web --extra dev
+uv run aivf-backup restore --backup "E:\\EditFactoryBackups\\edit-factory-v3-<timestamp>.tar.gz" --destination "E:\\EditFactoryRestoreTest"
+```
+
+Replace the example filename with the archive produced by the script. Inspect the restored `jobs.db`, auxiliary `state/*.sqlite` databases, output, uploads, and knowledge files. Restore validation checks manifest hashes and every SQLite database before extraction.
+
 ## Release gate
 
-Before a production release, CI must pass Python tests, lint, dependency audit, CLI smoke tests,
-and the Docker build. A release should also include a real end-to-end render, cancellation/restart
-smoke tests, and human visual acceptance on the target operating system.
+Before a production release, CI must pass Python tests, lint, dependency audit, CLI smoke tests, and the Docker build. For the personal Windows target, follow [WINDOWS-11-PRODUCTION-ACCEPTANCE.md](WINDOWS-11-PRODUCTION-ACCEPTANCE.md): run the full launcher checks, render one representative 60-second video, review the final MP4 manually, test a failure/restart, and make and restore a verified backup.
 
 ## V3 contract and job-state guarantees
 

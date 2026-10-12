@@ -1,113 +1,103 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Destination,
-    [ValidateRange(1, 365)]
-    [int]$RetentionDays = 14
+    [string]$Destination
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ComposeFile = Join-Path $Root '06-CONFIG-AND-DEPLOYMENT\docker-compose.dev.yml'
-$EnvFile = Join-Path $Root '06-CONFIG-AND-DEPLOYMENT\.env'
-
-function Invoke-Docker([string[]]$Arguments) {
-    & docker @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Docker command failed with exit code ${LASTEXITCODE}: docker $($Arguments -join ' ')"
-    }
-}
-
-$script:BackupLogPath = $null
-trap {
-    if ($script:BackupLogPath) {
-        Add-Content -LiteralPath $script:BackupLogPath -Value ("[{0}] ERROR: {1}" -f (Get-Date -Format "o"), $_) -Encoding UTF8
-    }
-    throw
-}
-
-function Write-BackupLog([string]$Message) {
-    $line = "[{0}] {1}" -f (Get-Date -Format "o"), $Message
-    if ($script:BackupLogPath) {
-        Add-Content -LiteralPath $script:BackupLogPath -Value $line -Encoding UTF8
-    }
-    Write-Host $Message
-}
+$ComposeFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\docker-compose.dev.yml"
+$EnvFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\.env"
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw 'Docker CLI was not found. Install Docker Desktop first.'
+    throw "Docker CLI was not found. Start Docker Desktop and retry."
 }
 if (-not (Test-Path -LiteralPath $ComposeFile -PathType Leaf)) {
-    throw "Development Compose file was not found: $ComposeFile"
+    throw "Compose file not found: $ComposeFile"
 }
 if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
-    throw "Local environment file was not found: $EnvFile. Run START-ALL.bat once to create the local dashboard configuration, then retry."
+    throw "Local .env was not found. Start Edit Factory with START-ALL.bat once before backing it up."
 }
 
-docker info *> $null
-if ($LASTEXITCODE -ne 0) {
-    throw 'Docker Desktop is not running. Start it and wait until the daemon is ready.'
+$Destination = [System.IO.Path]::GetFullPath($Destination)
+$SourceDrive = [System.IO.Path]::GetPathRoot($Root).TrimEnd('\')
+$BackupDrive = [System.IO.Path]::GetPathRoot($Destination).TrimEnd('\')
+if ([string]::IsNullOrWhiteSpace($BackupDrive)) {
+    throw "Destination must be an absolute path on a separate drive, for example E:\EditFactoryBackups."
 }
-
+if ([string]::Equals($SourceDrive, $BackupDrive, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Backup destination must use a different drive letter than the repository ($SourceDrive)."
+}
 New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-$ResolvedBackupRoot = (Resolve-Path -LiteralPath $Destination).Path
-$RepoDrive = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($Root))
-$BackupDrive = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($ResolvedBackupRoot))
-if ([string]::IsNullOrWhiteSpace($BackupDrive) -or $RepoDrive.Equals($BackupDrive, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Choose a backup destination on another drive. Repository drive: $RepoDrive; destination drive: $BackupDrive"
+
+$Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+& icacls $Destination /inheritance:r /grant:r "${Identity}:(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not restrict backup-folder permissions. Use an NTFS destination drive and retry."
 }
-$script:BackupLogPath = Join-Path $ResolvedBackupRoot "edit-factory-backup.log"
-Write-BackupLog "Backup run started. Destination=$ResolvedBackupRoot; retention_days=$RetentionDays"
 
-$ArchiveName = 'edit-factory-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.tar.gz'
-$ArchiveHostPath = Join-Path $ResolvedBackupRoot $ArchiveName
-$Volume = $ResolvedBackupRoot + ':/backup'
-$ComposePrefix = @('compose', '--env-file', $EnvFile, '-f', $ComposeFile, 'run', '--rm', '--no-deps', '--volume', $Volume, 'web')
-$BackupCommand = "mkdir -p /backup/.work && export TMPDIR=/backup/.work && aivf-backup backup --db /app/state/jobs.db --state /app/state --knowledge /app/knowledge_base_v3 --output /app/output --uploads /app/uploads --backup /backup/$ArchiveName"
+$Prefix = @("compose", "--env-file", $EnvFile, "-f", $ComposeFile)
+& docker info *> $null
+if ($LASTEXITCODE -ne 0) { throw "Docker Desktop is not running." }
 
-Write-BackupLog "Creating backup on $ResolvedBackupRoot ..."
-Invoke-Docker ($ComposePrefix + @('sh', '-ec', $BackupCommand))
+$PsArgs = $Prefix + @("ps", "-q", "web")
+$RunningId = (& docker @PsArgs | Select-Object -First 1)
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string]$RunningId)) {
+    throw "The Edit Factory web container is not running. Start it with START-ALL.bat first."
+}
+$RunningId = ([string]$RunningId).Trim()
 
-$VerifyCommand = "mkdir -p /backup/.work && export TMPDIR=/backup/.work && aivf-backup verify --backup /backup/$ArchiveName --marker /app/state/backup-restore-verified.json"
-Write-BackupLog "Verifying archive hashes and SQLite integrity ..."
-Invoke-Docker ($ComposePrefix + @('sh', '-ec', $VerifyCommand))
+# Build the backup utility into the current checkout without restarting the running dashboard.
+$BuildArgs = $Prefix + @("build", "web")
+& docker @BuildArgs
+if ($LASTEXITCODE -ne 0) { throw "Could not build the backup utility image." }
 
-$RestoreCommand = @'
-set -eu
-mkdir -p /backup/.work
-export TMPDIR=/backup/.work
-trap 'rm -rf /backup/.restore-smoke' EXIT
-aivf-backup restore --backup '/backup/ARCHIVE_PLACEHOLDER' --destination /backup/.restore-smoke
-python -c '
-import hashlib, json
-from pathlib import Path
-root = Path("/backup/.restore-smoke")
-manifest = json.loads((root / "backup-manifest.json").read_text(encoding="utf-8"))
-def digest(path):
-    value = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            value.update(chunk)
-    return value.hexdigest()
-bad = []
-for entry in manifest.get("files", []):
-    path = root / str(entry.get("name"))
-    if not path.is_file() or digest(path) != str(entry.get("sha256")):
-        bad.append(str(entry.get("name")))
-assert not bad, "restored files differ from backup manifest: " + ", ".join(bad[:10])
-assert (root / "jobs.db").is_file()
-print("restore drill passed; verified files:", len(manifest.get("files", [])))
-'
-'@
-$RestoreCommand = $RestoreCommand -replace 'ARCHIVE_PLACEHOLDER', $ArchiveName
-Write-BackupLog "Running isolated restore drill; live volumes are not overwritten ..."
-Invoke-Docker ($ComposePrefix + @('sh', '-ec', $RestoreCommand))
+$Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$Name = "edit-factory-v3-$Timestamp.tar.gz"
+$ContainerBackup = "/app/state/backup-staging/$Name"
+$ContainerVerify = "/app/state/backup-staging/verify-$Name"
+$ArchivePath = Join-Path $Destination $Name
 
-$Cutoff = (Get-Date).AddDays(-$RetentionDays)
-Get-ChildItem -LiteralPath $ResolvedBackupRoot -Filter 'edit-factory-backup-*.tar.gz' -File |
-    Where-Object { $_.LastWriteTime -lt $Cutoff } |
-    Remove-Item -Force
+$BackupArgs = $Prefix + @(
+    "run", "--rm", "--no-deps", "--entrypoint", "aivf-backup", "web",
+    "backup",
+    "--db", "/app/state/jobs.db",
+    "--backup", $ContainerBackup,
+    "--knowledge", "/app/knowledge_base_v3",
+    "--output", "/app/output",
+    "--uploads", "/app/uploads",
+    "--state", "/app/state"
+)
+$VerifyArgs = $Prefix + @(
+    "run", "--rm", "--no-deps", "--entrypoint", "aivf-backup", "web",
+    "verify", "--backup", $ContainerVerify, "--marker", "/tmp/aivf-backup-verified.json"
+)
 
-Write-BackupLog "SUCCESS: archive=$ArchiveHostPath"
-Write-BackupLog "Retention: $RetentionDays days. Contents include database/state, knowledge, output and uploads."
-Write-BackupLog "Token vaults, OAuth secrets and environment files are excluded. Protect the external drive with BitLocker."
+try {
+    & docker @BackupArgs
+    if ($LASTEXITCODE -ne 0) { throw "Backup creation failed inside the container." }
+
+    & docker cp "${RunningId}:${ContainerBackup}" $ArchivePath
+    if ($LASTEXITCODE -ne 0) { throw "Could not copy the backup archive to $ArchivePath." }
+
+    & icacls $ArchivePath /inheritance:r /grant:r "${Identity}:F" "SYSTEM:F" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not restrict archive permissions on the destination drive." }
+
+    # Verify the exact copy that landed on the destination drive, not only the source archive.
+    & docker cp $ArchivePath "${RunningId}:${ContainerVerify}"
+    if ($LASTEXITCODE -ne 0) { throw "Could not stage the copied archive for verification." }
+
+    & docker @VerifyArgs
+    if ($LASTEXITCODE -ne 0) { throw "Backup verification failed. Do not rely on this archive." }
+
+    $Hash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash
+    Write-Host "Verified Edit Factory backup: $ArchivePath" -ForegroundColor Green
+    Write-Host "SHA-256: $Hash"
+    Write-Host "State token/secret files are intentionally excluded; authorize provider accounts again after restore."
+    Write-Host "The archive is not encrypted. Keep it on a trusted, access-restricted drive."
+}
+finally {
+    if (-not [string]::IsNullOrWhiteSpace([string]$RunningId)) {
+        & docker exec $RunningId sh -lc "rm -f '$ContainerBackup' '$ContainerVerify'" *> $null
+    }
+}

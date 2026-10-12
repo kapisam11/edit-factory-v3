@@ -587,6 +587,17 @@ def strict_render_check(
     if expected_height and info["height"] != expected_height:
         errors.append(f"height {info['height']} != required {expected_height}")
 
+    try:
+        max_output_bytes = int(os.environ.get("AIVF_MAX_OUTPUT_BYTES", str(5 * 1024**3)))
+    except (TypeError, ValueError, OverflowError):
+        max_output_bytes = 0
+    if max_output_bytes <= 0:
+        errors.append("AIVF_MAX_OUTPUT_BYTES must be a positive integer")
+    elif int(info.get("size") or 0) > max_output_bytes:
+        errors.append(
+            f"output size {int(info['size'])} bytes exceeds configured limit {max_output_bytes} bytes"
+        )
+
     expected_fps_value: object = expected_fps
     if expected_fps_value is None:
         expected_fps_value = platform_profile.get("frame_rate_fps")
@@ -660,7 +671,6 @@ def strict_render_check(
                 f"maximum allowed is {max_av_delta:.3f}s"
             )
 
-    # A successful probe is necessary but does not prove every packet decodes.
     playability: dict[str, Any] = {"ok": False, "error": "not checked"}
     try:
         _verify_full_decode(path)
@@ -734,6 +744,7 @@ def strict_render_check(
             "expected_height": expected_height,
             "expected_frame_rate_fps": expected_fps_value,
             "frame_rate_tolerance_fps": platform_profile.get("frame_rate_tolerance_fps", 0.1),
+            "output_size_limit_bytes": max_output_bytes,
             "require_audio": audio_required,
             "max_audio_video_duration_delta_seconds": max_av_delta_value,
         },

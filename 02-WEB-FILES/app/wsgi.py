@@ -2,9 +2,9 @@
 import os
 import sys
 
-from dashboard_auth import _validate_dashboard_secrets
+from ai_video_factory.security_config import validate_dashboard_secrets
 
-_validate_dashboard_secrets()
+validate_dashboard_secrets()
 
 from app import web_app_v3 as _web_app_v3
 from ai_video_factory import configure_logging, bootstrap_runtime
@@ -16,11 +16,13 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # application module historically generated a random fallback at import time;
 # overriding it here prevents session invalidation and multi-worker mismatch.
 flask_secret_key = os.environ.get("FLASK_SECRET_KEY", "").strip()
-if not flask_secret_key:
+if flask_secret_key:
+    _web_app_v3.app.config["SECRET_KEY"] = flask_secret_key
+elif os.environ.get("AIVF_ENV", "production").strip().lower() != "test":
+    # Defensive duplicate check: production must never use the module's random fallback.
     raise RuntimeError(
         "FLASK_SECRET_KEY must be set for the production dashboard; refusing to use a per-process random key."
     )
-_web_app_v3.app.config["SECRET_KEY"] = flask_secret_key
 
 # Dashboard modules use the canonical V3 application implementation.
 sys.modules.setdefault("web_app_v3", _web_app_v3)

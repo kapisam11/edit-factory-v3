@@ -7,7 +7,6 @@ import os
 import shutil
 import tempfile
 import time
-import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol
@@ -48,7 +47,7 @@ from .v3_exceptions import (
     V3ValidationError,
 )
 from .v3_renderer_bridge import V3RenderPlan, V3RenderRequest, render_v3
-from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, strict_render_check
+from .v3_quality import RenderContractError, enforce_retention_events, normalize_duration, probe_media, strict_render_check
 from .v3_scores import V3ScoreBundle
 from .v3_performance import analyze_stage_timings
 from .editorial_evaluation import summarize_editorial_evidence
@@ -95,7 +94,6 @@ class V3ExecutionContext:
     source_manifest: dict[str, Any] = field(default_factory=dict)
     creative_provenance: dict[str, Any] = field(default_factory=dict)
     baseline_path: Path | None = None
-    preserved_previous_final: Path | None = None
     score_bundle: V3ScoreBundle | None = None
     stage_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -407,23 +405,17 @@ def _write_failed_evidence(
     package: Path,
     errors: list[str],
     stage_timings_ms: dict[str, float] | None = None,
-    *,
-    preserved_final_path: Path | None = None,
 ) -> None:
     package.mkdir(parents=True, exist_ok=True)
     timings = dict(stage_timings_ms or {})
-    failure = {
-        "ok": False,
-        "errors": list(errors),
-        "stage_timings_ms": timings,
-    }
-    if preserved_final_path is not None and preserved_final_path.is_file():
-        failure["preserved_previous_final"] = str(preserved_final_path)
-        failure["recovery_note"] = (
-            "A pre-existing output was moved outside the package before rerun cleanup. "
-            "Inspect it before manually deleting the recovery copy."
-        )
-    atomic_write_json(package / "v3_failure.json", failure)
+    atomic_write_json(
+        package / "v3_failure.json",
+        {
+            "ok": False,
+            "errors": list(errors),
+            "stage_timings_ms": timings,
+        },
+    )
     atomic_write_json(
         package / "v3_readiness.json",
         {
@@ -438,57 +430,6 @@ def _write_failed_evidence(
             "warnings": [],
         },
     )
-
-def _preserve_existing_final(
-    package: Path,
-    *,
-    input_video: str | None = None,
-) -> Path | None:
-    """Move an existing final MP4 outside the package before destructive rerun cleanup."""
-    canonical = package / "final.v3.mp4"
-    if canonical.is_symlink() or not canonical.is_file():
-        return None
-    if input_video:
-        source = Path(input_video)
-        try:
-            # Do not move the exact file (or a symlink resolving to it) that the
-            # caller selected as source media. The reset guard will preserve it.
-            if source.absolute() == canonical.absolute() or source.resolve() == canonical.resolve():
-                return None
-        except OSError:
-            if source.absolute() == canonical.absolute():
-                return None
-    try:
-        if canonical.stat().st_size <= 0:
-            return None
-    except OSError as exc:
-        raise V3ArtifactError(f"cannot inspect existing final video before rerun: {exc}") from exc
-
-    recovery_root = package.parent / ".aivf-recovery"
-    try:
-        if recovery_root.is_symlink():
-            raise V3ArtifactError(
-                "recovery directory is a symlink; refusing to move an existing final outside the workspace"
-            )
-        recovery_root.mkdir(parents=True, exist_ok=True)
-        recovery_dir = recovery_root / package.name
-        if recovery_dir.is_symlink():
-            raise V3ArtifactError(
-                "package recovery directory is a symlink; refusing to follow it"
-            )
-        recovery_dir.mkdir(parents=True, exist_ok=True)
-        if recovery_dir.resolve().parent != recovery_root.resolve():
-            raise V3ArtifactError("package recovery directory escapes the recovery root")
-        backup = recovery_dir / f"final.v3.{time.time_ns()}.{uuid.uuid4().hex[:12]}.mp4"
-        os.replace(canonical, backup)
-        return backup
-    except V3PipelineError:
-        raise
-    except OSError as exc:
-        raise V3ArtifactError(
-            f"could not preserve the pre-existing final video; refusing destructive rerun: {exc}"
-        ) from exc
-
 
 def _reset_v3_package(
     package: Path,
@@ -865,7 +806,6 @@ class MediaValidationStage:
             retention_events=context.payload.get("retention_map", []),
             retention_baseline=str(baseline),
             require_independent_retention=True,
-            require_audio=bool((context.payload.get("qc") or {}).get("require_audio", False)),
         )
         if not report["ok"]:
             raise RenderContractError(
@@ -883,6 +823,25 @@ class MediaValidationStage:
             )
         except (OSError, RuntimeError, ValueError) as exc:
             context.result.warnings.append(f"Final metadata stamping skipped: {exc}")
+
+        # Revalidate the exact promoted artifact after the metadata remux. The
+        # pre-promotion report alone is not evidence about bytes written afterward.
+        post_stamp_report = strict_render_check(
+            str(context.result.final_video),
+            target_seconds=context.request.target_seconds,
+            platform_profile=profile,
+            retention_events=context.payload.get("retention_map", []),
+            retention_baseline=str(baseline),
+            require_independent_retention=True,
+        )
+        context.render_report["post_metadata_stamp_validation"] = post_stamp_report
+        context.render_report["ok"] = bool(context.render_report.get("ok") and post_stamp_report.get("ok"))
+        if not post_stamp_report.get("ok"):
+            errors = list(post_stamp_report.get("errors") or [])
+            raise RenderContractError(
+                "post-metadata-stamp final media validation failed: "
+                + ("; ".join(str(error) for error in errors) if errors else "media contract returned not-ok")
+            )
 
         try:
             context.final_health = analyze_media(
@@ -1314,6 +1273,109 @@ class ReleaseEvidenceStage:
             atomic_write_json(metadata_path, metadata)
 
 
+
+
+
+def _snapshot_last_good_final(package: Path) -> Path | None:
+    """Copy the existing canonical output before any rerun can reset the workspace.
+
+    The snapshot lives beside the package so workspace cleanup cannot delete it.
+    Refuse a rerun instead of risking the last output when the file is suspicious
+    or the same volume lacks enough space for a conservative copy.
+    """
+    final_path = package / "final.v3.mp4"
+    if not final_path.exists() and not final_path.is_symlink():
+        return None
+    if final_path.is_symlink() or not final_path.is_file():
+        raise V3InputError("existing final.v3.mp4 is not a regular file; refusing to overwrite it")
+    original_size = final_path.stat().st_size
+    if original_size <= 0:
+        raise V3InputError("existing final.v3.mp4 is empty; refusing to overwrite it automatically")
+    reserve_bytes = 128 * 1024 * 1024
+    try:
+        free_bytes = shutil.disk_usage(package.parent).free
+    except OSError as exc:
+        raise V3InputError("cannot inspect free disk space before protecting the existing final video") from exc
+    if free_bytes < original_size + reserve_bytes:
+        raise V3InputError(
+            f"rerun blocked to preserve the existing final video: need at least "
+            f"{original_size + reserve_bytes} bytes free for a safe snapshot; have {free_bytes}"
+        )
+
+    fd, name = tempfile.mkstemp(
+        prefix=".aivf-v3-last-good-",
+        suffix=".mp4",
+        dir=str(package.parent),
+    )
+    os.close(fd)
+    backup_path = Path(name)
+    try:
+        original_hash = sha256_file(final_path)
+        with final_path.open("rb") as src, backup_path.open("wb") as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+            dst.flush()
+            os.fsync(dst.fileno())
+        if backup_path.stat().st_size != original_size or sha256_file(backup_path) != original_hash:
+            raise V3InputError("last-good final changed during snapshot; refusing to start rerun")
+        return backup_path
+    except BaseException:
+        backup_path.unlink(missing_ok=True)
+        raise
+
+
+def _finish_rerun_with_last_good_protection(
+    result: ProductionResult,
+    package: Path,
+    backup_path: Path | None,
+) -> ProductionResult:
+    """Keep a previous final if the rerun fails, and reject false-success results."""
+    final_path = package / "final.v3.mp4"
+    reported_final = Path(result.final_video).resolve() if result.final_video else None
+    success = (
+        not result.errors
+        and reported_final == final_path.resolve()
+        and final_path.is_file()
+        and not final_path.is_symlink()
+        and final_path.stat().st_size > 0
+    )
+    if success:
+        try:
+            probe_media(str(final_path))
+        except Exception as exc:
+            result.errors.append(
+                f"final artifact failed post-run media validation: {type(exc).__name__}: {exc}"
+            )
+            success = False
+    if success:
+        if backup_path is not None:
+            backup_path.unlink(missing_ok=True)
+        return result
+
+    try:
+        if backup_path is not None:
+            os.replace(backup_path, final_path)
+            result.artifacts["last_good_final_preserved"] = str(final_path)
+            result.warnings.append(
+                "The rerun failed; the previous final.v3.mp4 was restored and preserved."
+            )
+        else:
+            if final_path.is_file() or final_path.is_symlink():
+                final_path.unlink(missing_ok=True)
+            result.artifacts["failed_final_removed"] = str(final_path)
+        result.final_video = None
+    except OSError as exc:
+        result.errors.append(
+            f"CRITICAL: failed to restore the previous final video safely: {type(exc).__name__}: {exc}"
+        )
+        result.artifacts["last_good_snapshot"] = str(backup_path) if backup_path else ""
+        return result
+    if not result.errors:
+        result.errors.append("render did not produce a validated canonical final video")
+    if backup_path is None:
+        _write_failed_evidence(package, result.errors)
+    return result
+
+
 class V3PipelineRunner:
     """Execute the V3 production contract as independent, timed stages."""
 
@@ -1340,6 +1402,8 @@ class V3PipelineRunner:
         ))
 
     def run(self) -> ProductionResult:
+        backup_path: Path | None = None
+        package = Path(self.request.package_dir)
         try:
             with WorkspaceLock(self.request.package_dir):
                 reused = _reuse_existing_job(
@@ -1348,7 +1412,30 @@ class V3PipelineRunner:
                 )
                 if reused is not None:
                     return reused
-                return self._run_locked()
+                try:
+                    backup_path = _snapshot_last_good_final(package)
+                except (OSError, V3PipelineError) as exc:
+                    # The last final remains untouched. Don't invalidate its existing
+                    # manifests merely because the new run could not safely start.
+                    blocked = ProductionResult(package_dir=str(package))
+                    blocked.errors.append(f"rerun preflight blocked before workspace reset: {exc}")
+                    if (package / "final.v3.mp4").is_file() and not (package / "final.v3.mp4").is_symlink():
+                        blocked.artifacts["last_good_final_preserved"] = str(package / "final.v3.mp4")
+                    return blocked
+                try:
+                    result = self._run_locked()
+                    return _finish_rerun_with_last_good_protection(result, package, backup_path)
+                except BaseException:
+                    if backup_path is not None and backup_path.exists():
+                        os.replace(backup_path, package / "final.v3.mp4")
+                    else:
+                        failed_final = package / "final.v3.mp4"
+                        if failed_final.is_file() or failed_final.is_symlink():
+                            failed_final.unlink(missing_ok=True)
+                    raise
+                # Snapshot helpers consume their file on success/restore. If restoration
+                # itself fails, retain the orphaned snapshot rather than deleting the only
+                # recoverable copy of the previous final.
         except WorkspaceBusyError as exc:
             # The workspace belongs to another active job. Never mutate its artifacts
             # or readiness state from the losing caller.
@@ -1364,10 +1451,6 @@ class V3PipelineRunner:
         )
         try:
             _guard_workspace_isolation(self.request, source_metadata=self.source_metadata)
-            context.preserved_previous_final = _preserve_existing_final(
-                context.package,
-                input_video=self.request.input_video,
-            )
             _reset_v3_package(
                 context.package,
                 input_video=self.request.input_video,
@@ -1378,19 +1461,11 @@ class V3PipelineRunner:
                 context.package,
                 context.result.errors,
                 context.stage_timings_ms,
-                preserved_final_path=context.preserved_previous_final,
             )
             context.result.artifacts.update({
                 "v3_failure": str(context.package / "v3_failure.json"),
                 "v3_readiness": str(context.package / "v3_readiness.json"),
             })
-            if context.preserved_previous_final is not None:
-                context.result.warnings.append(
-                    f"Previous final video preserved for recovery: {context.preserved_previous_final}"
-                )
-                context.result.artifacts["preserved_previous_final"] = str(
-                    context.preserved_previous_final
-                )
             return context.result
 
         try:
@@ -1450,7 +1525,6 @@ class V3PipelineRunner:
                     context.package,
                     context.result.errors,
                     context.stage_timings_ms,
-                    preserved_final_path=context.preserved_previous_final,
                 )
 
         artifact_names = (
@@ -1494,22 +1568,6 @@ class V3PipelineRunner:
                 )).is_file()
             }
         )
-        if context.preserved_previous_final is not None:
-            context.result.artifacts["preserved_previous_final"] = str(
-                context.preserved_previous_final
-            )
-            context.result.warnings.append(
-                "The previous final video was preserved outside the current package at "
-                + str(context.preserved_previous_final)
-                + ". Keep it until the replacement output has been manually inspected."
-            )
-            if context.result.errors:
-                _write_failed_evidence(
-                    context.package,
-                    context.result.errors,
-                    context.stage_timings_ms,
-                    preserved_final_path=context.preserved_previous_final,
-                )
         _cleanup_transients(context.package, preserve=bool(context.result.errors) or os.environ.get("AIVF_DEBUG_ARTIFACTS", "0") == "1")
         return context.result
 
