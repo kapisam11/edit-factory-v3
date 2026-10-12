@@ -1936,7 +1936,8 @@ def publishing_status():
 init_db()
 
 if __name__ == "__main__":
-    from dashboard_auth import configure_dashboard_auth
+    from dashboard_auth import configure_dashboard_auth, validate_dashboard_secrets
+    validate_dashboard_secrets()
     from dashboard_compat import register_dashboard_compat
     configure_dashboard_auth(app)
     register_dashboard_compat(app)

@@ -48,8 +48,21 @@ def main(argv: list[str]) -> int:
         die("unsupported acceptance schema")
     if str(acceptance.get("package_name") or "") != package.name:
         die("acceptance package_name does not match package")
-    if not all(bool(acceptance.get(key)) for key in ("video_reviewed", "audio_reviewed", "rights_reviewed")):
-        die("video/audio/rights human review must all be explicitly true")
+    required_reviews = (
+        "video_reviewed",
+        "opening_reviewed",
+        "aspect_ratio_reviewed",
+        "captions_reviewed",
+        "ending_reviewed",
+        "audio_reviewed",
+        "rights_reviewed",
+    )
+    missing_reviews = [key for key in required_reviews if acceptance.get(key) is not True]
+    if missing_reviews:
+        die(
+            "video, opening, aspect ratio, captions, ending, audio, and rights reviews "
+            "must all be explicitly true; missing: " + ", ".join(missing_reviews)
+        )
     reviewer = str(acceptance.get("reviewer") or "").strip()
     if len(reviewer) < 2:
         die("reviewer is required")

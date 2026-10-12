@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Destination
+    [string]$Destination,
+    [ValidateRange(1, 365)]
+    [int]$RetentionDays = 14
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,6 +58,7 @@ $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $Name = "edit-factory-v3-$Timestamp.tar.gz"
 $ContainerBackup = "/app/state/backup-staging/$Name"
 $ContainerVerify = "/app/state/backup-staging/verify-$Name"
+$ContainerRestore = "/app/state/backup-staging/restore-drill-$Name"
 $ArchivePath = Join-Path $Destination $Name
 
 $BackupArgs = $Prefix + @(
@@ -71,6 +74,43 @@ $BackupArgs = $Prefix + @(
 $VerifyArgs = $Prefix + @(
     "run", "--rm", "--no-deps", "--entrypoint", "aivf-backup", "web",
     "verify", "--backup", $ContainerVerify, "--marker", "/tmp/aivf-backup-verified.json"
+)
+$RestoreArgs = $Prefix + @(
+    "run", "--rm", "--no-deps", "--entrypoint", "aivf-backup", "web",
+    "restore", "--backup", $ContainerVerify, "--destination", $ContainerRestore
+)
+
+# Independently verify the extracted restore against the archive manifest, including DB integrity.
+$RestoreCheckCode = @"
+import hashlib, json, sqlite3
+from pathlib import Path
+root = Path(r"$ContainerRestore").resolve()
+manifest = json.loads((root / "backup-manifest.json").read_text(encoding="utf-8"))
+def digest(path):
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+verified = 0
+for entry in manifest.get("files", []):
+    name = str(entry.get("name") or "")
+    path = (root / name).resolve()
+    path.relative_to(root)
+    if not path.is_file() or digest(path) != str(entry.get("sha256") or "").lower():
+        raise SystemExit("restored file missing or hash mismatch: " + name)
+    if path.suffix.casefold() in {".db", ".sqlite", ".sqlite3"}:
+        with sqlite3.connect(str(path)) as connection:
+            if str(connection.execute("PRAGMA integrity_check").fetchone()[0]).lower() != "ok":
+                raise SystemExit("restored SQLite integrity check failed: " + name)
+    verified += 1
+if not (root / "jobs.db").is_file():
+    raise SystemExit("restored jobs.db is missing")
+print("restore drill passed; verified files:", verified)
+"@
+$RestoreCheckArgs = $Prefix + @(
+    "run", "--rm", "--no-deps", "--entrypoint", "python", "web",
+    "-c", $RestoreCheckCode
 )
 
 try {
@@ -90,14 +130,24 @@ try {
     & docker @VerifyArgs
     if ($LASTEXITCODE -ne 0) { throw "Backup verification failed. Do not rely on this archive." }
 
+    # Restore the verified external copy into a new, isolated directory; never touch live data paths.
+    & docker @RestoreArgs
+    if ($LASTEXITCODE -ne 0) { throw "Isolated restore drill failed. Do not rely on this archive." }
+    & docker @RestoreCheckArgs
+    if ($LASTEXITCODE -ne 0) { throw "Restored-file/hash/SQLite verification failed. Do not rely on this archive." }
+
     $Hash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash
     Write-Host "Verified Edit Factory backup: $ArchivePath" -ForegroundColor Green
     Write-Host "SHA-256: $Hash"
     Write-Host "State token/secret files are intentionally excluded; authorize provider accounts again after restore."
-    Write-Host "The archive is not encrypted. Keep it on a trusted, access-restricted drive."
+    Write-Host "The archive is not encrypted. Enable BitLocker on the external drive and keep it access-restricted."
+    $Cutoff = (Get-Date).AddDays(-$RetentionDays)
+    Get-ChildItem -LiteralPath $Destination -Filter "edit-factory-v3-*.tar.gz" -File |
+        Where-Object { $_.LastWriteTime -lt $Cutoff } |
+        Remove-Item -Force
 }
 finally {
     if (-not [string]::IsNullOrWhiteSpace([string]$RunningId)) {
-        & docker exec $RunningId sh -lc "rm -f '$ContainerBackup' '$ContainerVerify'" *> $null
+        & docker exec $RunningId sh -lc "rm -f '$ContainerBackup' '$ContainerVerify'; rm -rf '$ContainerRestore'" *> $null
     }
 }

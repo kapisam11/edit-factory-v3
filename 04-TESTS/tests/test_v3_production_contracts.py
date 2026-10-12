@@ -582,3 +582,41 @@ def test_v3_preflight_failure_replaces_stale_readiness(monkeypatch, tmp_path):
     assert readiness["state"] == "FAILED"
     assert readiness["checks"]["PUBLISH_READY"] is False
     assert (tmp_path / "v3_failure.json").is_file()
+
+
+
+def test_failed_v3_rerun_preserves_previous_final_outside_package(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"test input media")
+    package = tmp_path / "job-package"
+    package.mkdir()
+    previous_final = package / "final.v3.mp4"
+    previous_final.write_bytes(b"last known final video")
+    (package / "v3_failure.json").write_text("{}", encoding="utf-8")
+
+    class FailingStage:
+        name = "intentional_failure"
+
+        def run(self, _context):
+            raise v3_stage_pipeline.V3PipelineError("injected failure")
+
+    request = v3_stage_pipeline.V3Request(
+        input_video=str(source),
+        topic="recovery test",
+        package_dir=str(package),
+        target_seconds=30,
+        platform="youtube_shorts",
+        audience="short-form viewers",
+    )
+    result = v3_stage_pipeline.V3PipelineRunner(request, stages=(FailingStage(),)).run()
+
+    assert result.errors
+    # The current production runner restores the last known-good file in place;
+    # it no longer moves it outside the package or leaves a blank canonical output.
+    assert previous_final.is_file()
+    assert previous_final.read_bytes() == b"last known final video"
+    assert result.artifacts["last_good_final_preserved"] == str(previous_final)
+    assert any("previous final.v3.mp4 was restored and preserved" in warning for warning in result.warnings)
+    failure = json.loads((package / "v3_failure.json").read_text(encoding="utf-8"))
+    assert failure["ok"] is False
+    assert any("injected failure" in error for error in failure["errors"])

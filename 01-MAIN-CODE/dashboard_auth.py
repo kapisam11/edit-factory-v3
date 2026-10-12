@@ -110,6 +110,13 @@ def _validate_dashboard_secrets() -> None:
             )
 
 
+def validate_dashboard_secrets() -> None:
+    """Public compatibility entrypoint using the canonical production secret policy."""
+    from ai_video_factory.security_config import validate_dashboard_secrets as _validate
+
+    _validate()
+
+
 def configure_dashboard_auth(app):
     _validate_dashboard_secrets()
     if app.config.get("_AIVF_AUTH_CONFIGURED"):

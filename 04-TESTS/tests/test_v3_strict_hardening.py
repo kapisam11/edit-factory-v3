@@ -402,3 +402,92 @@ def test_v3_blueprint_has_no_pre_render_technical_certificate(monkeypatch):
     blueprint = create_v3_blueprint("A subject", config=V3Config(target_seconds=8))
     assert blueprint.score_bundle.technical_validity is None
     assert blueprint.score_bundle.performance_heuristic >= 0.0
+
+
+
+def _run_strict_qc_with_mocked_media(monkeypatch, *, fps="30/1", has_audio=True, require_audio=False):
+    import ai_video_factory.v3_quality as quality
+
+    monkeypatch.setattr(
+        quality,
+        "probe_media",
+        lambda _path: {
+            "duration": 5.0,
+            "size": 1234,
+            "width": 1080,
+            "height": 1920,
+            "fps": fps,
+            "has_audio": has_audio,
+            "video_codec": "h264",
+            "audio_codec": "aac" if has_audio else None,
+            "format_name": "mp4",
+        },
+    )
+    monkeypatch.setattr(quality, "_verify_full_decode", lambda _path: None)
+    monkeypatch.setattr(
+        quality,
+        "_sample_visual_changes",
+        lambda *_args, **_kwargs: {"frames": 50, "change_events": [1.0, 2.0], "max_gap": 2.0},
+    )
+    return quality.strict_render_check(
+        "mocked.mp4",
+        target_seconds=5.0,
+        platform_profile={"width": 1080, "height": 1920, "fps": 30},
+        retention_events=[{"time": 0.0}, {"time": 1.0}],
+        require_audio=require_audio,
+    )
+
+
+def test_strict_render_check_blocks_missing_required_audio(monkeypatch):
+    report = _run_strict_qc_with_mocked_media(
+        monkeypatch,
+        has_audio=False,
+        require_audio=True,
+    )
+    assert report["ok"] is False
+    assert any("required audio stream" in error for error in report["errors"])
+
+
+def test_strict_render_check_blocks_frame_rate_mismatch(monkeypatch):
+    report = _run_strict_qc_with_mocked_media(monkeypatch, fps="24/1")
+    assert report["ok"] is False
+    assert any("frame rate 24.000 fps" in error for error in report["errors"])
+
+
+def test_strict_render_check_blocks_full_decode_failure(monkeypatch):
+    import ai_video_factory.v3_quality as quality
+
+    def fail_decode(_path):
+        raise quality.RenderContractError("decoder found corrupt packet")
+
+    monkeypatch.setattr(quality, "probe_media", lambda _path: {
+        "duration": 5.0,
+        "size": 1234,
+        "width": 1080,
+        "height": 1920,
+        "fps": "30/1",
+        "has_audio": True,
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "format_name": "mp4",
+    })
+    monkeypatch.setattr(quality, "_verify_full_decode", fail_decode)
+    monkeypatch.setattr(
+        quality,
+        "_sample_visual_changes",
+        lambda *_args, **_kwargs: {"frames": 50, "change_events": [1.0], "max_gap": 2.0},
+    )
+    report = quality.strict_render_check(
+        "mocked.mp4",
+        target_seconds=5.0,
+        platform_profile={"width": 1080, "height": 1920, "fps": 30},
+        retention_events=[{"time": 0.0}, {"time": 1.0}],
+    )
+    assert report["ok"] is False
+    assert any("full media decode failed" in error for error in report["errors"])
+
+
+def test_strict_render_check_reports_manual_caption_review(monkeypatch):
+    report = _run_strict_qc_with_mocked_media(monkeypatch)
+    assert report["caption_visibility"]["status"] == "manual_review_required"
+    assert any("human review" in warning.lower() for warning in report["warnings"])
