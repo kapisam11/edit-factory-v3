@@ -51,6 +51,10 @@ jobs:
           cat > "$RUNNER_TEMP/aivf-test-bin/edge-tts" <<'SH'
           #!/usr/bin/env bash
           set -euo pipefail
+          if [[ "${1:-}" == "--help" ]]; then
+            echo "deterministic edge-tts test stub"
+            exit 0
+          fi
           output=""
           while (($#)); do
             if [[ "$1" == "--write-media" ]]; then
