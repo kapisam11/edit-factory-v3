@@ -160,16 +160,23 @@ def _run_ffmpeg_streaming(
     cmd: List[str],
     timeout: int,
     diagnostics_dir: str | Path | None = None,
+    *,
+    capture_stdout: bool = False,
+    mirror_stderr: bool = True,
 ) -> subprocess.CompletedProcess:
-    """Run FFmpeg while retaining a durable stderr log and bounded tail.
-
-    Diagnostics are prepared before the child process starts. If runtime
-    diagnostics fail after spawn, the child is still terminated and reaped.
-    """
+    """Run FFmpeg with bounded capture, durable stderr logs, and tree-safe timeouts."""
     started = time.perf_counter()
     command_id = hashlib.sha256(
         (repr(cmd) + str(time.time_ns())).encode("utf-8")
     ).hexdigest()[:16]
+    stdout_limit = 0
+    if capture_stdout:
+        try:
+            stdout_limit = int(os.environ.get("AIVF_FFMPEG_CAPTURE_LIMIT_BYTES", str(4 * 1024**2)))
+        except ValueError as exc:
+            raise ValueError("AIVF_FFMPEG_CAPTURE_LIMIT_BYTES must be an integer") from exc
+        if not 1024 <= stdout_limit <= 64 * 1024**2:
+            raise ValueError("AIVF_FFMPEG_CAPTURE_LIMIT_BYTES must be between 1024 and 67108864")
 
     if diagnostics_dir is not None:
         diagnostic_root = Path(diagnostics_dir)
@@ -182,14 +189,12 @@ def _run_ffmpeg_streaming(
         )
 
     diagnostic_path = diagnostic_root / "diagnostics" / f"ffmpeg-{command_id}.stderr.log"
-    diagnostic_handle = None
     try:
         diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
         diagnostic_handle = diagnostic_path.open(
             "w", encoding="utf-8", errors="replace"
         )
     except OSError as exc:
-        # No child has been spawned yet, so diagnostics setup failure is safe.
         raise FFmpegExecutionError(
             f"could not prepare FFmpeg diagnostics: {exc}",
             command_id=command_id,
@@ -200,12 +205,19 @@ def _run_ffmpeg_streaming(
             stderr_path=str(diagnostic_path),
         ) from exc
 
-    stderr_tail = deque(maxlen=200)
+    stderr_tail = deque(maxlen=256)
+    stdout_chunks: list[bytes] = []
+    stdout_size = [0]
+    stdout_overflow: list[str] = []
+    stdout_reader_error: list[str] = []
+    reader_error: list[str] = []
+    output_limit_error: list[str] = []
     process: subprocess.Popen[str] | None = None
+    watchdog_stop = threading.Event()
     try:
         process = subprocess.Popen(
             cmd,
-            stdout=None,
+            stdout=subprocess.PIPE if capture_stdout else None,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
@@ -215,10 +227,6 @@ def _run_ffmpeg_streaming(
                 else {"start_new_session": True}
             ),
         )
-
-        reader_error: list[str] = []
-        output_limit_error: list[str] = []
-        watchdog_stop = threading.Event()
 
         def watchdog_output_size() -> None:
             try:
@@ -249,15 +257,46 @@ def _run_ffmpeg_streaming(
             if stream is None:
                 return
             try:
-                for line in stream:
-                    stderr_tail.append(line)
+                while True:
+                    chunk = stream.read(4096)
+                    if not chunk:
+                        break
+                    stderr_tail.append(chunk)
                     try:
-                        diagnostic_handle.write(line)
+                        diagnostic_handle.write(chunk)
                         diagnostic_handle.flush()
                     except OSError as exc:
                         reader_error.append(str(exc))
-                    sys.stderr.write(line)
-                    sys.stderr.flush()
+                    if mirror_stderr:
+                        sys.stderr.write(chunk)
+                        sys.stderr.flush()
+            finally:
+                stream.close()
+
+        def pump_stdout() -> None:
+            stream = process.stdout
+            if stream is None:
+                return
+            try:
+                while True:
+                    chunk = stream.read(4096)
+                    if not chunk:
+                        break
+                    encoded = chunk.encode("utf-8", errors="replace")
+                    available = stdout_limit - stdout_size[0]
+                    if len(encoded) > available:
+                        if available > 0:
+                            stdout_chunks.append(encoded[:available])
+                            stdout_size[0] += available
+                        stdout_overflow.append(
+                            f"FFmpeg stdout exceeded configured capture limit of {stdout_limit} bytes"
+                        )
+                        terminate_process_tree(process, grace_seconds=0.5)
+                        return
+                    stdout_chunks.append(encoded)
+                    stdout_size[0] += len(encoded)
+            except OSError as exc:
+                stdout_reader_error.append(str(exc))
             finally:
                 stream.close()
 
@@ -266,12 +305,23 @@ def _run_ffmpeg_streaming(
             name="aivf-ffmpeg-stderr",
             daemon=True,
         )
+        stdout_reader = (
+            threading.Thread(
+                target=pump_stdout,
+                name="aivf-ffmpeg-stdout",
+                daemon=True,
+            )
+            if capture_stdout
+            else None
+        )
         watchdog = threading.Thread(
             target=watchdog_output_size,
             name="aivf-ffmpeg-output-watchdog",
             daemon=True,
         )
         reader.start()
+        if stdout_reader is not None:
+            stdout_reader.start()
         watchdog.start()
         try:
             returncode = process.wait(timeout=timeout)
@@ -284,6 +334,8 @@ def _run_ffmpeg_streaming(
                 process.wait(timeout=3)
             watchdog_stop.set()
             reader.join(timeout=2)
+            if stdout_reader is not None:
+                stdout_reader.join(timeout=2)
             watchdog.join(timeout=1)
             detail = "".join(stderr_tail).strip()
             detail_suffix = f": {detail[-2000:]}" if detail else ""
@@ -299,9 +351,11 @@ def _run_ffmpeg_streaming(
 
         watchdog_stop.set()
         reader.join(timeout=2)
+        if stdout_reader is not None:
+            stdout_reader.join(timeout=2)
         watchdog.join(timeout=1)
+        detail = "".join(stderr_tail).strip()
         if output_limit_error:
-            detail = "".join(stderr_tail).strip()
             raise FFmpegExecutionError(
                 output_limit_error[-1],
                 command_id=command_id,
@@ -311,7 +365,16 @@ def _run_ffmpeg_streaming(
                 stderr_tail=detail[-2000:],
                 stderr_path=str(diagnostic_path),
             )
-        detail = "".join(stderr_tail).strip()
+        if stdout_overflow:
+            raise FFmpegExecutionError(
+                stdout_overflow[-1],
+                command_id=command_id,
+                command=cmd,
+                exit_code=returncode,
+                duration_seconds=time.perf_counter() - started,
+                stderr_tail=detail[-2000:],
+                stderr_path=str(diagnostic_path),
+            )
         if returncode != 0:
             detail_suffix = f": {detail[-2000:]}" if detail else ""
             if reader_error:
@@ -335,7 +398,24 @@ def _run_ffmpeg_streaming(
                 stderr_tail=detail[-2000:],
                 stderr_path=str(diagnostic_path),
             )
-        return subprocess.CompletedProcess(cmd, returncode, stdout=None, stderr=detail)
+        if stdout_reader_error:
+            raise FFmpegExecutionError(
+                f"FFmpeg stdout capture failed: {stdout_reader_error[-1]}",
+                command_id=command_id,
+                command=cmd,
+                exit_code=returncode,
+                duration_seconds=time.perf_counter() - started,
+                stderr_tail=detail[-2000:],
+                stderr_path=str(diagnostic_path),
+            )
+        stdout_value = (
+            b"".join(stdout_chunks).decode("utf-8", errors="replace")
+            if capture_stdout
+            else None
+        )
+        return subprocess.CompletedProcess(
+            cmd, returncode, stdout=stdout_value, stderr=detail
+        )
     except FFmpegExecutionError:
         raise
     except BaseException:
@@ -348,9 +428,8 @@ def _run_ffmpeg_streaming(
                 process.wait(timeout=3)
         raise
     finally:
-        if diagnostic_handle is not None:
-            diagnostic_handle.close()
-
+        watchdog_stop.set()
+        diagnostic_handle.close()
 
 def run_ffmpeg(
     cmd: List[str],
@@ -363,15 +442,15 @@ def run_ffmpeg(
     timeout = timeout if timeout is not None else _bounded_timeout("AIVF_FFMPEG_TIMEOUT_SECONDS", 3600)
     try:
         with slot():
-            if capture_output:
-                return subprocess.run(
-                    cmd,
-                    check=True,
-                    timeout=timeout,
-                    capture_output=True,
-                    text=True,
-                )
-            return _run_ffmpeg_streaming(cmd, timeout, diagnostics_dir)
+            # Captured analysis commands also use streamed, bounded capture so
+            # timeouts terminate the full process tree and cannot buffer huge logs.
+            return _run_ffmpeg_streaming(
+                cmd,
+                timeout,
+                diagnostics_dir,
+                capture_stdout=capture_output,
+                mirror_stderr=not capture_output,
+            )
     except FFmpegExecutionError:
         raise
     except subprocess.CalledProcessError as exc:

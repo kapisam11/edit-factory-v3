@@ -491,3 +491,52 @@ def test_strict_render_check_reports_manual_caption_review(monkeypatch):
     report = _run_strict_qc_with_mocked_media(monkeypatch)
     assert report["caption_visibility"]["status"] == "manual_review_required"
     assert any("human review" in warning.lower() for warning in report["warnings"])
+
+
+def test_required_audio_rejects_silent_stream(monkeypatch):
+    from ai_video_factory import audio_normalization
+
+    monkeypatch.delenv("AIVF_REQUIRE_OUTPUT_AUDIO", raising=False)
+    monkeypatch.delenv("AIVF_MIN_OUTPUT_AUDIO_LUFS", raising=False)
+    monkeypatch.setattr(
+        audio_normalization,
+        "measure_loudness",
+        lambda _path: {
+            "is_silent": True,
+            "integrated_lufs": float("-inf"),
+            "true_peak": float("-inf"),
+            "loudness_range": 0.0,
+        },
+    )
+    report = _run_strict_qc_with_mocked_media(
+        monkeypatch,
+        has_audio=True,
+        require_audio=True,
+    )
+    assert report["ok"] is False
+    assert report["audio_required"] is True
+    assert any("required output audio is silent" in error for error in report["errors"])
+
+
+def test_global_audio_requirement_is_reported_consistently(monkeypatch):
+    from ai_video_factory import audio_normalization
+
+    monkeypatch.setenv("AIVF_REQUIRE_OUTPUT_AUDIO", "1")
+    monkeypatch.setattr(
+        audio_normalization,
+        "measure_loudness",
+        lambda _path: {
+            "is_silent": False,
+            "integrated_lufs": -20.0,
+            "true_peak": -3.0,
+            "loudness_range": 5.0,
+        },
+    )
+    report = _run_strict_qc_with_mocked_media(
+        monkeypatch,
+        has_audio=True,
+        require_audio=False,
+    )
+    assert report["audio_required"] is True
+    assert report["contract"]["require_audio"] is True
+    assert report["ok"] is True

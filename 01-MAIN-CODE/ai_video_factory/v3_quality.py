@@ -634,23 +634,41 @@ def strict_render_check(
                 f"{expected_fps_number:.4f} ±{fps_tolerance:.4f} fps"
             )
 
+    # Environment policy can require audio globally, but it must never weaken
+    # an explicit job/profile requirement.
+    profile_audio_required = bool(require_audio or platform_profile.get("require_audio", False))
     audio_policy = os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "").strip()
-    if audio_policy in {"0", "1"}:
-        audio_required = audio_policy == "1"
+    if audio_policy == "1":
+        audio_required = True
     else:
-        audio_required = bool(require_audio or platform_profile.get("require_audio", False))
+        audio_required = profile_audio_required
+        if audio_policy not in {"", "0"}:
+            errors.append("AIVF_REQUIRE_OUTPUT_AUDIO must be '0' or '1' when set")
+
     if not info["has_audio"]:
         if audio_required:
             errors.append("rendered artifact has no audio stream but output audio is required")
         else:
             warnings.append("rendered artifact has no audio stream")
+    elif audio_required:
+        # A present stream can still be entirely silent. Check measured loudness
+        # when sound is part of the selected output contract.
+        try:
+            from .audio_normalization import measure_loudness
 
-    audio_required = bool(require_audio or platform_profile.get("require_audio", False))
-    if not info["has_audio"]:
-        if audio_required:
-            errors.append("rendered artifact is missing required audio; the required audio stream is absent")
-        else:
-            warnings.append("rendered artifact has no audio stream")
+            loudness = measure_loudness(path)
+            minimum_lufs = float(os.environ.get("AIVF_MIN_OUTPUT_AUDIO_LUFS", "-60"))
+            integrated_lufs = float(loudness.get("integrated_lufs"))
+            if not math.isfinite(minimum_lufs) or not -120.0 <= minimum_lufs <= 0.0:
+                raise ValueError("AIVF_MIN_OUTPUT_AUDIO_LUFS must be between -120 and 0 LUFS")
+            if bool(loudness.get("is_silent")) or not math.isfinite(integrated_lufs) or integrated_lufs < minimum_lufs:
+                errors.append(
+                    f"required output audio is silent or below {minimum_lufs:.1f} LUFS"
+                )
+        except (RuntimeError, OSError, ValueError, TypeError) as exc:
+            errors.append(
+                f"required output audio loudness validation failed: {type(exc).__name__}: {exc}"
+            )
 
     av_delta = info.get("audio_video_duration_delta_seconds")
     max_av_delta_value = platform_profile.get("max_av_duration_delta_seconds", 0.5)
