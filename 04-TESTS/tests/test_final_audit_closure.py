@@ -54,15 +54,39 @@ def test_backup_restore_round_trip(tmp_path) -> None:
         )
     knowledge = tmp_path / "knowledge"
     output = tmp_path / "output"
+    uploads = tmp_path / "uploads"
+    state = tmp_path / "state"
+    (state / "platform-secrets").mkdir(parents=True)
     knowledge.mkdir()
     output.mkdir()
+    uploads.mkdir()
     (knowledge / "k.txt").write_text("knowledge", encoding="utf-8")
     (output / "final.mp4").write_bytes(b"fixture")
+    (uploads / "incoming.mp4").write_bytes(b"pending upload")
+    (state / "publishing-heartbeat.json").write_text('{"status":"idle"}', encoding="utf-8")
+    with __import__("sqlite3").connect(state / "folder-publisher.sqlite") as conn:
+        conn.execute("CREATE TABLE publisher_state (id INTEGER PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO publisher_state(value) VALUES ('recoverable')")
+    with __import__("sqlite3").connect(state / "platform-secrets" / "platform-tokens.sqlite") as conn:
+        conn.execute("CREATE TABLE secret_tokens (token TEXT)")
+        conn.execute("INSERT INTO secret_tokens(token) VALUES ('must-not-enter-backup')")
     archive = tmp_path / "backup.tar.gz"
-    create_backup(db_path=db, backup_path=archive, knowledge_root=knowledge, output_root=output)
+    create_backup(
+        db_path=db,
+        backup_path=archive,
+        knowledge_root=knowledge,
+        output_root=output,
+        uploads_root=uploads,
+        state_root=state,
+    )
     assert verify_backup(archive)["ok"] is True
     destination = tmp_path / "restore"
     restore_backup(archive, destination)
     assert (destination / "jobs.db").is_file()
     assert (destination / "knowledge_base_v3" / "k.txt").read_text(encoding="utf-8") == "knowledge"
     assert (destination / "output" / "final.mp4").read_bytes() == b"fixture"
+    assert (destination / "uploads" / "incoming.mp4").read_bytes() == b"pending upload"
+    assert (destination / "state" / "publishing-heartbeat.json").is_file()
+    with __import__("sqlite3").connect(destination / "state" / "folder-publisher.sqlite") as conn:
+        assert conn.execute("SELECT value FROM publisher_state").fetchone()[0] == "recoverable"
+    assert not (destination / "state" / "platform-secrets").exists()
