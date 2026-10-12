@@ -538,42 +538,74 @@ def verify_retention_against_baseline(
     }
 
 
-def strict_render_check(path: str, *, target_seconds: float, platform_profile: Mapping[str, Any], retention_events: Sequence[Mapping[str, Any]] = (), retention_baseline: Optional[str] = None, require_independent_retention: bool = False, require_audio: bool = False) -> Dict[str, Any]:
+def strict_render_check(path: str, *, target_seconds: float, platform_profile: Mapping[str, Any], retention_events: Sequence[Mapping[str, Any]] = (), retention_baseline: Optional[str] = None, require_independent_retention: bool = False, expected_fps: float | None = None, require_audio: bool | None = None) -> Dict[str, Any]:
     info = probe_media(path); expected_width = int(platform_profile.get("width") or 0); expected_height = int(platform_profile.get("height") or 0); errors: list[str] = []; warnings: list[str] = []
     if abs(info["duration"] - float(target_seconds)) > 0.08: errors.append(f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s")
     if expected_width and info["width"] != expected_width: errors.append(f"width {info['width']} != required {expected_width}")
     if expected_height and info["height"] != expected_height: errors.append(f"height {info['height']} != required {expected_height}")
-    expected_fps_value = platform_profile.get("frame_rate_fps")
+    expected_fps_value: object = expected_fps
+    if expected_fps_value is None:
+        expected_fps_value = platform_profile.get("frame_rate_fps")
     if expected_fps_value is None:
         expected_fps_value = platform_profile.get("fps", platform_profile.get("frame_rate"))
-    if expected_fps_value is None and os.environ.get("AIVF_V3_EXPECTED_FPS"):
-        expected_fps_value = os.environ.get("AIVF_V3_EXPECTED_FPS")
+    if expected_fps_value is None:
+        expected_fps_value = os.environ.get("AIVF_V3_EXPECTED_FPS") or os.environ.get("AIVF_OUTPUT_FPS")
     if expected_fps_value is not None:
         actual_fps = _parse_frame_rate(info.get("fps"))
         try:
-            expected_fps = float(expected_fps_value)
-            fps_tolerance = float(platform_profile.get("frame_rate_tolerance_fps", 0.1))
+            expected_fps_number = float(expected_fps_value)
+            fps_tolerance = float(
+                platform_profile.get(
+                    "frame_rate_tolerance_fps",
+                    os.environ.get("AIVF_OUTPUT_FPS_TOLERANCE", "0.1"),
+                )
+            )
         except (TypeError, ValueError):
-            expected_fps = 0.0
+            expected_fps_number = 0.0
             fps_tolerance = -1.0
         if (
-            not math.isfinite(expected_fps)
-            or expected_fps <= 0
+            not math.isfinite(expected_fps_number)
+            or expected_fps_number <= 0
             or not math.isfinite(fps_tolerance)
             or fps_tolerance < 0
         ):
             errors.append("platform profile has an invalid frame-rate contract")
         elif actual_fps is None:
             errors.append("rendered artifact has an invalid or missing frame rate")
-        elif abs(actual_fps - expected_fps) > fps_tolerance:
+        elif abs(actual_fps - expected_fps_number) > fps_tolerance:
             errors.append(
                 f"frame rate {actual_fps:.4f} fps does not match required "
-                f"{expected_fps:.4f} ±{fps_tolerance:.4f} fps"
+                f"{expected_fps_number:.4f} ±{fps_tolerance:.4f} fps"
             )
 
+    raw_max_output_bytes = os.environ.get("AIVF_MAX_OUTPUT_BYTES", "").strip()
+    if raw_max_output_bytes:
+        try:
+            max_output_bytes = int(raw_max_output_bytes)
+        except ValueError:
+            max_output_bytes = 0
+            errors.append("AIVF_MAX_OUTPUT_BYTES must be a positive integer")
+        if max_output_bytes <= 0:
+            if not any("AIVF_MAX_OUTPUT_BYTES" in error for error in errors):
+                errors.append("AIVF_MAX_OUTPUT_BYTES must be a positive integer")
+        elif int(info.get("size") or os.path.getsize(path)) > max_output_bytes:
+            errors.append(
+                f"rendered artifact exceeds configured limit of {max_output_bytes} bytes"
+            )
+
+    configured_audio = os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "").strip().lower()
+    if require_audio is not None:
+        audio_required = bool(require_audio)
+    elif configured_audio in {"0", "1", "true", "false", "yes", "no"}:
+        audio_required = configured_audio in {"1", "true", "yes"}
+    else:
+        audio_required = bool(platform_profile.get("require_audio", False))
+        if configured_audio:
+            errors.append("AIVF_REQUIRE_OUTPUT_AUDIO must be a boolean value")
+
     if not info["has_audio"]:
-        if require_audio or bool(platform_profile.get("require_audio", False)):
-            errors.append("rendered artifact is missing required audio")
+        if audio_required:
+            errors.append("rendered artifact has no audio stream")
         else:
             warnings.append("rendered artifact has no audio stream")
     av_delta = info.get("audio_video_duration_delta_seconds")
@@ -646,20 +678,19 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
     return {
         "ok": not errors,
         "errors": errors,
-        "warnings": warnings + [
-            "Caption/subtitle visibility, readability, timing, and story coherence require human review; media metadata cannot prove them."
-        ],
+        "warnings": warnings,
         "contract": {
             "expected_width": expected_width,
             "expected_height": expected_height,
             "expected_frame_rate_fps": expected_fps_value,
             "frame_rate_tolerance_fps": platform_profile.get("frame_rate_tolerance_fps", 0.1),
-            "require_audio": bool(require_audio or platform_profile.get("require_audio", False)),
+            "require_audio": audio_required,
             "max_audio_video_duration_delta_seconds": platform_profile.get("max_av_duration_delta_seconds", 0.5),
         },
         "media": info,
         "playability": playability,
         "caption_visibility": {"status": "manual_review_required", "automated_ocr": "not_claimed"},
+        "audio_required": audio_required,
         "visual_sampling": visual,
         "retention_verification": retention_verification,
     }
