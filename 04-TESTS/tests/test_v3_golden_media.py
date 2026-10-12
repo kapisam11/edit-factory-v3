@@ -20,6 +20,7 @@ def test_v3_golden_media_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         pytest.skip("FFmpeg is required for the golden media test")
 
     monkeypatch.setenv("AIVF_ENV", "test")
+    monkeypatch.setenv("AIVF_TEST_DISABLE_EXTERNAL_TTS", "1")
     monkeypatch.setenv("AIVF_ALLOW_SKIP_QC", "1")
     monkeypatch.setenv("AIVF_V3_SEMANTIC_QC", "0")
     monkeypatch.setenv("AIVF_DEEP_FINAL_MEDIA_QC", "0")
