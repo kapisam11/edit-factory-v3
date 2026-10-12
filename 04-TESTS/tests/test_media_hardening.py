@@ -128,16 +128,34 @@ def test_music_mixer_duration_failure_is_hard_failure(monkeypatch, tmp_path):
         music_mixer.add_music_to_video(str(video), str(music), str(output))
 
 
-def test_render_engine_ffmpeg_failure_contains_stderr(monkeypatch):
+def test_render_engine_ffmpeg_failure_contains_stderr(monkeypatch, tmp_path):
     monkeypatch.setattr(render_engine.shutil, "which", lambda name: f"/usr/bin/{name}")
+    output = io.StringIO()
+    monkeypatch.setattr(render_engine.sys, "stderr", output)
 
-    def failing_run(*args, **kwargs):
-        raise subprocess.CalledProcessError(1, ["ffmpeg"], stderr="codec initialization failed")
+    class FakeProcess:
+        pid = 2468
+        returncode = 1
 
-    monkeypatch.setattr(render_engine.subprocess, "run", failing_run)
+        def __init__(self):
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("codec initialization failed\n")
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr(render_engine.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     with pytest.raises(RuntimeError, match="codec initialization failed"):
-        render_engine.run_ffmpeg(["ffmpeg", "-version"], capture_output=True)
-
+        render_engine.run_ffmpeg(
+            ["ffmpeg", "-y", str(tmp_path / "out.mp4")],
+            capture_output=True,
+        )
 
 def test_render_engine_capture_disabled_streams_and_reports_ffmpeg_stderr(monkeypatch):
     monkeypatch.setattr(render_engine.shutil, "which", lambda name: f"/usr/bin/{name}")
