@@ -658,7 +658,10 @@ def strict_render_check(
 
             loudness = measure_loudness(path)
             minimum_lufs = float(os.environ.get("AIVF_MIN_OUTPUT_AUDIO_LUFS", "-60"))
-            integrated_lufs = float(loudness.get("integrated_lufs"))
+            raw_integrated_lufs = loudness.get("integrated_lufs")
+            if raw_integrated_lufs is None:
+                raise ValueError("audio loudness measurement did not include integrated_lufs")
+            integrated_lufs = float(raw_integrated_lufs)
             if not math.isfinite(minimum_lufs) or not -120.0 <= minimum_lufs <= 0.0:
                 raise ValueError("AIVF_MIN_OUTPUT_AUDIO_LUFS must be between -120 and 0 LUFS")
             if bool(loudness.get("is_silent")) or not math.isfinite(integrated_lufs) or integrated_lufs < minimum_lufs:
