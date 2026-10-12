@@ -504,8 +504,11 @@ def strict_render_check(
     if expected_height and info["height"] != expected_height:
         errors.append(f"height {info['height']} != required {expected_height}")
 
-    fps_text = info.get("avg_frame_rate") or info.get("fps") or info.get("r_frame_rate")
-    actual_fps = _parse_fps(fps_text)
+    actual_fps = 0.0
+    for candidate in (info.get("avg_frame_rate"), info.get("fps"), info.get("r_frame_rate")):
+        actual_fps = _parse_fps(candidate)
+        if actual_fps > 0:
+            break
     configured_fps: float
     raw_expected = (
         expected_fps
