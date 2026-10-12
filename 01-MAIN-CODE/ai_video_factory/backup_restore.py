@@ -72,12 +72,66 @@ def backup_database(source: str | Path, destination: str | Path) -> Path:
     return destination_path
 
 
+def _copy_tree_for_backup(
+    source_root: Path,
+    target_root: Path,
+    *,
+    exclude_names: set[str] | None = None,
+    state_tree: bool = False,
+) -> None:
+    """Copy regular files only, keeping token/config secrets out of archives."""
+    excluded = {name.casefold() for name in (exclude_names or set())}
+    secret_directory_names = {"platform-secrets", "secrets", "credentials", "oauth"}
+    secret_name_markers = (
+        "token",
+        "secret",
+        "credential",
+        "oauth",
+        "client-secrets",
+        "client_secret",
+        ".env",
+    )
+    target_root.mkdir(parents=True, exist_ok=True)
+    for current, directories, filenames in os.walk(source_root, topdown=True, followlinks=False):
+        current_path = Path(current)
+        relative = current_path.relative_to(source_root)
+        target_current = target_root / relative
+        target_current.mkdir(parents=True, exist_ok=True)
+        kept_directories: list[str] = []
+        for name in directories:
+            child = current_path / name
+            if child.is_symlink():
+                continue
+            if state_tree and name.casefold() in secret_directory_names:
+                continue
+            kept_directories.append(name)
+        directories[:] = kept_directories
+
+        for name in filenames:
+            source = current_path / name
+            if source.is_symlink():
+                continue
+            lowered = name.casefold()
+            if lowered in excluded:
+                continue
+            if state_tree and any(marker in lowered for marker in secret_name_markers):
+                continue
+            destination = target_current / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if state_tree and lowered.endswith((".sqlite", ".sqlite3", ".db")):
+                backup_database(source, destination)
+            else:
+                shutil.copy2(source, destination)
+
+
 def create_backup(
     *,
     db_path: str | Path,
     backup_path: str | Path,
     knowledge_root: str | Path | None = None,
     output_root: str | Path | None = None,
+    uploads_root: str | Path | None = None,
+    state_root: str | Path | None = None,
 ) -> Path:
     backup_path = Path(backup_path)
     backup_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,14 +147,26 @@ def create_backup(
             }
         ]
 
-        for label, raw_root in (("knowledge_base_v3", knowledge_root), ("output", output_root)):
+        ignored_job_database = Path(db_path).name
+        data_roots = (
+            ("state", state_root, True, {ignored_job_database, ignored_job_database + "-wal", ignored_job_database + "-shm"}),
+            ("knowledge_base_v3", knowledge_root, False, set()),
+            ("output", output_root, False, set()),
+            ("uploads", uploads_root, False, set()),
+        )
+        for label, raw_root, is_state, exclusions in data_roots:
             if raw_root is None:
                 continue
             source_root = Path(raw_root)
             if not source_root.is_dir():
                 continue
             target_root = root / label
-            shutil.copytree(source_root, target_root, dirs_exist_ok=True, symlinks=False)
+            _copy_tree_for_backup(
+                source_root,
+                target_root,
+                exclude_names=exclusions,
+                state_tree=is_state,
+            )
             for path in target_root.rglob("*"):
                 if path.is_file() and not path.is_symlink():
                     files.append({
@@ -237,6 +303,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     backup.add_argument("--backup", required=True)
     backup.add_argument("--knowledge", default=os.environ.get("AIVF_KNOWLEDGE_DIR", "knowledge_base_v3"))
     backup.add_argument("--output", default=os.environ.get("AIVF_OUTPUT_DIR", "output"))
+    backup.add_argument("--uploads", default=os.environ.get("AIVF_UPLOAD_DIR", "uploads"))
+    backup.add_argument("--state", default=os.environ.get("AIVF_STATE_DIR", "state"))
 
     verify = sub.add_parser("verify")
     verify.add_argument("--backup", required=True)
@@ -254,6 +322,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             backup_path=args.backup,
             knowledge_root=args.knowledge,
             output_root=args.output,
+            uploads_root=args.uploads,
+            state_root=args.state,
         )
         print(f"backup created: {result}")
         return 0
