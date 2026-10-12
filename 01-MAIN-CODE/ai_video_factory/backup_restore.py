@@ -72,47 +72,112 @@ def backup_database(source: str | Path, destination: str | Path) -> Path:
     return destination_path
 
 
+def _is_sensitive_state_path(relative: Path) -> bool:
+    """Keep credential material out of ordinary backup archives."""
+    parts = [part.casefold() for part in relative.parts]
+    name = parts[-1] if parts else ""
+    if any(part in {"platform-secrets", "secrets", "credentials", "backups", "backup-staging"} for part in parts):
+        return True
+    if name in {".env", ".env.local", "client_secret.json", "credentials.json"}:
+        return True
+    if "token" in name or "secret" in name or name.endswith((".pem", ".key", ".p12", ".pfx")):
+        return True
+    return False
+
+
+def _copy_tree_into_backup(
+    staging_root: Path,
+    archive_label: str,
+    source_root: str | Path | None,
+    *,
+    state_tree: bool = False,
+) -> list[str]:
+    """Copy a tree without following symlinks; use SQLite's online backup API for DBs."""
+    if source_root is None:
+        return []
+    source = Path(source_root)
+    if not source.is_dir():
+        return []
+    target_root = staging_root / archive_label
+    target_root.mkdir(parents=True, exist_ok=True)
+    excluded: list[str] = []
+    for child in sorted(source.rglob("*")):
+        relative = child.relative_to(source)
+        if child.is_symlink():
+            continue
+        if state_tree and _is_sensitive_state_path(relative):
+            excluded.append((Path(archive_label) / relative).as_posix())
+            continue
+        destination = target_root / relative
+        if child.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+            continue
+        if not child.is_file():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Ignore live WAL/SHM files: backup_database produces a consistent SQLite
+        # snapshot, while copying those sidecars separately can reintroduce stale state.
+        if child.name.casefold().endswith(("-wal", "-shm")):
+            continue
+        if state_tree and child.suffix.casefold() in {".db", ".sqlite", ".sqlite3"}:
+            backup_database(child, destination)
+        else:
+            shutil.copy2(child, destination)
+    return excluded
+
+
 def create_backup(
     *,
     db_path: str | Path,
     backup_path: str | Path,
     knowledge_root: str | Path | None = None,
     output_root: str | Path | None = None,
+    uploads_root: str | Path | None = None,
+    state_root: str | Path | None = None,
 ) -> Path:
+    """Create a hash-manifested snapshot of the database and production data.
+
+    Credential/token files under the state tree are deliberately excluded: this
+    archive is a recovery backup, not a portable credential vault. Reauthorize
+    provider accounts after restore. Protect the archive and store it on a
+    different physical drive from the source data.
+    """
     backup_path = Path(backup_path)
     backup_path.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="aivf-backup-") as temp:
         root = Path(temp)
         db_copy = backup_database(db_path, root / "jobs.db")
-        files: list[dict[str, object]] = [
-            {
-                "name": "jobs.db",
-                "size_bytes": db_copy.stat().st_size,
-                "sha256": _sha256(db_copy),
-            }
-        ]
+        excluded_sensitive: list[str] = []
 
-        for label, raw_root in (("knowledge_base_v3", knowledge_root), ("output", output_root)):
-            if raw_root is None:
-                continue
-            source_root = Path(raw_root)
-            if not source_root.is_dir():
-                continue
-            target_root = root / label
-            shutil.copytree(source_root, target_root, dirs_exist_ok=True, symlinks=False)
-            for path in target_root.rglob("*"):
-                if path.is_file() and not path.is_symlink():
-                    files.append({
-                        "name": path.relative_to(root).as_posix(),
-                        "size_bytes": path.stat().st_size,
-                        "sha256": _sha256(path),
-                    })
+        if state_root is not None:
+            excluded_sensitive = _copy_tree_into_backup(
+                root, "state", state_root, state_tree=True
+            )
+        _copy_tree_into_backup(root, "knowledge_base_v3", knowledge_root)
+        _copy_tree_into_backup(root, "output", output_root)
+        _copy_tree_into_backup(root, "uploads", uploads_root)
 
+        # Hash every copied regular file, including auxiliary SQLite databases,
+        # upload staging and state data. The primary jobs DB is always included.
+        files: list[dict[str, object]] = []
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.name == "backup-manifest.json" or path.is_symlink():
+                continue
+            files.append({
+                "name": path.relative_to(root).as_posix(),
+                "size_bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+            })
         manifest = {
-            "format_version": 1,
+            "format_version": 2,
             "created_at_epoch": __import__("time").time(),
             "files": files,
+            "excluded_sensitive_state_files": excluded_sensitive,
+            "credential_restore_note": (
+                "Token, secret, credential and platform-secrets paths are excluded. "
+                "Provider accounts must be reauthorized after recovery."
+            ),
         }
         (root / "backup-manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -127,7 +192,6 @@ def create_backup(
         os.replace(partial, backup_path)
 
     return backup_path
-
 
 def verify_backup(
     backup_path: str | Path,
@@ -164,11 +228,21 @@ def verify_backup(
                 raise ValueError(f"backup hash mismatch: {relative}")
             verified += 1
 
-        jobs = root / "jobs.db"
-        with sqlite3.connect(str(jobs)) as conn:
-            integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0] or "").lower()
-        if integrity != "ok":
-            raise ValueError(f"backup database integrity check failed: {integrity}")
+        database_paths = {root / "jobs.db"}
+        for entry in manifest.get("files", []):
+            relative = str(entry.get("name") or "")
+            candidate = (root / relative).resolve()
+            if candidate.suffix.casefold() in {".db", ".sqlite", ".sqlite3"}:
+                database_paths.add(candidate)
+        for database_path in sorted(database_paths):
+            if not database_path.is_file():
+                raise ValueError(f"backup database is missing: {database_path.relative_to(root)}")
+            with sqlite3.connect(str(database_path)) as conn:
+                integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0] or "").lower()
+            if integrity != "ok":
+                raise ValueError(
+                    f"backup database integrity check failed for {database_path.relative_to(root)}: {integrity}"
+                )
         result = {
             "ok": True,
             "archive": str(archive_path),
@@ -237,6 +311,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     backup.add_argument("--backup", required=True)
     backup.add_argument("--knowledge", default=os.environ.get("AIVF_KNOWLEDGE_DIR", "knowledge_base_v3"))
     backup.add_argument("--output", default=os.environ.get("AIVF_OUTPUT_DIR", "output"))
+    backup.add_argument("--uploads", default=os.environ.get("AIVF_UPLOAD_DIR", "uploads"))
+    backup.add_argument("--state", default=os.environ.get("AIVF_STATE_DIR", "state"))
 
     verify = sub.add_parser("verify")
     verify.add_argument("--backup", required=True)
@@ -254,6 +330,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             backup_path=args.backup,
             knowledge_root=args.knowledge,
             output_root=args.output,
+            uploads_root=args.uploads,
+            state_root=args.state,
         )
         print(f"backup created: {result}")
         return 0

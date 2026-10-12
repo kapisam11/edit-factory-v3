@@ -193,6 +193,12 @@ The first run opens the standard OAuth consent flow and stores the refreshable t
 
 The default privacy setting is `private` so you can inspect the result before publishing. You can explicitly choose `unlisted` or `public` after verifying the package.
 
+## Final media contract and human review
+
+The upload manifest includes `media_contract`. `publish_ready` stays false when FFprobe cannot inspect the final file, the video stream or container is missing, dimensions differ from the selected output profile, frame rate is missing/outside the configured `AIVF_OUTPUT_FPS` ± `AIVF_OUTPUT_FPS_TOLERANCE` policy, the output exceeds `AIVF_MAX_OUTPUT_BYTES`, or a supplied caption file is missing/empty. If audio is mandatory for a project, set `AIVF_REQUIRE_OUTPUT_AUDIO=1`; audio is optional by default and its absence is reported as a warning unless that policy is enabled.
+
+These automated checks do not prove that the right footage appears, subtitles are readable or correctly timed, the narrative makes sense, music is balanced, or footage is licensed. The human review gate remains enabled by default. Play the entire MP4 and complete the review dimensions (`hook`, `pacing`, `visual_relevance`, `caption_readability`, `audio`, `rights`, and `metadata`) before enabling publication. A green technical media contract is not a creative, legal, or monetization guarantee.
+
 ## AI / altered-content review
 
 The manifest intentionally records `review_required` instead of making an automatic legal/platform decision. Review the generated or altered media and use the platform's current disclosure controls when needed.
