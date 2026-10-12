@@ -565,7 +565,9 @@ def strict_render_check(
     expected_width = int(platform_profile.get("width") or 0)
     expected_height = int(platform_profile.get("height") or 0)
     errors: list[str] = []
-    warnings: list[str] = []
+    warnings: list[str] = [
+        "Caption/subtitle visibility, readability, timing, and story coherence require human review; media metadata cannot prove them."
+    ]
 
     try:
         target_value = float(target_seconds)
@@ -628,7 +630,7 @@ def strict_render_check(
             errors.append("rendered artifact has an invalid or missing frame rate")
         elif abs(actual_fps - expected_fps_number) > fps_tolerance:
             errors.append(
-                f"frame rate {actual_fps:.4f} fps does not match required "
+                f"frame rate {actual_fps:.3f} fps does not match required "
                 f"{expected_fps_number:.4f} ±{fps_tolerance:.4f} fps"
             )
 
@@ -646,7 +648,7 @@ def strict_render_check(
     audio_required = bool(require_audio or platform_profile.get("require_audio", False))
     if not info["has_audio"]:
         if audio_required:
-            errors.append("rendered artifact is missing required audio")
+            errors.append("rendered artifact is missing the required audio stream (no audio stream present)")
         else:
             warnings.append("rendered artifact has no audio stream")
 
