@@ -95,7 +95,10 @@ def _stream_duration_seconds(stream: Mapping[str, Any] | None) -> Optional[float
     except (TypeError, ValueError):
         pass
     try:
-        ticks = float(stream.get("duration_ts"))
+        raw_ticks = stream.get("duration_ts")
+        if raw_ticks is None or raw_ticks == "":
+            return None
+        ticks = float(raw_ticks)
         numerator_text, denominator_text = str(stream.get("time_base", "")).split("/", 1)
         numerator, denominator = float(numerator_text), float(denominator_text)
         if denominator != 0:
