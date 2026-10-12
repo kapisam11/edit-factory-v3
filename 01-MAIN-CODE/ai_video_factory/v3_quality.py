@@ -647,7 +647,7 @@ def strict_render_check(
 
     if not info["has_audio"]:
         if audio_required:
-            errors.append("rendered artifact has no audio stream but output audio is required")
+            errors.append("rendered artifact is missing required audio stream")
         else:
             warnings.append("rendered artifact has no audio stream")
     elif audio_required:
