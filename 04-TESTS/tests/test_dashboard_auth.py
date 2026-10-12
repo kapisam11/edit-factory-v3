@@ -1,8 +1,11 @@
 import importlib
 from pathlib import Path
 
+import pytest
+
 
 def _load(monkeypatch):
+    monkeypatch.setenv("AIVF_ENV", "test")
     monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "test-token")
     monkeypatch.setenv("AIVF_COOKIE_SECURE", "0")
     import dashboard_auth
@@ -28,6 +31,44 @@ def _load(monkeypatch):
 def _login(client):
     response = client.post("/login", data={"token": "test-token"}, headers={"Origin": "http://localhost"})
     assert response.status_code == 302
+
+
+
+def test_dashboard_auth_rejects_missing_runtime_secret(monkeypatch):
+    monkeypatch.setenv("AIVF_ENV", "development")
+    monkeypatch.setenv("FLASK_SECRET_KEY", "a" * 48)
+    monkeypatch.delenv("AIVF_DASHBOARD_TOKEN", raising=False)
+    import dashboard_auth
+    importlib.reload(dashboard_auth)
+    from flask import Flask
+
+    app = Flask(__name__)
+    with pytest.raises(RuntimeError, match="AIVF_DASHBOARD_TOKEN"):
+        dashboard_auth.configure_dashboard_auth(app)
+
+
+def test_dashboard_auth_rejects_known_placeholder_secret(monkeypatch):
+    monkeypatch.setenv("AIVF_ENV", "development")
+    monkeypatch.setenv("FLASK_SECRET_KEY", "dev-secret-change-me")
+    monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "b" * 48)
+    import dashboard_auth
+    importlib.reload(dashboard_auth)
+    from flask import Flask
+
+    with pytest.raises(RuntimeError, match="FLASK_SECRET_KEY"):
+        dashboard_auth.configure_dashboard_auth(Flask(__name__))
+
+
+def test_dashboard_auth_rejects_weak_runtime_secrets(monkeypatch):
+    monkeypatch.setenv("AIVF_ENV", "development")
+    monkeypatch.setenv("FLASK_SECRET_KEY", "too-short")
+    monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "c" * 48)
+    import dashboard_auth
+    importlib.reload(dashboard_auth)
+    from flask import Flask
+
+    with pytest.raises(RuntimeError, match="FLASK_SECRET_KEY"):
+        dashboard_auth.configure_dashboard_auth(Flask(__name__))
 
 
 def test_dashboard_requires_authentication(monkeypatch):
@@ -127,6 +168,7 @@ def test_authenticated_state_change_accepts_same_origin_referer(monkeypatch):
 
 
 def test_insecure_local_mode_is_loopback_only(monkeypatch):
+    monkeypatch.setenv("AIVF_ENV", "test")
     monkeypatch.delenv("AIVF_DASHBOARD_TOKEN", raising=False)
     monkeypatch.setenv("AIVF_ALLOW_INSECURE_LOCAL", "1")
     import dashboard_auth
