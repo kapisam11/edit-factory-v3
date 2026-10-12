@@ -538,12 +538,16 @@ def verify_retention_against_baseline(
     }
 
 
-def strict_render_check(path: str, *, target_seconds: float, platform_profile: Mapping[str, Any], retention_events: Sequence[Mapping[str, Any]] = (), retention_baseline: Optional[str] = None, require_independent_retention: bool = False) -> Dict[str, Any]:
+def strict_render_check(path: str, *, target_seconds: float, platform_profile: Mapping[str, Any], retention_events: Sequence[Mapping[str, Any]] = (), retention_baseline: Optional[str] = None, require_independent_retention: bool = False, require_audio: bool = False) -> Dict[str, Any]:
     info = probe_media(path); expected_width = int(platform_profile.get("width") or 0); expected_height = int(platform_profile.get("height") or 0); errors: list[str] = []; warnings: list[str] = []
     if abs(info["duration"] - float(target_seconds)) > 0.08: errors.append(f"duration {info['duration']:.3f}s does not match target {float(target_seconds):.3f}s")
     if expected_width and info["width"] != expected_width: errors.append(f"width {info['width']} != required {expected_width}")
     if expected_height and info["height"] != expected_height: errors.append(f"height {info['height']} != required {expected_height}")
     expected_fps_value = platform_profile.get("frame_rate_fps")
+    if expected_fps_value is None:
+        expected_fps_value = platform_profile.get("fps", platform_profile.get("frame_rate"))
+    if expected_fps_value is None and os.environ.get("AIVF_V3_EXPECTED_FPS"):
+        expected_fps_value = os.environ.get("AIVF_V3_EXPECTED_FPS")
     if expected_fps_value is not None:
         actual_fps = _parse_frame_rate(info.get("fps"))
         try:
@@ -568,7 +572,7 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
             )
 
     if not info["has_audio"]:
-        if bool(platform_profile.get("require_audio", False)):
+        if require_audio or bool(platform_profile.get("require_audio", False)):
             errors.append("rendered artifact is missing required audio")
         else:
             warnings.append("rendered artifact has no audio stream")
@@ -588,6 +592,7 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
 
     # A successful probe is necessary but does not prove every packet decodes.
     # Decode the complete final file with errors promoted to a hard failure.
+    playability: dict[str, Any] = {"ok": False, "error": "not checked"}
     try:
         _run(
             [
@@ -598,9 +603,17 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
             timeout=_timeout("AIVF_FINAL_DECODE_TIMEOUT_SECONDS", 600),
         )
     except RenderContractError as exc:
+        playability["error"] = str(exc)
         errors.append(f"full media decode failed: {exc}")
+    else:
+        playability = {"ok": True, "error": ""}
 
-    visual = _sample_visual_changes(path, sample_hz=10.0); events = []; retention_verification = None
+    visual = {"frames": 0, "change_events": [], "max_gap": None}
+    try:
+        visual = _sample_visual_changes(path, sample_hz=10.0)
+    except (RenderContractError, OSError, ValueError) as exc:
+        errors.append(f"visual sampling failed: {exc}")
+    events = []; retention_verification = None
     for item in retention_events:
         if isinstance(item, Mapping):
             try: events.append(float(item.get("time", 0.0)))
@@ -622,4 +635,23 @@ def strict_render_check(path: str, *, target_seconds: float, platform_profile: M
                 except RenderContractError as exc:
                     errors.append(f"independent retention QC failed: {exc}")
     if visual.get("max_gap") is not None and visual["max_gap"] > 3.0: errors.append(f"coarse visual sampling found a change gap of {visual['max_gap']:.2f}s; maximum allowed gap is 3.00s")
-    return {"ok": not errors, "errors": errors, "warnings": warnings, "media": info, "visual_sampling": visual, "retention_verification": retention_verification}
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings + [
+            "Caption/subtitle visibility, readability, timing, and story coherence require human review; media metadata cannot prove them."
+        ],
+        "contract": {
+            "expected_width": expected_width,
+            "expected_height": expected_height,
+            "expected_frame_rate_fps": expected_fps_value,
+            "frame_rate_tolerance_fps": platform_profile.get("frame_rate_tolerance_fps", 0.1),
+            "require_audio": bool(require_audio or platform_profile.get("require_audio", False)),
+            "max_audio_video_duration_delta_seconds": platform_profile.get("max_av_duration_delta_seconds", 0.5),
+        },
+        "media": info,
+        "playability": playability,
+        "caption_visibility": {"status": "manual_review_required", "automated_ocr": "not_claimed"},
+        "visual_sampling": visual,
+        "retention_verification": retention_verification,
+    }
