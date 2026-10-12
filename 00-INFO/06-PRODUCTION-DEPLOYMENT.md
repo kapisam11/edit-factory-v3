@@ -96,3 +96,17 @@ Stop the service cleanly and confirm workers do not remain behind.
 Do not describe the deployment as fully verified until the automated checks **and** these target-host tests pass.
 
 For the concise operational reference, see `OPERATIONS.md` and the release checklist.
+
+## Windows external-drive backup and restore drill
+
+Run this from the repository root after `START-ALL.bat` has created the local configuration and Docker Desktop is running:
+
+```powershell
+.\BACKUP-EDIT-FACTORY.ps1 -Destination D:\EditFactoryBackups -RetentionDays 14
+```
+
+Choose a destination on a **different drive** from the repository, and replace `D:` with the drive you actually have. The script makes a timestamped archive from the running development Compose volumes, including the SQLite job database, non-secret publisher state, knowledge base, generated outputs and uploads. It then verifies archived SHA-256 hashes and SQLite integrity, performs an isolated restore into a temporary location, checks the restored files against the backup manifest, and only then removes archives older than the retention period. It never overwrites the live data volumes during the restore drill.
+
+Token vaults, OAuth files, secret-named files and environment files are intentionally excluded. Enable BitLocker on the external drive; the archive itself is not encrypted by this local backup script. Store provider credentials separately and test that you can reauthorize them when needed.
+
+For unattended daily backups, create a Windows Task Scheduler task that runs the same PowerShell command at a time when the user session and Docker Desktop are available. Select “Run only when user is logged on” unless you've separately verified Docker Desktop's availability for a non-interactive account. Check the task log/output and the newest archive regularly; scheduled execution is not proof the task succeeded.
