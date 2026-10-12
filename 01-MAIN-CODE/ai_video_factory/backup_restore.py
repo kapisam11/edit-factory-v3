@@ -76,7 +76,7 @@ def _is_sensitive_state_path(relative: Path) -> bool:
     """Keep credential material out of ordinary backup archives."""
     parts = [part.casefold() for part in relative.parts]
     name = parts[-1] if parts else ""
-    if any(part in {"platform-secrets", "secrets", "credentials"} for part in parts):
+    if any(part in {"platform-secrets", "secrets", "credentials", "backups", "backup-staging"} for part in parts):
         return True
     if name in {".env", ".env.local", "client_secret.json", "credentials.json"}:
         return True
@@ -228,11 +228,21 @@ def verify_backup(
                 raise ValueError(f"backup hash mismatch: {relative}")
             verified += 1
 
-        jobs = root / "jobs.db"
-        with sqlite3.connect(str(jobs)) as conn:
-            integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0] or "").lower()
-        if integrity != "ok":
-            raise ValueError(f"backup database integrity check failed: {integrity}")
+        database_paths = {root / "jobs.db"}
+        for entry in manifest.get("files", []):
+            relative = str(entry.get("name") or "")
+            candidate = (root / relative).resolve()
+            if candidate.suffix.casefold() in {".db", ".sqlite", ".sqlite3"}:
+                database_paths.add(candidate)
+        for database_path in sorted(database_paths):
+            if not database_path.is_file():
+                raise ValueError(f"backup database is missing: {database_path.relative_to(root)}")
+            with sqlite3.connect(str(database_path)) as conn:
+                integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0] or "").lower()
+            if integrity != "ok":
+                raise ValueError(
+                    f"backup database integrity check failed for {database_path.relative_to(root)}: {integrity}"
+                )
         result = {
             "ok": True,
             "archive": str(archive_path),
