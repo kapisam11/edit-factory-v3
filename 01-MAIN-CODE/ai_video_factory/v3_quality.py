@@ -604,7 +604,7 @@ def strict_render_check(
     if expected_fps_value is None:
         expected_fps_value = os.environ.get("AIVF_V3_EXPECTED_FPS", "30")
     try:
-        expected_fps_number = float(expected_fps_value)
+        expected_fps_number = float(str(expected_fps_value))
         fps_tolerance = float(
             platform_profile.get(
                 "frame_rate_tolerance_fps",
