@@ -19,8 +19,8 @@ services:
     env_file:
       - .env
     environment:
-      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-dev-secret-change-me}
-      AIVF_DASHBOARD_TOKEN: ${AIVF_DASHBOARD_TOKEN:-dev-token-change-me}
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
+      AIVF_DASHBOARD_TOKEN: ${AIVF_DASHBOARD_TOKEN:-}
       AIVF_COOKIE_SECURE: ${AIVF_COOKIE_SECURE:-0}
       AIVF_STATE_DIR: /app/state
       AIVF_UPLOAD_DIR: /app/uploads
