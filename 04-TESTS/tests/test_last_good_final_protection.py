@@ -106,3 +106,42 @@ def test_successful_rerun_replaces_last_good_final_and_removes_snapshot(monkeypa
     assert result.final_video == str(final)
     assert final.read_bytes() == b"new playable final"
     assert not list(tmp_path.glob(".aivf-v3-last-good-*"))
+
+def test_failed_final_restore_retains_emergency_snapshot(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source fixture")
+    package = tmp_path / "package"
+    package.mkdir()
+    final = package / "final.v3.mp4"
+    final.write_bytes(b"previous-known-good-final")
+
+    class SeedThenFailStage:
+        name = "injected_failure"
+
+        def run(self, context):
+            (context.package / "final.v3.mp4").write_bytes(b"corrupt replacement")
+            raise RenderContractError("injected render failure")
+
+    original_replace = v3_stage_pipeline.os.replace
+
+    def fail_only_last_good_restore(source_path, destination_path):
+        source_item = Path(source_path)
+        destination_item = Path(destination_path)
+        if (
+            destination_item == final
+            and source_item.name.startswith(".aivf-v3-last-good-")
+        ):
+            raise OSError("injected restore disk failure")
+        return original_replace(source_path, destination_path)
+
+    monkeypatch.setattr(v3_stage_pipeline.os, "replace", fail_only_last_good_restore)
+    result = v3_stage_pipeline.V3PipelineRunner(
+        _request(source, package),
+        stages=(SeedThenFailStage(),),
+    ).run()
+
+    assert result.errors
+    snapshot = Path(result.artifacts["last_good_snapshot"])
+    assert snapshot.is_file()
+    assert snapshot.read_bytes() == b"previous-known-good-final"
+    assert any("failed to restore the previous final video" in error for error in result.errors)
