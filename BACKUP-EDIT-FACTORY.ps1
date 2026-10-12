@@ -40,14 +40,16 @@ $Prefix = @("compose", "--env-file", $EnvFile, "-f", $ComposeFile)
 & docker info *> $null
 if ($LASTEXITCODE -ne 0) { throw "Docker Desktop is not running." }
 
-$RunningId = (& docker @($Prefix + @("ps", "-q", "web")) | Select-Object -First 1)
+$PsArgs = $Prefix + @("ps", "-q", "web")
+$RunningId = (& docker @PsArgs | Select-Object -First 1)
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string]$RunningId)) {
     throw "The Edit Factory web container is not running. Start it with START-ALL.bat first."
 }
 $RunningId = ([string]$RunningId).Trim()
 
 # Build the backup utility into the current checkout without restarting the running dashboard.
-& docker @($Prefix + @("build", "web"))
+$BuildArgs = $Prefix + @("build", "web")
+& docker @BuildArgs
 if ($LASTEXITCODE -ne 0) { throw "Could not build the backup utility image." }
 
 $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -56,17 +58,23 @@ $ContainerBackup = "/app/state/backup-staging/$Name"
 $ContainerVerify = "/app/state/backup-staging/verify-$Name"
 $ArchivePath = Join-Path $Destination $Name
 
+$BackupArgs = $Prefix + @(
+    "run", "--rm", "--no-deps", "--entrypoint", "aivf-backup", "web",
+    "backup",
+    "--db", "/app/state/jobs.db",
+    "--backup", $ContainerBackup,
+    "--knowledge", "/app/knowledge_base_v3",
+    "--output", "/app/output",
+    "--uploads", "/app/uploads",
+    "--state", "/app/state"
+)
+$VerifyArgs = $Prefix + @(
+    "run", "--rm", "--no-deps", "--entrypoint", "aivf-backup", "web",
+    "verify", "--backup", $ContainerVerify, "--marker", "/tmp/aivf-backup-verified.json"
+)
+
 try {
-    & docker @($Prefix + @(
-        "run", "--rm", "--no-deps", "--entrypoint", "aivf-backup", "web",
-        "backup",
-        "--db", "/app/state/jobs.db",
-        "--backup", $ContainerBackup,
-        "--knowledge", "/app/knowledge_base_v3",
-        "--output", "/app/output",
-        "--uploads", "/app/uploads",
-        "--state", "/app/state"
-    ))
+    & docker @BackupArgs
     if ($LASTEXITCODE -ne 0) { throw "Backup creation failed inside the container." }
 
     & docker cp "${RunningId}:${ContainerBackup}" $ArchivePath
@@ -79,10 +87,7 @@ try {
     & docker cp $ArchivePath "${RunningId}:${ContainerVerify}"
     if ($LASTEXITCODE -ne 0) { throw "Could not stage the copied archive for verification." }
 
-    & docker @($Prefix + @(
-        "run", "--rm", "--no-deps", "--entrypoint", "aivf-backup", "web",
-        "verify", "--backup", $ContainerVerify, "--marker", "/tmp/aivf-backup-verified.json"
-    ))
+    & docker @VerifyArgs
     if ($LASTEXITCODE -ne 0) { throw "Backup verification failed. Do not rely on this archive." }
 
     $Hash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash
@@ -92,5 +97,7 @@ try {
     Write-Host "The archive is not encrypted. Keep it on a trusted, access-restricted drive."
 }
 finally {
-    & docker exec $RunningId sh -lc "rm -f '$ContainerBackup' '$ContainerVerify'" *> $null
+    if (-not [string]::IsNullOrWhiteSpace([string]$RunningId)) {
+        & docker exec $RunningId sh -lc "rm -f '$ContainerBackup' '$ContainerVerify'" *> $null
+    }
 }
