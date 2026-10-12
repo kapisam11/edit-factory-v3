@@ -2,20 +2,28 @@
 import os
 import sys
 
+from app.runtime_secrets import require_runtime_secret
+
+# Fail before importing the dashboard module, which creates state directories
+# and initializes database/runtime components at import time.
+runtime_environment = os.environ.get("AIVF_ENV", "production").strip().lower()
+flask_secret_key = require_runtime_secret(
+    "FLASK_SECRET_KEY",
+    os.environ.get("FLASK_SECRET_KEY"),
+    environment=runtime_environment,
+)
+require_runtime_secret(
+    "AIVF_DASHBOARD_TOKEN",
+    os.environ.get("AIVF_DASHBOARD_TOKEN"),
+    environment=runtime_environment,
+)
+
 from app import web_app_v3 as _web_app_v3
 from ai_video_factory import configure_logging, bootstrap_runtime
 configure_logging()
 bootstrap_runtime()
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-# Production must use a stable explicitly configured session secret. The
-# application module historically generated a random fallback at import time;
-# overriding it here prevents session invalidation and multi-worker mismatch.
-flask_secret_key = os.environ.get("FLASK_SECRET_KEY", "").strip()
-if not flask_secret_key:
-    raise RuntimeError(
-        "FLASK_SECRET_KEY must be set for the production dashboard; refusing to use a per-process random key."
-    )
 _web_app_v3.app.config["SECRET_KEY"] = flask_secret_key
 
 # Dashboard modules use the canonical V3 application implementation.
