@@ -383,6 +383,7 @@ def _finalize_v3_media(
             payload.get("retention_map", []),
             target_seconds=target_seconds,
             normalize_audio=os.environ.get("AIVF_EBU_R128", "1").strip() != "0",
+            frame_rate_fps=float(profile.get("frame_rate_fps") or 30.0),
         )
         report = strict_render_check(
             str(retention_path),
