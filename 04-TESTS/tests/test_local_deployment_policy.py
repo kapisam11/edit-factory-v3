@@ -138,3 +138,27 @@ def test_readme_documents_small_group_windows_requirements_and_paid_work_checkli
     assert "API failure and retry behavior" in readme
     assert "rights approval before publish" in readme
     assert "disk space headroom" in readme
+
+
+def test_final_windows_checklist_documents_limits_recovery_and_publish_gates() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "Final Windows production checklist" in readme
+    assert "AIVF_FOLDER_MAX_FILE_BYTES" in readme
+    assert "AIVF_FOLDER_MAX_STAGED_BYTES" in readme
+    assert "AIVF_FOLDER_MIN_FREE_DISK_BYTES" in readme
+    assert "Crash/restart test" in readme
+    assert "backup/restore verification drill" in readme
+    assert "Missing or malformed rights evidence" in readme
+    assert "private or unlisted account acceptance test" in readme
+
+
+def test_security_workflow_has_pinned_secret_scanning() -> None:
+    workflow = (
+        REPOSITORY_ROOT / ".github" / "workflows" / "security.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "Secret scanning (Gitleaks)" in workflow
+    assert "gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e" in workflow
+    assert "fetch-depth: 0" in workflow
+
