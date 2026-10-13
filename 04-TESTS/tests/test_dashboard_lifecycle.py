@@ -542,3 +542,65 @@ def test_create_job_idempotency_reuses_existing_job_and_rejects_payload_conflict
     conflict = client.post("/api/jobs", data={"topic": "different topic"}, headers=headers)
     assert conflict.status_code == 409
     assert "different request" in conflict.get_json()["error"]
+
+
+
+def test_v3_worker_never_marks_a_result_with_errors_done(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from ai_video_factory import resource_metrics, v3_pipeline
+
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    source = tmp_path / "uploaded.mp4"
+    source.write_bytes(b"test source")
+    output_root = tmp_path / "output"
+    db_path = str(appmod.DB_PATH)
+    params = {
+        "topic": "false-success regression",
+        "workflow": "v3",
+        "raw_video": str(source),
+        "target_seconds": 8.0,
+        "platform": "youtube_shorts",
+        "audience": "test viewers",
+    }
+    appmod.db_insert_job("job-v3-failed-result", params["topic"], params)
+
+    class QuietResourceMonitor:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start_monitoring(self):
+            pass
+
+        def stop_monitoring(self):
+            return {"sample_count": 0, "samples": []}
+
+    def failed_pipeline(_source, _topic, package_dir, **_kwargs):
+        package = Path(package_dir)
+        package.mkdir(parents=True, exist_ok=True)
+        final = package / "final.v3.mp4"
+        # Even a file at the expected path must not override an explicit pipeline error.
+        final.write_bytes(b"invalid video")
+        return SimpleNamespace(
+            errors=["simulated final media contract failure"],
+            warnings=[],
+            artifacts={},
+            final_video=str(final),
+        )
+
+    monkeypatch.setattr(resource_metrics, "ResourceMonitor", QuietResourceMonitor)
+    monkeypatch.setattr(v3_pipeline, "run_v3_pipeline", failed_pipeline)
+
+    appmod._run_job_worker_impl(
+        "job-v3-failed-result",
+        params,
+        {},
+        str(output_root),
+        db_path,
+    )
+
+    job = appmod.db_get_job("job-v3-failed-result")
+    assert job["status"] == "error"
+    assert job["status"] != "done"
+    assert "simulated final media contract failure" in job["error"]
+    assert job["step"] == "failed"
+    assert not list(output_root.glob("*.mp4"))
