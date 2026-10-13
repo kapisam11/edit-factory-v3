@@ -35,7 +35,7 @@ jobs:
       - name: Verify toolchain and generate a synthetic video with audio
         run: |
           set -euo pipefail
-          docker run --rm --entrypoint bash aivf-codespaces-sandbox -euo pipefail -s <<'SH'
+          docker run --rm -i --entrypoint bash aivf-codespaces-sandbox -euo pipefail -s <<'SH'
           python --version
           uv --version
           ffmpeg -hide_banner -version
@@ -74,7 +74,7 @@ jobs:
           AIVF_DASHBOARD_TOKEN: sandbox-ci-dashboard-token
         run: |
           set -euo pipefail
-          docker run --rm \
+          docker run --rm -i \
             --user "$(id -u):$(id -g)" \
             --mount "type=bind,source=${GITHUB_WORKSPACE},target=/workspace" \
             --workdir /workspace \
