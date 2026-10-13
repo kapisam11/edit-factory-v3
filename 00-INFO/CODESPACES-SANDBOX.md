@@ -16,7 +16,7 @@ The environment is deliberately CPU/Linux based. It does not prove Windows-speci
 From the repository root, run:
 
 ```bash
-.devcontainer/verify-media.sh
+bash .devcontainer/verify-media.sh
 ```
 
 The script generates a temporary three-second H.264/AAC video using FFmpeg, checks its stream metadata and duration with FFprobe, then runs the existing media-health, render-integration, render-engine, golden-media, and output-QC tests. The generated fixture is deleted on exit.
