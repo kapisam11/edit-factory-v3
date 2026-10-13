@@ -100,6 +100,7 @@ def test_readiness_report_items_are_serialized_dicts():
 
 
 def test_readiness_blocks_a_missing_required_implementation_file(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = \"readiness-fixture\"\n", encoding="utf-8")
     package_dir = tmp_path / "01-MAIN-CODE" / "ai_video_factory"
     package_dir.mkdir(parents=True)
     for _name, required_path in readiness._required_code_checks(package_dir):
@@ -214,3 +215,62 @@ def test_rights_declaration_timestamp_is_valid():
         now=__import__("datetime").datetime.now(__import__("datetime").timezone.utc) + __import__("datetime").timedelta(days=1),
     )
     assert rights_gate([future])["publish_blocked"] is True
+
+
+def test_readiness_rejects_invalid_repository_roots_without_package_fallback(tmp_path):
+    bad_root = tmp_path / "wrong-directory"
+    bad_root.mkdir()
+    (bad_root / "pyproject.toml").write_text("[project]\nname = \"wrong-root\"\n", encoding="utf-8")
+
+    with pytest.raises(readiness.InvalidRepositoryRootError, match="invalid repository root"):
+        readiness.run_readiness(bad_root)
+    with pytest.raises(readiness.InvalidRepositoryRootError, match="invalid repository root"):
+        readiness._package_directory(bad_root)
+
+    missing_root = tmp_path / "does-not-exist"
+    with pytest.raises(readiness.InvalidRepositoryRootError, match="does not exist"):
+        readiness.run_readiness(missing_root)
+
+
+def test_readiness_cli_invalid_root_fails_with_actionable_error(tmp_path, capsys):
+    bad_root = tmp_path / "not-a-repository"
+    bad_root.mkdir()
+
+    assert readiness.main([str(bad_root)]) == 2
+    captured = capsys.readouterr()
+    assert "ERROR: invalid repository root" in captured.err
+    assert "01-MAIN-CODE/ai_video_factory" in captured.err
+
+    assert readiness.main([str(bad_root), "--json"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["verification_state"] == "INVALID_ROOT"
+    assert payload["summary"]["fully_verified"] is False
+
+
+def test_readiness_passes_only_when_behavior_tests_execute(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    items = {item.number: item for item in readiness.run_readiness(root)}
+
+    for number, test_id in (
+        (5, "test_log_redaction_patterns"),
+        (22, "test_rbac"),
+        (23, "test_job_backend_reclaims_expired_and_rejects_stale_worker"),
+    ):
+        assert items[number].status == "PASS", items[number]
+        assert test_id in items[number].evidence
+        assert "runtime test passed" in items[number].detail
+
+    for number in (4, 8, 10, 17, 20, 21, 25, 33):
+        assert items[number].status == "UNVERIFIED", items[number]
+
+
+def test_required_file_presence_is_not_reported_as_behavior_pass(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    report = readiness.report_dict(root)
+    assert report["code_checks"]
+    assert all(item["status"] in {"PRESENT", "BLOCKED"} for item in report["code_checks"])
+    assert all(
+        "behavior is not implied" in item["detail"]
+        for item in report["code_checks"]
+        if item["status"] == "PRESENT"
+    )
