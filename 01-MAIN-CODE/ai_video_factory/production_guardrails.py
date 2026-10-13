@@ -218,7 +218,7 @@ def run_tool(
         buffer = bytearray()
         try:
             while True:
-                chunk = stream.read(64 * 1024)
+                chunk = os.read(stream.fileno(), 64 * 1024)
                 if not chunk:
                     break
                 if overflow is not None and len(buffer) + len(chunk) > limit:
@@ -254,14 +254,24 @@ def run_tool(
     deadline = time.monotonic() + int(timeout)
     timed_out = False
     overflowed = False
-    while process.poll() is None:
+    while True:
         if stdout_overflow.is_set():
             overflowed = True
             terminate_process_tree(process)
             break
-        if time.monotonic() >= deadline:
+        if time.monotonic() >= deadline and (
+            process.poll() is None or stdout_thread.is_alive() or stderr_thread.is_alive()
+        ):
+            # A grandchild can inherit the pipes and outlive a parent that
+            # exits successfully. The deadline covers pipe EOF/reaping too.
             timed_out = True
             terminate_process_tree(process)
+            break
+        if (
+            process.poll() is not None
+            and not stdout_thread.is_alive()
+            and not stderr_thread.is_alive()
+        ):
             break
         time.sleep(0.02)
 
