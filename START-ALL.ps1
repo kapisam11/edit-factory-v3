@@ -2,7 +2,9 @@
 param(
     [switch]$SkipChecks,
     [switch]$NoBrowser,
-    [switch]$NoBuild
+    [switch]$NoBuild,
+    [ValidateRange(1, 600)]
+    [int]$HealthTimeoutSeconds = 60
 )
 
 $ErrorActionPreference = "Stop"
@@ -218,9 +220,9 @@ Write-Ok "Local Edit Factory dashboard container started."
 Write-Step "Waiting for the dashboard health check"
 
 $healthy = $false
-for ($i = 1; $i -le 60; $i++) {
+for ($i = 1; $i -le $HealthTimeoutSeconds; $i++) {
     try {
-        $response = Invoke-WebRequest -Uri "$BaseUrl/api/health" -UseBasicParsing -TimeoutSec 5
+        $response = Invoke-WebRequest -Uri "$BaseUrl/api/health" -UseBasicParsing -TimeoutSec ([Math]::Min(5, $HealthTimeoutSeconds))
         if ($response.StatusCode -eq 200) {
             $healthy = $true
             break
