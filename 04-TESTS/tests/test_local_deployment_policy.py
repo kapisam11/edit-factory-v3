@@ -162,3 +162,26 @@ def test_security_workflow_has_pinned_secret_scanning() -> None:
     assert "gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e" in workflow
     assert "fetch-depth: 0" in workflow
 
+
+
+
+def test_windows_launcher_has_configurable_health_timeout_and_failure_path_ci() -> None:
+    launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "python-tests.yml").read_text(encoding="utf-8")
+    regression = (
+        REPOSITORY_ROOT / "04-TESTS" / "scripts" / "test_start_all_failures.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "HealthTimeoutSeconds = 60" in launcher
+    assert "$i -le $HealthTimeoutSeconds" in launcher
+    assert "Dashboard health check failed" in launcher
+    assert "Exercise Windows launcher failure paths" in workflow
+    for scenario in (
+        "docker-command-missing",
+        "docker-desktop-down",
+        "port-conflict",
+        "health-never-ready",
+        "dependency-install-fails",
+        "repeat-start",
+    ):
+        assert scenario in regression
