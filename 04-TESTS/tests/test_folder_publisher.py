@@ -342,3 +342,36 @@ def test_probe_video_reports_bounded_ffprobe_failure(monkeypatch, tmp_path: Path
     with pytest.raises(ValueError, match="ffprobe could not validate.*timed out"):
         folder.probe_video(tmp_path / "broken.mp4", max_duration_seconds=30)
 
+
+
+def test_folder_publisher_redacts_secrets_from_failure_state_and_logs(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    import logging
+
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    video = incoming / "private-clip.mp4"
+    video.write_bytes(b"stable fake media for secret-redaction test")
+    folder.approve_sidecar(incoming, video.name, ai_generated=False, realistic_alteration=False)
+    monkeypatch.setattr(folder, "probe_video", _probe)
+    publisher = _publisher(tmp_path)
+
+    secret = "publisher-access-token-should-not-escape-123"
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", secret)
+
+    def failed_upload(*_args, **_kwargs):
+        raise RuntimeError(f"upstream rejected token={secret}")
+
+    monkeypatch.setattr(folder, "upload_video", failed_upload)
+    with caplog.at_level(logging.WARNING, logger=folder.LOG.name):
+        publisher.scan()
+        result = publisher.publish_one()
+
+    assert result is not None
+    assert result["state"] == "UPLOADING"
+    assert "RuntimeError" in result["error"]
+    assert secret not in result["error"]
+    assert secret not in publisher.store.items()[0]["last_error"]
+    assert secret not in caplog.text
+
