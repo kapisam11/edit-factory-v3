@@ -362,7 +362,8 @@ jobs:
           "RUN-PUBLISHER.ps1",
           "INSTALL-PUBLISHER-TASK.ps1",
           "REMOVE-PUBLISHER-TASK.ps1",
-          "BACKUP-EDIT-FACTORY.ps1"
+          "BACKUP-EDIT-FACTORY.ps1",
+          "04-TESTS/scripts/test_start_all_failures.ps1"
         )
         foreach ($script in $scripts) {
           $tokens = $null
@@ -423,6 +424,9 @@ jobs:
       env:
         PYTHONPATH: 01-MAIN-CODE;02-WEB-FILES;03-SIDE-CODE
       run: uv run pytest -q 04-TESTS/tests/test_dashboard_auth.py 04-TESTS/tests/test_dashboard_security.py 04-TESTS/tests/test_dashboard_lifecycle.py 04-TESTS/tests/test_config_roundtrip.py 04-TESTS/tests/test_model_adapter_security.py 04-TESTS/tests/test_pipeline_retry_policy.py 04-TESTS/tests/test_upload_cleanup.py
+    - name: Exercise Windows launcher failure paths
+      shell: pwsh
+      run: pwsh -NoProfile -ExecutionPolicy Bypass -File 04-TESTS/scripts/test_start_all_failures.ps1
 
   dependency-audit:
     runs-on: ubuntu-latest
