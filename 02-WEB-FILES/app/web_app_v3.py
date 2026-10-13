@@ -324,10 +324,11 @@ def db_list_jobs() -> list:
 
 
 def db_append_log(job_id: str, level: str, message: str) -> None:
+    safe_message = _redact_sensitive_text(message, max_length=10000)
     def write(conn):
         conn.execute(
             "INSERT INTO job_logs (job_id, level, message) VALUES (?, ?, ?)",
-            (job_id, level.upper(), str(message)[:10000]),
+            (job_id, level.upper(), safe_message),
         )
     _run_db_write(write)
 
