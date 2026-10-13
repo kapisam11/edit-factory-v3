@@ -1,0 +1,67 @@
+name: Codespaces sandbox
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".devcontainer/**"
+      - "00-INFO/CODESPACES-SANDBOX.md"
+      - ".github/workflows/codespaces-sandbox.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke-test:
+    name: Build clean Codespaces image and test FFmpeg
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Validate sandbox configuration and shell scripts
+        run: |
+          set -euo pipefail
+          python -m json.tool .devcontainer/devcontainer.json >/dev/null
+          bash -n .devcontainer/post-create.sh .devcontainer/verify-media.sh
+          git diff --check
+
+      - name: Build development container
+        run: docker build --pull --file .devcontainer/Dockerfile --tag aivf-codespaces-sandbox .
+
+      - name: Verify toolchain and generate a synthetic video with audio
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint bash aivf-codespaces-sandbox -euo pipefail -s <<'SH'
+          python --version
+          uv --version
+          ffmpeg -hide_banner -version
+          ffprobe -hide_banner -version
+          tesseract --version
+
+          fixture=/tmp/aivf-codespaces-smoke.mp4
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "testsrc=size=360x640:rate=24" \
+            -f lavfi -i "sine=frequency=440:sample_rate=48000" \
+            -t 3 -shortest -pix_fmt yuv420p \
+            -c:v libx264 -preset ultrafast -crf 30 \
+            -c:a aac -b:a 96k "$fixture"
+
+          ffprobe -v error \
+            -show_entries format=duration:stream=codec_type,codec_name,width,height \
+            -of json "$fixture" | python -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          streams = data.get("streams", [])
+          video = [s for s in streams if s.get("codec_type") == "video"]
+          audio = [s for s in streams if s.get("codec_type") == "audio"]
+          duration = float(data.get("format", {}).get("duration", 0))
+          assert len(video) == 1 and video[0].get("codec_name") == "h264', video
+          assert video[0].get("width") == 360 and video[0].get("height") == 640, video
+          assert len(audio) == 1 and audio[0].get("codec_name") == "aac", audio
+          assert 2.8 <= duration <= 3.2, duration
+          print(f"PASS: verified H.264 + AAC; duration={duration:.3f}s")
+          '
+          SH
