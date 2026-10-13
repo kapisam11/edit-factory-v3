@@ -94,7 +94,7 @@ def test_readiness_blocks_a_missing_required_implementation_file(tmp_path):
     package_dir.mkdir(parents=True)
     for _name, required_path in readiness._required_code_checks(package_dir):
         required_path.parent.mkdir(parents=True, exist_ok=True)
-        required_path.write_text("# fixture implementation file\\n", encoding="utf-8")
+        required_path.write_text("# fixture implementation file\n", encoding="utf-8")
 
     missing_path = package_dir / "job_recovery.py"
     missing_path.unlink()
