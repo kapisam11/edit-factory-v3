@@ -20,4 +20,4 @@ uv pip check
 
 echo
 echo "Edit Factory v3 sandbox ready."
-echo "Run .devcontainer/verify-media.sh for the synthetic FFmpeg + media test smoke."
+echo "Run bash .devcontainer/verify-media.sh for the synthetic FFmpeg + media test smoke."
