@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ai_video_factory import v3_stage_pipeline
 from ai_video_factory.v3_quality import RenderContractError
+from ai_video_factory.production_assurance import build_artifact_manifest, verify_artifact_manifest
 
 
 def _request(source: Path, package: Path) -> v3_stage_pipeline.V3Request:
@@ -350,3 +351,26 @@ def test_legacy_orphaned_snapshot_is_recovered_after_hard_crash(monkeypatch, tmp
     assert final.read_bytes() == b"legacy previous final"
     assert result.artifacts["last_good_final_preserved"] == str(final)
     assert not legacy_snapshot.exists()
+
+
+
+def test_artifact_manifest_ignores_mutable_workspace_lock(tmp_path):
+    package = tmp_path / "package"
+    package.mkdir()
+    final = package / "final.v3.mp4"
+    final.write_bytes(b"verified completed video")
+
+    manifest = build_artifact_manifest(
+        package,
+        required_files=("final.v3.mp4",),
+    )
+    lock = package / ".lock"
+    lock.write_text('{"pid": 123, "started_at": 1}', encoding="utf-8")
+
+    # WorkspaceLock rewrites .lock on every run; this operational state must not
+    # invalidate hashes for the immutable completed video and its release artifacts.
+    lock.write_text('{"pid": 456, "started_at": 2}', encoding="utf-8")
+    report = verify_artifact_manifest(package, manifest, verify_hashes=True)
+
+    assert report["ok"] is True, report["errors"]
+    assert all(item["path"] != ".lock" for item in manifest["files"])
