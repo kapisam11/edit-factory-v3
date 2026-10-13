@@ -10,9 +10,9 @@ command -v tesseract >/dev/null
 
 python --version
 uv --version
-ffmpeg -hide_banner -version | head -n 1
-ffprobe -hide_banner -version | head -n 1
-tesseract --version | head -n 1
+ffmpeg -hide_banner -version | sed -n '1p'
+ffprobe -hide_banner -version | sed -n '1p'
+tesseract --version | sed -n '1p'
 
 # Use the committed lockfile; do not silently resolve a new dependency set.
 uv sync --frozen --python 3.12 --extra web --extra dev --extra ocr
