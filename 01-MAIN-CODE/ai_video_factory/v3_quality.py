@@ -449,6 +449,383 @@ def verify_retention_against_baseline(
     rendered = probe_media(rendered_path)
     if baseline["width"] != rendered["width"] or baseline["height"] != rendered["height"]:
         raise RenderContractError("baseline and rendered dimensions differ")
+    baseline_visual_duration = _visual_duration_seconds(baseline)
+    rendered_visual_duration = _visual_duration_seconds(rendered)
+    duration_tolerance = _retention_duration_tolerance(baseline, rendered)
+    duration_delta = abs(baseline_visual_duration - rendered_visual_duration)
+    if duration_delta > duration_tolerance:
+        raise RenderContractError(
+            "baseline and rendered video durations differ: "
+            f"{baseline_visual_duration:.3f}s vs {rendered_visual_duration:.3f}s "
+            f"(allowed {duration_tolerance:.3f}s; container durations "
+            f"{float(baseline['duration']):.3f}s vs {float(rendered['duration']):.3f}s)"
+        )
+    events = _validated_retention_events(retention_events, rendered_visual_duration)
+
+    sample_times: set[float] = set()
+    event_windows: dict[float, list[float]] = {}
+    control_windows: dict[float, list[float]] = {}
+    for index, (timestamp, _kind) in enumerate(events):
+        active = [
+            round(timestamp + offset, 3)
+            for offset in (0.02, 0.08, 0.14)
+            if timestamp + offset < rendered_visual_duration - 0.02
+        ]
+        next_time = events[index + 1][0] if index + 1 < len(events) else rendered_visual_duration
+        candidates = [timestamp + 0.55, timestamp + max(0.35, (next_time - timestamp) * 0.50)]
+        controls = [
+            round(min(t, rendered_visual_duration - 0.05), 3)
+            for t in candidates
+            if t < next_time - 0.18 and t < rendered_visual_duration - 0.05
+        ]
+        if not controls:
+            controls = [round(max(0.05, timestamp - 0.45), 3)] if timestamp >= 0.45 else [0.30]
+        event_windows[timestamp] = active
+        control_windows[timestamp] = controls
+        sample_times.update(active)
+        sample_times.update(controls)
+
+    baseline_frames = _sample_gray_frames(baseline_path, sorted(sample_times))
+    rendered_frames = _sample_gray_frames(rendered_path, sorted(sample_times))
+    checks: list[dict[str, Any]] = []
+    for timestamp, kind in events:
+        active_times = event_windows[timestamp]
+        control_times = control_windows[timestamp]
+        active_metrics = [
+            verify_visual_effect(
+                baseline_frames[t],
+                rendered_frames[t],
+                effect_kind=kind,
+            )
+            for t in active_times
+            if baseline_frames.get(t) and rendered_frames.get(t)
+        ]
+        control_deltas = [
+            _frame_delta(baseline_frames[t], rendered_frames[t])
+            for t in control_times
+            if baseline_frames.get(t) and rendered_frames.get(t)
+        ]
+        strongest = max(active_metrics, key=lambda item: item.pixel_delta, default=None)
+        # Use the strongest in-window frame for the independent pixel gate. Effects
+        # are intentionally short, so a median can dilute a real effect near a
+        # frame boundary even when the strongest sample clearly proves it.
+        event_delta = strongest.pixel_delta if strongest is not None else 0.0
+        control_delta = median(control_deltas) if control_deltas else 0.0
+        threshold = max(0.10, control_delta * 1.08)
+        semantic_pass = bool(strongest and strongest.passed)
+        pixel_pass = event_delta >= threshold
+        # The semantic gate is the proof that the intended effect happened;
+        # the relative pixel gate only requires it to exceed the local control.
+        passed = semantic_pass and pixel_pass
+        checks.append({
+            "time": timestamp,
+            "kind": kind,
+            "event_delta": round(event_delta, 3),
+            "control_delta": round(control_delta, 3),
+            "threshold": round(threshold, 3),
+            "semantic_verification": strongest.to_dict() if strongest else None,
+            "passed": passed,
+        })
+
+    missing = [item for item in checks if not item["passed"]]
+    return {
+        "ok": not missing,
+        "method": "batched-baseline-compare-with-multi-signal-semantic-verification",
+        "baseline": os.path.abspath(baseline_path),
+        "rendered": os.path.abspath(rendered_path),
+        "events": checks,
+        "errors": [
+            (
+                f"retention event at {item['time']:.2f}s failed verification: "
+                f"semantic={item['semantic_verification'] and item['semantic_verification'].get('reason')!s}; "
+                f"event_delta={item['event_delta']:.3f}; "
+                f"control_delta={item['control_delta']:.3f}; "
+                f"threshold={item['threshold']:.3f}"
+            )
+            for item in missing
+        ],
+    }
+
+
+def _verify_full_decode(path: str) -> None:
+    """Decode every video packet and any audio stream before release."""
+    _run(
+        [
+            "ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-xerror",
+            "-i", path, "-map", "0:v:0", "-map", "0:a:0?", "-f", "null", "-",
+        ],
+        timeout=_timeout("AIVF_FINAL_DECODE_TIMEOUT_SECONDS", 600),
+    )
+
+
+def strict_render_check(
+    path: str,
+    *,
+    target_seconds: float,
+    platform_profile: Mapping[str, Any],
+    retention_events: Sequence[Mapping[str, Any]] = (),
+    retention_baseline: Optional[str] = None,
+    require_independent_retention: bool = False,
+    require_audio: bool = False,
+    expected_fps: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Enforce the final media contract before an output can be promoted."""
+    info = probe_media(path)
+    expected_width = int(platform_profile.get("width") or 0)
+    expected_height = int(platform_profile.get("height") or 0)
+    errors: list[str] = []
+    warnings: list[str] = [
+        "Caption/subtitle visibility, readability, timing, and story coherence require human review; media metadata cannot prove them."
+    ]
+
+    try:
+        target_value = float(target_seconds)
+    except (TypeError, ValueError, OverflowError):
+        target_value = 0.0
+        errors.append("target duration must be a finite positive number")
+    if not math.isfinite(target_value) or target_value <= 0:
+        if "target duration must be a finite positive number" not in errors:
+            errors.append("target duration must be a finite positive number")
+    elif abs(info["duration"] - target_value) > 0.08:
+        errors.append(
+            f"duration {info['duration']:.3f}s does not match target {target_value:.3f}s"
+        )
+
+    if expected_width and info["width"] != expected_width:
+        errors.append(f"width {info['width']} != required {expected_width}")
+    if expected_height and info["height"] != expected_height:
+        errors.append(f"height {info['height']} != required {expected_height}")
+
+    try:
+        max_output_bytes = int(os.environ.get("AIVF_MAX_OUTPUT_BYTES", str(5 * 1024**3)))
+    except (TypeError, ValueError, OverflowError):
+        max_output_bytes = 0
+    if max_output_bytes <= 0:
+        errors.append("AIVF_MAX_OUTPUT_BYTES must be a positive integer")
+    elif int(info.get("size") or 0) > max_output_bytes:
+        errors.append(
+            f"output size {int(info['size'])} bytes exceeds configured limit {max_output_bytes} bytes"
+        )
+
+    expected_fps_value: object = expected_fps
+    if expected_fps_value is None:
+        expected_fps_value = platform_profile.get("frame_rate_fps")
+    if expected_fps_value is None:
+        expected_fps_value = platform_profile.get("fps", platform_profile.get("frame_rate"))
+    if expected_fps_value is None:
+        expected_fps_value = os.environ.get("AIVF_V3_EXPECTED_FPS", "30")
+    try:
+        expected_fps_number = float(str(expected_fps_value))
+        fps_tolerance = float(
+            platform_profile.get(
+                "frame_rate_tolerance_fps",
+                os.environ.get("AIVF_OUTPUT_FPS_TOLERANCE", "0.1"),
+            )
+        )
+    except (TypeError, ValueError, OverflowError):
+        expected_fps_number = 0.0
+        fps_tolerance = -1.0
+
+    if (
+        not math.isfinite(expected_fps_number)
+        or not 1.0 <= expected_fps_number <= 120.0
+        or not math.isfinite(fps_tolerance)
+        or fps_tolerance < 0
+    ):
+        errors.append("platform profile has an invalid frame-rate contract")
+    else:
+        actual_fps = _parse_frame_rate(info.get("fps"))
+        if actual_fps is None:
+            errors.append("rendered artifact has an invalid or missing frame rate")
+        elif abs(actual_fps - expected_fps_number) > fps_tolerance:
+            errors.append(
+                f"frame rate {actual_fps:.3f} fps does not match required "
+                f"{expected_fps_number:.4f} ±{fps_tolerance:.4f} fps"
+            )
+
+    # Environment policy can require audio globally, but it must never weaken
+    # an explicit job/profile requirement.
+    profile_audio_required = bool(require_audio or platform_profile.get("require_audio", False))
+    audio_policy = os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "").strip()
+    if audio_policy == "1":
+        audio_required = True
+    else:
+        audio_required = profile_audio_required
+        if audio_policy not in {"", "0"}:
+            errors.append("AIVF_REQUIRE_OUTPUT_AUDIO must be '0' or '1' when set")
+
+    if not info["has_audio"]:
+        if audio_required:
+            errors.append("rendered artifact is missing required audio stream (no audio stream present)")
+        else:
+            warnings.append("rendered artifact has no audio stream")
+    elif audio_required:
+        # A present stream can still be entirely silent. Check measured loudness
+        # when sound is part of the selected output contract.
+        try:
+            from .audio_normalization import measure_loudness
+
+            loudness = measure_loudness(path)
+            minimum_lufs = float(os.environ.get("AIVF_MIN_OUTPUT_AUDIO_LUFS", "-60"))
+            raw_integrated_lufs = loudness.get("integrated_lufs")
+            if raw_integrated_lufs is None:
+                raise ValueError("audio loudness measurement did not include integrated_lufs")
+            integrated_lufs = float(raw_integrated_lufs)
+            if not math.isfinite(minimum_lufs) or not -120.0 <= minimum_lufs <= 0.0:
+                raise ValueError("AIVF_MIN_OUTPUT_AUDIO_LUFS must be between -120 and 0 LUFS")
+            if bool(loudness.get("is_silent")) or not math.isfinite(integrated_lufs) or integrated_lufs < minimum_lufs:
+                errors.append(
+                    f"required output audio is silent or below {minimum_lufs:.1f} LUFS"
+                )
+        except (RuntimeError, OSError, ValueError, TypeError) as exc:
+            errors.append(
+                f"required output audio loudness validation failed: {type(exc).__name__}: {exc}"
+            )
+
+    av_delta = info.get("audio_video_duration_delta_seconds")
+    max_av_delta_value = platform_profile.get("max_av_duration_delta_seconds", 0.5)
+    try:
+        max_av_delta = float(max_av_delta_value)
+    except (TypeError, ValueError, OverflowError):
+        max_av_delta = -1.0
+    if not math.isfinite(max_av_delta) or max_av_delta < 0:
+        errors.append("platform profile has an invalid audio/video duration tolerance")
+    elif info["has_audio"] and av_delta is not None:
+        try:
+            actual_av_delta = float(av_delta)
+        except (TypeError, ValueError, OverflowError):
+            actual_av_delta = float("inf")
+        if not math.isfinite(actual_av_delta) or abs(actual_av_delta) > max_av_delta:
+            errors.append(
+                f"audio/video stream durations differ by {abs(actual_av_delta):.3f}s; "
+                f"maximum allowed is {max_av_delta:.3f}s"
+            )
+
+    playability: dict[str, Any] = {"ok": False, "error": "not checked"}
+    try:
+        _verify_full_decode(path)
+    except RenderContractError as exc:
+        playability["error"] = str(exc)
+        errors.append(f"full media decode failed: {exc}")
+    else:
+        playability = {"ok": True, "error": ""}
+
+    visual: Dict[str, Any] = {"frames": 0, "change_events": [], "max_gap": None}
+    try:
+        visual = _sample_visual_changes(path, sample_hz=10.0)
+    except (RenderContractError, OSError, ValueError) as exc:
+        errors.append(f"visual sampling failed: {exc}")
+
+    events: list[float] = []
+    retention_verification = None
+    for item in retention_events:
+        if not isinstance(item, Mapping):
+            errors.append("retention map contains an invalid event")
+            continue
+        try:
+            event_time = float(item.get("time", 0.0))
+        except (TypeError, ValueError, OverflowError):
+            errors.append("retention map contains a non-numeric event time")
+            continue
+        if not math.isfinite(event_time):
+            errors.append("retention map contains a non-finite event time")
+            continue
+        events.append(event_time)
+
+    if not events:
+        errors.append("retention map is empty")
+    else:
+        if events[0] > 0.25:
+            errors.append("retention map does not begin near the opening")
+        if any(b <= a for a, b in zip(event
+
+def _visual_duration_seconds(info: Mapping[str, Any]) -> float:
+    """Use the video-stream timeline for visual QC, excluding audio/container tail padding."""
+    try:
+        duration = float(info.get("video_duration") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        duration = 0.0
+    if math.isfinite(duration) and duration > 0.0:
+        return duration
+    return float(info["duration"])
+
+
+def _retention_duration_tolerance(
+    baseline: Mapping[str, Any],
+    rendered: Mapping[str, Any],
+) -> float:
+    """Allow two frames at the slower frame rate plus small time-base rounding."""
+    baseline_fps = _fps_value(baseline.get("fps"))
+    rendered_fps = _fps_value(rendered.get("fps"))
+    slowest_fps = min(baseline_fps, rendered_fps)
+    return max(0.08, (2.0 / slowest_fps) + 0.005)
+
+def _sample_gray_frames(path: str, timestamps: Sequence[float]) -> dict[float, bytes]:
+    requested = [round(float(value), 3) for value in timestamps]
+    if not requested:
+        return {}
+    info = probe_media(path)
+    fps = _fps_value(info.get("fps"))
+    frame_numbers = sorted({max(0, int(round(timestamp * fps))) for timestamp in requested})
+    selector = "+".join(f"eq(n,{frame})" for frame in frame_numbers)
+    result = _run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", path,
+            "-vf", f"select='{selector}',scale=160:90,format=gray",
+            "-vsync", "0",
+            "-f", "rawvideo", "pipe:1",
+        ],
+        timeout=_timeout("AIVF_FFPROBE_TIMEOUT_SECONDS", 60),
+        capture_output=True,
+        text=False,
+    )
+    raw = result.stdout if isinstance(result.stdout, (bytes, bytearray)) else b""
+    frame_size = 160 * 90
+    frames = [bytes(raw[index:index + frame_size]) for index in range(0, len(raw), frame_size)]
+    frames = [frame for frame in frames if len(frame) == frame_size]
+    by_frame = dict(zip(frame_numbers, frames))
+    return {
+        timestamp: by_frame.get(max(0, int(round(timestamp * fps))), b"")
+        for timestamp in requested
+    }
+
+
+def _sample_gray_frame(path: str, timestamp: float) -> bytes:
+    result = _run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{max(0.0, timestamp):.3f}", "-i", path,
+            "-frames:v", "1", "-vf", "scale=160:90,format=gray",
+            "-f", "rawvideo", "pipe:1",
+        ],
+        timeout=_timeout("AIVF_FFPROBE_TIMEOUT_SECONDS", 30),
+        capture_output=True,
+        text=False,
+    )
+    raw = result.stdout if isinstance(result.stdout, (bytes, bytearray)) else b""
+    expected = 160 * 90
+    if len(raw) < expected:
+        raise RenderContractError(f"could not sample a frame from {path} at {timestamp:.3f}s")
+    return bytes(raw[:expected])
+
+
+def _frame_delta(first: bytes, second: bytes) -> float:
+    if len(first) != len(second) or not first:
+        return 0.0
+    return sum(abs(a - b) for a, b in zip(first, second)) / len(first)
+
+
+def verify_retention_against_baseline(
+    baseline_path: str,
+    rendered_path: str,
+    retention_events: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Verify retention effects using batched frame extraction and multiple visual signals."""
+    baseline = probe_media(baseline_path)
+    rendered = probe_media(rendered_path)
+    if baseline["width"] != rendered["width"] or baseline["height"] != rendered["height"]:
+        raise RenderContractError("baseline and rendered dimensions differ")
     if abs(baseline["duration"] - rendered["duration"]) > 0.08:
         raise RenderContractError("baseline and rendered durations differ")
     events = _validated_retention_events(retention_events, rendered["duration"])
