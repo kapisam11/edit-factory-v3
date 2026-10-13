@@ -42,3 +42,24 @@ def test_retention_verification_requires_effect_above_control(tmp_path):
     )
     assert report["ok"] is True
     assert all(event["passed"] for event in report["events"])
+
+
+def test_retention_visual_duration_ignores_container_audio_tail():
+    from ai_video_factory.v3_quality import _visual_duration_seconds
+
+    media = {"duration": 8.084, "video_duration": 8.0}
+    assert _visual_duration_seconds(media) == 8.0
+
+
+def test_retention_duration_tolerance_accounts_for_frame_rate_quantization():
+    from ai_video_factory.v3_quality import _retention_duration_tolerance
+
+    tolerance = _retention_duration_tolerance(
+        {"fps": "24/1"},
+        {"fps": "30/1"},
+    )
+    assert tolerance == pytest.approx((2.0 / 24.0) + 0.005)
+    assert _retention_duration_tolerance(
+        {"fps": "60/1"},
+        {"fps": "60/1"},
+    ) == pytest.approx(0.08)
