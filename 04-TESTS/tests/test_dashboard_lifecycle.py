@@ -667,3 +667,32 @@ def test_dashboard_job_errors_and_logs_are_redacted_before_persistence_and_respo
     )
     assert secret not in json.dumps(public_payload)
     assert "<REDACTED>" in json.dumps(public_payload)
+
+
+
+def test_unauthenticated_dashboard_client_cannot_reach_sensitive_routes(
+    monkeypatch, tmp_path
+):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    from dashboard_optimizations import install_dashboard_optimizations
+    install_dashboard_optimizations(appmod)
+    from dashboard_auth import configure_dashboard_auth
+    configure_dashboard_auth(appmod.app)
+
+    client = appmod.app.test_client()
+    assert client.get("/api/health").status_code == 200
+    protected_requests = [
+        ("GET", "/api/jobs"),
+        ("POST", "/api/jobs"),
+        ("GET", "/api/jobs/private-job"),
+        ("GET", "/api/jobs/private-job/status"),
+        ("POST", "/api/jobs/private-job/cancel"),
+        ("POST", "/api/jobs/private-job/retry"),
+        ("GET", "/api/packages"),
+        ("GET", "/api/packages/private-job/file/script.txt"),
+        ("GET", "/api/publishing/status"),
+        ("GET", "/api/health/details"),
+    ]
+    for method, path in protected_requests:
+        response = client.open(path, method=method, headers={"Origin": "http://localhost"})
+        assert response.status_code == 401, f"{method} {path} was not protected"
