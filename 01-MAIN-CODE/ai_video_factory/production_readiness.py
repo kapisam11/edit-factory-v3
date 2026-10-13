@@ -280,7 +280,7 @@ def _evaluate_behavior_probe(name: str, evidence: str, probe: Callable[[], str])
 
 
 def run_readiness(
-    root: str | Path = ".",
+    root: str | Path | None = ".",
     *,
     installed_package: bool = False,
 ) -> list[ReadinessItem]:
@@ -289,7 +289,7 @@ def run_readiness(
         base = Path.cwd().resolve()
         py = Path(__file__).resolve().parent
     else:
-        base = validate_repository_root(root)
+        base = validate_repository_root(root if root is not None else ".")
         py = base / "01-MAIN-CODE" / "ai_video_factory"
 
     items: list[ReadinessItem] = []
@@ -375,15 +375,15 @@ def run_readiness(
     return items
 
 
-def _package_directory(root: str | Path = ".", *, installed_package: bool = False) -> Path:
+def _package_directory(root: str | Path | None = ".", *, installed_package: bool = False) -> Path:
     """Resolve the package being inspected without silently switching targets."""
     if installed_package:
         return Path(__file__).resolve().parent
-    base = validate_repository_root(root)
+    base = validate_repository_root(root if root is not None else ".")
     return base / "01-MAIN-CODE" / "ai_video_factory"
 
 
-def report_dict(root: str | Path = ".", *, installed_package: bool = False) -> dict:
+def report_dict(root: str | Path | None = ".", *, installed_package: bool = False) -> dict:
     items = run_readiness(None, installed_package=True) if installed_package else run_readiness(root)
     package_dir = _package_directory(root, installed_package=installed_package)
     code_checks = _evaluate_code_checks(_required_code_checks(package_dir))
