@@ -736,7 +736,7 @@ class InstagramReelsAdapter(PlatformAdapter):
                 code="AMBIGUOUS_OUTCOME",
                 retryable=False,
                 uncertain=True,
-            ) from exc
+            ) from None
 
         remote_id = str(payload.get("id") or "")
         if not remote_id:
@@ -794,7 +794,7 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                 code=exc.code,
                 retryable=exc.retryable,
                 uncertain=exc.retryable,
-            ) from exc
+            ) from None
 
     def _api(
         self,
