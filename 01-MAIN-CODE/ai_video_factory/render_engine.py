@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from .ffmpeg_budget import slot
 from .hardware import choose_encoder, ffmpeg_preset_for
-from .production_guardrails import terminate_process_tree
+from .production_guardrails import GuardrailError, run_tool, terminate_process_tree
 from .runtime_config import runtime_config
 
 logger = logging.getLogger(__name__)
@@ -113,13 +113,28 @@ def _validate_tool_argv(cmd: List[str], expected: str) -> List[str]:
 
 
 def run_ffprobe(cmd: List[str], timeout: Optional[int] = None) -> subprocess.CompletedProcess:
+    """Run FFprobe with a hard deadline, tree-safe teardown, and a stdout cap."""
     cmd = _validate_tool_argv(cmd, "ffprobe")
     cmd[0] = _ffprobe_binary()
     timeout = timeout if timeout is not None else _bounded_timeout("AIVF_FFPROBE_TIMEOUT_SECONDS", 30)
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"FFprobe timed out after {timeout}s") from exc
+        result = run_tool(
+            cmd,
+            timeout=int(timeout),
+            stderr_limit=4000,
+            max_stdout_bytes=8 * 1024 * 1024,
+        )
+    except GuardrailError as exc:
+        detail = str(exc)
+        if detail.startswith("tool timed out after"):
+            raise RuntimeError(f"FFprobe timed out after {int(timeout)}s") from exc
+        raise RuntimeError(detail) from exc
+    return subprocess.CompletedProcess(
+        list(result.argv),
+        result.returncode,
+        result.stdout,
+        result.stderr_tail,
+    )
 
 
 def validate_media_output(path: str, require_video: bool = True, require_audio: bool = False) -> dict:

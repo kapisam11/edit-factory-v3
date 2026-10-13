@@ -15,7 +15,6 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
 import threading
 import time
 import uuid
@@ -24,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from .production_guardrails import redact_log_message
+from .render_engine import run_ffprobe
 from .youtube_publisher import upload_video
 
 LOG = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class FolderPublisherConfig:
     max_videos_per_day: int = 2
     max_file_bytes: int = 8 * 1024 * 1024 * 1024
     max_staged_bytes: int = 20 * 1024 * 1024 * 1024
+    min_free_disk_bytes: int = 20 * 1024 * 1024 * 1024
     max_duration_seconds: int = 2 * 60 * 60
     publish_enabled: bool = False
     privacy_status: str = "private"
@@ -65,6 +67,15 @@ class FolderPublisherConfig:
             max_videos_per_day=max(0, int(os.environ.get("AIVF_FOLDER_MAX_VIDEOS_PER_DAY", "2"))),
             max_file_bytes=max(1, int(os.environ.get("AIVF_FOLDER_MAX_FILE_BYTES", str(8 * 1024**3)))),
             max_staged_bytes=max(1, int(os.environ.get("AIVF_FOLDER_MAX_STAGED_BYTES", str(20 * 1024**3)))),
+            min_free_disk_bytes=max(
+                1,
+                int(
+                    os.environ.get(
+                        "AIVF_FOLDER_MIN_FREE_DISK_BYTES",
+                        os.environ.get("AIVF_MIN_FREE_DISK_BYTES", str(20 * 1024**3)),
+                    )
+                ),
+            ),
             max_duration_seconds=max(1, int(os.environ.get("AIVF_FOLDER_MAX_DURATION_SECONDS", "7200"))),
             publish_enabled=os.environ.get("AIVF_FOLDER_PUBLISH", "0").strip() == "1",
             privacy_status=os.environ.get("AIVF_FOLDER_PRIVACY", "private").strip().lower(),
@@ -72,6 +83,19 @@ class FolderPublisherConfig:
             client_secrets_path=os.environ.get("YOUTUBE_CLIENT_SECRETS"),
             token_path=os.environ.get("YOUTUBE_TOKEN_PATH"),
         )
+
+
+def _safe_publish_error(exc: BaseException) -> str:
+    """Bound and redact provider/filesystem errors before storing or logging them."""
+    message = redact_log_message(str(exc), max_length=1200)
+    for name, value in os.environ.items():
+        if (
+            value
+            and len(value) >= 5
+            and re.search(r"(TOKEN|SECRET|PASSWORD|CLIENT_KEY|ACCESS_KEY|REFRESH|API_KEY)", name, re.IGNORECASE)
+        ):
+            message = message.replace(value, "<REDACTED>")
+    return f"{type(exc).__name__}: {message}"[:1400]
 
 
 def _allows_duplicate_content(path: Path) -> bool:
@@ -103,27 +127,34 @@ def _sha256(path: Path) -> str:
 
 
 def probe_video(path: Path, *, max_duration_seconds: int) -> dict[str, Any]:
-    """Reject corrupt/non-video inputs before any upload is attempted."""
+    """Validate local video metadata with bounded, tree-safe FFprobe execution."""
     try:
-        result = subprocess.run(
+        result = run_ffprobe(
             [
                 "ffprobe",
                 "-v",
                 "error",
+                "-max_alloc",
+                str(64 * 1024 * 1024),
+                "-protocol_whitelist",
+                "file,crypto,data",
                 "-show_entries",
                 "format=duration,format_name:stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate",
                 "-of",
                 "json",
                 str(path),
             ],
-            check=True,
-            capture_output=True,
-            text=True,
             timeout=25,
         )
-        payload = json.loads(result.stdout)
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        raise ValueError(f"ffprobe could not validate this file: {exc}") from exc
+        if result.returncode != 0:
+            detail = redact_log_message(result.stderr or "ffprobe failed", max_length=800)
+            raise ValueError(f"ffprobe exited with code {result.returncode}: {detail}")
+        payload = json.loads(result.stdout or "{}")
+    except (OSError, RuntimeError, ValueError) as exc:
+        detail = redact_log_message(str(exc), max_length=800)
+        raise ValueError(
+            f"ffprobe could not validate this file ({type(exc).__name__}): {detail}"
+        ) from exc
 
     streams = payload.get("streams")
     if not isinstance(streams, list):
@@ -194,7 +225,6 @@ def probe_video(path: Path, *, max_duration_seconds: int) -> dict[str, Any]:
             1 for item in streams if isinstance(item, dict) and item.get("codec_type") == "audio"
         ),
     }
-
 
 class FolderQueue:
     """SQLite-backed queue with safe discovery and upload-lease recovery."""
@@ -721,6 +751,11 @@ class FolderPublisher:
                 return target, ""
 
             before = source.stat()
+            if before.st_size > self.config.max_file_bytes:
+                return None, (
+                    f"staging: source size {before.st_size} exceeds configured "
+                    f"{self.config.max_file_bytes}-byte file limit"
+                )
             if (
                 before.st_size != int(item["size_bytes"])
                 or before.st_mtime_ns != int(item["mtime_ns"])
@@ -744,14 +779,32 @@ class FolderPublisher:
                     f"staging: queued media snapshots exceed the configured "
                     f"{self.config.max_staged_bytes}-byte staging quota"
                 )
-            reserve = max(512 * 1024 * 1024, before.st_size // 10)
-            if shutil.disk_usage(root).free < before.st_size + reserve:
-                return None, "staging: insufficient disk headroom for an immutable retry-safe snapshot"
+            reserve = max(self.config.min_free_disk_bytes, before.st_size // 10)
+            free_bytes = shutil.disk_usage(root).free
+            required_bytes = before.st_size + reserve
+            if free_bytes < required_bytes:
+                return None, (
+                    "staging: insufficient disk headroom for an immutable retry-safe snapshot; "
+                    f"{free_bytes} bytes free, {required_bytes} bytes required "
+                    f"(including {reserve}-byte reserve)"
+                )
 
             temporary = root / f".{source_hash}.{uuid.uuid4().hex}.partial"
             try:
+                # Never copy more than the size admitted above. If another
+                # process appends to the input during staging, the post-copy
+                # stat/hash check rejects the snapshot without letting a race
+                # consume unbounded temporary disk space.
                 with source.open("rb") as input_handle, temporary.open("wb") as output_handle:
-                    shutil.copyfileobj(input_handle, output_handle, length=1024 * 1024)
+                    remaining = before.st_size
+                    while remaining > 0:
+                        chunk = input_handle.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        output_handle.write(chunk)
+                        remaining -= len(chunk)
+                    output_handle.flush()
+                    os.fsync(output_handle.fileno())
                 after = source.stat()
                 if (
                     before.st_size != after.st_size
@@ -1126,15 +1179,16 @@ class FolderPublisher:
             }
         except Exception as exc:
             now = time.time()
+            safe_error = _safe_publish_error(exc)
             self.store.defer_uncertain(
                 int(item["id"]),
                 str(item["lease_owner"]),
-                str(exc),
+                safe_error,
                 now=now,
                 attempts=int(item["attempts"]),
             )
-            LOG.warning("publish attempt for item %s is deferred safely: %s", item["id"], exc)
-            return {"id": int(item["id"]), "state": "UPLOADING", "error": str(exc)}
+            LOG.warning("publish attempt for item %s is deferred safely: %s", item["id"], safe_error)
+            return {"id": int(item["id"]), "state": "UPLOADING", "error": safe_error}
 
     def run_forever(self) -> None:
         LOG.info("watching %s; database=%s; uploads_enabled=%s", self.watch_dir, self.db_path, self.config.publish_enabled)

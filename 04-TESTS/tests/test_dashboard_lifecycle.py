@@ -302,7 +302,9 @@ def test_worker_exit_reconciles_running_job_and_releases_secrets(monkeypatch, tm
 
     job = appmod.db_get_job("job-crash")
     assert job["status"] == "interrupted"
+    assert job["error_code"] == "worker_crash"
     assert "Worker exited unexpectedly" in job["error"]
+    assert len(job["error"]) < 512
     assert "job-crash" in appmod._runtime_secrets
     assert "job-crash" in appmod._runtime_secret_expiry
 
@@ -604,3 +606,24 @@ def test_v3_worker_never_marks_a_result_with_errors_done(monkeypatch, tmp_path):
     assert "simulated final media contract failure" in job["error"]
     assert job["step"] == "failed"
     assert not list(output_root.glob("*.mp4"))
+
+
+def test_failed_oversize_upload_removes_partial_file(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    appmod.app.config["MAX_CONTENT_LENGTH"] = 16
+    upload_root = Path(appmod.UPLOAD_FOLDER)
+    upload_root.mkdir(parents=True, exist_ok=True)
+
+    class OversizeUpload:
+        content_length = None
+
+        @staticmethod
+        def save(path):
+            Path(path).write_bytes(b"x" * 17)
+
+    with pytest.raises(ValueError, match="Upload is too large"):
+        appmod._save_and_validate_upload(OversizeUpload(), ".mp4")
+
+    assert not list(upload_root.glob(".upload-*"))
+    assert not list(upload_root.glob("*.mp4"))
+

@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -161,34 +162,151 @@ def terminate_process_tree(process: subprocess.Popen[Any], *, grace_seconds: flo
         except OSError:
             pass
 
-def run_tool(argv: Sequence[str], *, timeout: int = 60, cwd: str | Path | None = None, env: Mapping[str, str] | None = None, stderr_limit: int = 4000) -> ToolResult:
-    """Run an external tool without a shell and retain a bounded diagnostic tail."""
+def run_tool(
+    argv: Sequence[str],
+    *,
+    timeout: int = 60,
+    cwd: str | Path | None = None,
+    env: Mapping[str, str] | None = None,
+    stderr_limit: int = 4000,
+    max_stdout_bytes: int = 8 * 1024 * 1024,
+) -> ToolResult:
+    """Run a command with a hard deadline, process-tree teardown, and bounded capture.
+
+    stdout is capped because callers commonly parse tool output as JSON. stderr is
+    drained continuously but only its tail is retained for diagnostics. A process
+    that exceeds the stdout budget is terminated rather than allowed to exhaust RAM.
+    """
     args = tuple(str(item) for item in argv)
     if not args or not args[0]:
         raise GuardrailError("tool command cannot be empty")
-    if int(timeout) <= 0:
+    if isinstance(timeout, bool) or int(timeout) <= 0:
         raise GuardrailError("tool timeout must be positive")
-    limit = max(256, int(stderr_limit))
+    stdout_limit = int(max_stdout_bytes)
+    if stdout_limit < 1:
+        raise GuardrailError("tool stdout limit must be positive")
+    stderr_tail_limit = max(256, int(stderr_limit))
+
     try:
-        process = subprocess.Popen(list(args), cwd=str(cwd) if cwd else None, env=dict(env) if env is not None else None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **_process_group_kwargs())
-        try:
-            stdout, stderr = process.communicate(timeout=int(timeout))
-        except subprocess.TimeoutExpired as exc:
-            terminate_process_tree(process)
-            try:
-                stdout, stderr = process.communicate(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                stdout, stderr = process.communicate(timeout=1)
-            raise GuardrailError(f"tool timed out after {timeout}s: {args[0]}") from exc
-        completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
-    except subprocess.TimeoutExpired as exc:
-        terminate_process_tree(process)
-        raise GuardrailError(f"tool timed out after {timeout}s: {args[0]}") from exc
+        process = subprocess.Popen(
+            list(args),
+            cwd=str(cwd) if cwd else None,
+            env=dict(env) if env is not None else None,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            **_process_group_kwargs(),
+        )
     except OSError as exc:
-        raise GuardrailError(f"could not start tool {args[0]}: {exc}") from exc
-    stderr = (completed.stderr or "").strip()
-    return ToolResult(args, completed.returncode, completed.stdout or "", stderr[-limit:])
+        raise GuardrailError(f"could not start tool {args[0]}: {type(exc).__name__}") from exc
+
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout_overflow = threading.Event()
+    stdout_capture: list[bytes] = []
+    stderr_capture: list[bytes] = []
+
+    def drain(
+        stream: Any,
+        destination: list[bytes],
+        limit: int,
+        *,
+        keep_tail: bool,
+        overflow: threading.Event | None = None,
+    ) -> None:
+        buffer = bytearray()
+        try:
+            while True:
+                chunk = os.read(stream.fileno(), 64 * 1024)
+                if not chunk:
+                    break
+                if overflow is not None and len(buffer) + len(chunk) > limit:
+                    overflow.set()
+                if keep_tail:
+                    buffer.extend(chunk)
+                    if len(buffer) > limit:
+                        del buffer[: len(buffer) - limit]
+                elif len(buffer) < limit:
+                    buffer.extend(chunk[: limit - len(buffer)])
+        except (OSError, ValueError):
+            # The pipe can close while a killed process tree is being reaped.
+            pass
+        destination.append(bytes(buffer))
+
+    stdout_thread = threading.Thread(
+        target=drain,
+        args=(process.stdout, stdout_capture, stdout_limit),
+        kwargs={"keep_tail": False, "overflow": stdout_overflow},
+        name=f"tool-stdout-{process.pid}",
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=drain,
+        args=(process.stderr, stderr_capture, stderr_tail_limit),
+        kwargs={"keep_tail": True},
+        name=f"tool-stderr-{process.pid}",
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+
+    deadline = time.monotonic() + int(timeout)
+    timed_out = False
+    overflowed = False
+    while True:
+        if stdout_overflow.is_set():
+            overflowed = True
+            terminate_process_tree(process)
+            break
+        if time.monotonic() >= deadline and (
+            process.poll() is None or stdout_thread.is_alive() or stderr_thread.is_alive()
+        ):
+            # A grandchild can inherit the pipes and outlive a parent that
+            # exits successfully. The deadline covers pipe EOF/reaping too.
+            timed_out = True
+            terminate_process_tree(process)
+            break
+        if (
+            process.poll() is not None
+            and not stdout_thread.is_alive()
+            and not stderr_thread.is_alive()
+        ):
+            break
+        time.sleep(0.02)
+
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired as exc:
+            raise GuardrailError(f"could not reap terminated tool process: {args[0]}") from exc
+
+    stdout_thread.join(timeout=2)
+    stderr_thread.join(timeout=2)
+    for pipe in (process.stdout, process.stderr):
+        try:
+            pipe.close()
+        except OSError:
+            pass
+    stdout_thread.join(timeout=0.25)
+    stderr_thread.join(timeout=0.25)
+
+    if timed_out:
+        raise GuardrailError(f"tool timed out after {int(timeout)}s: {args[0]}")
+    if overflowed or stdout_overflow.is_set():
+        raise GuardrailError(
+            f"tool stdout exceeded the configured {stdout_limit}-byte limit: {args[0]}"
+        )
+
+    stdout = stdout_capture[0].decode("utf-8", errors="replace") if stdout_capture else ""
+    stderr = stderr_capture[0].decode("utf-8", errors="replace") if stderr_capture else ""
+    return ToolResult(args, int(process.returncode or 0), stdout, stderr.strip())
 
 def redact_log_message(message: object, *, max_length: int = 4000) -> str:
     """Redact common credential-bearing values before they reach logs."""

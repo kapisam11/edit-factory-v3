@@ -90,3 +90,43 @@ def test_run_tool_timeout_terminates_process_group():
             [sys.executable, "-c", "import time; time.sleep(30)"],
             timeout=1,
         )
+
+
+def test_run_tool_terminates_when_stdout_exceeds_the_capture_budget() -> None:
+    with pytest.raises(GuardrailError, match="stdout exceeded the configured 1024-byte limit"):
+        run_tool(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.write('x' * 1000000); sys.stdout.flush()",
+            ],
+            timeout=10,
+            max_stdout_bytes=1024,
+        )
+
+
+def test_run_tool_retains_only_the_stderr_tail() -> None:
+    result = run_tool(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stderr.write('x' * 10000 + 'END-OF-DIAGNOSTIC')",
+        ],
+        timeout=10,
+        stderr_limit=256,
+    )
+
+    assert result.returncode == 0
+    assert len(result.stderr_tail) <= 256
+    assert result.stderr_tail.endswith("END-OF-DIAGNOSTIC")
+
+
+
+def test_run_tool_times_out_when_child_keeps_pipes_open_after_parent_exits() -> None:
+    code = (
+        "import subprocess, sys; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+        "print('parent-exited', flush=True)"
+    )
+    with pytest.raises(GuardrailError, match="timed out after 1s"):
+        run_tool([sys.executable, "-c", code], timeout=1)

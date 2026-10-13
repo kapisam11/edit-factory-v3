@@ -119,11 +119,41 @@ The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**.
 
 ### Windows small-group production requirements (practical local scope)
 
-- Windows 10/11 with Docker Desktop (WSL2 backend) running locally.
-- Python 3.12 tooling for local checks (`uv`, `pytest`, `mypy`, `ruff`).
-- FFmpeg installed and reachable in PATH for render and media validation.
-- Stable internet/API connectivity for research and optional publishing features.
-- Keep localhost-only defaults (`127.0.0.1`) unless you have separately hardened remote access.
+This guidance is for supervised use on one trusted Windows 10/11 PC by a few trusted users—not an internet-facing multi-tenant service.
+
+- Use Windows 10/11 with Docker Desktop (WSL2 backend) running locally.
+- Use Python 3.12 for local checks (`uv`, `pytest`, `mypy`, and `ruff`) and install FFmpeg/FFprobe where the Windows tools and any non-container tasks can resolve them.
+- Keep the dashboard bound to `127.0.0.1`. Do not expose it to a LAN, reverse proxy, or public internet without a separate authentication, session/CSRF, TLS, and file-access review.
+- Keep render concurrency conservative (start at `AIVF_MAX_CONCURRENT_JOBS=1`); increase it only after representative renders show acceptable peak RAM, VRAM, disk, thermal, and recovery behavior.
+- Keep publishing disabled during installation and testing. Enable a platform only after reviewing its rights/approval checklist and completing a controlled private or unlisted account acceptance test.
+- Keep generated tokens, client secrets, and the deployment `.env` file out of Git, ordinary support bundles, and backups. After restoring a backup, reauthorize provider accounts because credential files are intentionally excluded.
+
+### File-size and disk-space safeguards
+
+The effective upload limit is the smaller of the dashboard's configured maximum upload size and `AIVF_MAX_INPUT_BYTES` (default 2 GiB). Media admission also checks duration, dimensions, frame rate, and stream metadata before expensive processing. Final output size is bounded by `AIVF_MAX_OUTPUT_BYTES` (default 5 GiB).
+
+For the existing-folder publisher, configure:
+
+- `AIVF_FOLDER_MAX_FILE_BYTES` (default 8 GiB): maximum incoming file size.
+- `AIVF_FOLDER_MAX_STAGED_BYTES` (default 20 GiB): staging quota for immutable upload snapshots.
+- `AIVF_FOLDER_MIN_FREE_DISK_BYTES` (defaults to `AIVF_MIN_FREE_DISK_BYTES`, normally 20 GiB): disk space that must remain free in addition to the space needed for a new staged copy.
+- `AIVF_MIN_FREE_DISK_BYTES` (default 20 GiB): shared media admission/free-space floor.
+
+Set these values deliberately for the actual drive hosting uploads, staging, state, and output. Limits are admission safeguards, not a substitute for monitoring the drive or keeping a separate backup. If a disk-space check fails, free space or adjust the configured policy before retrying; do not delete active job workspaces manually.
+
+### Final Windows production checklist
+
+Complete and record these steps on the target PC before accepting paid work or enabling unattended publishing:
+
+1. **Installation and exposure:** start with a clean checkout, generated secrets, a working Docker Desktop/WSL2 installation, and localhost-only dashboard access. Verify that login and sensitive routes reject unauthenticated requests.
+2. **Real media smoke test:** render representative source footage with audio and captions; confirm the resulting video plays, has expected dimensions/duration/audio, and passes the project's media/QC checks. Review the actual image and sound yourself.
+3. **Resource and cleanup test:** confirm upload/file-size limits and disk-space safeguards are active. Test a rejected oversized file and a low-disk condition; confirm temporary uploads/staging files are cleaned and the last known-good output is preserved.
+4. **Crash/restart test:** run a test render, terminate the worker while it is active, restart the service, and verify the job is marked interrupted/recoverable rather than incorrectly successful. Confirm no orphan FFmpeg/FFprobe process remains and a retry does not overwrite another attempt's output.
+5. **Backup/restore verification drill:** run `BACKUP-EDIT-FACTORY.ps1` to a different physical drive, verify the archive, restore into an isolated destination, and check the restored database, knowledge, uploads, and output. Keep the backup drive encrypted (for example, BitLocker) and test restore, not just backup creation.
+6. **API failure and retry behavior:** exercise mocked network timeouts, HTTP 429/rate limits, HTTP 5xx responses, and malformed media/probe output before allowing any real post. Verify the job displays a useful error code/message, credentials and signed URLs are not logged, and an uncertain publication is reconciled rather than blindly posted twice.
+7. **Rights approval before publish:** confirm every source has an explicit rights basis/evidence/declaration, then complete a valid human review with all required scoring dimensions. Missing or malformed rights evidence, missing approval, or an invalid media contract must keep `publish_ready` false.
+8. **Controlled account acceptance:** only after the previous checks pass, test one video at private/unlisted visibility on each intended platform/account. Confirm the remote ID/status and visibility before increasing volume or enabling automatic publication.
+9. **Daily operations:** keep an eye on queue status, failed/interrupted jobs, resource usage, output quality, API status, and disk headroom. Verify the last backup is readable and rerun the restore drill after significant storage/schema changes.
 
 ### Pre-paid-work checklist
 
