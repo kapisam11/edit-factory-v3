@@ -125,7 +125,10 @@ def run_ffprobe(cmd: List[str], timeout: Optional[int] = None) -> subprocess.Com
             max_stdout_bytes=8 * 1024 * 1024,
         )
     except GuardrailError as exc:
-        raise RuntimeError(str(exc)) from exc
+        detail = str(exc)
+        if detail.startswith("tool timed out after"):
+            raise RuntimeError(f"FFprobe timed out after {int(timeout)}s") from exc
+        raise RuntimeError(detail) from exc
     return subprocess.CompletedProcess(
         list(result.argv),
         result.returncode,
