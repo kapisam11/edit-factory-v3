@@ -208,7 +208,9 @@ def _approved_review_payload() -> dict:
 
 
 def _configure_publish_package_probe(monkeypatch, tmp_path: Path) -> Path:
-    video = tmp_path / "final.mp4"
+    package_dir = tmp_path / "package"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    video = package_dir / "final.mp4"
     video.write_bytes(b"x" * 1000)
     monkeypatch.setattr(upload_package, "_probe_media", lambda _path: _ffprobe_payload())
     monkeypatch.setenv("AIVF_ENV", "production")
