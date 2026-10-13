@@ -1,0 +1,35 @@
+{
+  "name": "Edit Factory v3 - isolated media test sandbox",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true,
+  "forwardPorts": [5000],
+  "portsAttributes": {
+    "5000": {
+      "label": "Edit Factory v3 local dashboard",
+      "onAutoForward": "notify"
+    }
+  },
+  "containerEnv": {
+    "PYTHONPATH": "01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE"
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["04-TESTS/tests"],
+        "editor.formatOnSave": true
+      }
+    }
+  }
+}

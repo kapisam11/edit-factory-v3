@@ -383,6 +383,29 @@ def _fps_value(raw_fps: object) -> float:
     return value if math.isfinite(value) and value > 0 else 30.0
 
 
+def _visual_duration_seconds(info: Mapping[str, Any]) -> float:
+    """Use video-stream duration for visual QC, excluding audio/container tail padding."""
+    try:
+        duration = float(info.get("video_duration") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        duration = 0.0
+    if math.isfinite(duration) and duration > 0.0:
+        return duration
+    return float(info["duration"])
+
+
+def _retention_duration_tolerance(
+    baseline: Mapping[str, Any],
+    rendered: Mapping[str, Any],
+) -> float:
+    """Allow two frames at the slower frame rate plus small time-base rounding."""
+    baseline_fps = _fps_value(baseline.get("fps"))
+    rendered_fps = _fps_value(rendered.get("fps"))
+    slowest_fps = min(baseline_fps, rendered_fps)
+    return max(0.08, (2.0 / slowest_fps) + 0.005)
+
+
+
 def _sample_gray_frames(path: str, timestamps: Sequence[float]) -> dict[float, bytes]:
     requested = [round(float(value), 3) for value in timestamps]
     if not requested:
@@ -449,9 +472,18 @@ def verify_retention_against_baseline(
     rendered = probe_media(rendered_path)
     if baseline["width"] != rendered["width"] or baseline["height"] != rendered["height"]:
         raise RenderContractError("baseline and rendered dimensions differ")
-    if abs(baseline["duration"] - rendered["duration"]) > 0.08:
-        raise RenderContractError("baseline and rendered durations differ")
-    events = _validated_retention_events(retention_events, rendered["duration"])
+    baseline_visual_duration = _visual_duration_seconds(baseline)
+    rendered_visual_duration = _visual_duration_seconds(rendered)
+    duration_tolerance = _retention_duration_tolerance(baseline, rendered)
+    duration_delta = abs(baseline_visual_duration - rendered_visual_duration)
+    if duration_delta > duration_tolerance:
+        raise RenderContractError(
+            "baseline and rendered video durations differ: "
+            f"{baseline_visual_duration:.3f}s vs {rendered_visual_duration:.3f}s "
+            f"(allowed {duration_tolerance:.3f}s; container durations "
+            f"{float(baseline['duration']):.3f}s vs {float(rendered['duration']):.3f}s)"
+        )
+    events = _validated_retention_events(retention_events, rendered_visual_duration)
 
     sample_times: set[float] = set()
     event_windows: dict[float, list[float]] = {}
@@ -460,14 +492,14 @@ def verify_retention_against_baseline(
         active = [
             round(timestamp + offset, 3)
             for offset in (0.02, 0.08, 0.14)
-            if timestamp + offset < rendered["duration"] - 0.02
+            if timestamp + offset < rendered_visual_duration - 0.02
         ]
-        next_time = events[index + 1][0] if index + 1 < len(events) else rendered["duration"]
+        next_time = events[index + 1][0] if index + 1 < len(events) else rendered_visual_duration
         candidates = [timestamp + 0.55, timestamp + max(0.35, (next_time - timestamp) * 0.50)]
         controls = [
-            round(min(t, rendered["duration"] - 0.05), 3)
+            round(min(t, rendered_visual_duration - 0.05), 3)
             for t in candidates
-            if t < next_time - 0.18 and t < rendered["duration"] - 0.05
+            if t < next_time - 0.18 and t < rendered_visual_duration - 0.05
         ]
         if not controls:
             controls = [round(max(0.05, timestamp - 0.45), 3)] if timestamp >= 0.45 else [0.30]

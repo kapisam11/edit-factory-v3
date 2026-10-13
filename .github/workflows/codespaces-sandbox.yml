@@ -1,0 +1,66 @@
+name: Codespaces sandbox
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".devcontainer/**"
+      - "00-INFO/CODESPACES-SANDBOX.md"
+      - ".github/workflows/codespaces-sandbox.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke-test:
+    name: Build clean Codespaces image and test FFmpeg
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Validate sandbox configuration and shell scripts
+        run: |
+          set -euo pipefail
+          python -m json.tool .devcontainer/devcontainer.json >/dev/null
+          bash -n .devcontainer/post-create.sh
+          bash -n .devcontainer/verify-media.sh
+          git diff --check
+
+      - name: Build development container
+        run: docker build --pull --file .devcontainer/Dockerfile --tag aivf-codespaces-sandbox .
+
+      - name: Run project media/render regressions inside the sandbox container
+        env:
+          AIVF_ENV: test
+          FLASK_SECRET_KEY: sandbox-ci-session-secret
+          AIVF_DASHBOARD_TOKEN: sandbox-ci-dashboard-token
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,source=${GITHUB_WORKSPACE},target=/workspace" \
+            --workdir /workspace \
+            --env HOME=/tmp/aivf-home \
+            --env UV_CACHE_DIR=/tmp/aivf-uv-cache \
+            --env UV_PROJECT_ENVIRONMENT=/tmp/aivf-venv \
+            --env PYTHONPATH=01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE \
+            --env AIVF_ENV=test \
+            --env FLASK_SECRET_KEY=sandbox-ci-session-secret \
+            --env AIVF_DASHBOARD_TOKEN=sandbox-ci-dashboard-token \
+            --env AIVF_STATE_DIR=/tmp/aivf-state \
+            --env AIVF_UPLOAD_DIR=/tmp/aivf-uploads \
+            --env AIVF_OUTPUT_DIR=/tmp/aivf-output \
+            --entrypoint bash aivf-codespaces-sandbox -euo pipefail -s <<'SH'
+          mkdir -p "$HOME" "$UV_CACHE_DIR" "$AIVF_STATE_DIR" "$AIVF_UPLOAD_DIR" "$AIVF_OUTPUT_DIR"
+          python --version
+          uv --version
+          command -v ffmpeg
+          command -v ffprobe
+          command -v tesseract
+          uv sync --frozen --python 3.12 --extra web --extra dev --extra ocr
+          uv pip check
+          bash .devcontainer/verify-media.sh
+          SH
