@@ -25,7 +25,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m json.tool .devcontainer/devcontainer.json >/dev/null
-          bash -n .devcontainer/post-create.sh .devcontainer/verify-media.sh
+          bash -n .devcontainer/post-create.sh
+          bash -n .devcontainer/verify-media.sh
           git diff --check
 
       - name: Build development container
