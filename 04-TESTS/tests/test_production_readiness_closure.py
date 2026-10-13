@@ -130,6 +130,30 @@ def test_readiness_distinguishes_clear_code_from_full_release_verification(capsy
     assert "Fully verified / release ready: False" in strict_output
 
 
+def test_strict_cli_fails_for_simulated_environment_gate(monkeypatch, capsys):
+    root = Path(__file__).resolve().parents[2]
+    all_pass = [
+        readiness.ReadinessItem(number, f"gate-{number}", "PASS", "test evidence")
+        for number in range(1, 35)
+    ]
+    outstanding = list(all_pass)
+    outstanding[8] = readiness.ReadinessItem(
+        9, "GPU availability", "ENVIRONMENT", "requires deployment hardware"
+    )
+    monkeypatch.setattr(readiness, "run_readiness", lambda _root: outstanding)
+
+    assert readiness.main([str(root), "--strict", "--json"]) == 1
+    pending_report = json.loads(capsys.readouterr().out)
+    assert pending_report["summary"]["verification_state"] == "NOT_FULLY_VERIFIED"
+    assert pending_report["summary"]["fully_verified"] is False
+
+    monkeypatch.setattr(readiness, "run_readiness", lambda _root: all_pass)
+    assert readiness.main([str(root), "--strict", "--json"]) == 0
+    verified_report = json.loads(capsys.readouterr().out)
+    assert verified_report["summary"]["verification_state"] == "FULLY_VERIFIED"
+    assert verified_report["summary"]["release_ready"] is True
+
+
 def test_log_redaction_patterns():
     from ai_video_factory.production_guardrails import redact_log_message
     value=redact_log_message("Authorization: Bearer abc123 token=xyz secret: nope password=bad")
