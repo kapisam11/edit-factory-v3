@@ -6,6 +6,7 @@ from environment variables and are never included in result objects or log text.
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import os
 import re
