@@ -215,7 +215,7 @@ def render_markdown(data:dict)->str:
         "Use --strict to require every checklist gate to be PASS.",
         "",
     ])
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def main(argv:list[str]|None=None)->int:
