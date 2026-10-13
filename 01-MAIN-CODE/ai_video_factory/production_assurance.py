@@ -17,6 +17,8 @@ from typing import Any, Iterable, Mapping
 SCHEMA_VERSION = 1
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 _DEFAULT_EXCLUDES = {
+    # WorkspaceLock rewrites this operational file on every run; it is not a release artifact.
+    ".lock",
     ".git",
     "__pycache__",
     ".pytest_cache",
