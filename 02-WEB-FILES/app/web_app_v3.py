@@ -28,7 +28,7 @@ from werkzeug.utils import secure_filename
 
 from ai_video_factory.validation import normalize_workflow, validate_target_seconds, validate_v3_target_seconds
 from ai_video_factory.render_engine import run_ffprobe
-from ai_video_factory.production_guardrails import sha256_file
+from ai_video_factory.production_guardrails import redact_log_message, sha256_file
 from ai_video_factory.runtime_capabilities import capabilities
 from ai_video_factory.runtime_config import runtime_config
 from ai_video_factory.retry_policy import idempotency_key as request_idempotency_hash
@@ -75,6 +75,26 @@ logger = logging.getLogger("web_app_v3")
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
 INTERNAL_PARAM_KEYS = {"_principal", "_retry_secret_keys", "raw_video", "pkg_dir", "_resource_class", "_resource_budget"}
+
+def _redact_sensitive_text(message: Any, explicit_secrets: Optional[Mapping[str, str]] = None, *, max_length: int = 1200) -> str:
+    """Redact diagnostics before persistence, logging, or returning legacy records."""
+    value = redact_log_message(str(message or ""), max_length=max_length)
+    candidates: set[str] = set()
+    for name, secret in os.environ.items():
+        if secret and len(secret) >= 5 and re.search(
+            r"(TOKEN|SECRET|PASSWORD|CLIENT_KEY|ACCESS_KEY|REFRESH|API_KEY|GROQ_KEY|ELEVENLABS|DIARIZATION)",
+            name,
+            re.IGNORECASE,
+        ):
+            candidates.add(secret)
+    for secret in (explicit_secrets or {}).values():
+        if secret and len(str(secret)) >= 5:
+            candidates.add(str(secret))
+    for secret in sorted(candidates, key=len, reverse=True):
+        value = value.replace(secret, "<REDACTED>")
+    return value[:max(1, int(max_length))]
+
+
 RUNTIME_SECRET_TTL_SECONDS = RUNTIME_CONFIG.retry_secret_ttl_seconds
 TERMINAL_STATUSES = {"done", "error", "cancelled", "interrupted"}
 SETTINGS_SCHEMA = {
@@ -247,6 +267,8 @@ def db_update_job(job_id: str, **kwargs: Any) -> int:
     invalid = set(kwargs) - allowed
     if invalid:
         raise ValueError(f"Invalid job fields: {sorted(invalid)}")
+    if "error" in kwargs and kwargs["error"] is not None:
+        kwargs["error"] = _redact_sensitive_text(kwargs["error"])
 
     def write(conn):
         row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -312,10 +334,13 @@ def db_append_log(job_id: str, level: str, message: str) -> None:
 
 def db_logs_since(job_id: str, last_id: int = 0) -> list:
     with get_db() as conn:
-        return [dict(row) for row in conn.execute(
+        rows = [dict(row) for row in conn.execute(
             "SELECT id, created_at, level, message FROM job_logs WHERE job_id=? AND id>? ORDER BY id ASC",
             (job_id, last_id),
         ).fetchall()]
+    for row in rows:
+        row["message"] = _redact_sensitive_text(row.get("message"), max_length=10000)
+    return rows
 
 
 def get_settings() -> dict:
@@ -525,6 +550,8 @@ def _redact_job(job: dict, include_logs: bool = False) -> dict:
         except OSError:
             result["package_name"] = None
     result["params"] = params
+    if result.get("error"):
+        result["error"] = _redact_sensitive_text(result["error"])
     if include_logs:
         result["logs"] = [
             {"id": row["id"], "time": row["created_at"], "level": row["level"], "msg": row["message"]}
@@ -694,6 +721,8 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         allowed = {"status", "step", "params", "pkg_dir", "error", "error_code"}
         if set(kwargs) - allowed:
             raise ValueError("Invalid worker update")
+        if "error" in kwargs and kwargs["error"] is not None:
+            kwargs["error"] = _redact_sensitive_text(kwargs["error"], secrets)
         fields = ", ".join(f"{key}=?" for key in kwargs)
 
         def write(conn):
@@ -714,10 +743,11 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         return _run_db_write(write, db_path)
 
     def log(level: str, message: str) -> None:
+        safe_message = _redact_sensitive_text(message, secrets, max_length=10000)
         def write(conn):
             conn.execute(
                 "INSERT INTO job_logs (job_id, level, message) VALUES (?, ?, ?)",
-                (job_id, level.upper(), str(message)[:10000]),
+                (job_id, level.upper(), safe_message),
             )
 
         _run_db_write(write, db_path)
