@@ -822,6 +822,9 @@ class MediaValidationStage:
             raise RenderContractError(
                 "; ".join(str(error) for error in report.get("errors", [])) or "V3 render QC failed"
             )
+        # This is an intermediate, not a publishable package artifact. Remove it
+        # after the retention baseline has been verified and before manifests are built.
+        normalized.unlink(missing_ok=True)
         os.replace(retention, canonical)
         context.result.final_video = str(canonical)
         context.baseline_path = baseline
