@@ -50,6 +50,9 @@ def test_windows_launcher_uses_buildable_development_compose() -> None:
     assert "AIVF_DASHBOARD_PORT must be a TCP port number" in launcher
     assert launcher.rstrip().endswith("exit 0")
     assert sum(line.strip() == "exit 0" for line in launcher.splitlines()) == 2
+    assert launcher.count("function Set-EnvValue([string]$Name, [string]$Value)") == 1
+    assert '$temporaryEnvFile = "$EnvFile.tmp"' in launcher
+    assert "Move-Item -Path $temporaryEnvFile -Destination $EnvFile -Force" in launcher
 
 
 def test_documentation_distinguishes_profiles_from_direct_publishers() -> None:
@@ -124,3 +127,14 @@ def test_hardware_runbook_keeps_concurrency_one_until_benchmarked() -> None:
     assert "60-second" in guide
     assert "AIVF_MAX_CONCURRENT_JOBS=1" in guide
     assert "Do not raise CPU limits" in guide
+
+
+def test_readme_documents_small_group_windows_requirements_and_paid_work_checklist() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "Windows small-group production requirements" in readme
+    assert "Pre-paid-work checklist" in readme
+    assert "real media smoke test" in readme
+    assert "backup/restore verification drill" in readme
+    assert "API failure and retry behavior" in readme
+    assert "rights approval before publish" in readme
+    assert "disk space headroom" in readme

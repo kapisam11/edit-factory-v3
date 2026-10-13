@@ -151,28 +151,6 @@ function Test-UsableSecret([string]$Value) {
     return $true
 }
 
-function Set-EnvValue([string]$Name, [string]$Value) {
-    $pattern = "^\s*$([regex]::Escape($Name))\s*="
-    $updated = New-Object System.Collections.Generic.List[string]
-    $found = $false
-    if (Test-Path $EnvFile) {
-        foreach ($line in Get-Content -Path $EnvFile) {
-            if ($line -match $pattern) {
-                if (-not $found) {
-                    $updated.Add("$Name=$Value")
-                    $found = $true
-                }
-            } else {
-                $updated.Add($line)
-            }
-        }
-    }
-    if (-not $found) {
-        $updated.Add("$Name=$Value")
-    }
-    $updated.ToArray() | Set-Content -Path $EnvFile -Encoding UTF8
-}
-
 Write-Step "Preparing local dashboard configuration"
 
 if (-not (Test-Path $EnvFile)) {

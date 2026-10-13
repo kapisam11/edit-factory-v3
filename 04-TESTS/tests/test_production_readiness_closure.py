@@ -2,6 +2,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from ai_video_factory.authorization import role_allows, Role
 from ai_video_factory.cache_lifecycle import CacheLifecycle
 from ai_video_factory.factuality_guard import metadata_fact_gate
@@ -89,6 +91,14 @@ def test_readiness_reports_exactly_34_items():
     assert [item.number for item in items]==list(range(1,35))
 
 
+def test_readiness_report_items_are_serialized_dicts():
+    report = readiness.report_dict(Path(__file__).resolve().parents[2])
+    assert report["items"]
+    first = report["items"][0]
+    assert isinstance(first, dict)
+    assert {"number", "name", "status", "evidence"} <= set(first.keys())
+
+
 def test_readiness_blocks_a_missing_required_implementation_file(tmp_path):
     package_dir = tmp_path / "01-MAIN-CODE" / "ai_video_factory"
     package_dir.mkdir(parents=True)
@@ -110,6 +120,14 @@ def test_readiness_blocks_a_missing_required_implementation_file(tmp_path):
     assert report["summary"]["no_known_code_blockers"] is False
     assert report["summary"]["fully_verified"] is False
     assert next(item for item in report["items"] if item["number"] == 34)["status"] == "BLOCKED"
+
+
+def test_readiness_help_exit_is_success(capsys):
+    with pytest.raises(SystemExit) as exc:
+        readiness.main(["--help"])
+    assert exc.value.code == 0
+    output = capsys.readouterr().out
+    assert "Inspect Edit Factory v3 production-readiness evidence." in output
 
 
 def test_readiness_distinguishes_clear_code_from_full_release_verification(capsys):
