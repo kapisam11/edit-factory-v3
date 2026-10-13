@@ -102,7 +102,24 @@ def _request_json(
     timeout: float = 30,
     allow_redirects: bool = True,
 ) -> dict[str, Any]:
-    """Call an API without leaking signed URLs or bearer tokens in exceptions."""
+    """Call an API with bounded timeouts and redact signed URLs/tokens from errors."""
+    try:
+        timeout_seconds = float(timeout)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise PlatformPublishError(
+            "platform request timeout must be numeric",
+            code="INVALID_TIMEOUT",
+            retryable=False,
+        ) from exc
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise PlatformPublishError(
+            "platform request timeout must be finite and positive",
+            code="INVALID_TIMEOUT",
+            retryable=False,
+        )
+    # Requests interprets timeout as a socket inactivity limit. Clamp it even if
+    # a future call site supplies an unreasonably large value.
+    timeout_seconds = min(180.0, max(0.1, timeout_seconds))
     try:
         response = requests.request(
             method,
@@ -111,7 +128,7 @@ def _request_json(
             params=params,
             data=data,
             json=json_body,
-            timeout=timeout,
+            timeout=timeout_seconds,
             allow_redirects=allow_redirects,
         )
     except requests.RequestException as exc:
