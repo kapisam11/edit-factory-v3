@@ -158,6 +158,28 @@ def _evidence_item(
 
 
 
+def _partial_evidence_item(
+    number: int,
+    name: str,
+    evidence_key: str,
+    scope_limit: str,
+    runtime_evidence: dict[str, dict[str, str]],
+) -> ReadinessItem:
+    """Keep a broad readiness claim unverified when its probe covers only a narrow behavior."""
+    observed = runtime_evidence.get(evidence_key)
+    if observed and observed["status"] == "BLOCKED":
+        return _item(number, name, "BLOCKED", observed["evidence"], observed["detail"])
+    evidence = observed["evidence"] if observed else "targeted behavior test not available"
+    detail = observed["detail"] if observed else "No targeted runtime result was available."
+    return _item(
+        number,
+        name,
+        "UNVERIFIED",
+        evidence,
+        f"{detail}. The probe is partial; {scope_limit}",
+    )
+
+
 def _required_code_checks(py: Path) -> list[tuple[str, Path]]:
     """List implementation files whose presence is required for code evidence."""
     return [
@@ -224,7 +246,7 @@ def run_readiness(root: str | Path = ".") -> list[ReadinessItem]:
         _item(2,"CI verification","CI","GitHub workflow required","Final green state is reported from GitHub Actions, not assumed locally."),
         _item(3,"Command-injection audit","PASS" if security_ok else "BLOCKED","security_audit.py",security_detail),
         _item(4,"Repository path traversal","UNVERIFIED","asset_manager.py + path-containment tests","Implementation presence is not evidence that traversal cases were executed."),
-        _evidence_item(5,"Secret-safe logging","secret_logging","production_guardrails.py","Redaction behavior has not been executed.",runtime_evidence),
+        _partial_evidence_item(5,"Secret-safe logging","secret_logging","every application log call-site and persisted error still need redaction integration tests",runtime_evidence),
         _item(6,"SLSA/build provenance","CI","release.yml emits SBOM/provenance/attestation","Attestation generation is a GitHub-hosted control."),
         _item(7,"PySceneDetect integration","UNVERIFIED" if (py/"scene_detect_adapter.py").is_file() else "BLOCKED","scene_detect_adapter.py","Adapter behavior has not been verified by a targeted runtime test." if (py/"scene_detect_adapter.py").is_file() else "required implementation file is missing"),
         _item(8,"Scene detection redesign","UNVERIFIED","scene detection and salience implementation","Source descriptions alone do not prove shot-aware behavior; an executed integration test is required."),
@@ -241,8 +263,8 @@ def run_readiness(root: str | Path = ".") -> list[ReadinessItem]:
         _evidence_item(19,"Learning feedback loop","feedback_store","feedback_store.py","Feedback-store behavior has not been executed.",runtime_evidence),
         _item(20,"Observability","UNVERIFIED","observability_metrics.py + dashboard observability","Implementation references do not prove metrics are emitted and exposed at runtime."),
         _item(21,"Durable queue / scaling boundary","UNVERIFIED","SQLite job lifecycle + optional Redis backend contract","The SQLite recovery probe does not prove multi-process or Redis-backed scaling; that requires a separate integration test."),
-        _evidence_item(22,"Multi-user RBAC","rbac","authorization.py","RBAC behavior has not been executed.",runtime_evidence),
-        _evidence_item(23,"Crash recovery","crash_recovery","job_recovery.py + SQLite queue visibility timeout","Crash recovery behavior has not been executed.",runtime_evidence),
+        _partial_evidence_item(22,"Multi-user RBAC","rbac","route/resource-level authorization and principal isolation still need integration tests",runtime_evidence),
+        _partial_evidence_item(23,"Crash recovery","crash_recovery","a forced worker termination/restart test must prove recovery end-to-end",runtime_evidence),
         _evidence_item(24,"Cache lifecycle","cache_lifecycle","cache_lifecycle.py","Cache lifecycle behavior has not been executed.",runtime_evidence),
         _item(25,"UI production surface","UNVERIFIED","dashboard health/preview/retry surfaces","The presence of UI endpoints does not prove that the complete production flow works."),
         _item(26,"UI automation","CI","existing dashboard E2E workflow"),
