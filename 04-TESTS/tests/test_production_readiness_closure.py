@@ -256,9 +256,15 @@ def test_readiness_passes_only_when_behavior_tests_execute(tmp_path):
         (22, "test_rbac"),
         (23, "test_job_backend_reclaims_expired_and_rejects_stale_worker"),
     ):
-        assert items[number].status == "PASS", items[number]
+        # The targeted unit probes run, but each covers only part of its broader
+        # release claim. Keep the aggregate readiness item UNVERIFIED.
+        assert items[number].status == "UNVERIFIED", items[number]
         assert test_id in items[number].evidence
         assert "runtime test passed" in items[number].detail
+
+    assert "every application log call-site" in items[5].detail
+    assert "route/resource-level authorization" in items[22].detail
+    assert "forced worker termination/restart" in items[23].detail
 
     for number in (4, 8, 10, 17, 20, 21, 25, 33):
         assert items[number].status == "UNVERIFIED", items[number]
