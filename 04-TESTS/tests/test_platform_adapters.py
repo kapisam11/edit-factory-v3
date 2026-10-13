@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from ai_video_factory import platform_adapters as platform
+from ai_video_factory import youtube_publisher
 from ai_video_factory.platform_adapters import (
     InstagramReelsAdapter,
     PlatformPublishError,
@@ -613,3 +614,31 @@ def test_tiktok_rejects_unrecognized_success_codes_in_media_transfer(
         )
     assert caught.value.code == "UPLOAD_HTTP_308"
     assert caught.value.retryable is False
+
+
+
+def test_platform_api_timeout_is_finite_and_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def request(_method: str, _url: str, **kwargs: Any) -> FakeResponse:
+        captured.update(kwargs)
+        return FakeResponse({})
+
+    monkeypatch.setattr(platform.requests, "request", request)
+    platform._request_json("GET", "https://api.example.test/status", headers={}, timeout=99999)
+    assert captured["timeout"] == 180.0
+
+    with pytest.raises(PlatformPublishError) as caught:
+        platform._request_json(
+            "GET", "https://api.example.test/status", headers={}, timeout=float("nan")
+        )
+    assert caught.value.code == "INVALID_TIMEOUT"
+
+
+def test_youtube_api_socket_timeout_has_a_hard_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AIVF_YOUTUBE_HTTP_TIMEOUT_SECONDS", "999999")
+    assert youtube_publisher._bounded_youtube_http_timeout_seconds() == 180
+
+    monkeypatch.setenv("AIVF_YOUTUBE_HTTP_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ValueError, match="must be finite and positive"):
+        youtube_publisher._bounded_youtube_http_timeout_seconds()
