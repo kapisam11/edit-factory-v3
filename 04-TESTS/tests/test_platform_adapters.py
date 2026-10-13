@@ -642,3 +642,93 @@ def test_youtube_api_socket_timeout_has_a_hard_ceiling(monkeypatch: pytest.Monke
     monkeypatch.setenv("AIVF_YOUTUBE_HTTP_TIMEOUT_SECONDS", "0")
     with pytest.raises(ValueError, match="must be finite and positive"):
         youtube_publisher._bounded_youtube_http_timeout_seconds()
+
+
+
+def test_access_tokens_never_appear_in_adapter_failure_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "TEST_SECRET_12345"
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"test video bytes")
+    failure_text = f"request failed Authorization: Bearer {secret} access_token={secret}"
+
+    def failed_request(*_args: Any, **_kwargs: Any) -> Any:
+        raise platform.requests.Timeout(failure_text)
+
+    monkeypatch.setattr(platform.requests, "request", failed_request)
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", secret)
+    monkeypatch.setenv("INSTAGRAM_USER_ID", "test-account-id")
+    monkeypatch.setenv("INSTAGRAM_GRAPH_API_VERSION", "v26.0")
+    monkeypatch.setenv("TIKTOK_ACCESS_TOKEN", secret)
+    noop = lambda *_args, **_kwargs: None
+
+    adapter_calls = [
+        (
+            "instagram",
+            InstagramReelsAdapter(),
+            {
+                "media_path": video,
+                "metadata": {
+                    "title": "Test",
+                    "_platform_override": {
+                        "video_url": "https://media.example.test/clip.mp4",
+                        "share_to_feed": True,
+                    },
+                },
+                "account_id": "test",
+                "idempotency_key": "redaction-instagram",
+                "remote_operation_id": None,
+                "adapter_state": {},
+                "on_operation": noop,
+                "on_state": noop,
+                "on_remote_post": noop,
+            },
+        ),
+        (
+            "tiktok",
+            TikTokDirectPostAdapter(),
+            {
+                "media_path": video,
+                "metadata": {},
+                "account_id": "test",
+                "idempotency_key": "redaction-tiktok",
+                "remote_operation_id": None,
+                "adapter_state": {},
+                "on_operation": noop,
+                "on_state": noop,
+                "on_remote_post": noop,
+            },
+        ),
+    ]
+
+    for name, adapter, kwargs in adapter_calls:
+        with pytest.raises(PlatformPublishError) as caught:
+            adapter.publish(**kwargs)
+        assert secret not in str(caught.value), name
+        assert secret not in repr(caught.value.to_dict()), name
+
+    from ai_video_factory import youtube_publisher
+    from ai_video_factory.platform_adapters import YouTubeAdapter
+
+    monkeypatch.setenv("YOUTUBE_CLIENT_SECRETS", str(tmp_path / "client-secrets.json"))
+    monkeypatch.setenv("YOUTUBE_TOKEN_PATH", str(tmp_path / "token.json"))
+
+    def fail_youtube_upload(*_args: Any, **_kwargs: Any) -> Any:
+        raise platform.requests.Timeout(failure_text)
+
+    monkeypatch.setattr(youtube_publisher, "upload_video", fail_youtube_upload)
+    with pytest.raises(PlatformPublishError) as caught_youtube:
+        YouTubeAdapter().publish(
+            media_path=video,
+            metadata={},
+            account_id="test",
+            idempotency_key="redaction-youtube",
+            remote_operation_id=None,
+            adapter_state={},
+            on_operation=noop,
+            on_state=noop,
+            on_remote_post=noop,
+        )
+    assert secret not in str(caught_youtube.value)
+    assert secret not in repr(caught_youtube.value.to_dict())
