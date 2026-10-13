@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import mimetypes
 import os
 import stat
@@ -65,10 +66,31 @@ def _credentials(client_secrets_path: str, token_path: str, scopes: Sequence[str
     return creds
 
 
+def _bounded_youtube_http_timeout_seconds() -> int:
+    """Return a per-request timeout within a conservative hard ceiling."""
+    raw = os.environ.get("AIVF_YOUTUBE_HTTP_TIMEOUT_SECONDS", "45")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("AIVF_YOUTUBE_HTTP_TIMEOUT_SECONDS must be numeric") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("AIVF_YOUTUBE_HTTP_TIMEOUT_SECONDS must be finite and positive")
+    return int(min(180.0, max(1.0, value)))
+
+
 def _service(api: str, version: str, client_secrets_path: str, token_path: str, scopes: Sequence[str]) -> Any:
+    """Create an authenticated YouTube client with a finite socket timeout."""
     _require_google()
+    import httplib2  # type: ignore
+    from google_auth_httplib2 import AuthorizedHttp  # type: ignore
     from googleapiclient.discovery import build  # type: ignore
-    return build(api, version, credentials=_credentials(client_secrets_path, token_path, scopes), cache_discovery=False)
+
+    credentials = _credentials(client_secrets_path, token_path, scopes)
+    http = AuthorizedHttp(
+        credentials,
+        http=httplib2.Http(timeout=_bounded_youtube_http_timeout_seconds()),
+    )
+    return build(api, version, http=http, cache_discovery=False)
 
 
 def _paths(client_secrets_path: Optional[str], token_path: Optional[str]) -> tuple[str, str]:
