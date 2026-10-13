@@ -109,7 +109,7 @@ def test_readiness_blocks_a_missing_required_implementation_file(tmp_path):
     assert report["summary"]["code_blockers"] >= 1
     assert report["summary"]["no_known_code_blockers"] is False
     assert report["summary"]["fully_verified"] is False
-    assert next(item for item in report["items"] if item.number == 34).status == "BLOCKED"
+    assert next(item for item in report["items"] if item["number"] == 34)["status"] == "BLOCKED"
 
 
 def test_readiness_distinguishes_clear_code_from_full_release_verification(capsys):
