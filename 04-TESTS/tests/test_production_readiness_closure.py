@@ -253,6 +253,8 @@ def test_readiness_passes_only_when_behavior_tests_execute(tmp_path):
 
     for number, test_id in (
         (5, "test_log_redaction_patterns"),
+        (13, "test_v3_audio_normalization_replaces_source_only_after_validation"),
+        (19, "test_feedback_store_aggregates"),
         (22, "test_rbac"),
         (23, "test_job_backend_reclaims_expired_and_rejects_stale_worker"),
     ):
@@ -263,6 +265,8 @@ def test_readiness_passes_only_when_behavior_tests_execute(tmp_path):
         assert "runtime test passed" in items[number].detail
 
     assert "every application log call-site" in items[5].detail
+    assert "real FFmpeg loudnorm render" in items[13].detail
+    assert "end-to-end feedback ingestion" in items[19].detail
     assert "route/resource-level authorization" in items[22].detail
     assert "forced worker termination/restart" in items[23].detail
 
