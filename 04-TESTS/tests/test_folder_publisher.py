@@ -40,9 +40,11 @@ def test_probe_video_reports_average_frame_rate(monkeypatch, tmp_path: Path) -> 
 
     monkeypatch.setenv("AIVF_MAX_INPUT_FPS", "60")
     monkeypatch.setattr(
-        folder.subprocess,
-        "run",
+        folder,
+        "run_ffprobe",
         lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stderr="",
             stdout=json.dumps({
                 "streams": [{
                     "codec_type": "video",
@@ -65,9 +67,11 @@ def test_probe_video_rejects_frame_rate_above_configured_limit(monkeypatch, tmp_
 
     monkeypatch.setenv("AIVF_MAX_INPUT_FPS", "60")
     monkeypatch.setattr(
-        folder.subprocess,
-        "run",
+        folder,
+        "run_ffprobe",
         lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stderr="",
             stdout=json.dumps({
                 "streams": [{
                     "codec_type": "video",
@@ -89,9 +93,11 @@ def test_probe_video_rejects_missing_or_invalid_frame_rate(monkeypatch, tmp_path
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        folder.subprocess,
-        "run",
+        folder,
+        "run_ffprobe",
         lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stderr="",
             stdout=json.dumps({
                 "streams": [{
                     "codec_type": "video",
@@ -270,3 +276,69 @@ def test_editing_source_during_upload_does_not_revoke_active_lease(
         for item in publisher.store.items()
         if int(item["id"]) != old_id
     )
+
+
+def test_folder_publisher_limits_are_configurable(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AIVF_INCOMING_DIR", str(tmp_path / "incoming"))
+    monkeypatch.setenv("AIVF_FOLDER_STATE_DB", str(tmp_path / "state" / "folder.sqlite"))
+    monkeypatch.setenv("AIVF_FOLDER_MAX_FILE_BYTES", "12345")
+    monkeypatch.setenv("AIVF_FOLDER_MAX_STAGED_BYTES", "45678")
+    monkeypatch.setenv("AIVF_FOLDER_MIN_FREE_DISK_BYTES", "8192")
+
+    config = folder.FolderPublisherConfig.from_environment()
+
+    assert config.max_file_bytes == 12345
+    assert config.max_staged_bytes == 45678
+    assert config.min_free_disk_bytes == 8192
+
+
+def test_folder_scan_rejects_oversize_file_before_probing_or_staging(tmp_path: Path, monkeypatch) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    video = incoming / "oversize.mp4"
+    video.write_bytes(b"x" * 128)
+
+    def unexpected_probe(*_args, **_kwargs):
+        raise AssertionError("oversized input must be rejected before FFprobe")
+
+    monkeypatch.setattr(folder, "probe_video", unexpected_probe)
+    publisher = _publisher(tmp_path, max_file_bytes=64)
+    result = publisher.scan()
+    item = publisher.store.items()[0]
+
+    assert result["observed_files"] == 1
+    assert item["state"] == "NEEDS_REVIEW"
+    assert "configured maximum size of 64 bytes" in item["last_error"]
+    assert not list(publisher.staging_dir.glob("*.partial"))
+
+
+def test_folder_staging_preserves_configured_free_disk_floor(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    video = incoming / "low-disk.mp4"
+    video.write_bytes(b"stable fake media")
+    folder.approve_sidecar(incoming, video.name, ai_generated=False, realistic_alteration=False)
+    monkeypatch.setattr(folder, "probe_video", _probe)
+    monkeypatch.setattr(folder.shutil, "disk_usage", lambda _path: SimpleNamespace(free=512))
+    publisher = _publisher(tmp_path, min_free_disk_bytes=4096)
+
+    publisher.scan()
+    item = publisher.store.items()[0]
+
+    assert item["state"] == "NEEDS_REVIEW"
+    assert "insufficient disk headroom" in item["last_error"]
+    assert "512 bytes free" in item["last_error"]
+    assert "4096-byte reserve" in item["last_error"]
+    assert not list(publisher.staging_dir.glob("*.partial"))
+
+
+def test_probe_video_reports_bounded_ffprobe_failure(monkeypatch, tmp_path: Path) -> None:
+    def timed_out(*_args, **_kwargs):
+        raise RuntimeError("tool timed out after 25s: ffprobe")
+
+    monkeypatch.setattr(folder, "run_ffprobe", timed_out)
+    with pytest.raises(ValueError, match="ffprobe could not validate.*timed out"):
+        folder.probe_video(tmp_path / "broken.mp4", max_duration_seconds=30)
+
