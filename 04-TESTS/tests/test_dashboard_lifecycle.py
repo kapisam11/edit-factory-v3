@@ -627,3 +627,43 @@ def test_failed_oversize_upload_removes_partial_file(monkeypatch, tmp_path):
     assert not list(upload_root.glob(".upload-*"))
     assert not list(upload_root.glob("*.mp4"))
 
+
+
+
+def test_dashboard_job_errors_and_logs_are_redacted_before_persistence_and_response(
+    monkeypatch, tmp_path
+):
+    import json
+
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    secret = "TEST_SECRET_12345"
+    monkeypatch.setenv("AIVF_TEST_ACCESS_TOKEN", secret)
+    appmod.db_insert_job("job-sensitive-error", "topic", {"topic": "topic"})
+    appmod.db_update_job(
+        "job-sensitive-error",
+        status="error",
+        step="failed",
+        error=f"provider returned Authorization: Bearer {secret}",
+    )
+    appmod.db_append_log(
+        "job-sensitive-error",
+        "ERROR",
+        f"provider failed access_token={secret}",
+    )
+
+    with appmod.get_db() as conn:
+        raw_job = conn.execute(
+            "SELECT error FROM jobs WHERE id=?", ("job-sensitive-error",)
+        ).fetchone()["error"]
+        raw_log = conn.execute(
+            "SELECT message FROM job_logs WHERE job_id=? ORDER BY id DESC LIMIT 1",
+            ("job-sensitive-error",),
+        ).fetchone()["message"]
+
+    assert secret not in raw_job
+    assert secret not in raw_log
+    public_payload = appmod._redact_job(
+        appmod.db_get_job("job-sensitive-error"), include_logs=True
+    )
+    assert secret not in json.dumps(public_payload)
+    assert "<REDACTED>" in json.dumps(public_payload)
