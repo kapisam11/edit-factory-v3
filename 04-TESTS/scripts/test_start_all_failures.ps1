@@ -175,3 +175,80 @@ function Stop-HealthResponder($Process) {
     [void]$Process.WaitForExit(5000)
   }
 }
+
+
+try {
+  # Missing Docker CLI.
+  $fixture = New-Fixture "docker-command-missing"
+  Add-FakeTools $fixture
+  Remove-Item -LiteralPath (Join-Path $fixture.Bin "docker.cmd") -Force
+  $result = Invoke-Launcher $fixture "success" "success" 51821
+  Assert-True ($result.ExitCode -ne 0) "missing docker command must return non-zero"
+  Assert-True ($result.Output.Contains("Docker was not found")) "missing docker command must explain the blocker"
+
+  # Docker Desktop exists as a CLI but the daemon is unavailable.
+  $fixture = New-Fixture "docker-desktop-down"
+  Add-FakeTools $fixture
+  $result = Invoke-Launcher $fixture "not-running" "success" 51822
+  Assert-True ($result.ExitCode -ne 0) "unavailable Docker daemon must fail"
+  Assert-True ($result.Output.Contains("Docker Desktop is not running")) "daemon failure must be actionable"
+
+  # Compose port conflict and placeholder credentials.
+  $fixture = New-Fixture "port-conflict"
+  Add-FakeTools $fixture
+  Set-PlaceholderEnv $fixture
+  $result = Invoke-Launcher $fixture "port-conflict" "success" 51823
+  Assert-True ($result.ExitCode -ne 0) "Compose port allocation error must fail startup"
+  Assert-True ($result.Output.Contains("Command failed with exit code 17: docker compose")) "port conflict must preserve failing command and exit code"
+  $flaskSecret = Get-EnvValue $fixture.EnvFile "FLASK_SECRET_KEY"
+  $dashboardToken = Get-EnvValue $fixture.EnvFile "AIVF_DASHBOARD_TOKEN"
+  Assert-True ($flaskSecret.Length -ge 32 -and $flaskSecret -ne "change-me") "invalid Flask secret should be replaced"
+  Assert-True ($dashboardToken.Length -ge 32 -and $dashboardToken -ne "placeholder-token") "invalid dashboard token should be replaced"
+
+  # Dashboard health never becomes ready.
+  $fixture = New-Fixture "health-never-ready"
+  Add-FakeTools $fixture
+  $result = Invoke-Launcher $fixture "success" "success" 51824 1
+  Assert-True ($result.ExitCode -ne 0) "unhealthy dashboard must fail startup"
+  Assert-True ($result.Output.Contains("Dashboard health check failed")) "health timeout must be visible"
+
+  # Dependency installation failure must propagate a non-zero result.
+  $fixture = New-Fixture "dependency-install-fails"
+  Add-FakeTools $fixture
+  Set-PlaceholderEnv $fixture
+  $port = Get-FreeLoopbackPort
+  $health = Start-HealthResponder $fixture.Root $port
+  try {
+    $result = Invoke-Launcher $fixture "success" "fail-sync" $port
+    Assert-True ($result.ExitCode -ne 0) "failed dependency installation must return non-zero"
+    Assert-True ($result.Output.Contains("Command failed with exit code 19: uv sync")) "dependency error should identify uv sync"
+    Assert-True ((Get-EnvValue $fixture.EnvFile "FLASK_SECRET_KEY").Length -ge 32) "launcher must repair placeholder Flask secret"
+    Assert-True ((Get-EnvValue $fixture.EnvFile "AIVF_DASHBOARD_TOKEN").Length -ge 32) "launcher must repair placeholder dashboard token"
+  } finally {
+    Stop-HealthResponder $health
+  }
+
+  # Repeated runs against a healthy service preserve generated credentials.
+  $fixture = New-Fixture "repeat-start"
+  Add-FakeTools $fixture
+  $port = Get-FreeLoopbackPort
+  $health = Start-HealthResponder $fixture.Root $port
+  try {
+    $first = Invoke-Launcher $fixture "success" "success" $port
+    Assert-True ($first.ExitCode -eq 0) "first start should succeed"
+    $firstFlask = Get-EnvValue $fixture.EnvFile "FLASK_SECRET_KEY"
+    $firstToken = Get-EnvValue $fixture.EnvFile "AIVF_DASHBOARD_TOKEN"
+    $second = Invoke-Launcher $fixture "success" "success" $port
+    Assert-True ($second.ExitCode -eq 0) "second start while service is healthy should succeed"
+    Assert-True ((Get-EnvValue $fixture.EnvFile "FLASK_SECRET_KEY") -eq $firstFlask) "second start must preserve valid Flask secret"
+    Assert-True ((Get-EnvValue $fixture.EnvFile "AIVF_DASHBOARD_TOKEN") -eq $firstToken) "second start must preserve valid dashboard token"
+    $upCalls = @(Get-Content -LiteralPath $fixture.DockerLog | Where-Object { $_ -match "(?i)\bup\s+-d\b.*--remove-orphans" })
+    Assert-True ($upCalls.Count -eq 2) "Compose up should occur once per successful launcher invocation"
+  } finally {
+    Stop-HealthResponder $health
+  }
+
+  Write-Host "START-ALL.ps1 failure-path and repeat-start regressions passed."
+} finally {
+  Remove-Item -LiteralPath $Temp -Recurse -Force -ErrorAction SilentlyContinue
+}
