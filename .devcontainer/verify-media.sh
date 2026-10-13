@@ -44,6 +44,7 @@ uv run pytest -q \
   04-TESTS/tests/test_media_host.py \
   04-TESTS/tests/test_real_media_health.py \
   04-TESTS/tests/test_real_render_integration.py \
+  04-TESTS/tests/test_v3_retention_independence.py \
   04-TESTS/tests/test_render_engine.py \
   04-TESTS/tests/test_render_engine_hardening.py \
   04-TESTS/tests/test_quality_control_v3.py \
