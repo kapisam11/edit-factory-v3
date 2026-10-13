@@ -14,6 +14,7 @@ from ai_video_factory.scene_detect_adapter import scene_windows
 from ai_video_factory.security_audit import high_severity, scan_repository
 from ai_video_factory.hardware import ffmpeg_preset_for
 from ai_video_factory.production_readiness import run_readiness
+from ai_video_factory import production_readiness as readiness
 
 def test_security_audit_has_no_high_findings():
     root=Path(__file__).resolve().parents[2]
@@ -86,6 +87,47 @@ def test_readiness_reports_exactly_34_items():
     items=run_readiness(Path(__file__).resolve().parents[2])
     assert len(items)==34
     assert [item.number for item in items]==list(range(1,35))
+
+
+def test_readiness_blocks_a_missing_required_implementation_file(tmp_path):
+    package_dir = tmp_path / "01-MAIN-CODE" / "ai_video_factory"
+    package_dir.mkdir(parents=True)
+    for _name, required_path in readiness._required_code_checks(package_dir):
+        required_path.parent.mkdir(parents=True, exist_ok=True)
+        required_path.write_text("# fixture implementation file\\n", encoding="utf-8")
+
+    missing_path = package_dir / "job_recovery.py"
+    missing_path.unlink()
+    report = readiness.report_dict(tmp_path)
+
+    missing_checks = [
+        check for check in report["code_checks"]
+        if check["name"] == "job recovery"
+    ]
+    assert len(missing_checks) == 1
+    assert missing_checks[0]["status"] == "BLOCKED"
+    assert report["summary"]["code_blockers"] >= 1
+    assert report["summary"]["no_known_code_blockers"] is False
+    assert report["summary"]["fully_verified"] is False
+    assert next(item for item in report["items"] if item.number == 34).status == "BLOCKED"
+
+
+def test_readiness_distinguishes_clear_code_from_full_release_verification(capsys):
+    root = Path(__file__).resolve().parents[2]
+    report = readiness.report_dict(root)
+    summary = report["summary"]
+
+    assert summary["no_known_code_blockers"] is True
+    assert summary["fully_verified"] is False
+    assert summary["release_ready"] is False
+    assert {"CI", "ENVIRONMENT", "MANUAL", "PROCESS"} & set(summary["outstanding_gates"])
+
+    assert readiness.main([str(root)]) == 0
+    capsys.readouterr()
+    assert readiness.main([str(root), "--strict"]) == 1
+    strict_output = capsys.readouterr().out
+    assert "NOT_FULLY_VERIFIED" in strict_output
+    assert "Fully verified / release ready: False" in strict_output
 
 
 def test_log_redaction_patterns():
