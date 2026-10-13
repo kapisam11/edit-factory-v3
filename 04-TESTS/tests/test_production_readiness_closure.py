@@ -214,3 +214,78 @@ def test_rights_declaration_timestamp_is_valid():
         now=__import__("datetime").datetime.now(__import__("datetime").timezone.utc) + __import__("datetime").timedelta(days=1),
     )
     assert rights_gate([future])["publish_blocked"] is True
+
+
+
+def test_readiness_rejects_invalid_explicit_repository_roots(tmp_path, capsys):
+    not_a_repo = tmp_path / "unrelated-checkout"
+    not_a_repo.mkdir()
+
+    with pytest.raises(ValueError, match="Not an Edit Factory repository root"):
+        readiness.run_readiness(not_a_repo)
+    with pytest.raises(ValueError, match="does not exist"):
+        readiness.report_dict(tmp_path / "missing-repository")
+
+    assert readiness.main([str(not_a_repo), "--json"]) == 2
+    assert "Not an Edit Factory repository root" in capsys.readouterr().err
+
+
+def test_readiness_behavior_entries_are_live_results_not_hardcoded_passes():
+    root = Path(__file__).resolve().parents[2]
+    report = readiness.report_dict(root)
+    items = {item["number"]: item for item in report["items"]}
+
+    assert items[4]["status"] == "PASS"
+    assert "validate_path_inside" in items[4]["evidence"]
+    assert items[5]["status"] == "PASS"
+    assert "redact_log_message" in items[5]["evidence"]
+    assert items[14]["status"] == "PASS"
+    assert items[16]["status"] == "PASS"
+    assert items[18]["status"] == "PASS"
+    assert items[19]["status"] == "PASS"
+    assert items[20]["status"] == "PASS"
+    assert items[21]["status"] == "PASS"
+    assert items[22]["status"] == "PASS"
+    assert items[23]["status"] == "PASS"
+    assert items[24]["status"] == "PASS"
+
+    # These entries require CI or human evidence and therefore may not claim PASS
+    # solely because an implementation file is present.
+    assert items[8]["status"] == "CI"
+    assert items[10]["status"] == "CI"
+    assert items[13]["status"] == "CI"
+    assert items[25]["status"] == "CI"
+    assert items[27]["status"] == "CI"
+    assert items[33]["status"] == "MANUAL"
+    assert items[34]["status"] == "MANUAL"
+    assert report["summary"]["release_ready"] is False
+
+
+def test_readiness_blocks_release_verdict_when_secret_redaction_probe_is_broken(
+    monkeypatch,
+):
+    from ai_video_factory import production_guardrails
+
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.setattr(production_guardrails, "redact_log_message", lambda message: message)
+
+    report = readiness.report_dict(root)
+    items = {item["number"]: item for item in report["items"]}
+
+    assert items[5]["status"] == "BLOCKED"
+    assert "TEST_SECRET_12345" not in items[5]["detail"]
+    assert items[34]["status"] == "BLOCKED"
+    assert report["summary"]["no_known_code_blockers"] is False
+    assert report["summary"]["fully_verified"] is False
+    assert report["summary"]["release_ready"] is False
+
+
+def test_installed_package_readiness_mode_is_explicit(capsys):
+    assert readiness.main(["--installed-package", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    items = {item["number"]: item for item in report["items"]}
+
+    assert report["summary"]["no_known_code_blockers"] is True
+    assert items[3]["status"] == "ENVIRONMENT"
+    assert "cannot scan a source checkout" in items[3]["detail"]
+    assert report["summary"]["fully_verified"] is False
