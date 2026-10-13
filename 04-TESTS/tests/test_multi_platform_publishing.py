@@ -841,3 +841,33 @@ def test_instagram_can_use_configured_media_host_for_local_sources(
     assert row["remote_post_id"] == "instagram-post-hosted"
     assert saved_state["media_host_url"].startswith("https://media.example.test/")
     assert saved_state["container_id"] == "instagram-container-hosted"
+
+
+
+def test_publishing_failure_redacts_credentials_before_persisting_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "TEST_SECRET_12345"
+    monkeypatch.setenv("YOUTUBE_ACCESS_TOKEN", secret)
+    store = PublicationStore(tmp_path / "publish.sqlite")
+    job_id = _enqueue(store, tmp_path, "redaction-probe", Target("youtube", "default"))
+    now = 1_800_000_000.0
+    job = store.claim_next(max_per_day=10, now=now)
+    assert job is not None and job["id"] == job_id
+
+    state = store.mark_failure(
+        job,
+        str(job["lease_owner"]),
+        PlatformPublishError(
+            f"HTTP request failed Authorization: Bearer {secret} access_token={secret}",
+            code="PROVIDER_FAILURE",
+            retryable=False,
+        ),
+        now=now + 1,
+    )
+
+    persisted = json.dumps(store.jobs()) + json.dumps(store.history(job_id))
+    assert state == "permanent_failed"
+    assert secret not in persisted
+    assert "Bearer <REDACTED>" in persisted
+    assert "access_token=<REDACTED>" in persisted
