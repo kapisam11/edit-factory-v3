@@ -193,7 +193,7 @@ def _probe_feedback_store() -> str:
         )
         aggregate = store.aggregate("youtube")
     record = aggregate.get("youtube:readiness-probe", {})
-    if record.get("count") != 1 or record.get("means", {}).get("retention") != 0.5:
+    if record.get("samples") != 1 or record.get("means", {}).get("retention") != 0.5:
         raise RuntimeError("feedback could not be persisted and aggregated")
     return "A feedback record was persisted and recovered through the aggregate API."
 
@@ -384,7 +384,7 @@ def _package_directory(root: str | Path = ".", *, installed_package: bool = Fals
 
 
 def report_dict(root: str | Path = ".", *, installed_package: bool = False) -> dict:
-    items = run_readiness(root, installed_package=installed_package)
+    items = run_readiness(None, installed_package=True) if installed_package else run_readiness(root)
     package_dir = _package_directory(root, installed_package=installed_package)
     code_checks = _evaluate_code_checks(_required_code_checks(package_dir))
     code_blockers = sum(check["status"] == "BLOCKED" for check in code_checks)
