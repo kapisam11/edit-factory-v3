@@ -119,3 +119,14 @@ def test_run_tool_retains_only_the_stderr_tail() -> None:
     assert result.returncode == 0
     assert len(result.stderr_tail) <= 256
     assert result.stderr_tail.endswith("END-OF-DIAGNOSTIC")
+
+
+
+def test_run_tool_times_out_when_child_keeps_pipes_open_after_parent_exits() -> None:
+    code = (
+        "import subprocess, sys; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+        "print('parent-exited', flush=True)"
+    )
+    with pytest.raises(GuardrailError, match="timed out after 1s"):
+        run_tool([sys.executable, "-c", code], timeout=1)
