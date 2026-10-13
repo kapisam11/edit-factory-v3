@@ -706,7 +706,7 @@ def test_access_tokens_never_appear_in_adapter_failure_diagnostics(
         with pytest.raises(PlatformPublishError) as caught:
             adapter.publish(**kwargs)
         assert secret not in str(caught.value), name
-        assert secret not in repr(caught.value.to_dict()), name
+        import traceback\n        rendered = "".join(traceback.format_exception(type(caught.value), caught.value, caught.value.__traceback__))\n        assert secret not in rendered, name
 
     from ai_video_factory import youtube_publisher
     from ai_video_factory.platform_adapters import YouTubeAdapter
@@ -731,4 +731,4 @@ def test_access_tokens_never_appear_in_adapter_failure_diagnostics(
             on_remote_post=noop,
         )
     assert secret not in str(caught_youtube.value)
-    assert secret not in repr(caught_youtube.value.to_dict())
+    import traceback\n    rendered = "".join(traceback.format_exception(type(caught_youtube.value), caught_youtube.value, caught_youtube.value.__traceback__))\n    assert secret not in rendered
