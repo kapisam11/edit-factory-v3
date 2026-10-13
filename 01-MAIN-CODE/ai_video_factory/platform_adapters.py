@@ -137,7 +137,7 @@ def _request_json(
             f"platform network request failed ({type(exc).__name__})",
             code="NETWORK_ERROR",
             retryable=True,
-        ) from exc
+        ) from None
 
     retry_after_seconds: float | None = None
     retry_after_header = response.headers.get("Retry-After")
@@ -302,7 +302,7 @@ class YouTubeAdapter(PlatformAdapter):
                 code="YOUTUBE_UPLOAD_FAILED",
                 retryable=retryable,
                 uncertain=retryable,
-            ) from exc
+            ) from None
 
         post_id = str(result.get("video_id") or "")
         if not post_id:
@@ -497,7 +497,7 @@ def _verify_youtube_processing(
                 code="REMOTE_STATUS_LOOKUP_FAILED",
                 retryable=True,
                 uncertain=True,
-            ) from exc
+            ) from None
         items = response.get("items") or []
         if not items:
             raise PlatformPublishError(
@@ -592,7 +592,7 @@ class InstagramReelsAdapter(PlatformAdapter):
                 code=exc.code,
                 retryable=exc.retryable,
                 uncertain=exc.retryable,
-            ) from exc
+            ) from None
         return token, user_id, version
 
     def publish(
@@ -736,7 +736,7 @@ class InstagramReelsAdapter(PlatformAdapter):
                 code="AMBIGUOUS_OUTCOME",
                 retryable=False,
                 uncertain=True,
-            ) from exc
+            ) from None
 
         remote_id = str(payload.get("id") or "")
         if not remote_id:
@@ -794,7 +794,7 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                 code=exc.code,
                 retryable=exc.retryable,
                 uncertain=exc.retryable,
-            ) from exc
+            ) from None
 
     def _api(
         self,
@@ -1155,7 +1155,7 @@ class TikTokDirectPostAdapter(PlatformAdapter):
                         code="UPLOAD_TRANSFER_FAILED",
                         retryable=True,
                         uncertain=True,
-                    ) from exc
+                    ) from None
 
                 if response.status_code not in {201, 206}:
                     retryable = (
