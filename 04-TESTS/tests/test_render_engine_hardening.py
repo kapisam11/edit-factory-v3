@@ -4,20 +4,25 @@ import subprocess
 import pytest
 
 from ai_video_factory import render_engine
+from ai_video_factory.production_guardrails import GuardrailError, ToolResult
 
 
 def test_run_ffprobe_accepts_resolved_binary_path(monkeypatch):
     calls = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_tool(cmd, **kwargs):
         calls["cmd"] = cmd
         calls["kwargs"] = kwargs
-        return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        return ToolResult(tuple(cmd), 0, "{}", "")
 
-    monkeypatch.setattr(render_engine.subprocess, "run", fake_run)
-    result = render_engine.run_ffprobe(["/usr/bin/ffprobe", "-v", "error"], timeout=7)
+    monkeypatch.setattr(render_engine, "_ffprobe_binary", lambda: "/usr/bin/ffprobe")
+    monkeypatch.setattr(render_engine, "run_tool", fake_tool)
+    result = render_engine.run_ffprobe(["ffprobe", "-v", "error"], timeout=7)
     assert result.returncode == 0
+    assert result.stdout == "{}"
+    assert calls["cmd"][0] == "/usr/bin/ffprobe"
     assert calls["kwargs"]["timeout"] == 7
+    assert calls["kwargs"]["max_stdout_bytes"] == 8 * 1024 * 1024
 
 
 def test_run_ffmpeg_capture_path_accepts_resolved_binary_path(monkeypatch, tmp_path):
@@ -87,11 +92,11 @@ def test_run_ffmpeg_streams_stderr_and_keeps_bounded_tail(monkeypatch):
 
 
 def test_ffprobe_timeout_is_bounded(monkeypatch):
-    def fake_run(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+    def fake_tool(*_args, **kwargs):
+        raise GuardrailError(f"tool timed out after {kwargs['timeout']}s: ffprobe")
 
-    monkeypatch.setattr(render_engine.subprocess, "run", fake_run)
-    with pytest.raises(RuntimeError, match="FFprobe timed out"):
+    monkeypatch.setattr(render_engine, "run_tool", fake_tool)
+    with pytest.raises(RuntimeError, match="FFprobe timed out after 3s"):
         render_engine.run_ffprobe(["ffprobe", "-v", "error"], timeout=3)
 
 
