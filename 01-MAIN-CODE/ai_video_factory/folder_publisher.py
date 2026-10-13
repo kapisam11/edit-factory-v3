@@ -791,8 +791,20 @@ class FolderPublisher:
 
             temporary = root / f".{source_hash}.{uuid.uuid4().hex}.partial"
             try:
+                # Never copy more than the size admitted above. If another
+                # process appends to the input during staging, the post-copy
+                # stat/hash check rejects the snapshot without letting a race
+                # consume unbounded temporary disk space.
                 with source.open("rb") as input_handle, temporary.open("wb") as output_handle:
-                    shutil.copyfileobj(input_handle, output_handle, length=1024 * 1024)
+                    remaining = before.st_size
+                    while remaining > 0:
+                        chunk = input_handle.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        output_handle.write(chunk)
+                        remaining -= len(chunk)
+                    output_handle.flush()
+                    os.fsync(output_handle.fileno())
                 after = source.stat()
                 if (
                     before.st_size != after.st_size
