@@ -58,7 +58,7 @@ jobs:
           video = [s for s in streams if s.get("codec_type") == "video"]
           audio = [s for s in streams if s.get("codec_type") == "audio"]
           duration = float(data.get("format", {}).get("duration", 0))
-          assert len(video) == 1 and video[0].get("codec_name") == "h264', video
+assert len(video) == 1 and video[0].get("codec_name") == "h264", video
           assert video[0].get("width") == 360 and video[0].get("height") == 640, video
           assert len(audio) == 1 and audio[0].get("codec_name") == "aac", audio
           assert 2.8 <= duration <= 3.2, duration
