@@ -117,6 +117,24 @@ The local Compose profile publishes the dashboard only on `127.0.0.1` by default
 
 The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**.
 
+### Windows small-group production requirements (practical local scope)
+
+- Windows 10/11 with Docker Desktop (WSL2 backend) running locally.
+- Python 3.12 tooling for local checks (`uv`, `pytest`, `mypy`, `ruff`).
+- FFmpeg installed and reachable in PATH for render and media validation.
+- Stable internet/API connectivity for research and optional publishing features.
+- Keep localhost-only defaults (`127.0.0.1`) unless you have separately hardened remote access.
+
+### Pre-paid-work checklist
+
+Before accepting paid editing work, run this short checklist on your own machine:
+
+1. Complete a **real media smoke test** with representative footage and audio.
+2. Run a **backup/restore verification drill** and confirm recovered state/output.
+3. Simulate **API failure and retry behavior** (timeouts, rate limits, temporary outages) and confirm jobs fail with actionable errors.
+4. Confirm **rights approval before publish** and human review gates are completed for every deliverable.
+5. Keep **disk space headroom** above your configured minimum before long renders or uploads.
+
 ## Python API
 
 ```python

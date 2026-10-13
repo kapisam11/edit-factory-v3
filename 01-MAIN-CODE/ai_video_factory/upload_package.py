@@ -677,6 +677,17 @@ def _collect_artifacts(package_dir: Path) -> Dict[str, Any]:
     return artifacts
 
 
+def _human_review_required() -> bool:
+    """Keep publish approval fail-closed outside explicit test mode."""
+    env = os.environ.get("AIVF_ENV", "").strip().lower()
+    override = os.environ.get("AIVF_REQUIRE_HUMAN_REVIEW")
+    if env != "test":
+        return True
+    if override is None:
+        return True
+    return override.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[Mapping[str, Any]] = None, script: str = "", platform: str = "youtube_shorts", final_video: Optional[str] = None, thumbnail: Optional[str] = None, caption_path: Optional[str] = None) -> Dict[str, Any]:
     """Create the full copy/paste upload bundle for one platform."""
     profile = get_output_profile(platform)
@@ -727,7 +738,7 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         fact_reviewed=bool(summary.get("facts_reviewed", False)),
     )
     human_review = review_gate(summary.get("human_review"))
-    require_human_review = os.environ.get("AIVF_REQUIRE_HUMAN_REVIEW", "1") == "1"
+    require_human_review = _human_review_required()
     human_review["required"] = require_human_review
     upload_dir = root / "upload" / profile.name
     upload_dir.mkdir(parents=True, exist_ok=True)
