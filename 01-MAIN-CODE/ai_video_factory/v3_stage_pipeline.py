@@ -790,10 +790,20 @@ class MediaValidationStage:
         normalized = context.package / ".final.v3.normalized.mp4"
         canonical = context.package / "final.v3.mp4"
 
-        shutil.copyfile(context.result.final_video, baseline)
+        # Normalize the no-retention render before creating the reference baseline.
+        # The renderer can finish on a frame boundary a little beyond the requested
+        # duration (e.g. 8.125s at 24fps for an 8s target). Comparing that source
+        # directly with an effect pass capped at 8.000s creates a false retention-QC
+        # failure, so both baseline and effect render must start from identical media.
+        normalize_duration(
+            context.result.final_video,
+            str(normalized),
+            context.request.target_seconds,
+        )
+        shutil.copyfile(normalized, baseline)
         profile = context.payload["platform_variants"][context.request.platform]
         enforce_retention_events(
-            context.result.final_video,
+            str(normalized),
             str(retention),
             context.payload.get("retention_map", []),
             target_seconds=context.request.target_seconds,
