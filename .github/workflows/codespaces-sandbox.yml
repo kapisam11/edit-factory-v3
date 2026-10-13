@@ -66,3 +66,31 @@ jobs:
           print(f"PASS: verified H.264 + AAC; duration={duration:.3f}s")
           '
           SH
+
+      - name: Run project media/render regressions inside the sandbox container
+        env:
+          AIVF_ENV: test
+          FLASK_SECRET_KEY: sandbox-ci-session-secret
+          AIVF_DASHBOARD_TOKEN: sandbox-ci-dashboard-token
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,source=${GITHUB_WORKSPACE},target=/workspace" \
+            --workdir /workspace \
+            --env HOME=/tmp/aivf-home \
+            --env UV_CACHE_DIR=/tmp/aivf-uv-cache \
+            --env UV_PROJECT_ENVIRONMENT=/tmp/aivf-venv \
+            --env PYTHONPATH=01-MAIN-CODE:02-WEB-FILES:03-SIDE-CODE \
+            --env AIVF_ENV=test \
+            --env FLASK_SECRET_KEY=sandbox-ci-session-secret \
+            --env AIVF_DASHBOARD_TOKEN=sandbox-ci-dashboard-token \
+            --env AIVF_STATE_DIR=/tmp/aivf-state \
+            --env AIVF_UPLOAD_DIR=/tmp/aivf-uploads \
+            --env AIVF_OUTPUT_DIR=/tmp/aivf-output \
+            --entrypoint bash aivf-codespaces-sandbox -euo pipefail -s <<'SH'
+          mkdir -p "$HOME" "$UV_CACHE_DIR" "$AIVF_STATE_DIR" "$AIVF_UPLOAD_DIR" "$AIVF_OUTPUT_DIR"
+          uv sync --frozen --python 3.12 --extra web --extra dev --extra ocr
+          uv pip check
+          bash .devcontainer/verify-media.sh
+          SH
