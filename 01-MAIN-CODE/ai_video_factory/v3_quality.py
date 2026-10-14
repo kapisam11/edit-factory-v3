@@ -583,11 +583,19 @@ def verify_retention_against_baseline(
             # frame boundary even when the strongest sample clearly proves it.
             event_delta = strongest.pixel_delta if strongest is not None else 0.0
         control_delta = median(control_deltas) if control_deltas else 0.0
-        threshold = max(0.10, control_delta * 1.08)
+        if caption_kind:
+            # Captions can persist across adjacent frames, so control samples may
+            # legitimately contain stronger text in the same band. Requiring a
+            # caption to exceed those controls rejects valid captions. The semantic
+            # verifier already requires both measurable frame-wide change and a
+            # localized lower-band signal; retain an absolute localized evidence floor.
+            threshold = 0.50
+        else:
+            # For discrete motion/zoom/transition effects, require the event change
+            # to exceed changes in non-event control frames.
+            threshold = max(0.10, control_delta * 1.08)
         semantic_pass = bool(strongest and strongest.passed)
         pixel_pass = event_delta >= threshold
-        # The semantic gate proves the intended effect happened. The relative pixel
-        # gate compares like-for-like regions for localized caption effects.
         passed = semantic_pass and pixel_pass
         checks.append({
             "time": timestamp,
