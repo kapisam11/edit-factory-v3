@@ -326,6 +326,7 @@ def test_unexecuted_or_partial_checks_never_become_pass():
     assert failed.status == "BLOCKED"
 
 
-def test_readiness_rejects_legacy_or_unknown_status_values():
+@pytest.mark.parametrize("legacy_status", ["UNVERIFIED", "PRESENT", "PROCESS", "TYPO"])
+def test_readiness_rejects_legacy_or_unknown_status_values(legacy_status):
     with pytest.raises(ValueError, match="unsupported readiness status"):
-        readiness._item(99, "legacy status", "UNVERIFIED", "test", "should never be emitted")
+        readiness._item(99, "legacy status", legacy_status, "test", "should never be emitted")
