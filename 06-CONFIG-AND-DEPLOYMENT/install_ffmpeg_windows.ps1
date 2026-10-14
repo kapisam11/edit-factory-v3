@@ -13,8 +13,23 @@ function Find-FfmpegBinDirectory {
             $ffmpegDirectory = Split-Path -Parent $ffmpegPath
             $ffprobeDirectory = Split-Path -Parent $ffprobePath
             if ($ffmpegDirectory -eq $ffprobeDirectory) {
-                return $ffmpegDirectory
+                # Chocolatey shims can exist even when the package payload did
+                # not install. Prove that both commands run before accepting PATH.
+                try {
+                    & $ffmpegPath -version *> $null
+                    $ffmpegExit = $LASTEXITCODE
+                    & $ffprobePath -version *> $null
+                    $ffprobeExit = $LASTEXITCODE
+                    if ($ffmpegExit -eq 0 -and $ffprobeExit -eq 0) {
+                        return $ffmpegDirectory
+                    }
+                }
+                catch {
+                    # Continue to inspect package payloads and then use fallback.
+                }
             }
+            $searchRoots.Add($ffmpegDirectory)
+            $searchRoots.Add($ffprobeDirectory)
         }
     }
 
