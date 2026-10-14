@@ -22,7 +22,12 @@ class ReadinessItem:
     detail: str = ""
 
 
+READINESS_STATUSES = frozenset({"PASS", "IMPLEMENTED", "CI", "ENVIRONMENT", "MANUAL", "BLOCKED"})
+
+
 def _item(number:int,name:str,status:str,evidence:str,detail:str="")->ReadinessItem:
+    if status not in READINESS_STATUSES:
+        raise ValueError(f"unsupported readiness status: {status!r}")
     return ReadinessItem(number,name,status,evidence,detail)
 
 
@@ -145,7 +150,11 @@ def _run_behavior_evidence(root: Path) -> dict[str, dict[str, str]]:
 def _evidence_item(
     number: int, name: str, evidence_key: str, implementation_evidence: str,
     unverified_detail: str, runtime_evidence: dict[str, dict[str, str]],
+    implementation_present: bool = True,
 ) -> ReadinessItem:
+    if not implementation_present:
+        return _item(number, name, "BLOCKED", implementation_evidence,
+                     "required implementation file is missing")
     observed = runtime_evidence.get(evidence_key)
     if observed is None:
         return _item(number, name, "IMPLEMENTED", implementation_evidence, unverified_detail)
@@ -164,8 +173,12 @@ def _partial_evidence_item(
     evidence_key: str,
     scope_limit: str,
     runtime_evidence: dict[str, dict[str, str]],
+    implementation_present: bool = True,
 ) -> ReadinessItem:
     """Keep a broad readiness claim IMPLEMENTED when its probe covers only a narrow behavior."""
+    if not implementation_present:
+        return _item(number, name, "BLOCKED", evidence_key,
+                     "required implementation file is missing")
     observed = runtime_evidence.get(evidence_key)
     if observed and observed["status"] == "BLOCKED":
         return _item(number, name, "BLOCKED", observed["evidence"], observed["detail"])
@@ -245,28 +258,28 @@ def run_readiness(root: str | Path = ".") -> list[ReadinessItem]:
         _item(1,"Merge/process gate","MANUAL","working branch + pull request workflow","Final merge still belongs to the repository owner."),
         _item(2,"CI verification","CI","GitHub workflow required","Final green state is reported from GitHub Actions, not assumed locally."),
         _item(3,"Command-injection audit","PASS" if security_ok else "BLOCKED","security_audit.py",security_detail),
-        _item(4,"Repository path traversal","IMPLEMENTED","asset_manager.py + path-containment tests","The implementation exists, but traversal cases must be executed before this control can be marked PASS."),
-        _partial_evidence_item(5,"Secret-safe logging","secret_logging","every application log call-site and persisted error still need redaction integration tests",runtime_evidence),
+        _item(4,"Repository path traversal","IMPLEMENTED" if (py/"asset_manager.py").is_file() else "BLOCKED","asset_manager.py + path-containment tests","The implementation exists, but traversal cases must be executed before this control can be marked PASS." if (py/"asset_manager.py").is_file() else "required implementation file is missing"),
+        _partial_evidence_item(5,"Secret-safe logging","secret_logging","every application log call-site and persisted error still need redaction integration tests",runtime_evidence, implementation_present=(py/"production_guardrails.py").is_file()),
         _item(6,"SLSA/build provenance","CI","release.yml emits SBOM/provenance/attestation","Attestation generation is a GitHub-hosted control."),
         _item(7,"PySceneDetect integration","IMPLEMENTED" if (py/"scene_detect_adapter.py").is_file() else "BLOCKED","scene_detect_adapter.py","Adapter behavior has not been verified by a targeted runtime test." if (py/"scene_detect_adapter.py").is_file() else "required implementation file is missing"),
-        _item(8,"Scene detection redesign","IMPLEMENTED","scene detection and salience implementation","Source descriptions alone do not prove shot-aware behavior; an executed integration test is required."),
+        _item(8,"Scene detection redesign","IMPLEMENTED" if (py/"scene_detect_adapter.py").is_file() else "BLOCKED","scene detection and salience implementation","Source descriptions alone do not prove shot-aware behavior; an executed integration test is required." if (py/"scene_detect_adapter.py").is_file() else "required implementation file is missing"),
         _item(9,"GPU/NVENC verification","ENVIRONMENT","hardware.py verifies actual FFmpeg encoder availability","Requires a host with the target GPU."),
-        _item(10,"Performance benchmark","IMPLEMENTED","benchmark.py","A benchmark file is not proof that a benchmark ran; record a completed benchmark result before PASS."),
+        _item(10,"Performance benchmark","IMPLEMENTED" if (py/"benchmark.py").is_file() else "BLOCKED","benchmark.py","A benchmark file is not proof that a benchmark ran; record a completed benchmark result before PASS." if (py/"benchmark.py").is_file() else "required implementation file is missing"),
         _item(11,"10+ GB media","ENVIRONMENT","large_media_smoke.py","Opt-in test avoids making CI consume 10+ GB by default."),
         _item(12,"Exotic media compatibility","ENVIRONMENT","compatibility_matrix.py","Run against the target formats on the deployment host."),
-        _partial_evidence_item(13,"Audio normalization","audio_normalization","a real FFmpeg loudnorm render and measured-output test must confirm actual loudness behavior",runtime_evidence),
-        _evidence_item(14,"Rights/license verification","rights_gate","rights_policy.py","Rights-gate behavior has not been executed; this is not a legal opinion.",runtime_evidence),
+        _partial_evidence_item(13,"Audio normalization","audio_normalization","a real FFmpeg loudnorm render and measured-output test must confirm actual loudness behavior",runtime_evidence, implementation_present=(py/"audio_normalization.py").is_file()),
+        _partial_evidence_item(14,"Rights/license verification","rights_gate","the probe only proves the gate requires structured evidence; it does not validate legal rights, license truth, or permission scope",runtime_evidence, implementation_present=(py/"rights_policy.py").is_file()),
         _item(15,"Content ID","MANUAL","exact/visual fingerprinting infrastructure","No external Content ID database is available for an automatic guarantee."),
-        _evidence_item(16,"Metadata factuality","factuality_gate","factuality_guard.py","Factuality-gate behavior has not been executed; numeric/date claims require evidence or explicit fact review.",runtime_evidence),
-        _item(17,"Thumbnail quality","IMPLEMENTED","thumbnail.py quality scoring + focal-frame extraction","Implementation presence is not a measured quality result; a thumbnail-quality test or human evaluation is required."),
-        _evidence_item(18,"Human-quality review","human_review","human_review.py","Review-contract behavior has not been executed; publish approval remains a human decision.",runtime_evidence),
-        _partial_evidence_item(19,"Learning feedback loop","feedback_store","end-to-end feedback ingestion, learning updates, and subsequent recommendation changes still need a test",runtime_evidence),
-        _item(20,"Observability","IMPLEMENTED","observability_metrics.py + dashboard observability","Implementation references do not prove metrics are emitted and exposed at runtime."),
-        _item(21,"Durable queue / scaling boundary","IMPLEMENTED","SQLite job lifecycle + optional Redis backend contract","The SQLite recovery probe does not prove multi-process or Redis-backed scaling; that requires a separate integration test."),
-        _partial_evidence_item(22,"Multi-user RBAC","rbac","route/resource-level authorization and principal isolation still need integration tests",runtime_evidence),
-        _partial_evidence_item(23,"Crash recovery","crash_recovery","a forced worker termination/restart test must prove recovery end-to-end",runtime_evidence),
-        _evidence_item(24,"Cache lifecycle","cache_lifecycle","cache_lifecycle.py","Cache lifecycle behavior has not been executed.",runtime_evidence),
-        _item(25,"UI production surface","IMPLEMENTED","dashboard health/preview/retry surfaces","The presence of UI endpoints does not prove that the complete production flow works."),
+        _partial_evidence_item(16,"Metadata factuality","factuality_gate","the probe only covers unsupported numeric claims; it does not verify every title, date, name, or external claim",runtime_evidence, implementation_present=(py/"factuality_guard.py").is_file()),
+        _item(17,"Thumbnail quality","IMPLEMENTED" if (py/"thumbnail.py").is_file() else "BLOCKED","thumbnail.py quality scoring + focal-frame extraction","Implementation presence is not a measured quality result; a thumbnail-quality test or human evaluation is required." if (py/"thumbnail.py").is_file() else "required implementation file is missing"),
+        _partial_evidence_item(18,"Human-quality review","human_review","the probe validates review fields and the approval gate; it does not replace a human review of rendered media",runtime_evidence, implementation_present=(py/"human_review.py").is_file()),
+        _partial_evidence_item(19,"Learning feedback loop","feedback_store","end-to-end feedback ingestion, learning updates, and subsequent recommendation changes still need a test",runtime_evidence, implementation_present=(py/"feedback_store.py").is_file()),
+        _item(20,"Observability","IMPLEMENTED" if (py/"observability_metrics.py").is_file() else "BLOCKED","observability_metrics.py + dashboard observability","Implementation references do not prove metrics are emitted and exposed at runtime." if (py/"observability_metrics.py").is_file() else "required implementation file is missing"),
+        _item(21,"Durable queue / scaling boundary","IMPLEMENTED" if (py/"job_backend.py").is_file() else "BLOCKED","SQLite job lifecycle + optional Redis backend contract","The SQLite recovery probe does not prove multi-process or Redis-backed scaling; that requires a separate integration test." if (py/"job_backend.py").is_file() else "required implementation file is missing"),
+        _partial_evidence_item(22,"Multi-user RBAC","rbac","route/resource-level authorization and principal isolation still need integration tests",runtime_evidence, implementation_present=(py/"authorization.py").is_file()),
+        _partial_evidence_item(23,"Crash recovery","crash_recovery","a forced worker termination/restart test must prove recovery end-to-end",runtime_evidence, implementation_present=(py/"job_recovery.py").is_file()),
+        _partial_evidence_item(24,"Cache lifecycle","cache_lifecycle","the probe covers size enforcement only; expiry, restart, and lifecycle behavior need separate tests",runtime_evidence, implementation_present=(py/"cache_lifecycle.py").is_file()),
+        _item(25,"UI production surface","IMPLEMENTED" if (base/"01-MAIN-CODE"/"app"/"web_app_v3.py").is_file() else "BLOCKED","dashboard health/preview/retry surfaces","The presence of UI endpoints does not prove that the complete production flow works." if (base/"01-MAIN-CODE"/"app"/"web_app_v3.py").is_file() else "required dashboard implementation file is missing"),
         _item(26,"UI automation","CI","existing dashboard E2E workflow"),
         _item(27,"Typing boundary","CI","mypy hardened production boundary","The typing result is established by the configured CI check, not by this runner."),
         _item(28,"Lint boundary","CI","Ruff correctness gate plus targeted production modules"),
@@ -274,7 +287,7 @@ def run_readiness(root: str | Path = ".") -> list[ReadinessItem]:
         _item(30,"Reproducible build","CI","reproducible_build.py + CI verification"),
         _item(31,"OS/hardware matrix","ENVIRONMENT","Linux + Windows CI; hardware checks are runtime-detected"),
         _item(32,"Real end-to-end video","CI","dashboard-e2e.yml generates and renders a real media fixture"),
-        _item(33,"Before/after quality comparison","IMPLEMENTED","benchmark compare API + quality reports","No actual before/after result is available; a project-specific comparison is required."),
+        _item(33,"Before/after quality comparison","IMPLEMENTED" if (py/"benchmark.py").is_file() else "BLOCKED","benchmark compare API + quality reports","No actual before/after result is available; a project-specific comparison is required." if (py/"benchmark.py").is_file() else "required benchmark implementation file is missing"),
         _item(
             34,
             "10/10 evidence",
