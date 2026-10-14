@@ -462,6 +462,31 @@ def _frame_delta(first: bytes, second: bytes) -> float:
     return sum(abs(a - b) for a, b in zip(first, second)) / len(first)
 
 
+def _frame_region_delta(
+    first: bytes,
+    second: bytes,
+    *,
+    y0: int,
+    y1: int,
+) -> float:
+    """Compare mean pixel change in a localized region of a sampled 160x90 frame."""
+    width, height = 160, 90
+    if len(first) != len(second) or len(first) != width * height:
+        return 0.0
+    start = max(0, min(height, int(y0)))
+    end = max(start, min(height, int(y1)))
+    if end <= start:
+        return 0.0
+    total = 0
+    for row in range(start, end):
+        offset = row * width
+        total += sum(
+            abs(first[index] - second[index])
+            for index in range(offset, offset + width)
+        )
+    return total / ((end - start) * width)
+
+
 def verify_retention_against_baseline(
     baseline_path: str,
     rendered_path: str,
@@ -523,22 +548,46 @@ def verify_retention_against_baseline(
             for t in active_times
             if baseline_frames.get(t) and rendered_frames.get(t)
         ]
-        control_deltas = [
-            _frame_delta(baseline_frames[t], rendered_frames[t])
-            for t in control_times
-            if baseline_frames.get(t) and rendered_frames.get(t)
-        ]
-        strongest = max(active_metrics, key=lambda item: item.pixel_delta, default=None)
-        # Use the strongest in-window frame for the independent pixel gate. Effects
-        # are intentionally short, so a median can dilute a real effect near a
-        # frame boundary even when the strongest sample clearly proves it.
-        event_delta = strongest.pixel_delta if strongest is not None else 0.0
+        caption_kind = kind in {"text", "caption"}
+        if caption_kind:
+            # Caption changes are deliberately localized to the lower band. Comparing
+            # their whole-frame delta with a control frame dominated by a zoom or scene
+            # change mixes unrelated signals and can reject a valid caption. Compare
+            # the same lower-band region for both the event and its controls.
+            band_y0 = int(90 * 0.68)
+            control_deltas = [
+                _frame_region_delta(
+                    baseline_frames[t],
+                    rendered_frames[t],
+                    y0=band_y0,
+                    y1=90,
+                )
+                for t in control_times
+                if baseline_frames.get(t) and rendered_frames.get(t)
+            ]
+            strongest = max(
+                active_metrics,
+                key=lambda item: item.lower_band_change,
+                default=None,
+            )
+            event_delta = strongest.lower_band_change * 255.0 if strongest is not None else 0.0
+        else:
+            control_deltas = [
+                _frame_delta(baseline_frames[t], rendered_frames[t])
+                for t in control_times
+                if baseline_frames.get(t) and rendered_frames.get(t)
+            ]
+            strongest = max(active_metrics, key=lambda item: item.pixel_delta, default=None)
+            # Use the strongest in-window frame for the independent pixel gate. Effects
+            # are intentionally short, so a median can dilute a real effect near a
+            # frame boundary even when the strongest sample clearly proves it.
+            event_delta = strongest.pixel_delta if strongest is not None else 0.0
         control_delta = median(control_deltas) if control_deltas else 0.0
         threshold = max(0.10, control_delta * 1.08)
         semantic_pass = bool(strongest and strongest.passed)
         pixel_pass = event_delta >= threshold
-        # The semantic gate is the proof that the intended effect happened;
-        # the relative pixel gate only requires it to exceed the local control.
+        # The semantic gate proves the intended effect happened. The relative pixel
+        # gate compares like-for-like regions for localized caption effects.
         passed = semantic_pass and pixel_pass
         checks.append({
             "time": timestamp,
