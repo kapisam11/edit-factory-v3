@@ -139,7 +139,7 @@ def test_readiness_distinguishes_clear_code_from_full_release_verification(capsy
     assert summary["no_known_code_blockers"] is True
     assert summary["fully_verified"] is False
     assert summary["release_ready"] is False
-    assert {"CI", "ENVIRONMENT", "MANUAL", "PROCESS"} & set(summary["outstanding_gates"])
+    assert {"CI", "ENVIRONMENT", "MANUAL", "IMPLEMENTED"} & set(summary["outstanding_gates"])
 
     assert readiness.main([str(root)]) == 0
     capsys.readouterr()
@@ -259,8 +259,8 @@ def test_readiness_passes_only_when_behavior_tests_execute(tmp_path):
         (23, "test_job_backend_reclaims_expired_and_rejects_stale_worker"),
     ):
         # The targeted unit probes run, but each covers only part of its broader
-        # release claim. Keep the aggregate readiness item UNVERIFIED.
-        assert items[number].status == "UNVERIFIED", items[number]
+        # release claim. Keep the aggregate claim IMPLEMENTED, not PASS.
+        assert items[number].status == "IMPLEMENTED", items[number]
         assert test_id in items[number].evidence
         assert "runtime test passed" in items[number].detail
 
@@ -271,16 +271,16 @@ def test_readiness_passes_only_when_behavior_tests_execute(tmp_path):
     assert "forced worker termination/restart" in items[23].detail
 
     for number in (4, 8, 10, 17, 20, 21, 25, 33):
-        assert items[number].status == "UNVERIFIED", items[number]
+        assert items[number].status == "IMPLEMENTED", items[number]
 
 
 def test_required_file_presence_is_not_reported_as_behavior_pass(tmp_path):
     root = Path(__file__).resolve().parents[2]
     report = readiness.report_dict(root)
     assert report["code_checks"]
-    assert all(item["status"] in {"PRESENT", "BLOCKED"} for item in report["code_checks"])
+    assert all(item["status"] in {"IMPLEMENTED", "BLOCKED"} for item in report["code_checks"])
     assert all(
-        "behavior is not implied" in item["detail"]
+        "behavior has not been verified" in item["detail"]
         for item in report["code_checks"]
         if item["status"] == "PRESENT"
     )
