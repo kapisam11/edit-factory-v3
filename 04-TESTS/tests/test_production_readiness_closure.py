@@ -250,6 +250,11 @@ def test_readiness_cli_invalid_root_fails_with_actionable_error(tmp_path, capsys
 def test_readiness_passes_only_when_behavior_tests_execute(tmp_path):
     root = Path(__file__).resolve().parents[2]
     items = {item.number: item for item in readiness.run_readiness(root)}
+    assert all(item.status in readiness.READINESS_STATUSES for item in items.values())
+    # Broad/implementation-only claims cannot pass based on file presence or a narrow probe.
+    assert all(item.number == 3 for item in items.values() if item.status == "PASS")
+    for number in (4, 5, 7, 8, 10, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 33):
+        assert items[number].status in {"IMPLEMENTED", "BLOCKED"}, items[number]
 
     for number, test_id in (
         (5, "test_log_redaction_patterns"),
@@ -284,3 +289,43 @@ def test_required_file_presence_is_not_reported_as_behavior_pass(tmp_path):
         for item in report["code_checks"]
         if item["status"] == "IMPLEMENTED"
     )
+
+
+
+def test_unexecuted_or_partial_checks_never_become_pass():
+    no_result = readiness._evidence_item(
+        90, "not executed", "probe", "example.py", "probe was not run", {}
+    )
+    skipped_result = readiness._evidence_item(
+        91,
+        "skipped probe",
+        "probe",
+        "example.py",
+        "probe did not execute",
+        {"probe": {"status": "UNVERIFIED", "evidence": "example_test.py", "detail": "skipped"}},
+    )
+    narrow_pass = readiness._partial_evidence_item(
+        92,
+        "broad claim",
+        "probe",
+        "the targeted test does not cover the complete claim",
+        {"probe": {"status": "PASS", "evidence": "example_test.py", "detail": "runtime test passed"}},
+    )
+    failed = readiness._evidence_item(
+        93,
+        "failed probe",
+        "probe",
+        "example.py",
+        "probe failed",
+        {"probe": {"status": "BLOCKED", "evidence": "example_test.py", "detail": "runtime test failed"}},
+    )
+
+    assert no_result.status == "IMPLEMENTED"
+    assert skipped_result.status == "IMPLEMENTED"
+    assert narrow_pass.status == "IMPLEMENTED"
+    assert failed.status == "BLOCKED"
+
+
+def test_readiness_rejects_legacy_or_unknown_status_values():
+    with pytest.raises(ValueError, match="unsupported readiness status"):
+        readiness._item(99, "legacy status", "UNVERIFIED", "test", "should never be emitted")
