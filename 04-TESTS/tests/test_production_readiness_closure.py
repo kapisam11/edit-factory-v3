@@ -282,5 +282,5 @@ def test_required_file_presence_is_not_reported_as_behavior_pass(tmp_path):
     assert all(
         "behavior has not been verified" in item["detail"]
         for item in report["code_checks"]
-        if item["status"] == "PRESENT"
+        if item["status"] == "IMPLEMENTED"
     )
