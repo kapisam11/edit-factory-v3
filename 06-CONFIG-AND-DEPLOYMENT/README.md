@@ -31,6 +31,38 @@ The deployment helper performs backup verification, restore drills, immutable-im
 
 Production Compose defaults to secure session cookies and requires TLS/reverse-proxy termination when exposed to users. For local HTTP development, explicitly set `AIVF_COOKIE_SECURE=0` in the development environment only.
 
+## Windows production startup
+
+`START-ALL.ps1` and `START-ALL.bat` intentionally start the source-built **development** stack. Do not use them for production. Use the separate `START-PRODUCTION.ps1` or `START-PRODUCTION.bat` path instead.
+
+Before starting production, configure `06-CONFIG-AND-DEPLOYMENT/.env` with:
+
+```text
+AIVF_IMAGE=ghcr.io/kapisam11/edit-factory-v3@sha256:<64-hex-digest>
+FLASK_SECRET_KEY=<generated secret of at least 32 characters>
+AIVF_DASHBOARD_TOKEN=<generated token of at least 32 characters>
+```
+
+The production launcher refuses mutable image tags, missing/placeholder secrets, invalid Compose configuration, and a different image from the one already configured in the production Compose project. It does not build source. Production Compose forces `AIVF_ENV=production`, secure cookies, and `AIVF_ALLOW_RUNTIME_MIGRATIONS=0`, even if those variables in the shared `.env` contain development values.
+
+On first setup, explicitly initialize and migrate the database, then start the pinned production image:
+
+```powershell
+.\START-PRODUCTION.ps1 -Migrate
+```
+
+If a database already exists, the migration mode creates and verifies a database-only backup at `/app/state/backups/pre-migration-<UTC timestamp>.tar.gz` before running `aivf-db-migrate`. This is a local pre-migration safeguard on the same Docker state volume, **not** a disaster-recovery or off-host backup. Configure and test the full backup/restore procedure separately.
+
+For ordinary restarts of the same already-migrated image, run:
+
+```powershell
+.\START-PRODUCTION.ps1
+```
+
+Without `-Migrate`, the launcher verifies the existing schema without changing it and fails closed if the schema is missing or incompatible. The launcher deliberately refuses image-version changes; use the controlled backup/migration/rollback deployment procedure for releases rather than replacing a running image through a simple start command.
+
+Autonomous publishing is not started by the default production launch. The `automation` Compose profile remains opt-in.
+
 ## Local development
 
 Use the separate development definition so source builds never become an accidental production deployment:
