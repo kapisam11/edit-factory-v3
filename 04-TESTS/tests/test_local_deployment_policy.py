@@ -162,3 +162,14 @@ def test_security_workflow_has_pinned_secret_scanning() -> None:
     assert "gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e" in workflow
     assert "fetch-depth: 0" in workflow
 
+
+
+def test_windows_ffmpeg_installer_persists_verified_path_between_ci_steps() -> None:
+    installer = (DEPLOYMENT_ROOT / "install_ffmpeg_windows.ps1").read_text(encoding="utf-8")
+
+    # The installer runs in its own PowerShell process; local PATH changes do not
+    # survive into later GitHub Actions steps unless GITHUB_PATH is updated.
+    assert "Test-FfmpegBinDirectory -Directory $ffmpegDirectory" in installer
+    assert 'if ($env:GITHUB_PATH) {' in installer
+    assert "Add-Content -LiteralPath $env:GITHUB_PATH -Value $binDirectory -Encoding utf8" in installer
+    assert "Resolved FFmpeg directory contains a newline" in installer
