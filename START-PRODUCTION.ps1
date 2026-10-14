@@ -25,19 +25,19 @@ function Get-EnvFileValue([string]$Name) {
     }
 
     $value = ($line -replace "^\s*$([regex]::Escape($Name))\s*=\s*", "").Trim()
-    return $value.Trim('"').Trim("'")
+    return $value.Trim([char]'"').Trim([char]"'")
 }
 
 function Get-ConfiguredValue([string]$Name) {
     $processValue = [Environment]::GetEnvironmentVariable($Name, "Process")
     if (-not [string]::IsNullOrWhiteSpace($processValue)) {
-        return $processValue.Trim().Trim('"').Trim("'")
+        return $processValue.Trim().Trim([char]'"').Trim([char]"'")
     }
     return Get-EnvFileValue $Name
 }
 
 function Test-UsableSecret([string]$Value) {
-    $candidate = if ($null -eq $Value) { "" } else { $Value.Trim().Trim('"').Trim("'") }
+    $candidate = if ($null -eq $Value) { "" } else { $Value.Trim().Trim([char]'"').Trim([char]"'") }
     if ($candidate.Length -lt 32) {
         return $false
     }
@@ -51,7 +51,7 @@ function Invoke-Compose([string[]]$ComposeArguments) {
     & docker compose --env-file $EnvFile -f $ComposeFile @ComposeArguments
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
-        throw "docker compose failed with exit code $exitCode: $($ComposeArguments -join ' ')"
+        throw "docker compose failed with exit code ${exitCode}: $($ComposeArguments -join ' ')"
     }
 }
 
@@ -140,7 +140,7 @@ if ($Migrate) {
     if ($dbCheckCode -eq 0) {
         $stamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
         $backupPath = "/app/state/backups/pre-migration-$stamp.tar.gz"
-        $backupMarker = "$backupPath.verified"
+        $backupMarker = "${backupPath}.verified"
         $backupCommand = "mkdir -p /tmp/aivf-empty /app/state/backups && aivf-backup backup --db /app/state/jobs.db --backup $backupPath --knowledge /tmp/aivf-empty --output /tmp/aivf-empty --uploads /tmp/aivf-empty --state /tmp/aivf-empty && aivf-backup verify --backup $backupPath --marker $backupMarker"
         Write-Host "Existing database detected; creating and verifying a local pre-migration database backup..."
         Invoke-Compose @("run", "--rm", "--no-deps", "-T", "web", "sh", "-c", $backupCommand)
