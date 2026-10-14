@@ -83,6 +83,8 @@ if (-not (Test-UsableSecret $dashboardToken)) {
 # These process values take precedence over the development values that may
 # exist in the shared .env file. Production Compose also fixes them explicitly.
 $env:AIVF_IMAGE = $image
+$env:FLASK_SECRET_KEY = $flaskSecret
+$env:AIVF_DASHBOARD_TOKEN = $dashboardToken
 $env:AIVF_ENV = "production"
 $env:AIVF_COOKIE_SECURE = "1"
 $env:AIVF_ALLOW_RUNTIME_MIGRATIONS = "0"
@@ -94,6 +96,7 @@ if ([string]::IsNullOrWhiteSpace($port)) {
 if ($port -notmatch '^\d{1,5}$' -or [int]$port -lt 1 -or [int]$port -gt 65535) {
     throw "AIVF_DASHBOARD_PORT must be a TCP port number between 1 and 65535."
 }
+$env:AIVF_DASHBOARD_PORT = [string][int]$port
 $baseUrl = "http://127.0.0.1:$([int]$port)"
 
 Write-Host ""
