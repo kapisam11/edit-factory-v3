@@ -148,11 +148,11 @@ def _evidence_item(
 ) -> ReadinessItem:
     observed = runtime_evidence.get(evidence_key)
     if observed is None:
-        return _item(number, name, "UNVERIFIED", implementation_evidence, unverified_detail)
+        return _item(number, name, "IMPLEMENTED", implementation_evidence, unverified_detail)
     if observed["status"] in {"PASS", "BLOCKED"}:
         return _item(number, name, observed["status"], observed["evidence"], observed["detail"])
     return _item(
-        number, name, "UNVERIFIED", observed["evidence"], observed["detail"] or unverified_detail
+        number, name, "IMPLEMENTED", observed["evidence"], observed["detail"] or unverified_detail
     )
 
 
@@ -165,7 +165,7 @@ def _partial_evidence_item(
     scope_limit: str,
     runtime_evidence: dict[str, dict[str, str]],
 ) -> ReadinessItem:
-    """Keep a broad readiness claim unverified when its probe covers only a narrow behavior."""
+    """Keep a broad readiness claim IMPLEMENTED when its probe covers only a narrow behavior."""
     observed = runtime_evidence.get(evidence_key)
     if observed and observed["status"] == "BLOCKED":
         return _item(number, name, "BLOCKED", observed["evidence"], observed["detail"])
@@ -174,7 +174,7 @@ def _partial_evidence_item(
     return _item(
         number,
         name,
-        "UNVERIFIED",
+        "IMPLEMENTED",
         evidence,
         f"{detail}. The probe is partial; {scope_limit}",
     )
@@ -212,8 +212,8 @@ def _evaluate_code_checks(checks: list[tuple[str, Path]]) -> list[dict[str, str]
         results.append({
             "name": name,
             "path": path.as_posix(),
-            "status": "PRESENT" if present else "BLOCKED",
-            "detail": "implementation file is present; behavior is not implied" if present
+            "status": "IMPLEMENTED" if present else "BLOCKED",
+            "detail": "implementation file is present; behavior has not been verified" if present
                       else "required implementation file is missing",
         })
     return results
@@ -242,31 +242,31 @@ def run_readiness(root: str | Path = ".") -> list[ReadinessItem]:
     missing_code_checks = [check for check in code_check_results if check["status"] == "BLOCKED"]
 
     items.extend([
-        _item(1,"Merge/process gate","PROCESS","working branch + pull request workflow","Final merge still belongs to the repository owner."),
+        _item(1,"Merge/process gate","MANUAL","working branch + pull request workflow","Final merge still belongs to the repository owner."),
         _item(2,"CI verification","CI","GitHub workflow required","Final green state is reported from GitHub Actions, not assumed locally."),
         _item(3,"Command-injection audit","PASS" if security_ok else "BLOCKED","security_audit.py",security_detail),
-        _item(4,"Repository path traversal","UNVERIFIED","asset_manager.py + path-containment tests","Implementation presence is not evidence that traversal cases were executed."),
+        _item(4,"Repository path traversal","IMPLEMENTED","asset_manager.py + path-containment tests","The implementation exists, but traversal cases must be executed before this control can be marked PASS."),
         _partial_evidence_item(5,"Secret-safe logging","secret_logging","every application log call-site and persisted error still need redaction integration tests",runtime_evidence),
         _item(6,"SLSA/build provenance","CI","release.yml emits SBOM/provenance/attestation","Attestation generation is a GitHub-hosted control."),
-        _item(7,"PySceneDetect integration","UNVERIFIED" if (py/"scene_detect_adapter.py").is_file() else "BLOCKED","scene_detect_adapter.py","Adapter behavior has not been verified by a targeted runtime test." if (py/"scene_detect_adapter.py").is_file() else "required implementation file is missing"),
-        _item(8,"Scene detection redesign","UNVERIFIED","scene detection and salience implementation","Source descriptions alone do not prove shot-aware behavior; an executed integration test is required."),
+        _item(7,"PySceneDetect integration","IMPLEMENTED" if (py/"scene_detect_adapter.py").is_file() else "BLOCKED","scene_detect_adapter.py","Adapter behavior has not been verified by a targeted runtime test." if (py/"scene_detect_adapter.py").is_file() else "required implementation file is missing"),
+        _item(8,"Scene detection redesign","IMPLEMENTED","scene detection and salience implementation","Source descriptions alone do not prove shot-aware behavior; an executed integration test is required."),
         _item(9,"GPU/NVENC verification","ENVIRONMENT","hardware.py verifies actual FFmpeg encoder availability","Requires a host with the target GPU."),
-        _item(10,"Performance benchmark","UNVERIFIED","benchmark.py","A benchmark file is not proof that a benchmark ran; record a completed benchmark result before PASS."),
+        _item(10,"Performance benchmark","IMPLEMENTED","benchmark.py","A benchmark file is not proof that a benchmark ran; record a completed benchmark result before PASS."),
         _item(11,"10+ GB media","ENVIRONMENT","large_media_smoke.py","Opt-in test avoids making CI consume 10+ GB by default."),
         _item(12,"Exotic media compatibility","ENVIRONMENT","compatibility_matrix.py","Run against the target formats on the deployment host."),
         _partial_evidence_item(13,"Audio normalization","audio_normalization","a real FFmpeg loudnorm render and measured-output test must confirm actual loudness behavior",runtime_evidence),
         _evidence_item(14,"Rights/license verification","rights_gate","rights_policy.py","Rights-gate behavior has not been executed; this is not a legal opinion.",runtime_evidence),
         _item(15,"Content ID","MANUAL","exact/visual fingerprinting infrastructure","No external Content ID database is available for an automatic guarantee."),
         _evidence_item(16,"Metadata factuality","factuality_gate","factuality_guard.py","Factuality-gate behavior has not been executed; numeric/date claims require evidence or explicit fact review.",runtime_evidence),
-        _item(17,"Thumbnail quality","UNVERIFIED","thumbnail.py quality scoring + focal-frame extraction","Implementation presence is not a measured quality result; a thumbnail-quality test or human evaluation is required."),
+        _item(17,"Thumbnail quality","IMPLEMENTED","thumbnail.py quality scoring + focal-frame extraction","Implementation presence is not a measured quality result; a thumbnail-quality test or human evaluation is required."),
         _evidence_item(18,"Human-quality review","human_review","human_review.py","Review-contract behavior has not been executed; publish approval remains a human decision.",runtime_evidence),
         _partial_evidence_item(19,"Learning feedback loop","feedback_store","end-to-end feedback ingestion, learning updates, and subsequent recommendation changes still need a test",runtime_evidence),
-        _item(20,"Observability","UNVERIFIED","observability_metrics.py + dashboard observability","Implementation references do not prove metrics are emitted and exposed at runtime."),
-        _item(21,"Durable queue / scaling boundary","UNVERIFIED","SQLite job lifecycle + optional Redis backend contract","The SQLite recovery probe does not prove multi-process or Redis-backed scaling; that requires a separate integration test."),
+        _item(20,"Observability","IMPLEMENTED","observability_metrics.py + dashboard observability","Implementation references do not prove metrics are emitted and exposed at runtime."),
+        _item(21,"Durable queue / scaling boundary","IMPLEMENTED","SQLite job lifecycle + optional Redis backend contract","The SQLite recovery probe does not prove multi-process or Redis-backed scaling; that requires a separate integration test."),
         _partial_evidence_item(22,"Multi-user RBAC","rbac","route/resource-level authorization and principal isolation still need integration tests",runtime_evidence),
         _partial_evidence_item(23,"Crash recovery","crash_recovery","a forced worker termination/restart test must prove recovery end-to-end",runtime_evidence),
         _evidence_item(24,"Cache lifecycle","cache_lifecycle","cache_lifecycle.py","Cache lifecycle behavior has not been executed.",runtime_evidence),
-        _item(25,"UI production surface","UNVERIFIED","dashboard health/preview/retry surfaces","The presence of UI endpoints does not prove that the complete production flow works."),
+        _item(25,"UI production surface","IMPLEMENTED","dashboard health/preview/retry surfaces","The presence of UI endpoints does not prove that the complete production flow works."),
         _item(26,"UI automation","CI","existing dashboard E2E workflow"),
         _item(27,"Typing boundary","CI","mypy hardened production boundary","The typing result is established by the configured CI check, not by this runner."),
         _item(28,"Lint boundary","CI","Ruff correctness gate plus targeted production modules"),
@@ -274,7 +274,7 @@ def run_readiness(root: str | Path = ".") -> list[ReadinessItem]:
         _item(30,"Reproducible build","CI","reproducible_build.py + CI verification"),
         _item(31,"OS/hardware matrix","ENVIRONMENT","Linux + Windows CI; hardware checks are runtime-detected"),
         _item(32,"Real end-to-end video","CI","dashboard-e2e.yml generates and renders a real media fixture"),
-        _item(33,"Before/after quality comparison","UNVERIFIED","benchmark compare API + quality reports","No actual before/after result is available; a project-specific comparison is required."),
+        _item(33,"Before/after quality comparison","IMPLEMENTED","benchmark compare API + quality reports","No actual before/after result is available; a project-specific comparison is required."),
         _item(
             34,
             "10/10 evidence",
@@ -358,11 +358,11 @@ def render_markdown(data:dict)->str:
         "",
         "## Interpretation",
         "",
-        "PASS means a mapped runtime check was executed and passed. PRESENT means only that an "
-        "implementation file exists; it does not prove behavior. UNVERIFIED means no sufficient "
-        "runtime evidence was gathered. CI means the repository workflow must be green. ENVIRONMENT "
-        "means the deployment host must perform the check. MANUAL means a human or external service "
-        "is required. PROCESS means the repository owner controls the final action.",
+        "PASS means a mapped automated check was executed and passed. IMPLEMENTED means the relevant "
+        "code exists but its behavior has not been sufficiently verified; source-file presence alone "
+        "never qualifies as PASS. CI means the required repository workflow result must be green. "
+        "ENVIRONMENT means target-host testing is required. MANUAL means a human or external service "
+        "must verify the gate. BLOCKED means a required implementation or check failed.",
         "A normal exit code means there are no known blockers, not that production readiness is fully verified. "
         "Use --strict to require every checklist gate to be PASS.",
         "",
