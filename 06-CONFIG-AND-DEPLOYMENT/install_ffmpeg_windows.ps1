@@ -144,6 +144,18 @@ if (-not $binDirectory) {
 }
 
 $env:PATH = "$binDirectory;$env:PATH"
+
+# This installer is invoked as a separate PowerShell process in GitHub Actions.
+# Updating this process's PATH alone does not make FFmpeg available to later steps.
+# Persist the verified directory through the runner's supported PATH environment file.
+if ($env:GITHUB_PATH) {
+    if ($binDirectory -match "[`r`n]") {
+        throw 'Resolved FFmpeg directory contains a newline and cannot be safely added to GITHUB_PATH.'
+    }
+    Add-Content -LiteralPath $env:GITHUB_PATH -Value $binDirectory -Encoding utf8
+    Write-Host 'Persisted the verified FFmpeg directory for subsequent GitHub Actions steps.'
+}
+
 $ffmpegPath = Join-Path $binDirectory 'ffmpeg.exe'
 $ffprobePath = Join-Path $binDirectory 'ffprobe.exe'
 if (-not (Test-Path $ffmpegPath -PathType Leaf) -or -not (Test-Path $ffprobePath -PathType Leaf)) {
