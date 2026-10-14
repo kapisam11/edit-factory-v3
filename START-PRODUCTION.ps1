@@ -122,6 +122,9 @@ if ($existingId) {
         throw "Could not inspect the existing web container; refusing to replace it."
     }
     if ($existingImage -ne $image) {
+        if ($existingImage -eq "edit-factory-v3:dev") {
+            throw "The development stack is still using this Compose project. Stop it first with: docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.dev.yml down. No production container was changed."
+        }
         throw "A different image is already configured for this Compose project. Refusing an unbacked image upgrade. Use the controlled deployment/rollback procedure in 06-CONFIG-AND-DEPLOYMENT/README.md."
     }
 }
