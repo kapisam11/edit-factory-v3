@@ -190,7 +190,7 @@ def test_windows_production_launcher_is_separate_and_fail_closed() -> None:
     wrapper = (REPOSITORY_ROOT / "START-PRODUCTION.bat").read_text(encoding="utf-8")
 
     assert "docker-compose.yml" in launcher
-    assert "docker-compose.dev.yml" not in launcher
+    assert '$ComposeFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\\docker-compose.yml"' in launcher
     assert "@sha256:[0-9a-fA-F]{64}" in launcher
     assert '$env:AIVF_ENV = "production"' in launcher
     assert '$env:AIVF_COOKIE_SECURE = "1"' in launcher
