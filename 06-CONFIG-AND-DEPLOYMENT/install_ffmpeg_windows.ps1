@@ -1,5 +1,27 @@
 $ErrorActionPreference = 'Stop'
 
+function Test-FfmpegBinDirectory {
+    param([Parameter(Mandatory = $true)][string]$Directory)
+
+    $ffmpegPath = Join-Path $Directory 'ffmpeg.exe'
+    $ffprobePath = Join-Path $Directory 'ffprobe.exe'
+    if (-not (Test-Path $ffmpegPath -PathType Leaf) -or -not (Test-Path $ffprobePath -PathType Leaf)) {
+        return $false
+    }
+
+    # Verify the executables, not merely Chocolatey shim filenames.
+    try {
+        & $ffmpegPath -version *> $null
+        $ffmpegExit = $LASTEXITCODE
+        & $ffprobePath -version *> $null
+        $ffprobeExit = $LASTEXITCODE
+        return ($ffmpegExit -eq 0 -and $ffprobeExit -eq 0)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Find-FfmpegBinDirectory {
     # A successful package-manager process is not sufficient: Chocolatey can
     # report success while its feed has failed. Accept only a directory that
@@ -13,21 +35,8 @@ function Find-FfmpegBinDirectory {
         if ($ffmpegPath -and $ffprobePath) {
             $ffmpegDirectory = Split-Path -Parent $ffmpegPath
             $ffprobeDirectory = Split-Path -Parent $ffprobePath
-            if ($ffmpegDirectory -eq $ffprobeDirectory) {
-                # Chocolatey shims can exist even when the package payload did
-                # not install. Prove that both commands run before accepting PATH.
-                try {
-                    & $ffmpegPath -version *> $null
-                    $ffmpegExit = $LASTEXITCODE
-                    & $ffprobePath -version *> $null
-                    $ffprobeExit = $LASTEXITCODE
-                    if ($ffmpegExit -eq 0 -and $ffprobeExit -eq 0) {
-                        return $ffmpegDirectory
-                    }
-                }
-                catch {
-                    # Continue to inspect package payloads and then use fallback.
-                }
+            if ($ffmpegDirectory -eq $ffprobeDirectory -and (Test-FfmpegBinDirectory -Directory $ffmpegDirectory)) {
+                return $ffmpegDirectory
             }
             $searchRoots.Add($ffmpegDirectory)
             $searchRoots.Add($ffprobeDirectory)
@@ -43,10 +52,14 @@ function Find-FfmpegBinDirectory {
         }
     }
 
-    $wingetRoots = @(
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'),
-        (Join-Path $env:ProgramFiles 'WinGet\Packages')
-    ) | Where-Object { $_ -and (Test-Path $_ -PathType Container) }
+    $wingetRoots = @()
+    if ($env:LOCALAPPDATA) {
+        $wingetRoots += Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    }
+    if ($env:ProgramFiles) {
+        $wingetRoots += Join-Path $env:ProgramFiles 'WinGet\Packages'
+    }
+    $wingetRoots = $wingetRoots | Where-Object { Test-Path $_ -PathType Container }
 
     foreach ($wingetRoot in $wingetRoots) {
         Get-ChildItem -Path $wingetRoot -Directory -ErrorAction SilentlyContinue |
@@ -67,14 +80,13 @@ function Find-FfmpegBinDirectory {
 
         $directFfmpeg = Join-Path $root 'ffmpeg.exe'
         $directFfprobe = Join-Path $root 'ffprobe.exe'
-        if ((Test-Path $directFfmpeg -PathType Leaf) -and (Test-Path $directFfprobe -PathType Leaf)) {
+        if (Test-FfmpegBinDirectory -Directory $root) {
             return $root
         }
 
         $candidates = Get-ChildItem -Path $root -Filter 'ffmpeg.exe' -File -Recurse -ErrorAction SilentlyContinue
         foreach ($candidate in $candidates) {
-            $candidateFfprobe = Join-Path $candidate.DirectoryName 'ffprobe.exe'
-            if (Test-Path $candidateFfprobe -PathType Leaf) {
+            if (Test-FfmpegBinDirectory -Directory $candidate.DirectoryName) {
                 return $candidate.DirectoryName
             }
         }
