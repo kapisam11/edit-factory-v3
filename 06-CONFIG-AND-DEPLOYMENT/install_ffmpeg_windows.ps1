@@ -4,6 +4,7 @@ function Find-FfmpegBinDirectory {
     # A successful package-manager process is not sufficient: Chocolatey can
     # report success while its feed has failed. Accept only a directory that
     # actually contains both executables used by the media tests.
+    $searchRoots = [System.Collections.Generic.List[string]]::new()
     $ffmpegCommand = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
     $ffprobeCommand = Get-Command ffprobe.exe -ErrorAction SilentlyContinue
     if ($ffmpegCommand -and $ffprobeCommand) {
@@ -33,7 +34,6 @@ function Find-FfmpegBinDirectory {
         }
     }
 
-    $searchRoots = [System.Collections.Generic.List[string]]::new()
     if ($env:ChocolateyInstall) {
         $searchRoots.Add((Join-Path $env:ChocolateyInstall 'bin'))
         $chocolateyLib = Join-Path $env:ChocolateyInstall 'lib'
