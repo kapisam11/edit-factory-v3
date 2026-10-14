@@ -117,6 +117,12 @@ The local Compose profile publishes the dashboard only on `127.0.0.1` by default
 
 The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**.
 
+### Production startup is a separate, deliberate path
+
+`START-ALL.bat` is the development/supervised-local launcher. It builds `docker-compose.dev.yml`, generates local development secrets, and is **not** the production launch path.
+
+For the immutable production image, use **[START-PRODUCTION.bat](START-PRODUCTION.bat)** or [START-PRODUCTION.ps1](START-PRODUCTION.ps1). Configure `AIVF_IMAGE` as a full `image@sha256:<64-hex-digest>` and set real `FLASK_SECRET_KEY` and `AIVF_DASHBOARD_TOKEN` values in `06-CONFIG-AND-DEPLOYMENT/.env`. First startup requires the explicit `START-PRODUCTION.ps1 -Migrate` command; ordinary restarts use `START-PRODUCTION.ps1` and verify the schema without modifying it. The production launcher does not build source, prints no secrets, and refuses an unbacked image version change. See [the deployment guide](06-CONFIG-AND-DEPLOYMENT/README.md) for backup and release-upgrade limitations.
+
 ### Windows small-group production requirements (practical local scope)
 
 This guidance is for supervised use on one trusted Windows 10/11 PC by a few trusted users—not an internet-facing multi-tenant service.
