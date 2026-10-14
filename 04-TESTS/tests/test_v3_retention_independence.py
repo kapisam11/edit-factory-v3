@@ -65,7 +65,7 @@ def test_retention_duration_tolerance_accounts_for_frame_rate_quantization():
     ) == pytest.approx(0.08)
 
 
-def test_caption_retention_gate_compares_the_same_localized_region(monkeypatch):
+def test_caption_retention_gate_allows_persistent_lower_band_changes_in_controls(monkeypatch):
     from ai_video_factory import v3_quality
 
     monkeypatch.setattr(
@@ -93,9 +93,9 @@ def test_caption_retention_gate_compares_the_same_localized_region(monkeypatch):
                         start = row * 160
                         frame[start : start + 160] = bytes([102]) * 160
                 else:
-                    # Larger unrelated changes elsewhere in the frame must not
-                    # drown out the smaller, semantically verified caption.
-                    for row in range(0, int(90 * 0.68)):
+                    # Captions may persist across control samples, making their
+                    # lower-band deltas larger than the particular event sample.
+                    for row in range(int(90 * 0.68), 90):
                         start = row * 160
                         frame[start : start + 160] = bytes([104]) * 160
             frames[round(float(timestamp), 3)] = bytes(frame)
@@ -113,5 +113,6 @@ def test_caption_retention_gate_compares_the_same_localized_region(monkeypatch):
     assert report["events"][0]["passed"] is True
     assert report["events"][0]["semantic_verification"]["passed"] is True
     assert report["events"][0]["event_delta"] == pytest.approx(2.0)
-    assert report["events"][0]["control_delta"] == pytest.approx(0.0)
+    assert report["events"][0]["control_delta"] == pytest.approx(4.0)
+    assert report["events"][0]["threshold"] == pytest.approx(0.5)
 
