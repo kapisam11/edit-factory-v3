@@ -201,3 +201,12 @@ def test_windows_production_launcher_is_separate_and_fail_closed() -> None:
     assert "--no-build" in launcher
     assert "if ($existingImage -ne $image)" in launcher
     assert "START-PRODUCTION.ps1" in wrapper
+
+
+def test_root_readme_distinguishes_development_and_production_launchers() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "is the development/supervised-local launcher" in readme
+    assert "START-PRODUCTION.bat" in readme
+    assert "START-PRODUCTION.ps1 -Migrate" in readme
+    assert "does not build source" in readme
