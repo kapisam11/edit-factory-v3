@@ -5,6 +5,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Handle native exit codes explicitly below, including the DB-not-found sentinel.
+$PSNativeCommandUseErrorActionPreference = $false
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
