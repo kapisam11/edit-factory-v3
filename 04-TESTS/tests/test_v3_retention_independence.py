@@ -63,3 +63,56 @@ def test_retention_duration_tolerance_accounts_for_frame_rate_quantization():
         {"fps": "60/1"},
         {"fps": "60/1"},
     ) == pytest.approx(0.08)
+
+
+def test_caption_retention_gate_allows_persistent_lower_band_changes_in_controls(monkeypatch):
+    from ai_video_factory import v3_quality
+
+    monkeypatch.setattr(
+        v3_quality,
+        "probe_media",
+        lambda _path: {
+            "width": 1080,
+            "height": 1920,
+            "duration": 4.0,
+            "video_duration": 4.0,
+            "fps": "30/1",
+        },
+    )
+
+    baseline_frame = bytes([100]) * (160 * 90)
+
+    def sample_frames(path, timestamps):
+        frames = {}
+        for timestamp in timestamps:
+            frame = bytearray(baseline_frame)
+            if path == "rendered.mp4":
+                if timestamp <= 1.0:
+                    # A measurable caption in the lower band at the retention event.
+                    for row in range(int(90 * 0.68), 90):
+                        start = row * 160
+                        frame[start : start + 160] = bytes([102]) * 160
+                else:
+                    # Captions may persist across control samples, making their
+                    # lower-band deltas larger than the particular event sample.
+                    for row in range(int(90 * 0.68), 90):
+                        start = row * 160
+                        frame[start : start + 160] = bytes([104]) * 160
+            frames[round(float(timestamp), 3)] = bytes(frame)
+        return frames
+
+    monkeypatch.setattr(v3_quality, "_sample_gray_frames", sample_frames)
+
+    report = v3_quality.verify_retention_against_baseline(
+        "baseline.mp4",
+        "rendered.mp4",
+        [{"time": 0.8, "kind": "caption"}],
+    )
+
+    assert report["ok"] is True
+    assert report["events"][0]["passed"] is True
+    assert report["events"][0]["semantic_verification"]["passed"] is True
+    assert report["events"][0]["event_delta"] == pytest.approx(2.0)
+    assert report["events"][0]["control_delta"] == pytest.approx(4.0)
+    assert report["events"][0]["threshold"] == pytest.approx(0.5)
+
