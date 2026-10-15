@@ -15,16 +15,16 @@
 
         </header>
 
-        <section class="release-overview panel" aria-labelledby="releaseOverviewTitle">
-            <div class="panel-header release-overview-header">
-                <div>
+        <details class="release-overview panel" aria-labelledby="releaseOverviewTitle">
+            <summary class="release-overview-summary">
+                <div class="release-overview-summary-copy">
                     <h2 id="releaseOverviewTitle">Latest reliability &amp; production updates</h2>
-                    <p class="release-overview-intro">A guide to the safeguards and workflows added around the creative pipeline.</p>
+                    <p class="release-overview-intro">Eight quick notes covering the safeguards and workflows added around the creative pipeline.</p>
                 </div>
                 <span class="release-version-pill">V3 operations</span>
-            </div>
-
-            <div class="release-overview-grid">
+            </summary>
+            <div class="release-overview-content">
+                <div class="release-overview-grid">
                 <article class="release-card">
                     <span class="release-card-kicker">Rendering</span>
                     <h3>Protect valid video output</h3>
@@ -80,9 +80,10 @@
                     <p>CI exercises the real Windows FFmpeg path, PowerShell launchers, media validation, dashboard flows, Docker builds, and security checks. Target-host and real-account acceptance are still separate.</p>
                     <a href="https://github.com/kapisam11/edit-factory-v3/actions" target="_blank" rel="noopener noreferrer">GitHub Actions ↗</a>
                 </article>
+                </div>
+                <p class="release-overview-note">This overview describes implemented safeguards; it is not a live certification of this computer, your platform accounts, or a particular release.</p>
             </div>
-            <p class="release-overview-note">This overview describes implemented safeguards; it is not a live certification of this computer, your platform accounts, or a particular release.</p>
-        </section>
+        </details>
 
         <div class="main-layout">
             <aside class="sidebar">
