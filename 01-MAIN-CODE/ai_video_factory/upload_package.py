@@ -96,7 +96,18 @@ def _source_records(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "attribution_required": str(raw.get("attribution_required") or "").strip().lower() in {"1", "true", "yes", "on"},
         }
         key = record["url"] or (record["creator"], record["title"], record["source"])
-        if key and key not in seen and (record["title"] or record["creator"] or record["url"]):
+        has_rights_declaration = any(
+            str(record.get(field) or "").strip()
+            for field in (
+                "rights_basis", "rights_status", "evidence_url", "license_url",
+                "declared_by", "declared_at", "commercial_use", "permitted_uses",
+                "attribution",
+            )
+        ) or record.get("asset_origin") != "unknown" or record.get("attribution_required")
+        required_user_declaration = bool(summary.get("requires_rights_declaration")) and record["source"] == "user_provided"
+        if key and key not in seen and (
+            record["title"] or record["creator"] or record["url"] or has_rights_declaration or required_user_declaration
+        ):
             seen.add(key)
             records.append(record)
 
