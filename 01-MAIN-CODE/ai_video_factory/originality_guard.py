@@ -19,9 +19,9 @@ MAX_PACKAGES_TO_COMPARE = 25
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
-        return {}
     try:
+        if path.is_symlink() or not path.is_file():
+            return {}
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return {}
@@ -29,9 +29,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _read_text(path: Path) -> str:
-    if path.is_symlink() or not path.is_file():
-        return ""
     try:
+        if path.is_symlink() or not path.is_file():
+            return ""
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
@@ -39,9 +39,20 @@ def _read_text(path: Path) -> str:
 
 def _script_path(package: Path) -> Path | None:
     for candidate in (package / "script.txt", package / "primary" / "script.txt"):
-        if candidate.is_file() and not candidate.is_symlink():
-            return candidate
+        try:
+            if candidate.is_file() and not candidate.is_symlink():
+                return candidate
+        except OSError:
+            # One locked/private sibling must not fail the current upload.
+            continue
     return None
+
+
+def _package_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _game_names(profile: Mapping[str, Any]) -> list[str]:
@@ -148,13 +159,24 @@ def compare_recent_packages(
     current_script_comparable = len(current) >= MIN_SCRIPT_TOKENS
 
     try:
-        children = [
-            item for item in root.parent.iterdir()
-            if item.is_dir() and not item.is_symlink() and item.resolve() != root.resolve()
-        ]
+        entries = list(root.parent.iterdir())
+        root_resolved = root.resolve()
     except OSError:
-        children = []
-    children.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+        entries = []
+        root_resolved = root
+    children: list[Path] = []
+    for item in entries:
+        try:
+            if item.is_symlink() or not item.is_dir():
+                continue
+            if item.resolve() == root_resolved:
+                continue
+            children.append(item)
+        except (OSError, RuntimeError):
+            # Filesystem ACLs, disappearing entries, and symlink loops are
+            # irrelevant to the current job; skip them rather than fail packaging.
+            continue
+    children.sort(key=_package_mtime, reverse=True)
     limit = max(1, min(100, int(max_recent)))
     children = children[:limit]
 
