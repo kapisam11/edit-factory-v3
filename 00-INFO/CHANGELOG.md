@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — dashboard and production workflow updates
+
+### Dashboard
+- Rebranded the browser control panel, sign-in, and autonomous-controls pages to Edit Factory V3; added a compact, expandable responsive reliability/production overview.
+- Added direct links from the dashboard to the rendering/recovery architecture, evidence-driven readiness checker, production setup, publishing guide, and GitHub Actions.
+- Aligned sign-in and autonomous controls branding, added a direct Quick Actions link to autonomous controls, and clarified that the overview is informational—not a live host check or a guarantee of platform-account eligibility.
+
+### Reliability and operations
+- Documented the six readiness-report statuses and the distinction between implemented code and verified behavior.
+- Surfaced the split between the source-built development launcher and the digest-pinned Windows production launcher, including explicit migrations and secure production configuration.
+- Explained output validation, job recovery/attempt fencing, host resource protections, platform-specific publishing reconciliation, rights evidence, and human review.
+
 ## 3.0.0 — 2026-09-14
 
 ### V3 creative system

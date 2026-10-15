@@ -3,16 +3,87 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Video Factory — Control Panel</title>
+    <title>Edit Factory V3 — Production Dashboard</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="stylesheet" href="/static/css/enhancements.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>AI VIDEO FACTORY</h1>
-            <p class="subtitle">Production control panel — create, monitor, cancel, and review jobs from your browser</p>
+            <h1>EDIT FACTORY V3</h1>
+            <p class="subtitle">Emotion-first video production, quality control, recoverable jobs, and publishing operations</p>
+
         </header>
+
+        <details class="release-overview panel" aria-labelledby="releaseOverviewTitle">
+            <summary class="release-overview-summary">
+                <div class="release-overview-summary-copy">
+                    <h2 id="releaseOverviewTitle">Latest reliability &amp; production updates</h2>
+                    <p class="release-overview-intro">Eight quick notes covering the safeguards and workflows added around the creative pipeline.</p>
+                </div>
+                <span class="release-version-pill">8 updates</span>
+            </summary>
+            <div class="release-overview-content">
+                <div class="release-overview-grid">
+                <article class="release-card">
+                    <span class="release-card-kicker">Rendering</span>
+                    <h3>Protect valid video output</h3>
+                    <p>FFmpeg/FFprobe validation checks rendered media before it is accepted. Failed normalization or reruns should not silently replace the last valid final video.</p>
+                    <a href="https://github.com/kapisam11/edit-factory-v3/blob/main/00-INFO/04-USING-THE-DASHBOARD.md" target="_blank" rel="noopener noreferrer">Dashboard guide ↗</a>
+                </article>
+
+                <article class="release-card">
+                    <span class="release-card-kicker">Jobs &amp; recovery</span>
+                    <h3>Recoverable background work</h3>
+                    <p>Jobs record persistent state and attempts. Restart reconciliation and lease/attempt checks help prevent stale workers from claiming that an old run completed.</p>
+                    <a href="https://github.com/kapisam11/edit-factory-v3/blob/main/00-INFO/ARCHITECTURE.md" target="_blank" rel="noopener noreferrer">Architecture ↗</a>
+                </article>
+
+                <article class="release-card">
+                    <span class="release-card-kicker">Release checks</span>
+                    <h3>Readiness reports tell the truth</h3>
+                    <p>The checker separates <code>PASS</code>, <code>IMPLEMENTED</code>, <code>CI</code>, <code>ENVIRONMENT</code>, <code>MANUAL</code>, and <code>BLOCKED</code>. A file existing is not proof that a behavior passed.</p>
+                    <a href="https://github.com/kapisam11/edit-factory-v3/blob/main/01-MAIN-CODE/ai_video_factory/production_readiness.py" target="_blank" rel="noopener noreferrer">Readiness checker ↗</a>
+                </article>
+
+                <article class="release-card">
+                    <span class="release-card-kicker">Windows</span>
+                    <h3>Development and production are separate</h3>
+                    <p><code>START-ALL.bat</code> is for local development. <code>START-PRODUCTION.bat</code> uses the production Compose file, requires an immutable image digest, and keeps database migrations explicit.</p>
+                    <a href="https://github.com/kapisam11/edit-factory-v3/blob/main/06-CONFIG-AND-DEPLOYMENT/README.md" target="_blank" rel="noopener noreferrer">Production setup ↗</a>
+                </article>
+
+                <article class="release-card">
+                    <span class="release-card-kicker">Host protection</span>
+                    <h3>Conservative resource defaults</h3>
+                    <p>The dashboard binds to localhost by default. Job concurrency, container CPU/memory/PID limits, upload limits, and free-disk safeguards help protect a single Windows PC.</p>
+                    <a href="https://github.com/kapisam11/edit-factory-v3/blob/main/README.md" target="_blank" rel="noopener noreferrer">Setup &amp; safety notes ↗</a>
+                </article>
+
+                <article class="release-card">
+                    <span class="release-card-kicker">Publishing</span>
+                    <h3>Per-platform status and reconciliation</h3>
+                    <p>YouTube, TikTok Direct Post, and Instagram Reels adapters have separate destination state and retry handling. Mock tests do not prove account eligibility or a successful live post.</p>
+                    <a href="https://github.com/kapisam11/edit-factory-v3/blob/main/00-INFO/UPLOAD-PACKAGE.md" target="_blank" rel="noopener noreferrer">Publishing guide ↗</a>
+                </article>
+
+                <article class="release-card">
+                    <span class="release-card-kicker">Rights &amp; review</span>
+                    <h3>Evidence before publishing</h3>
+                    <p>Rights evidence and factuality checks support review, while human approval remains a separate gate. A credit or source URL alone does not prove permission to reuse content.</p>
+                    <a href="https://github.com/kapisam11/edit-factory-v3/blob/main/00-INFO/UPLOAD-PACKAGE.md" target="_blank" rel="noopener noreferrer">Rights &amp; upload guide ↗</a>
+                </article>
+
+                <article class="release-card">
+                    <span class="release-card-kicker">Verification</span>
+                    <h3>More Windows and pipeline checks</h3>
+                    <p>CI exercises the real Windows FFmpeg path, PowerShell launchers, media validation, dashboard flows, Docker builds, and security checks. Target-host and real-account acceptance are still separate.</p>
+                    <a href="https://github.com/kapisam11/edit-factory-v3/actions" target="_blank" rel="noopener noreferrer">GitHub Actions ↗</a>
+                </article>
+                </div>
+                <p class="release-overview-note">This overview describes implemented safeguards; it is not a live certification of this computer, your platform accounts, or a particular release.</p>
+            </div>
+        </details>
 
         <div class="main-layout">
             <aside class="sidebar">
@@ -35,6 +106,7 @@
                     <h2>Quick Actions</h2>
                     <button class="btn-sm w-full" onclick="loadPackages()">Refresh Packages</button>
                     <button class="btn-sm w-full" onclick="openSettings()">Control Settings</button>
+                    <a class="btn-sm w-full dashboard-quick-link" href="/autonomous">Autonomous Controls</a>
                 </div>
             </aside>
 

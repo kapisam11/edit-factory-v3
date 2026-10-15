@@ -4,6 +4,21 @@ The dashboard is the browser **control panel** for Edit Factory. It is the main 
 
 The **V3 Production** workflow is also controlled from this panel. Select V3 to expose platform, audience, BPM, edit type, creative context, and optional OCR/object-detection/diarization controls. The dashboard disables optional controls that are not installed in the production runtime. V3 jobs require an uploaded source video and are dispatched to `ai_video_factory.v3_pipeline.run_v3_pipeline()`; completed packages expose the V3 readiness report and canonical final-video preview.
 
+## Reliability and production overview
+
+The dashboard header includes a compact, expandable **Latest reliability & production updates** overview linking to the underlying project guides. The Quick Actions panel also links to the Autonomous Controls page; the sign-in and autonomous pages share the Edit Factory V3 branding. The overview summarizes these areas:
+
+- validated render output and protection of the last known-good final artifact
+- persistent job attempts, restart reconciliation, and stale-worker fencing
+- the six evidence-driven readiness states: `PASS`, `IMPLEMENTED`, `CI`, `ENVIRONMENT`, `MANUAL`, and `BLOCKED`
+- the distinction between the development launcher (`START-ALL.bat`) and the pinned-image production launcher (`START-PRODUCTION.bat`), including explicit database migration
+- localhost-only exposure defaults and conservative CPU, memory, concurrency, upload, and disk safeguards
+- per-platform publishing status/reconciliation and the need to verify real platform accounts separately
+- rights evidence, factuality checks, and human approval before publishing
+- links to the Windows, Docker, security, and end-to-end CI verification
+
+This is a **static feature overview**, not a live release certificate. The cards do not query the user's host, re-run readiness checks, grant publishing permissions, or confirm a remote post. Use the live health/publishing panels and CI links for current status, then complete host and account acceptance before enabling unattended public publishing.
+
 ## Components
 
 ```text
