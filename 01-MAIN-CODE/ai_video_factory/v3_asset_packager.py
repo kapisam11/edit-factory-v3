@@ -1,6 +1,7 @@
 """V3 asset packaging service separated from pipeline orchestration."""
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -71,6 +72,21 @@ class V3AssetPackager:
                 result.artifacts["thumbnail_variants"] = str(thumb_dir)
             finally:
                 shutil.rmtree(thumbnail_work_dir, ignore_errors=True)
+
+            gaming_report_path = package / "gaming_editorial.json"
+            if gaming_report_path.is_file() and not gaming_report_path.is_symlink():
+                try:
+                    gaming_report = json.loads(gaming_report_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, TypeError):
+                    gaming_report = {
+                        "status": "invalid",
+                        "publish_blocked": True,
+                        "warnings": ["Gaming editorial evidence report could not be read."],
+                    }
+                baseline_summary["gaming_editorial"] = gaming_report
+                baseline_summary["content_profile"] = str(
+                    gaming_report.get("content_profile") or "gaming_auto"
+                )
 
             from .upload_package import finalize_upload_package
 
