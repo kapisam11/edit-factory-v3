@@ -154,6 +154,31 @@
                                 <h3 style="margin-top: 0;">V3 Production Controls</h3>
                                 <div class="form-row">
                                     <div class="form-group">
+                                        <label for="content_profile">Content profile</label>
+                                        <select id="content_profile" name="content_profile">
+                                            <option value="gaming" selected>Gaming clips & commentary</option>
+                                            <option value="general">General short-form</option>
+                                        </select>
+                                        <small>Gaming mode plans around a creator-supplied game/event and requires explicit commercial-use review.</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="game_name">Game name</label>
+                                        <input type="text" id="game_name" name="game_name" maxlength="120" placeholder="e.g. Minecraft, Valorant, Fortnite">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="gaming_angle">Creator angle</label>
+                                    <select id="gaming_angle" name="gaming_angle">
+                                        <option value="clutch">Clutch / epic play</option>
+                                        <option value="strategy">Strategy / educational commentary</option>
+                                        <option value="funny">Funny moment / story</option>
+                                        <option value="challenge">Challenge / attempt</option>
+                                        <option value="storytelling" selected>Gaming story</option>
+                                    </select>
+                                    <small>Enter the actual event in Topic. Edit Factory treats it as a creator brief, not proof; selected gameplay still has to support the claims.</small>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
                                         <label for="platform">Platform</label>
                                         <select id="platform" name="platform">
                                             <option value="youtube_shorts">YouTube Shorts</option>
@@ -211,18 +236,57 @@
                                     <label for="license_url">License URL (required for licensed media)</label>
                                     <input type="url" id="license_url" name="license_url" maxlength="1000" placeholder="https://...">
                                 </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="asset_origin">Asset origin</label>
+                                        <select id="asset_origin" name="asset_origin">
+                                            <option value="unknown" selected>Not declared</option>
+                                            <option value="original">My original recording / asset</option>
+                                            <option value="ai_generated">AI-generated asset</option>
+                                            <option value="licensed">Licensed asset</option>
+                                            <option value="third_party">Third-party asset</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="commercial_use">Commercial use</label>
+                                        <select id="commercial_use" name="commercial_use">
+                                            <option value="review_required" selected>Not verified — publishing blocked</option>
+                                            <option value="allowed">I verified commercial use is allowed</option>
+                                            <option value="not_allowed">Commercial use is not allowed</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="permitted_uses">Permitted uses / restrictions</label>
+                                    <input type="text" id="permitted_uses" name="permitted_uses" maxlength="1000" placeholder="e.g. monetized gameplay permitted under publisher policy">
+                                </div>
                                 <div class="form-group">
                                     <label for="rights_basis">Rights basis</label>
                                     <select id="rights_basis" name="rights_basis">
                                         <option value="">Not declared — publishing will require review</option>
-                                        <option value="owned">I own this media</option>
+                                        <option value="owned">I own this recording / asset</option>
                                         <option value="explicit_permission">I have explicit permission</option>
                                         <option value="commercial_license">Commercial license</option>
                                         <option value="public_domain">Public domain</option>
                                         <option value="cc_license">Creative Commons license (verified)</option>
                                     </select>
-                                    <small>Credit is not permission. Only choose a cleared option when it is actually true.</small>
+                                    <small>Credit is not permission. Game-publisher terms and third-party asset licenses are separate checks.</small>
                                 </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="rights_declared_by">Rights declaration by</label>
+                                        <input type="text" id="rights_declared_by" name="rights_declared_by" maxlength="200" placeholder="Your review/declaration name">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="attribution">Required attribution text</label>
+                                        <input type="text" id="attribution" name="attribution" maxlength="1000" placeholder="Required credit text, if any">
+                                    </div>
+                                </div>
+                                <label class="toggle">
+                                    <input type="checkbox" id="attribution_required" name="attribution_required">
+                                    <span class="toggle-slider"></span>
+                                    <span class="toggle-label">This asset requires attribution</span>
+                                </label>
                                 <div class="toggles">
                                     <label class="toggle">
                                         <input type="checkbox" name="enable_ocr" id="enable_ocr">
@@ -416,6 +480,15 @@
         let settings = {};
 
         document.addEventListener('DOMContentLoaded', () => {
+            const contentProfile = document.getElementById('content_profile');
+            const gameName = document.getElementById('game_name');
+            const syncGamingRequirements = () => {
+                if (gameName && contentProfile) {
+                    gameName.required = contentProfile.value === 'gaming';
+                }
+            };
+            contentProfile?.addEventListener('change', syncGamingRequirements);
+            syncGamingRequirements();
             loadSettings();
             loadPresets();
             loadPackages();
