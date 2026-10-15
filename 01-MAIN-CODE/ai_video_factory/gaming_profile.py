@@ -6,6 +6,7 @@ by analyzed footage and the final cut still requires human review.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 GAMING_ANGLES: dict[str, dict[str, Any]] = {
@@ -165,12 +166,27 @@ def build_gaming_profile_report(
         rights_items.append("asset origin has not been declared")
     if commercial_use != "allowed":
         rights_items.append("commercial use has not been explicitly verified as allowed")
-    if rights_basis in {"", "review_required", "unverified", "license_identified"}:
+    if rights_basis not in {"owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"}:
         rights_items.append("rights basis is not explicitly cleared")
     if rights_basis not in {"owned", "public_domain"} and not rights_evidence_url:
         rights_items.append("permission/license evidence URL is missing")
     if rights_basis in {"commercial_license", "cc_license"} and not license_url:
         rights_items.append("license URL is missing")
+    declared_by = str(source.get("declared_by") or "").strip()
+    declared_at = str(source.get("declared_at") or "").strip()
+    if not declared_by:
+        rights_items.append("rights declaration identity is missing")
+    if not declared_at:
+        rights_items.append("rights declaration timestamp is missing")
+    else:
+        try:
+            parsed_timestamp = datetime.fromisoformat(declared_at.replace("Z", "+00:00"))
+            if parsed_timestamp.tzinfo is None:
+                rights_items.append("rights declaration timestamp must include a timezone")
+            elif parsed_timestamp > datetime.now(timezone.utc):
+                rights_items.append("rights declaration timestamp cannot be in the future")
+        except ValueError:
+            rights_items.append("rights declaration timestamp is not ISO-8601")
     if attribution_required and not attribution:
         rights_items.append("required attribution text is missing")
 
