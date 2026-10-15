@@ -101,6 +101,7 @@ def test_game_specific_recommendation_only_ranks_seen_configurations_and_caps_sm
     )
 
     assert result.evidence_count <= 4
+    assert "duration_seconds" not in result.settings
     assert result.confidence <= 0.40
     assert result.learning["context_game_sample_count"] == 4
     assert result.learning["contextual_recommendation"] == "game_specific_candidates"
