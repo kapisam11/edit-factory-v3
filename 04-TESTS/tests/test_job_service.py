@@ -35,3 +35,56 @@ def test_job_service_rejects_invalid_v3_configuration():
             _settings(),
             allow_skip_qc=False,
         )
+
+def test_job_service_accepts_explicit_gaming_profile_and_persists_rights_fields():
+    params = build_job_params(
+        {
+            "topic": "A 1v3 retake on Ascent",
+            "workflow": "v3",
+            "platform": "youtube_shorts",
+            "target_seconds": "30",
+            "audience": "FPS gamers",
+            "content_profile": "gaming",
+            "game_name": "Valorant",
+            "gaming_angle": "strategy",
+            "asset_origin": "original",
+            "rights_basis": "owned",
+            "commercial_use": "allowed",
+            "permitted_uses": "Monetized gameplay",
+            "rights_declared_by": "local-reviewer",
+            "attribution_required": "false",
+        },
+        _settings(),
+        allow_skip_qc=False,
+    )
+    assert params["content_profile"] == "gaming"
+    assert params["game_name"] == "Valorant"
+    assert params["gaming_angle"] == "strategy"
+    assert params["source_metadata"]["asset_origin"] == "original"
+    assert params["source_metadata"]["commercial_use"] == "allowed"
+    assert params["source_metadata"]["permitted_uses"] == "Monetized gameplay"
+    assert params["source_metadata"]["declared_by"] == "local-reviewer"
+    assert params["source_metadata"]["declared_at"].endswith("Z")
+
+
+def test_job_service_rejects_gaming_profile_without_game_name():
+    with pytest.raises(ValueError, match="game name is required"):
+        build_job_params(
+            {
+                "topic": "A last-second escape",
+                "workflow": "v3",
+                "content_profile": "gaming",
+                "gaming_angle": "clutch",
+            },
+            _settings(),
+            allow_skip_qc=False,
+        )
+
+
+def test_job_service_preserves_general_profile_default():
+    params = build_job_params(
+        {"topic": "A subject", "workflow": "v3"},
+        _settings(),
+        allow_skip_qc=False,
+    )
+    assert params["content_profile"] == "general"
