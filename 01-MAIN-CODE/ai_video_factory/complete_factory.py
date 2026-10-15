@@ -242,11 +242,87 @@ def update_learning_history(path: str, *, topic: str, platform: str, package_dir
                 thinking = nested
                 break
 
+    # Persist the actual context of each outcome so recommendations can be
+    # compared within the same game, format, duration, hook and commentary type.
+    gaming_profile: Dict[str, Any] = {}
+    for profile_path in (root / "gaming_profile.json", root / "primary" / "gaming_profile.json"):
+        try:
+            raw_profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if isinstance(raw_profile, dict) and raw_profile.get("enabled", True):
+            gaming_profile = raw_profile
+            break
+
+    blueprint_payload: Dict[str, Any] = {}
+    for blueprint_path in (root / "v3_blueprint.json", root / "primary" / "v3_blueprint.json"):
+        try:
+            raw_blueprint = json.loads(blueprint_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if isinstance(raw_blueprint, dict):
+            blueprint_payload = raw_blueprint
+            break
+
+    game_name = str(
+        observed_metrics.get("game")
+        or gaming_profile.get("game_name")
+        or ""
+    ).strip()
+    creator_angle = str(
+        observed_metrics.get("commentary_style")
+        or observed_metrics.get("creator_angle")
+        or gaming_profile.get("creator_angle")
+        or ""
+    ).strip().lower()
+    first_hook = ""
+    hooks = blueprint_payload.get("hooks")
+    if isinstance(hooks, list) and hooks and isinstance(hooks[0], Mapping):
+        first_hook = str(hooks[0].get("text") or "").strip()
+    if not first_hook:
+        first_hook = str(observed_metrics.get("hook") or thinking.get("hook") or "").strip()
+
+    hook_type = str(observed_metrics.get("hook_type") or "").strip().lower()
+    if not hook_type:
+        hook_type = {
+            "clutch": "decisive_action",
+            "strategy": "instructional_problem",
+            "funny": "reaction_or_reversal",
+            "challenge": "challenge",
+            "storytelling": "turning_point",
+        }.get(creator_angle, "unspecified" if not first_hook else "creator_authored")
+    try:
+        duration_seconds = float(
+            observed_metrics.get("actual_duration_seconds")
+            or observed_metrics.get("actual_timeline_seconds")
+            or observed_metrics.get("target_seconds")
+            or target_seconds
+            or 45.0
+        )
+    except (TypeError, ValueError, OverflowError):
+        duration_seconds = 45.0
+    if not 1.0 <= duration_seconds <= 3600.0:
+        duration_seconds = 45.0
+
+    content_type = str(
+        observed_metrics.get("content_type")
+        or ("gaming" if gaming_profile else "short_video")
+    ).strip().lower()
+    format_name = str(
+        observed_metrics.get("format")
+        or f"{platform}:{'short' if duration_seconds <= 60.0 else 'long'}"
+    ).strip().lower()
     edit_emotion = str(observed_metrics.get("emotion") or thinking.get("emotion") or "")
     record: Dict[str, Any] = {
         "topic": topic,
         "platform": platform,
-        "content_type": observed_metrics.get("content_type", "short_video"),
+        "content_type": content_type,
+        "format": format_name,
+        "game": game_name,
+        "duration_seconds": duration_seconds,
+        "hook_type": hook_type,
+        "commentary_style": creator_angle or str(observed_metrics.get("commentary_style") or "unspecified"),
+        "hook": first_hook[:500],
         "package_dir": package_dir,
         "cuts_per_minute": cuts_per_minute,
         "avg_shot_duration": average_shot or 2.5,
