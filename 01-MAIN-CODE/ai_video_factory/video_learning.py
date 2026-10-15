@@ -21,10 +21,15 @@ from pathlib import Path
 import tempfile
 from typing import Any, Iterable, Mapping, Sequence
 
-NUMERIC_FEATURES = ("cuts_per_minute", "avg_shot_duration", "hook_duration", "music_energy")
-CATEGORICAL_FEATURES = ("platform", "content_type", "caption_style", "voice", "music_style", "edit_type")
-SETTING_KEYS = (*NUMERIC_FEATURES, "caption_style", "voice", "music_style", "platform", "content_type", "edit_type")
-MODEL_SCHEMA_VERSION = 1
+NUMERIC_FEATURES = ("cuts_per_minute", "avg_shot_duration", "hook_duration", "music_energy", "duration_seconds")
+CATEGORICAL_FEATURES = (
+    "platform", "content_type", "format", "game", "hook_type",
+    "commentary_style", "caption_style", "voice", "music_style", "edit_type",
+)
+SETTING_KEYS = (*NUMERIC_FEATURES, *CATEGORICAL_FEATURES)
+# Feature layout changed to include gaming context. Old models are ignored and
+# retrained from observed history rather than loaded with mismatched weights.
+MODEL_SCHEMA_VERSION = 2
 DEFAULT_MIN_SAMPLES = 6
 
 # These are expert editorial priors, not learned outcomes. They help the
@@ -74,6 +79,7 @@ _DEFAULTS = {
     "avg_shot_duration": 2.5,
     "hook_duration": 2.0,
     "music_energy": 0.5,
+    "duration_seconds": 45.0,
 }
 
 
@@ -146,6 +152,7 @@ def _valid_setting_record(record: Mapping[str, Any]) -> bool:
         "avg_shot_duration": (0.1, 120.0),
         "hook_duration": (0.1, 15.0),
         "music_energy": (0.0, 1.0),
+        "duration_seconds": (1.0, 3600.0),
     }
     for key in NUMERIC_FEATURES:
         parsed = _finite_float(record.get(key, _DEFAULTS[key]))
@@ -401,10 +408,28 @@ def recommend_learned_profile(
     if model.get("status") != "trained" or not examples:
         return None
     candidates = examples
-    for key in ("platform", "content_type"):
+    requested_game = str(context.get("game") or "").strip()
+    game_sample_count = 0
+    if requested_game:
+        game_candidates = [
+            row for row in candidates
+            if str(row.get("game") or "").strip().casefold() == requested_game.casefold()
+        ]
+        game_sample_count = len(game_candidates)
+        # Never borrow another game's best-performing configuration and present
+        # it as evidence-backed for a game with fewer than three measured/rated videos.
+        if game_sample_count < 3:
+            return None
+        candidates = game_candidates
+    for key in ("platform", "format", "content_type"):
         wanted = str(context.get(key) or "").strip()
-        matching = [row for row in candidates if wanted and str(row.get(key) or "").strip() == wanted]
-        if matching:
+        matching = [
+            row for row in candidates
+            if wanted and str(row.get(key) or "").strip().casefold() == wanted.casefold()
+        ]
+        # Keep the game context and enough observations to avoid single-row
+        # context overfitting; fall back to the broader game sample otherwise.
+        if len(matching) >= 3:
             candidates = matching
     scored = [
         (predict_reward(model, row), float(row["_learning_reward"]), index, row)
@@ -421,6 +446,8 @@ def recommend_learned_profile(
         "observed_reward": observed,
         "candidate_count": len(scored),
         "sample_count": int(model.get("samples") or 0),
+        "context_sample_count": game_sample_count if requested_game else len(candidates),
+        "context_game": requested_game or None,
     }
 
 
