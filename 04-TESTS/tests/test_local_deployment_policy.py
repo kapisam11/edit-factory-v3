@@ -173,3 +173,40 @@ def test_windows_ffmpeg_installer_persists_verified_path_between_ci_steps() -> N
     assert 'if ($env:GITHUB_PATH) {' in installer
     assert "Add-Content -LiteralPath $env:GITHUB_PATH -Value $binDirectory -Encoding utf8" in installer
     assert "Resolved FFmpeg directory contains a newline" in installer
+
+
+def test_production_compose_forces_production_and_disables_runtime_migrations() -> None:
+    compose = (DEPLOYMENT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert compose.count("AIVF_ENV: production") == 3
+    assert compose.count('AIVF_ALLOW_RUNTIME_MIGRATIONS: "0"') == 3
+    assert 'AIVF_COOKIE_SECURE: "1"' in compose
+    assert "${AIVF_ENV:-production}" not in compose
+    assert "${AIVF_COOKIE_SECURE:-1}" not in compose
+
+
+def test_windows_production_launcher_is_separate_and_fail_closed() -> None:
+    launcher = (REPOSITORY_ROOT / "START-PRODUCTION.ps1").read_text(encoding="utf-8")
+    wrapper = (REPOSITORY_ROOT / "START-PRODUCTION.bat").read_text(encoding="utf-8")
+
+    assert "docker-compose.yml" in launcher
+    assert '$ComposeFile = Join-Path $Root "06-CONFIG-AND-DEPLOYMENT\\docker-compose.yml"' in launcher
+    assert "@sha256:[0-9a-fA-F]{64}" in launcher
+    assert '$env:AIVF_ENV = "production"' in launcher
+    assert '$env:AIVF_COOKIE_SECURE = "1"' in launcher
+    assert '$env:AIVF_ALLOW_RUNTIME_MIGRATIONS = "0"' in launcher
+    assert "aivf-db-migrate" in launcher
+    assert "aivf-backup backup" in launcher
+    assert "aivf-backup verify" in launcher
+    assert "--no-build" in launcher
+    assert "if ($existingImage -ne $image)" in launcher
+    assert "START-PRODUCTION.ps1" in wrapper
+
+
+def test_root_readme_distinguishes_development_and_production_launchers() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "is the development/supervised-local launcher" in readme
+    assert "START-PRODUCTION.bat" in readme
+    assert "START-PRODUCTION.ps1 -Migrate" in readme
+    assert "does not build source" in readme
