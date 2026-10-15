@@ -145,16 +145,7 @@ def compare_recent_packages(
     """Compare one output against recent sibling packages, never across arbitrary roots."""
     root = Path(package_dir)
     current = _canonical_script(current_script, _game_names(current_profile or {}))
-    if len(current) < MIN_SCRIPT_TOKENS:
-        return {
-            "schema_version": "1.0.0",
-            "status": "insufficient_data",
-            "publish_blocked": False,
-            "reason": f"At least {MIN_SCRIPT_TOKENS} script tokens are needed for a useful comparison.",
-            "comparison_count": 0,
-            "comparisons": [],
-            "human_review_override": {"approved": False, "distinct_contribution": ""},
-        }
+    current_script_comparable = len(current) >= MIN_SCRIPT_TOKENS
 
     try:
         children = [
@@ -179,6 +170,8 @@ def compare_recent_packages(
     current_sequence = _sequence_signature(root)
 
     comparisons: list[dict[str, Any]] = []
+    comparable_script_count = 0
+    comparable_sequence_count = 0
     for sibling in children:
         script_path = _script_path(sibling)
         if script_path is None:
@@ -199,10 +192,12 @@ def compare_recent_packages(
         else:
             game_names = [*_game_names(current_profile_data), *_game_names(prior_profile)]
         prior_tokens = _canonical_script(prior_script, game_names)
-        if len(prior_tokens) < MIN_SCRIPT_TOKENS:
-            continue
-
-        script_similarity = _similarity(current, prior_tokens)
+        script_comparable = current_script_comparable and len(prior_tokens) >= MIN_SCRIPT_TOKENS
+        if script_comparable:
+            script_similarity: float | None = _similarity(current, prior_tokens)
+            comparable_script_count += 1
+        else:
+            script_similarity = None
         prior_topic = sibling.name
         for meta_path in (sibling / "upload" / "metadata.json", sibling / "metadata.json"):
             meta = _read_json(meta_path)
@@ -212,14 +207,25 @@ def compare_recent_packages(
 
         prior_source_hash = _source_hash(sibling)
         prior_sequence = _sequence_signature(sibling)
-        sequence_similarity = (
-            _similarity(current_sequence, prior_sequence)
-            if current_source_hash and current_source_hash == prior_source_hash
-            and len(current_sequence) >= 4 and len(prior_sequence) >= 4
-            else 0.0
+        sequence_comparable = bool(
+            current_source_hash
+            and current_source_hash == prior_source_hash
+            and len(current_sequence) >= 4
+            and len(prior_sequence) >= 4
         )
-        repeated_script = script_similarity >= float(similarity_threshold)
-        repeated_sequence = sequence_similarity >= float(sequence_threshold)
+        if sequence_comparable:
+            sequence_similarity: float | None = _similarity(current_sequence, prior_sequence)
+            comparable_sequence_count += 1
+        else:
+            sequence_similarity = None
+        repeated_script = (
+            script_similarity is not None
+            and script_similarity >= float(similarity_threshold)
+        )
+        repeated_sequence = (
+            sequence_similarity is not None
+            and sequence_similarity >= float(sequence_threshold)
+        )
         same_angle = bool(
             current_profile_data.get("creator_angle")
             and str(current_profile_data.get("creator_angle")).casefold()
@@ -230,8 +236,8 @@ def compare_recent_packages(
             "package": sibling.name,
             "topic": prior_topic,
             "game": prior_game or None,
-            "script_similarity": round(script_similarity, 4),
-            "source_sequence_similarity": round(sequence_similarity, 4) if sequence_similarity else None,
+            "script_similarity": round(script_similarity, 4) if script_similarity is not None else None,
+            "source_sequence_similarity": round(sequence_similarity, 4) if sequence_similarity is not None else None,
             "same_source_media": bool(current_source_hash and current_source_hash == prior_source_hash),
             "same_creator_angle": same_angle,
             "near_duplicate_script": repeated_script,
@@ -242,7 +248,9 @@ def compare_recent_packages(
                 if repeated_script else
                 "the same source recording uses a substantially repeated sequence"
                 if repeated_sequence else
-                "no strong repetition signal"
+                "no comparable script or source sequence"
+                if not script_comparable and not sequence_comparable
+                else "no strong repetition signal"
             ),
         })
 
@@ -250,7 +258,7 @@ def compare_recent_packages(
         key=lambda item: (
             bool(item["review_required"]),
             max(
-                float(item["script_similarity"]),
+                float(item.get("script_similarity") or 0.0),
                 float(item.get("source_sequence_similarity") or 0.0),
             ),
         ),
@@ -267,7 +275,7 @@ def compare_recent_packages(
             else "review_required"
             if flagged
             else "compared"
-            if comparisons
+            if comparable_script_count or comparable_sequence_count
             else "insufficient_data"
         ),
         "publish_blocked": publish_blocked,
@@ -278,10 +286,12 @@ def compare_recent_packages(
             else "A reviewer documented the distinct contribution for a similar format."
             if flagged and override_approved
             else "No strong script or source-sequence repetition signal was found in the available packages."
-            if comparisons
-            else "No comparable recent packages were available; this is not a guarantee of originality."
+            if comparable_script_count or comparable_sequence_count
+            else "There was not enough comparable script or source-sequence evidence; this is not a guarantee of originality."
         ),
         "compared_package_count": len(comparisons),
+        "comparable_script_count": comparable_script_count,
+        "comparable_source_sequence_count": comparable_sequence_count,
         "minimum_script_tokens": MIN_SCRIPT_TOKENS,
         "script_similarity_threshold": float(similarity_threshold),
         "source_sequence_similarity_threshold": float(sequence_threshold),
