@@ -7,13 +7,13 @@ from ai_video_factory.originality_guard import compare_recent_packages
 
 
 SCRIPT_VALORANT = (
-    "The round looks lost until the defender saves one flash and changes the timing. "
+    "In Valorant, the round looks lost until the defender saves one flash and changes the timing. "
     "Instead of swinging alone, she waits for the teammate to pressure the other lane. "
     "That forces the last opponent to turn away from the plant, opening a safe path onto site. "
     "The useful lesson is the delayed utility and coordinated timing, not raw aim."
 )
 SCRIPT_FORTNITE = (
-    "The round looks lost until the defender saves one flash and changes the timing. "
+    "In Fortnite, the round looks lost until the defender saves one flash and changes the timing. "
     "Instead of swinging alone, she waits for the teammate to pressure the other lane. "
     "That forces the last opponent to turn away from the plant, opening a safe path onto site. "
     "The useful lesson is the delayed utility and coordinated timing, not raw aim."
@@ -179,3 +179,82 @@ def test_no_history_is_reported_as_insufficient_not_as_proof_of_originality(tmp_
     assert report["status"] == "insufficient_data"
     assert report["publish_blocked"] is False
     assert "not a guarantee of originality" in report["limitations"][-1]
+
+
+
+def test_upload_package_blocks_near_duplicate_without_explicit_originality_review(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from ai_video_factory import upload_package
+
+    output = tmp_path / "output"
+    output.mkdir()
+    _package(output / "prior", script=SCRIPT_FORTNITE, game="Fortnite")
+    current = output / "current"
+    current.mkdir()
+    video = current / "final.mp4"
+    video.write_bytes(b"fake-media; ffprobe is mocked")
+
+    monkeypatch.setenv("AIVF_ENV", "test")
+    monkeypatch.setenv("AIVF_REQUIRE_HUMAN_REVIEW", "0")
+    monkeypatch.delenv("AIVF_ENABLE_AUDIO_SIGNAL_QC", raising=False)
+    monkeypatch.setattr(
+        upload_package,
+        "media_rights_report",
+        lambda _summary: {"status": "cleared", "publish_blocked": False, "sources": [], "unverified_sources": []},
+    )
+    monkeypatch.setattr(
+        upload_package,
+        "_probe_media",
+        lambda _path: {
+            "available": True,
+            "format": {"duration": "30", "size": "100", "format_name": "mp4"},
+            "streams": [
+                {"codec_type": "video", "width": 1080, "height": 1920, "avg_frame_rate": "30/1", "duration": "30"},
+                {"codec_type": "audio", "duration": "30"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        upload_package,
+        "_media_contract_report",
+        lambda *_args, **_kwargs: {
+            "passed": True,
+            "checks": {"ffprobe_available": True, "duration_valid": True},
+            "errors": [],
+            "probe": {"has_audio": True},
+            "expected": {},
+        },
+    )
+    monkeypatch.setattr(
+        upload_package,
+        "validate_metadata_quality",
+        lambda *_args, **_kwargs: {"passed": True, "score": 100.0, "checks": {}, "issues": []},
+    )
+    monkeypatch.setattr(
+        upload_package,
+        "metadata_fact_gate",
+        lambda *_args, **_kwargs: {"publish_blocked": False, "status": "cleared", "issues": []},
+    )
+
+    manifest = upload_package.finalize_upload_package(
+        str(current),
+        topic="Valorant clutch breakdown",
+        summary={
+            "gaming_profile": {
+                "enabled": True,
+                "game_name": "Valorant",
+                "creator_angle": "clutch",
+                "publish_blocked": False,
+            },
+        },
+        script=SCRIPT_VALORANT,
+        platform="youtube_shorts",
+        final_video=str(video),
+    )
+
+    assert manifest["media_contract"]["passed"] is True
+    assert manifest["media_rights"]["publish_blocked"] is False
+    assert manifest["originality"]["publish_blocked"] is True
+    assert manifest["publish_ready"] is False
