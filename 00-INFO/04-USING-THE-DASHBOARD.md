@@ -6,7 +6,7 @@ The **V3 Production** workflow is also controlled from this panel. Select V3 to 
 
 ## Reliability and production overview
 
-The dashboard header includes a **Latest reliability & production updates** overview linking to the underlying project guides. The Quick Actions panel also links to the Autonomous Controls page; the sign-in and autonomous pages share the Edit Factory V3 branding. The overview summarizes these areas:
+The dashboard header includes a compact, expandable **Latest reliability & production updates** overview linking to the underlying project guides. The Quick Actions panel also links to the Autonomous Controls page; the sign-in and autonomous pages share the Edit Factory V3 branding. The overview summarizes these areas:
 
 - validated render output and protection of the last known-good final artifact
 - persistent job attempts, restart reconciliation, and stale-worker fencing
