@@ -201,6 +201,7 @@ _V3_GENERATED_FILES = frozenset({
     "job_identity.json",
     "final_content_manifest.json",
     "clip_source_evidence.json",
+    "gaming_profile.json",
 })
 _V3_TRANSIENT_FILE_NAMES = (
     "final.v3.retention.mp4",
@@ -245,6 +246,9 @@ def _request_identity(
         "allow_unsupported_critical_evidence": request.allow_unsupported_critical_evidence,
         "diarization_token_hash": diarization_token_hash,
         "source_metadata": dict(source_metadata or {}),
+        "content_profile": request.content_profile,
+        "game_name": request.game_name,
+        "gaming_angle": request.gaming_angle,
     })
 
 
@@ -573,9 +577,22 @@ class PlanningStage:
             if fixture_evidence_override
             else context.footage_evidence
         )
+        planning_context = context.request.context
+        if context.request.content_profile == "gaming":
+            from .gaming_profile import build_gaming_planning_context
+
+            gaming_context = build_gaming_planning_context(
+                game_name=context.request.game_name,
+                event_brief=context.request.topic,
+                angle=context.request.gaming_angle,
+            )
+            planning_context = "\\n\\n".join(
+                value for value in (planning_context.strip(), gaming_context) if value
+            )
+
         blueprint = create_v3_blueprint(
             context.request.topic,
-            context=context.request.context,
+            context=planning_context,
             config=config,
             edit_type=context.request.edit_type,
             footage_evidence=planning_footage_evidence,
@@ -640,6 +657,18 @@ class PlanningStage:
             source_asset=str(context.request.input_video),
         )
         atomic_write_json(context.package / "clip_source_evidence.json", clip_evidence)
+        if context.request.content_profile == "gaming":
+            from .gaming_profile import build_gaming_profile_report
+
+            gaming_profile = build_gaming_profile_report(
+                game_name=context.request.game_name,
+                event_brief=context.request.topic,
+                angle=context.request.gaming_angle,
+                footage_evidence=context.footage_evidence,
+                clip_evidence=clip_evidence,
+                source_metadata=context.source_metadata,
+            )
+            atomic_write_json(context.package / "gaming_profile.json", gaming_profile)
         unsupported_critical = [
             item for item in clip_evidence
             if item.get("purpose") in {"Hook", "Payoff", "Punchline", "Climax", "Final impact"}
@@ -759,6 +788,15 @@ class RenderStage:
         if context.blueprint is None:
             raise V3ArtifactError("planning stage did not produce a blueprint")
         context.baseline_summary = _research_summary(context.payload | {"retention_map": []}, context.footage_evidence)
+        if context.request.content_profile == "gaming":
+            try:
+                gaming_profile = json.loads((context.package / "gaming_profile.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError) as exc:
+                raise V3ArtifactError(f"gaming profile report is missing or unreadable: {exc}") from exc
+            context.baseline_summary["gaming_profile"] = gaming_profile
+            context.baseline_summary["content_profile"] = "gaming"
+            context.baseline_summary["requires_rights_declaration"] = True
+            context.baseline_summary["requires_commercial_rights_review"] = True
         request = V3RenderRequest(
             input_video=context.request.input_video,
             topic=context.request.topic,
@@ -1117,14 +1155,23 @@ class ComplianceStage:
         rights_record = {
             "asset_id": "source_video",
             "source": "user_upload",
-            "rights_basis": rights_status,
+            "rights_basis": str(source_meta.get("rights_basis") or "review_required").strip().lower(),
+            "rights_status": rights_status,
+            "asset_origin": str(source_meta.get("asset_origin") or "unknown").strip().lower(),
+            "commercial_use": str(source_meta.get("commercial_use") or "review_required").strip().lower(),
+            "permitted_uses": str(source_meta.get("permitted_uses") or "").strip(),
+            "attribution_required": source_meta.get("attribution_required", False),
             "evidence_url": str(source_meta.get("evidence_url") or ""),
             "license_url": str(source_meta.get("license_url") or ""),
             "declared_by": str(source_meta.get("declared_by") or ""),
             "declared_at": str(source_meta.get("declared_at") or ""),
             "attribution": str(source_meta.get("attribution") or ""),
         }
-        context.rights_report = rights_gate([rights_record], strict=True)
+        context.rights_report = rights_gate(
+            [rights_record],
+            strict=True,
+            require_commercial_use=context.request.content_profile == "gaming",
+        )
 
         if context.blueprint_path is None:
             raise V3ArtifactError("blueprint path missing before provenance generation")
