@@ -33,6 +33,7 @@ from .provenance import (
     write_provenance,
 )
 from .rights_policy import rights_gate
+from .content_quality import build_gaming_editorial_report, content_profile_from_context
 from .scene_intelligence import analyze_video, save_scene_index, SceneAnalysisError
 from .system_diagnostics import diagnostics_report, write_diagnostics
 from .v3_asset_packager import V3AssetPackager
@@ -656,6 +657,16 @@ class PlanningStage:
             context.footage_evidence,
             source_asset=str(context.request.input_video),
         )
+        content_profile = content_profile_from_context(context.request.context)
+        if content_profile.startswith("gaming_"):
+            gaming_report = build_gaming_editorial_report(
+                topic=context.request.topic,
+                context=context.request.context,
+                footage_evidence=context.footage_evidence,
+                clip_source_evidence=clip_evidence,
+                content_profile=content_profile,
+            )
+            atomic_write_json(context.package / "gaming_editorial.json", gaming_report)
         atomic_write_json(context.package / "clip_source_evidence.json", clip_evidence)
         if context.request.content_profile == "gaming":
             from .gaming_profile import build_gaming_profile_report
