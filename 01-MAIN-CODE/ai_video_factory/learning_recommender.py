@@ -20,7 +20,8 @@ class Recommendation:
     learning: Dict[str, Any] = field(default_factory=dict)
 
 
-NUMERIC_FEATURES = ("cuts_per_minute", "avg_shot_duration", "hook_duration", "music_energy", "duration_seconds")
+EDIT_NUMERIC_FEATURES = ("cuts_per_minute", "avg_shot_duration", "hook_duration", "music_energy")
+NUMERIC_FEATURES = (*EDIT_NUMERIC_FEATURES, "duration_seconds")
 CATEGORICAL_CONTEXT_FEATURES = (
     "platform", "content_type", "format", "game", "hook_type",
     "commentary_style", "caption_style", "voice", "music_style", "edit_type",
@@ -195,7 +196,7 @@ def recommend(
         weight = similarity * (1.0 + performance)
         total_weight += weight
         for key, value in record.items():
-            if key in context or key in NUMERIC_FEATURES or key in ("caption_style", "voice", "music_style"):
+            if key in EDIT_NUMERIC_FEATURES or key in ("caption_style", "voice", "music_style"):
                 if isinstance(value, (int, float)):
                     weighted[key] = weighted.get(key, 0.0) + float(value) * weight
 
