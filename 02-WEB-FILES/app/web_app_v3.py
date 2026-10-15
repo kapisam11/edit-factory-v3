@@ -770,6 +770,9 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 enable_diarization=params.get("enable_diarization", False),
                 diarization_token=secrets.get("diarization_token"),
                 source_metadata=params.get("source_metadata"),
+                content_profile=params.get("content_profile", "general"),
+                game_name=params.get("game_name", ""),
+                gaming_angle=params.get("gaming_angle", "storytelling"),
                 allow_unsupported_critical_evidence=bool(
                     params.get("allow_unsupported_critical_evidence", False)
                 ),
