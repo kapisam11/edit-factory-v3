@@ -55,6 +55,17 @@ def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, al
         raise ValueError(str(exc)) from exc
     if not audience or len(audience) > 500:
         raise ValueError("V3 audience must be between 1 and 500 characters")
+    content_profile = str(data.get("content_profile", "gaming_auto")).strip().lower()
+    supported_profiles = {
+        "general", "gaming_auto", "gaming_clutch", "gaming_strategy",
+        "gaming_funny", "gaming_story", "gaming_analysis",
+    }
+    if content_profile not in supported_profiles:
+        raise ValueError("Unsupported creative content profile")
+    user_context = str(data.get("context", "")).strip()
+    profile_marker = "" if content_profile == "general" else f"[AIVF_CONTENT_PROFILE={content_profile}]\\n"
+    job_context = (profile_marker + user_context)[:2000]
+
     params.update({
         "platform": platform,
         "audience": audience,
@@ -63,7 +74,7 @@ def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, al
         "content_profile": content_profile,
         "game_name": game_name,
         "gaming_angle": gaming_angle,
-        "context": str(data.get("context", "")).strip()[:2000],
+        "context": job_context,
         "enable_ocr": _flag(data.get("enable_ocr")),
         "enable_object_detection": _flag(data.get("enable_object_detection", "false")),
         "enable_diarization": _flag(data.get("enable_diarization")),
@@ -90,6 +101,9 @@ def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, al
             "declared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z") if str(data.get("rights_declared_by") or "").strip() else "",
             "human_approval_status": "review_required",
             "source": "user_provided",
+            "asset_origin": str(data.get("asset_origin", "unknown")).strip().lower(),
+            "permitted_commercial_use": str(data.get("permitted_commercial_use", "unknown")).strip().lower(),
+            "attribution_required": str(data.get("attribution_required", "unknown")).strip().lower(),
         },
     })
     return params
