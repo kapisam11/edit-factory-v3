@@ -586,7 +586,7 @@ class PlanningStage:
                 event_brief=context.request.topic,
                 angle=context.request.gaming_angle,
             )
-            planning_context = "\\n\\n".join(
+            planning_context = "\n\n".join(
                 value for value in (planning_context.strip(), gaming_context) if value
             )
 
