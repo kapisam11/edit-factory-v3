@@ -55,3 +55,19 @@ def test_release_overview_has_responsive_styling_and_documentation() -> None:
     assert "static feature overview" in guide
     assert "not a live release certificate" in guide
     assert "confirm a remote post" in guide
+
+
+def test_login_and_autonomous_pages_share_product_branding() -> None:
+    login = (ROOT / "02-WEB-FILES" / "templates" / "login.html").read_text(encoding="utf-8")
+    autonomous = (ROOT / "02-WEB-FILES" / "templates" / "autonomous.html").read_text(encoding="utf-8")
+
+    assert "<title>Edit Factory V3 — Sign in</title>" in login
+    assert "<h1>Edit Factory V3</h1>" in login
+    assert "<title>Edit Factory V3 — Autonomous YouTube</title>" in autonomous
+    assert "<h1>EDIT FACTORY V3</h1>" in autonomous
+    assert '<a href="/">← Main dashboard</a>' in autonomous
+
+
+def test_dashboard_exposes_autonomous_controls_from_quick_actions() -> None:
+    html = TEMPLATE.read_text(encoding="utf-8")
+    assert '<a class="btn-sm w-full dashboard-quick-link" href="/autonomous">Autonomous Controls</a>' in html
