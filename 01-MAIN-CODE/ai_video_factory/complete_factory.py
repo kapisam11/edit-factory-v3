@@ -378,7 +378,12 @@ def update_learning_history(path: str, *, topic: str, platform: str, package_dir
         history.append(record)
     else:
         merged = dict(history[existing_index])
-        merged.update(record)
+        for key, value in record.items():
+            # Reimported analytics may arrive without media metadata. Preserve
+            # the earlier duration rather than replacing it with unknown.
+            if key == "duration_seconds" and value is None and merged.get(key) is not None:
+                continue
+            merged[key] = value
         history[existing_index] = merged
         record = merged
     Path(path).parent.mkdir(parents=True, exist_ok=True)
