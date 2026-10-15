@@ -710,11 +710,14 @@ def _ass_to_srt(ass_text: str) -> str:
         try:
             start = clean_time(parts[1])
             end = clean_time(parts[2])
-        except ValueError:
-            continue
+        except ValueError as exc:
+            # Never silently drop a dialogue cue and then package the remainder
+            # as if the captions were complete and valid.
+            raise ValueError(f"invalid ASS dialogue timing on line: {line[:160]}") from exc
         text = re.sub(r"\{[^}]*\}", "", parts[9]).replace("\\N", " ").strip()
-        if text:
-            rows.append((start, end, text))
+        if not text:
+            raise ValueError(f"empty ASS dialogue text on line: {line[:160]}")
+        rows.append((start, end, text))
     return "\n\n".join(f"{i}\n{start} --> {end}\n{text}" for i, (start, end, text) in enumerate(rows, start=1)) + ("\n" if rows else "")
 
 
