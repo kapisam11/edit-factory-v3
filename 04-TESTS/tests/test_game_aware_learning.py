@@ -46,7 +46,9 @@ def test_preference_model_encodes_game_format_duration_hook_and_commentary(tmp_p
     assert "duration_seconds" in model["numeric_features"]
     for field in ("game", "format", "hook_type", "commentary_style"):
         assert field in model["categorical_features"]
-        assert any(key.casefold().startswith(field + "=") for key in model["categories"][field])
+        assert field in model["categories"]
+    assert "Valorant" in model["categories"]["game"]
+    assert "youtube_shorts:short" in model["categories"]["format"]
 
 
 def test_too_few_video_outcomes_for_a_game_uses_baseline_and_says_why(tmp_path: Path) -> None:
