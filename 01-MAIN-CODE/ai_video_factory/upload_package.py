@@ -840,12 +840,19 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "captions_srt": str(srt_path.relative_to(root)) if srt_path and srt_path.exists() else None,
     }
     media_probe = _probe_media(video) if video.exists() else {"available": False, "warning": "final video not found"}
-    media_contract = _media_contract_report(
-        video,
-        media_probe,
-        profile,
-        require_audio=True if is_gaming else None,
-    )
+    # Keep the long-standing three-argument helper call compatible with
+    # integrations/tests that replace the probe contract; tighten gaming audio
+    # requirements after the base profile report is returned.
+    media_contract = _media_contract_report(video, media_probe, profile)
+    if is_gaming:
+        media_contract.setdefault("expected", {})["audio_required"] = True
+        has_audio = bool((media_contract.get("probe") or {}).get("has_audio"))
+        checks = media_contract.setdefault("checks", {})
+        checks["audio_present_when_required"] = has_audio
+        if not has_audio:
+            errors = media_contract.setdefault("errors", [])
+            errors.append("output audio is required for the gaming profile but no audio stream was validated")
+            media_contract["passed"] = False
     if caption_path is not None and not (srt_path is not None and srt_path.is_file() and srt_path.stat().st_size > 0):
         media_contract["passed"] = False
         media_contract["checks"]["caption_file_valid"] = False
