@@ -20,6 +20,9 @@ class V3Request:
     audience: str = "general short-form viewers"
     bpm: int = 120
     edit_type: str | None = None
+    content_profile: str = "general"
+    game_name: str = ""
+    gaming_angle: str = "storytelling"
     model_key: str | None = None
     skip_qc: bool = False
     music_path: str | None = None
@@ -57,6 +60,21 @@ class V3Request:
             raise V3InputError("audience must be non-empty and <= 500 characters")
         if not package:
             raise V3InputError("package_dir is required")
+
+        content_profile = str(self.content_profile or "general").strip().lower()
+        if content_profile not in {"general", "gaming"}:
+            raise V3InputError("content_profile must be 'general' or 'gaming'")
+        if len(str(self.game_name or "").strip()) > 120:
+            raise V3InputError("game_name must be 120 characters or fewer")
+        if content_profile == "gaming":
+            from .gaming_profile import validate_gaming_brief
+            errors = validate_gaming_brief(
+                self.game_name,
+                topic,
+                str(self.gaming_angle or "").strip().lower(),
+            )
+            if errors:
+                raise V3InputError("; ".join(errors))
 
         try:
             self.config().validate()
