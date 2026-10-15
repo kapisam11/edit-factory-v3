@@ -96,15 +96,17 @@ def _sequence_signature(package: Path) -> list[str]:
         status = str(item.get("status") or "").casefold()
         if status and status not in {"supported", "weak"}:
             continue
-        scene = str(item.get("source_scene") or item.get("scene_id") or "")
-        if not scene:
-            continue
         try:
             start = round(float(item.get("source_start") or 0.0) * 2) / 2
             end = round(float(item.get("source_end") or 0.0) * 2) / 2
         except (TypeError, ValueError, OverflowError):
             continue
-        signature.append(f"{scene}:{start:.1f}-{end:.1f}")
+        if end <= start:
+            continue
+        # The source SHA-256 is checked separately before comparing sequences.
+        # Time ranges therefore remain comparable even if generated scene IDs
+        # differ between two analysis runs of the same recording.
+        signature.append(f"{start:.1f}-{end:.1f}")
     return signature
 
 
