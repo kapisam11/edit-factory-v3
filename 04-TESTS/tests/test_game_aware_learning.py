@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ai_video_factory.complete_factory import update_learning_history
 from ai_video_factory.learning_recommender import build_recommendation_context, recommend
-from ai_video_factory.video_learning import train_preference_model
+from ai_video_factory.video_learning import eligible_examples, load_preference_model, train_preference_model
 
 
 def _records(*, valorant_count: int, total: int = 12) -> list[dict]:
@@ -174,3 +174,27 @@ def test_canonical_learning_context_carries_game_angle_and_duration() -> None:
     assert context["hook_type"] == "instructional_problem"
     assert context["commentary_style"] == "strategy"
     assert context["cuts_per_minute"] == 18.0
+
+
+
+def test_old_preference_model_schema_is_rejected(tmp_path: Path) -> None:
+    model_path = tmp_path / "old-model.json"
+    model_path.write_text(json.dumps({
+        "schema_version": 1,
+        "status": "trained",
+        "coefficients": [1.0],
+    }), encoding="utf-8")
+
+    assert load_preference_model(model_path) is None
+
+
+def test_missing_duration_is_not_imputed_as_a_measured_45_second_video(tmp_path: Path) -> None:
+    rows = _records(valorant_count=6)
+    rows[0].pop("duration_seconds")
+    eligible = eligible_examples(rows)
+
+    assert len(eligible) == len(rows)
+    assert "duration_seconds" not in eligible[0]
+    model = train_preference_model(rows, model_path=tmp_path / "model.json")
+    expected = sum(float(row["duration_seconds"]) for row in rows[1:]) / (len(rows) - 1)
+    assert model["means"]["duration_seconds"] == expected
