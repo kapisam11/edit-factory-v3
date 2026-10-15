@@ -86,13 +86,28 @@ def _source_records(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "rights_basis": _normalize_phrase(str(raw.get("rights_basis") or "")),
             "rights_status": _normalize_phrase(str(raw.get("rights_status") or "review_required")).lower(),
             "source": _normalize_phrase(str(raw.get("source") or default_source)).lower(),
-            "evidence_url": str(raw.get("evidence_url") or raw.get("permission_url") or "").strip(),
+            "evidence_url": str(raw.get("evidence_url") or raw.get("rights_evidence_url") or raw.get("permission_url") or "").strip(),
             "declared_by": _normalize_phrase(str(raw.get("declared_by") or "")),
             "declared_at": str(raw.get("declared_at") or "").strip(),
             "attribution": _normalize_phrase(str(raw.get("attribution") or "")),
+            "asset_origin": _normalize_phrase(str(raw.get("asset_origin") or "unknown")).lower(),
+            "commercial_use": _normalize_phrase(str(raw.get("commercial_use") or "review_required")).lower(),
+            "permitted_uses": _normalize_phrase(str(raw.get("permitted_uses") or "")),
+            "attribution_required": str(raw.get("attribution_required") or "").strip().lower() in {"1", "true", "yes", "on"},
         }
         key = record["url"] or (record["creator"], record["title"], record["source"])
-        if key and key not in seen and (record["title"] or record["creator"] or record["url"]):
+        has_rights_declaration = any(
+            str(record.get(field) or "").strip()
+            for field in (
+                "rights_basis", "rights_status", "evidence_url", "license_url",
+                "declared_by", "declared_at", "commercial_use", "permitted_uses",
+                "attribution",
+            )
+        ) or record.get("asset_origin") != "unknown" or record.get("attribution_required")
+        required_user_declaration = bool(summary.get("requires_rights_declaration")) and record["source"] == "user_provided"
+        if key and key not in seen and (
+            record["title"] or record["creator"] or record["url"] or has_rights_declaration or required_user_declaration
+        ):
             seen.add(key)
             records.append(record)
 
@@ -106,7 +121,12 @@ def _source_records(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
 
     source_meta = summary.get("source_manifest") or summary.get("source_metadata")
     if isinstance(source_meta, Mapping):
-        add(source_meta, default_source="user_provided")
+        nested = source_meta.get("metadata")
+        merged_source = dict(nested) if isinstance(nested, Mapping) else {}
+        # Explicit typed manifest fields take precedence; nested metadata keeps
+        # declaration details introduced after the original manifest schema.
+        merged_source.update(dict(source_meta))
+        add(merged_source, default_source="user_provided")
 
     visuals = summary.get("visuals") or []
     if isinstance(visuals, Sequence) and not isinstance(visuals, (str, bytes)):
@@ -187,6 +207,10 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
             "declared_by": _normalize_phrase(str(raw.get("declared_by") or "")),
             "declared_at": str(raw.get("declared_at") or "").strip(),
             "attribution": _normalize_phrase(str(raw.get("attribution") or "")),
+            "asset_origin": _normalize_phrase(str(raw.get("asset_origin") or "unknown")).lower(),
+            "commercial_use": _normalize_phrase(str(raw.get("commercial_use") or "review_required")).lower(),
+            "permitted_uses": _normalize_phrase(str(raw.get("permitted_uses") or "")),
+            "attribution_required": str(raw.get("attribution_required") or "").strip().lower() in {"1", "true", "yes", "on"},
         })
 
     external = [
@@ -197,10 +221,14 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
     ]
 
     if summary.get("requires_rights_declaration"):
-        supplied = summary.get("source_metadata")
+        supplied = summary.get("source_metadata") or summary.get("source_manifest")
+        if isinstance(supplied, Mapping) and isinstance(supplied.get("metadata"), Mapping):
+            merged_declaration = dict(supplied.get("metadata") or {})
+            merged_declaration.update(dict(supplied))
+            supplied = merged_declaration
         declaration_present = isinstance(supplied, Mapping) and any(
             str(supplied.get(key) or "").strip()
-            for key in ("rights_status", "rights_basis", "source_url", "evidence_url", "declared_by", "declared_at")
+            for key in ("rights_status", "rights_basis", "source_url", "url", "evidence_url", "declared_by", "declared_at")
         )
         if not declaration_present:
             external.append({
@@ -237,7 +265,10 @@ def media_rights_report(summary: Mapping[str, Any]) -> Dict[str, Any]:
             "rights_basis": basis,
         })
 
-    evidence_gate = rights_gate(evidence_records) if evidence_records else {
+    evidence_gate = rights_gate(
+        evidence_records,
+        require_commercial_use=bool(summary.get("requires_commercial_rights_review")),
+    ) if evidence_records else {
         "status": "not_declared",
         "publish_blocked": False,
         "checked": [],
@@ -514,7 +545,13 @@ def _rate_fps(value: object) -> float | None:
     return parsed if math.isfinite(parsed) and parsed > 0 else None
 
 
-def _media_contract_report(video_path: Path, probe: Mapping[str, Any], profile: OutputProfile) -> Dict[str, Any]:
+def _media_contract_report(
+    video_path: Path,
+    probe: Mapping[str, Any],
+    profile: OutputProfile,
+    *,
+    require_audio: bool | None = None,
+) -> Dict[str, Any]:
     """Fail closed when the final media cannot meet the selected output profile."""
     checks: Dict[str, bool] = {}
     errors: list[str] = []
@@ -606,7 +643,11 @@ def _media_contract_report(video_path: Path, probe: Mapping[str, Any], profile: 
     elif size_bytes > max_output_bytes:
         errors.append(f"final video size {size_bytes} exceeds configured {max_output_bytes}-byte limit")
 
-    audio_required = str(os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "0")).strip().lower() not in {"0", "false", "no"}
+    audio_required = (
+        bool(require_audio)
+        if require_audio is not None
+        else str(os.environ.get("AIVF_REQUIRE_OUTPUT_AUDIO", "0")).strip().lower() not in {"0", "false", "no"}
+    )
     checks["audio_present_when_required"] = not audio_required or bool(audio_streams)
     if audio_required and not audio_streams:
         errors.append("output audio is required but the final video has no audio stream")
@@ -649,18 +690,34 @@ def _media_contract_report(video_path: Path, probe: Mapping[str, Any], profile: 
 
 def _ass_to_srt(ass_text: str) -> str:
     rows = []
+
+    def clean_time(value: str) -> str:
+        match = re.fullmatch(r"\s*(\d+):(\d{2}):(\d{2})[.](\d{1,3})\s*", value)
+        if not match:
+            raise ValueError(f"invalid ASS timestamp: {value!r}")
+        hours, minutes, seconds, fraction = match.groups()
+        # ASS normally stores centiseconds; pad rather than emitting invalid
+        # two-digit millisecond values in an SRT timestamp.
+        milliseconds = int(fraction.ljust(3, "0")[:3])
+        return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d},{milliseconds:03d}"
+
     for line in ass_text.splitlines():
         if not line.startswith("Dialogue:"):
             continue
         parts = line.split(",", 9)
         if len(parts) < 10:
             continue
-        def clean_time(value: str) -> str:
-            value = value.strip().replace(".", ",")
-            if value.count(":") == 1:
-                value = "0:" + value
-            return value
-        rows.append((clean_time(parts[1]), clean_time(parts[2]), re.sub(r"\{[^}]*\}", "", parts[9]).replace("\\N", " ").strip()))
+        try:
+            start = clean_time(parts[1])
+            end = clean_time(parts[2])
+        except ValueError as exc:
+            # Never silently drop a dialogue cue and then package the remainder
+            # as if the captions were complete and valid.
+            raise ValueError(f"invalid ASS dialogue timing on line: {line[:160]}") from exc
+        text = re.sub(r"\{[^}]*\}", "", parts[9]).replace("\\N", " ").strip()
+        if not text:
+            raise ValueError(f"empty ASS dialogue text on line: {line[:160]}")
+        rows.append((start, end, text))
     return "\n\n".join(f"{i}\n{start} --> {end}\n{text}" for i, (start, end, text) in enumerate(rows, start=1)) + ("\n" if rows else "")
 
 
@@ -693,7 +750,13 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
     profile = get_output_profile(platform)
     root = Path(package_dir)
     root.mkdir(parents=True, exist_ok=True)
-    summary = summary or {}
+    summary = dict(summary or {})
+    gaming_profile = summary.get("gaming_profile")
+    is_gaming = isinstance(gaming_profile, Mapping) and bool(gaming_profile.get("enabled", True))
+    if is_gaming:
+        # Own capture does not by itself establish commercial-use permission for game IP.
+        summary["requires_rights_declaration"] = True
+        summary["requires_commercial_rights_review"] = True
     hooks = summary.get("hooks") or []
     hook = str(summary.get("hook") or (hooks[0].get("hook") if hooks and isinstance(hooks[0], dict) else ""))
     final_metadata = summary.get("final_metadata") or {}
@@ -777,13 +840,94 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "captions_srt": str(srt_path.relative_to(root)) if srt_path and srt_path.exists() else None,
     }
     media_probe = _probe_media(video) if video.exists() else {"available": False, "warning": "final video not found"}
+    # Keep the long-standing three-argument helper call compatible with
+    # integrations/tests that replace the probe contract; tighten gaming audio
+    # requirements after the base profile report is returned.
     media_contract = _media_contract_report(video, media_probe, profile)
+    if is_gaming:
+        media_contract.setdefault("expected", {})["audio_required"] = True
+        has_audio = bool((media_contract.get("probe") or {}).get("has_audio"))
+        checks = media_contract.setdefault("checks", {})
+        checks["audio_present_when_required"] = has_audio
+        if not has_audio:
+            errors = media_contract.setdefault("errors", [])
+            errors.append("output audio is required for the gaming profile but no audio stream was validated")
+            media_contract["passed"] = False
     if caption_path is not None and not (srt_path is not None and srt_path.is_file() and srt_path.stat().st_size > 0):
         media_contract["passed"] = False
         media_contract["checks"]["caption_file_valid"] = False
         media_contract["errors"].append("a caption file was supplied but no non-empty validated SRT was produced")
     else:
         media_contract["checks"]["caption_file_valid"] = True
+
+    from .media_quality_gates import audio_signal_report, validate_srt_file
+
+    duration_value = (media_probe.get("format") or {}).get("duration") if isinstance(media_probe.get("format"), Mapping) else None
+    if not duration_value and isinstance(media_probe.get("streams"), list):
+        first_video = next((item for item in media_probe["streams"] if isinstance(item, Mapping) and item.get("codec_type") == "video"), {})
+        duration_value = first_video.get("duration")
+    try:
+        final_duration = float(duration_value or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        final_duration = 0.0
+
+    if srt_path is not None and srt_path.is_file() and srt_path.stat().st_size > 0 and media_contract.get("checks", {}).get("duration_valid"):
+        caption_quality = validate_srt_file(
+            srt_path,
+            duration_seconds=final_duration,
+            max_line_chars=42 if profile.height > profile.width else 56,
+            max_lines=2,
+        )
+    else:
+        caption_quality = {
+            "passed": caption_path is None,
+            "status": "not_supplied" if caption_path is None else "blocked",
+            "cue_count": 0,
+            "errors": [] if caption_path is None else [{"code": "caption_file_invalid", "message": "caption file was not available for validation"}],
+            "warnings": [{"code": "manual_caption_review", "message": "SRT checks cannot certify burned-in caption visibility or platform safe margins"}],
+            "human_visibility_review_required": True,
+            "safe_area_check": "not_certified_from_SRT; review rendered frames at phone size",
+        }
+    media_contract["caption_quality"] = caption_quality
+    media_contract["checks"]["caption_timing_and_text_fit"] = bool(caption_quality.get("passed"))
+    for issue in caption_quality.get("errors") or []:
+        when = issue.get("timestamp_seconds")
+        timestamp_text = f" at {float(when):.2f}s" if isinstance(when, (int, float)) else ""
+        media_contract["errors"].append(
+            f"caption QC [{issue.get('code', 'invalid')}]{timestamp_text}: {issue.get('message', 'caption validation failed')}"
+        )
+    if not caption_quality.get("passed"):
+        media_contract["passed"] = False
+
+    audio_quality_enabled_raw = os.environ.get("AIVF_ENABLE_AUDIO_SIGNAL_QC")
+    audio_quality_enabled = (
+        str(audio_quality_enabled_raw).strip().lower() not in {"0", "false", "no", "off"}
+        if audio_quality_enabled_raw is not None
+        else os.environ.get("AIVF_ENV", "development").strip().lower() != "test"
+    )
+    audio_present = bool((media_contract.get("probe") or {}).get("has_audio"))
+    if audio_quality_enabled and audio_present and media_contract.get("checks", {}).get("ffprobe_available"):
+        audio_quality = audio_signal_report(video, is_gaming=is_gaming)
+    else:
+        reason = "test mode default" if not audio_quality_enabled else "no validated audio stream available"
+        audio_quality = {
+            "passed": not (is_gaming and audio_quality_enabled),
+            "status": "not_run",
+            "metrics": {},
+            "errors": ([{"code": "audio_signal_qc_not_run", "message": reason}] if is_gaming and audio_quality_enabled else []),
+            "warnings": [{"code": "manual_audio_review", "message": "voice/music balance and perceived clarity still require listening review"}],
+            "human_listening_review_required": True,
+        }
+    media_contract["audio_quality"] = audio_quality
+    media_contract["checks"]["audio_signal_qc"] = bool(audio_quality.get("passed"))
+    for issue in audio_quality.get("errors") or []:
+        when = issue.get("timestamp_seconds")
+        timestamp_text = f" at {float(when):.2f}s" if isinstance(when, (int, float)) else ""
+        media_contract["errors"].append(
+            f"audio QC [{issue.get('code', 'invalid')}]{timestamp_text}: {issue.get('message', 'audio validation failed')}"
+        )
+    if not audio_quality.get("passed"):
+        media_contract["passed"] = False
     media_contract["human_caption_visibility_review_required"] = True
     disclosure = {
         "status": "review_required",
@@ -811,6 +955,7 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
             and bool(metadata_quality["passed"])
             and not rights["publish_blocked"]
             and not factuality["publish_blocked"]
+            and not (is_gaming and bool(gaming_profile.get("publish_blocked")))
             and (not require_human_review or human_review["status"] == "approved")
         ),
         "artifacts": _collect_artifacts(root),

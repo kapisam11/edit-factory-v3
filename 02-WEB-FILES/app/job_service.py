@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from ai_video_factory.v3_engine import EditType, V3Config
@@ -32,6 +33,16 @@ def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, al
     platform = str(data.get("platform", settings.get("default_v3_platform", "youtube_shorts"))).strip().lower()
     audience = str(data.get("audience", settings.get("default_v3_audience", "general short-form viewers"))).strip()
     edit_type = str(data.get("edit_type", "")).strip() or None
+    content_profile = str(data.get("content_profile", "general")).strip().lower()
+    game_name = str(data.get("game_name", "")).strip()[:120]
+    gaming_angle = str(data.get("gaming_angle", "storytelling")).strip().lower()
+    if content_profile not in {"general", "gaming"}:
+        raise ValueError("Unsupported content profile")
+    if content_profile == "gaming":
+        from ai_video_factory.gaming_profile import validate_gaming_brief
+        errors = validate_gaming_brief(game_name, topic, gaming_angle)
+        if errors:
+            raise ValueError("; ".join(errors))
     try:
         bpm = int(data.get("bpm", settings.get("default_v3_bpm", 120)))
     except (TypeError, ValueError) as exc:
@@ -49,6 +60,9 @@ def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, al
         "audience": audience,
         "bpm": bpm,
         "edit_type": edit_type,
+        "content_profile": content_profile,
+        "game_name": game_name,
+        "gaming_angle": gaming_angle,
         "context": str(data.get("context", "")).strip()[:2000],
         "enable_ocr": _flag(data.get("enable_ocr")),
         "enable_object_detection": _flag(data.get("enable_object_detection", "false")),
@@ -67,6 +81,14 @@ def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, al
             "rights_status": str(data.get("rights_status") or data.get("rights_basis", "")).strip().lower(),
             "evidence_url": str(data.get("rights_evidence_url", "")).strip()[:1000],
             "license_url": str(data.get("license_url", "")).strip()[:1000],
+            "asset_origin": str(data.get("asset_origin") or "unknown").strip().lower(),
+            "commercial_use": str(data.get("commercial_use") or "review_required").strip().lower(),
+            "permitted_uses": str(data.get("permitted_uses") or "").strip()[:1000],
+            "attribution_required": _flag(data.get("attribution_required")),
+            "attribution": str(data.get("attribution") or "").strip()[:1000],
+            "declared_by": str(data.get("rights_declared_by") or "").strip()[:200],
+            "declared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z") if str(data.get("rights_declared_by") or "").strip() else "",
+            "human_approval_status": "review_required",
             "source": "user_provided",
         },
     })

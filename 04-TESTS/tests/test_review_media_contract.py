@@ -218,6 +218,9 @@ def _configure_publish_package_probe(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("AIVF_OUTPUT_FPS_TOLERANCE", "0.5")
     monkeypatch.setenv("AIVF_MAX_OUTPUT_BYTES", "2000")
     monkeypatch.setenv("AIVF_REQUIRE_OUTPUT_AUDIO", "1")
+    # This test uses a fake probe payload; audio measurement is covered with a
+    # mocked FFmpeg analyzer in test_gaming_quality_gates.py.
+    monkeypatch.setenv("AIVF_ENABLE_AUDIO_SIGNAL_QC", "0")
     monkeypatch.delenv("AIVF_REQUIRE_HUMAN_REVIEW", raising=False)
     return video
 

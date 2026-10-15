@@ -473,6 +473,9 @@ def run_v3_pipeline(
     enable_diarization: bool = False,
     diarization_token: Optional[str] = None,
     source_metadata: Optional[Dict[str, Any]] = None,
+    content_profile: str = "general",
+    game_name: str = "",
+    gaming_angle: str = "storytelling",
     allow_unsupported_critical_evidence: bool = False,
 ) -> ProductionResult:
     """Run V3 through the explicit production stages without pre-resetting the workspace.
@@ -489,6 +492,9 @@ def run_v3_pipeline(
         audience=audience,
         bpm=bpm,
         edit_type=edit_type,
+        content_profile=content_profile,
+        game_name=game_name,
+        gaming_angle=gaming_angle,
         model_key=model_key,
         skip_qc=skip_qc,
         music_path=music_path,
