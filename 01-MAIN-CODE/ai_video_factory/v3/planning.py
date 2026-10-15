@@ -6,7 +6,7 @@ V3Blueprint consumed by the rest of the pipeline.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import re
 from typing import Any, Mapping, Sequence
 
@@ -23,6 +23,7 @@ from .music import analyze_music
 from .platform_policy import POLICIES
 from .retention import build_retention_map
 from ..idempotency import stable_hash
+from ..content_quality import content_profile_from_context, gaming_core_overrides
 from ..v3_scoring import heuristic_metrics
 
 
@@ -205,6 +206,9 @@ def create_blueprint(
     cfg = config or V3Config()
     cfg.validate()
     core = analyze_core_idea(topic, context, cfg.audience)
+    content_profile = content_profile_from_context(context)
+    if content_profile.startswith("gaming_"):
+        core = replace(core, **gaming_core_overrides(topic, content_profile))
     selected = choose_edit_type(core, edit_type)
     evidence_context = dict(footage_evidence or {})
     evidence_context["audience_label"] = cfg.audience
