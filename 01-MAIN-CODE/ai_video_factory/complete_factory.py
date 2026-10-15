@@ -291,26 +291,47 @@ def update_learning_history(path: str, *, topic: str, platform: str, package_dir
             "challenge": "challenge",
             "storytelling": "turning_point",
         }.get(creator_angle, "unspecified" if not first_hook else "creator_authored")
+    duration_value = (
+        observed_metrics.get("actual_duration_seconds")
+        or observed_metrics.get("actual_timeline_seconds")
+        or observed_metrics.get("target_seconds")
+        or (target_seconds if target_seconds > 0 else None)
+    )
+    if not duration_value:
+        for media_path in (root / "final_media_metadata.json", root / "primary" / "final_media_metadata.json"):
+            try:
+                media_payload = json.loads(media_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if isinstance(media_payload, Mapping):
+                stream_value = media_payload.get("duration_seconds") or media_payload.get("duration")
+                if not stream_value and isinstance(media_payload.get("format"), Mapping):
+                    stream_value = media_payload["format"].get("duration")
+                if stream_value:
+                    duration_value = stream_value
+                    break
+    if not duration_value:
+        clips = blueprint_payload.get("clip_plan")
+        if isinstance(clips, list) and clips and isinstance(clips[-1], Mapping):
+            duration_value = clips[-1].get("end")
     try:
-        duration_seconds = float(
-            observed_metrics.get("actual_duration_seconds")
-            or observed_metrics.get("actual_timeline_seconds")
-            or observed_metrics.get("target_seconds")
-            or target_seconds
-            or 45.0
-        )
+        duration_seconds = float(duration_value) if duration_value not in (None, "") else None
     except (TypeError, ValueError, OverflowError):
-        duration_seconds = 45.0
-    if not 1.0 <= duration_seconds <= 3600.0:
-        duration_seconds = 45.0
+        duration_seconds = None
+    if duration_seconds is not None and not 1.0 <= duration_seconds <= 3600.0:
+        duration_seconds = None
 
     content_type = str(
         observed_metrics.get("content_type")
         or ("gaming" if gaming_profile else "short_video")
     ).strip().lower()
+    format_kind = (
+        "unknown-duration"
+        if duration_seconds is None
+        else "short" if duration_seconds <= 60.0 else "long"
+    )
     format_name = str(
-        observed_metrics.get("format")
-        or f"{platform}:{'short' if duration_seconds <= 60.0 else 'long'}"
+        observed_metrics.get("format") or f"{platform}:{format_kind}"
     ).strip().lower()
     edit_emotion = str(observed_metrics.get("emotion") or thinking.get("emotion") or "")
     record: Dict[str, Any] = {
