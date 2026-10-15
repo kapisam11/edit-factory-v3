@@ -246,15 +246,15 @@ def run_production_pipeline(input_video: str, topic: str, package_dir: str, *, t
         os.environ.get("AIVF_LEARNING_MODEL_PATH", "").strip()
         or (str(Path(history_path).with_name("video_preference_model.json")) if history_path else None)
     )
+    from .learning_recommender import build_recommendation_context
+
+    recommendation_context = build_recommendation_context(
+        summary,
+        platform=platform,
+        target_seconds=target_seconds,
+    )
     recommendation = recommend(
-        {
-            "platform": summary.get("platform", "youtube_shorts"),
-            "content_type": summary.get("content_type", "short_video"),
-            "cuts_per_minute": summary.get("cuts_per_minute", 12),
-            "avg_shot_duration": summary.get("avg_shot_duration", 2.5),
-            "hook_duration": summary.get("hook_duration", 2.0),
-            "music_energy": summary.get("music_energy", 0.5),
-        },
+        recommendation_context,
         experiments,
         defaults={"caption_style": "karaoke", "voice": "en-US-GuyNeural", "music_style": summary["emotion"]},
         model_path=model_path,
