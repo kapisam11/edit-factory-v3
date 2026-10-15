@@ -289,3 +289,28 @@ def test_short_script_does_not_disable_repeat_sequence_check(tmp_path: Path) -> 
     assert report["comparable_source_sequence_count"] == 1
     assert report["publish_blocked"] is True
     assert report["comparisons"][0]["reused_source_sequence"] is True
+
+
+def test_inaccessible_sibling_package_does_not_break_publish_check(tmp_path: Path, monkeypatch) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    _package(output / "restricted", script=SCRIPT_FORTNITE, game="Fortnite")
+    current = output / "current"
+    current.mkdir()
+
+    original_is_file = Path.is_file
+
+    def guarded_is_file(path: Path) -> bool:
+        if "restricted" in path.parts:
+            raise PermissionError("fixture simulates a protected sibling directory")
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", guarded_is_file)
+    report = compare_recent_packages(
+        current,
+        SCRIPT_VALORANT,
+        current_profile={"enabled": True, "game_name": "Valorant", "creator_angle": "clutch"},
+    )
+
+    assert report["status"] == "insufficient_data"
+    assert report["publish_blocked"] is False
