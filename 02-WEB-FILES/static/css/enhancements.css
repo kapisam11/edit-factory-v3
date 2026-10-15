@@ -48,3 +48,137 @@
 .retry-action.visible {
     display: inline-flex;
 }
+
+
+/* Recent release / production overview */
+.release-overview {
+    margin-bottom: 20px;
+    padding: 22px;
+}
+
+.release-overview-header {
+    align-items: flex-start;
+    gap: 14px;
+}
+
+.release-overview-header h2 {
+    margin-bottom: 6px;
+}
+
+.release-overview-intro {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin: 0;
+    max-width: 760px;
+}
+
+.release-version-pill {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.release-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.release-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+    padding: 17px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+}
+
+.release-card-kicker {
+    display: inline-block;
+    margin-bottom: 9px;
+    color: var(--accent);
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.09em;
+    line-height: 1.4;
+    text-transform: uppercase;
+}
+
+.release-card h3 {
+    margin: 0 0 8px;
+    color: var(--text-primary);
+    font-size: 0.97rem;
+    line-height: 1.35;
+}
+
+.release-card p {
+    margin: 0 0 14px;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    line-height: 1.55;
+}
+
+.release-card code {
+    color: var(--text-primary);
+    font-size: 0.92em;
+    overflow-wrap: anywhere;
+}
+
+.release-card a {
+    margin-top: auto;
+    color: var(--accent);
+    font-size: 0.81rem;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.release-card a:hover,
+.release-card a:focus-visible {
+    color: var(--accent-hover);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.release-card a:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 3px;
+    border-radius: 2px;
+}
+
+.release-overview-note {
+    margin: 15px 0 0;
+    color: var(--text-muted);
+    font-size: 0.77rem;
+    line-height: 1.5;
+}
+
+@media (max-width: 1100px) {
+    .release-overview-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .release-overview {
+        padding: 16px;
+    }
+
+    .release-overview-header {
+        flex-direction: column;
+    }
+
+    .release-overview-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
