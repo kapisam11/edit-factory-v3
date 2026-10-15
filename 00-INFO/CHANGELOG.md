@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — gaming profile and publish-quality gates
+
+### Gaming content
+- Added a V3 gaming commentary profile with game/event brief, creator angle presets, an evidence-grounded planning context, and a persisted gaming_profile.json report.
+- Carry game/angle input through the dashboard, request contract, job identity, and rendering summary; unsupported critical source beats remain blocked and creator-provided event text is not treated as proof.
+
+### Media and rights gates
+- Persist asset origin, commercial-use declaration, permitted-use notes, attribution requirements, rights-evidence URL, declaration identity/time, and human-approval state in the source manifest.
+- Gaming upload packages require explicit commercial-use declarations and audio streams; rights-only source declarations are retained even without a title or source URL.
+- Add timestamped SRT timing/text-fit checks and FFmpeg loudness/true-peak/silence reports to upload metadata; invalid caption timing, overflow, or severe signal defects block readiness.
+- Clarify that safe-area placement, voice/music balance, publisher terms, and monetization eligibility still require human/account verification.
+
 ## Unreleased — dashboard and production workflow updates
 
 ### Dashboard
