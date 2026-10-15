@@ -5,7 +5,7 @@
 ### Dashboard
 - Rebranded the browser control panel header to Edit Factory V3 and added a responsive reliability/production overview.
 - Added direct links from the dashboard to the rendering/recovery architecture, evidence-driven readiness checker, production setup, publishing guide, and GitHub Actions.
-- Clearly disclosed that the overview is informational, not a live host check or a guarantee of platform-account eligibility.
+- Aligned sign-in and autonomous controls branding, added a direct Quick Actions link to autonomous controls, and clarified that the overview is informational—not a live host check or a guarantee of platform-account eligibility.
 
 ### Reliability and operations
 - Documented the six readiness-report statuses and the distinction between implemented code and verified behavior.
