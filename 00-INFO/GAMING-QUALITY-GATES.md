@@ -38,6 +38,27 @@ These are measurable checks, not proof of polished sound or readable visuals. In
 
 For deterministic tests, audio signal analysis can be mocked or disabled with `AIVF_ENABLE_AUDIO_SIGNAL_QC=0`; this must not be interpreted as production signal verification. Do not leave the override disabled in normal production if you expect audio signal QC to run.
 
+## Originality and repeat-pattern review
+
+Every upload package includes an `originality` report. The checker compares the script with recent sibling output packages, normalizes the explicitly identified game name (so swapping only “Valorant” for “Fortnite” doesn't hide an otherwise copied script), and—when the same source file hash and clip-source evidence are available—compares the selected scene/time sequence.
+
+- A script similarity of 0.86 or more, or a repeated source sequence similarity of 0.82 or more, marks `originality.publish_blocked=true` until reviewed.
+- Shared intros, short recurring phrases, or a repeated visual style alone do not block publication. A genuinely different script on similar gameplay is not rejected by the script-only check.
+- A legitimate recurring series can pass the similarity gate only after valid human approval and a note ending in `originality-reviewed: ` plus at least 25 characters that explain the genuinely distinct creator contribution. This note is not a shortcut for copied footage or rights issues; the technical, rights, factuality and human-review gates still apply.
+- If there are too few comparable scripts, the report says `insufficient_data`. That means “not enough evidence to compare”, not “proven original”.
+
+The comparison is a bounded heuristic, not a copyright detector or monetization verdict. It can miss similar stories written with very different words and cannot establish whether a creator contribution is meaningful by itself. Review the flagged comparison list before approving an exception.
+
+## Learning from actual outcomes
+
+The local preference model records the game, platform, short/long format, actual duration when available, hook type, commentary angle, edit settings, and measured view/retention/engagement outcomes or explicit human ratings. Model schema version 2 ensures a prior model with a different feature layout is not loaded with mismatched coefficients; it can be retrained from existing eligible history.
+
+- Unknown duration remains unknown and is not written as a fabricated measured duration.
+- A game-specific recommendation uses only previously tested configurations from that game. Fewer than three eligible measured/rated videos for the requested game returns baseline settings with an explicit uncertainty message.
+- With 3–5 game-specific outcomes, reported recommendation confidence is capped at 0.40. With 6–9 it is capped at 0.65. These are conservative product guardrails, not statistically calibrated probabilities.
+- Real YouTube Analytics and explicit human ratings remain the learning targets. Videos without measured outcomes are not assigned fabricated retention/engagement labels.
+- Keep evaluating held-out/newer videos against a simple baseline. Even a learned preference score is not proof that an editing style causes more views, qualifies for monetization, or will keep performing.
+
 ## Publishing decision
 
 Keep the decisions separate:

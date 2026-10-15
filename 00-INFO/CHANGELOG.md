@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — originality and game-aware learning
+
+### Editorial and publishing
+- Add a pre-publish originality report comparing current scripts with recent outputs while normalizing identified game names, so copied scripts with swapped game names are flagged for review.
+- Detect repeated clip source/time sequences when source hashes and clip evidence are present; write results to `originality` and block `publish_ready` until reviewed. Legitimate recurring series can pass only with valid human approval and an explicit note describing distinct contribution. An empty history is reported as insufficient evidence, not proof of originality.
+
+### Learning
+- Expand the local preference feature set with game, format, duration, hook type and commentary style, and persist those fields from production packages alongside actual outcomes.
+- Bump the preference-model schema so models with the previous feature layout are retrained instead of read with incompatible coefficients.
+- Use per-game tested configurations; fall back to baseline settings below three measured/rated outcomes for that game, and cap reported confidence for low sample counts. Missing duration remains unknown instead of becoming a synthetic 45-second measurement.
+- Feed the canonical game/format/duration/commentary context into both V3 rendering recommendations and the legacy director workflow.
+
 ## Unreleased — gaming profile and publish-quality gates
 
 ### Gaming content

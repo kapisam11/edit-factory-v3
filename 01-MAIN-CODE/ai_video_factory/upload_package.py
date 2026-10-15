@@ -803,6 +803,28 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
     human_review = review_gate(summary.get("human_review"))
     require_human_review = _human_review_required()
     human_review["required"] = require_human_review
+
+    from .originality_guard import compare_recent_packages
+
+    originality_script = str(script or "")
+    if not originality_script.strip():
+        for candidate in (root / "script.txt", root / "primary" / "script.txt"):
+            if candidate.is_file() and not candidate.is_symlink():
+                try:
+                    originality_script = candidate.read_text(encoding="utf-8", errors="replace")
+                    break
+                except OSError:
+                    continue
+    raw_human_review = summary.get("human_review")
+    originality_review = dict(raw_human_review) if isinstance(raw_human_review, Mapping) else {}
+    originality_review["status"] = human_review.get("status", "review_required")
+    originality_report = compare_recent_packages(
+        root,
+        originality_script,
+        current_topic=topic,
+        current_profile=gaming_profile if is_gaming else None,
+        human_review=originality_review,
+    )
     upload_dir = root / "upload" / profile.name
     upload_dir.mkdir(parents=True, exist_ok=True)
     (upload_dir / "title.txt").write_text(chosen_title + "\n", encoding="utf-8")
@@ -950,12 +972,14 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "metadata_quality": metadata_quality,
         "factuality": factuality,
         "human_review": human_review,
+        "originality": originality_report,
         "publish_ready": (
             bool(media_contract["passed"])
             and bool(metadata_quality["passed"])
             and not rights["publish_blocked"]
             and not factuality["publish_blocked"]
             and not (is_gaming and bool(gaming_profile.get("publish_blocked")))
+            and not bool(originality_report.get("publish_blocked"))
             and (not require_human_review or human_review["status"] == "approved")
         ),
         "artifacts": _collect_artifacts(root),
@@ -968,7 +992,9 @@ def finalize_upload_package(package_dir: str, *, topic: str, summary: Optional[M
         "1. Upload the listed video.\n2. Use `title.txt`, `description.txt`, and `tags.txt`.\n"
         "3. Use `captions.srt` when supplied.\n4. Review AI/altered-content disclosure before publishing.\n"
         "5. Review `metadata.json` for ranked titles, source credits, rights status, and artifact fingerprints.\n"
-        "6. Do not publish while `media_rights.publish_blocked` is true.\n",
+        "6. Do not publish while `media_rights.publish_blocked` or `originality.publish_blocked` is true.\n"
+        "7. If a similar script/sequence belongs to an intentional recurring series, the approved human-review notes must end with "
+        "`originality-reviewed: ` plus at least 25 characters explaining the genuinely distinct creator contribution.\n",
         encoding="utf-8",
     )
     if legacy_upload_dir != upload_dir:
