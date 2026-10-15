@@ -21,12 +21,13 @@ from pathlib import Path
 import tempfile
 from typing import Any, Iterable, Mapping, Sequence
 
-NUMERIC_FEATURES = ("cuts_per_minute", "avg_shot_duration", "hook_duration", "music_energy", "duration_seconds")
+EDIT_NUMERIC_FEATURES = ("cuts_per_minute", "avg_shot_duration", "hook_duration", "music_energy")
+NUMERIC_FEATURES = (*EDIT_NUMERIC_FEATURES, "duration_seconds")
 CATEGORICAL_FEATURES = (
     "platform", "content_type", "format", "game", "hook_type",
     "commentary_style", "caption_style", "voice", "music_style", "edit_type",
 )
-SETTING_KEYS = (*NUMERIC_FEATURES, *CATEGORICAL_FEATURES)
+SETTING_KEYS = (*EDIT_NUMERIC_FEATURES, *CATEGORICAL_FEATURES)
 # Feature layout changed to include gaming context. Old models are ignored and
 # retrained from observed history rather than loaded with mismatched weights.
 MODEL_SCHEMA_VERSION = 2
