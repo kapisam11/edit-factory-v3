@@ -166,6 +166,8 @@ def build_gaming_profile_report(
         rights_items.append("asset origin has not been declared")
     if commercial_use != "allowed":
         rights_items.append("commercial use has not been explicitly verified as allowed")
+    if not str(source.get("permitted_uses") or "").strip():
+        rights_items.append("permitted uses/restrictions are not documented")
     if rights_basis not in {"owned", "explicit_permission", "commercial_license", "public_domain", "cc_license"}:
         rights_items.append("rights basis is not explicitly cleared")
     if rights_basis not in {"owned", "public_domain"} and not rights_evidence_url:
