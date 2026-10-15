@@ -14,6 +14,9 @@ def test_dashboard_uses_edit_factory_v3_branding_and_shows_release_overview() ->
     assert "<title>Edit Factory V3 — Production Dashboard</title>" in html
     assert "<h1>EDIT FACTORY V3</h1>" in html
     assert "Latest reliability &amp; production updates" in html
+    assert '<details class="release-overview panel"' in html
+    assert '<summary class="release-overview-summary">' in html
+    assert '<details class="release-overview panel" open' not in html
     assert html.count('class="release-card"') == 8
 
 
@@ -50,6 +53,7 @@ def test_release_overview_has_responsive_styling_and_documentation() -> None:
     guide = GUIDE.read_text(encoding="utf-8")
 
     assert ".release-overview-grid" in css
+    assert ".release-overview-summary:focus-visible" in css
     assert "@media (max-width: 1100px)" in css
     assert "@media (max-width: 640px)" in css
     assert "static feature overview" in guide
