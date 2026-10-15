@@ -17,6 +17,14 @@ class SourceManifest:
     license_name: str = ""
     license_url: str = ""
     attribution: str = ""
+    asset_origin: str = "unknown"
+    commercial_use: str = "review_required"
+    permitted_uses: str = ""
+    attribution_required: bool = False
+    rights_evidence_url: str = ""
+    declared_by: str = ""
+    declared_at: str = ""
+    human_approval_status: str = "review_required"
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -31,6 +39,14 @@ class SourceManifest:
             "license_name": self.license_name,
             "license_url": self.license_url,
             "attribution": self.attribution,
+            "asset_origin": self.asset_origin,
+            "commercial_use": self.commercial_use,
+            "permitted_uses": self.permitted_uses,
+            "attribution_required": self.attribution_required,
+            "rights_evidence_url": self.rights_evidence_url,
+            "declared_by": self.declared_by,
+            "declared_at": self.declared_at,
+            "human_approval_status": self.human_approval_status,
             "metadata": dict(self.metadata),
         }
 
@@ -57,6 +73,17 @@ def build_source_manifest(
         license_name=str(raw.get("license_name") or "").strip(),
         license_url=str(raw.get("license_url") or "").strip(),
         attribution=str(raw.get("attribution") or "").strip(),
+        asset_origin=str(raw.get("asset_origin") or "unknown").strip().lower(),
+        commercial_use=str(raw.get("commercial_use") or "review_required").strip().lower(),
+        permitted_uses=str(raw.get("permitted_uses") or "").strip(),
+        attribution_required=(
+            raw.get("attribution_required") is True
+            or str(raw.get("attribution_required") or "").strip().lower() in {"1", "true", "yes", "on"}
+        ),
+        rights_evidence_url=str(raw.get("evidence_url") or raw.get("rights_evidence_url") or "").strip(),
+        declared_by=str(raw.get("declared_by") or "").strip(),
+        declared_at=str(raw.get("declared_at") or "").strip(),
+        human_approval_status=str(raw.get("human_approval_status") or "review_required").strip().lower(),
         metadata=raw,
     )
 
