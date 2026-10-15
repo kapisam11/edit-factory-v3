@@ -74,6 +74,8 @@ def validate_rights_evidence(
             errors.append("asset origin is not explicitly declared")
         if evidence.commercial_use != "allowed":
             errors.append("commercial use is not explicitly declared as allowed")
+        if not evidence.permitted_uses:
+            errors.append("permitted uses/restrictions are not documented")
         if evidence.permitted_uses and evidence.commercial_use == "not_allowed":
             errors.append("declared permitted uses prohibit commercial use")
     return errors
