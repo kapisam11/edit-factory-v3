@@ -258,3 +258,34 @@ def test_upload_package_blocks_near_duplicate_without_explicit_originality_revie
     assert manifest["media_rights"]["publish_blocked"] is False
     assert manifest["originality"]["publish_blocked"] is True
     assert manifest["publish_ready"] is False
+
+
+def test_short_script_does_not_disable_repeat_sequence_check(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    sequence = _same_sequence()
+    _package(
+        output / "prior",
+        script="One clutch moment.",
+        game="Valorant",
+        source_hash="b" * 64,
+        sequence=sequence,
+    )
+    current = output / "current"
+    current.mkdir()
+    (current / "source_manifest.json").write_text(
+        json.dumps({"source_sha256": "b" * 64}),
+        encoding="utf-8",
+    )
+    (current / "clip_source_evidence.json").write_text(json.dumps(sequence), encoding="utf-8")
+
+    report = compare_recent_packages(
+        current,
+        "Another short caption.",
+        current_profile={"enabled": True, "game_name": "Valorant", "creator_angle": "clutch"},
+    )
+
+    assert report["comparable_script_count"] == 0
+    assert report["comparable_source_sequence_count"] == 1
+    assert report["publish_blocked"] is True
+    assert report["comparisons"][0]["reused_source_sequence"] is True
