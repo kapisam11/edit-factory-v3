@@ -178,7 +178,7 @@ def test_no_history_is_reported_as_insufficient_not_as_proof_of_originality(tmp_
 
     assert report["status"] == "insufficient_data"
     assert report["publish_blocked"] is False
-    assert "not a guarantee of originality" in report["limitations"][-1]
+    assert "not a guarantee of originality" in report["reason"]
 
 
 
