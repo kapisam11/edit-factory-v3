@@ -155,11 +155,13 @@ def _valid_setting_record(record: Mapping[str, Any]) -> bool:
         "duration_seconds": (1.0, 3600.0),
     }
     for key in NUMERIC_FEATURES:
-        raw_value = record.get(key, _DEFAULTS[key])
-        if key == "duration_seconds" and raw_value in (None, ""):
+        if key == "duration_seconds" and (
+            key not in record or record.get(key) in (None, "")
+        ):
             # Duration may be genuinely unavailable for older or unrendered records.
             # Do not drop otherwise-valid measured feedback or invent a duration.
             continue
+        raw_value = record.get(key, _DEFAULTS[key])
         parsed = _finite_float(raw_value)
         if parsed is None:
             return False
@@ -230,7 +232,10 @@ def _vector(
 ) -> list[float]:
     values = [1.0]
     for key in NUMERIC_FEATURES:
-        value = _finite_float(record.get(key, _DEFAULTS[key]))
+        if key == "duration_seconds" and record.get(key) in (None, ""):
+            value = None
+        else:
+            value = _finite_float(record.get(key, _DEFAULTS[key]))
         if value is None:
             value = means[key]
         values.append((value - means[key]) / scales[key])
