@@ -182,3 +182,29 @@
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+
+.dashboard-quick-link {
+    display: block;
+    text-align: center;
+    text-decoration: none;
+}
+
+.dashboard-page-links {
+    display: flex;
+    justify-content: center;
+    margin-top: 12px;
+}
+
+.dashboard-page-links a {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    text-decoration: none;
+}
+
+.dashboard-page-links a:hover,
+.dashboard-page-links a:focus-visible {
+    color: var(--accent-hover);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
