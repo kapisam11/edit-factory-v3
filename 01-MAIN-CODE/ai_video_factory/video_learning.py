@@ -512,7 +512,7 @@ def _package_has_observed_edit_settings(package_dir: str | Path) -> bool:
         recommendation = payload.get("recommendation") if isinstance(payload, Mapping) else None
         settings = recommendation.get("settings") if isinstance(recommendation, Mapping) else None
         if isinstance(settings, Mapping) and any(
-            key in settings for key in (*NUMERIC_FEATURES, "caption_style", "voice", "music_style", "edit_type")
+            key in settings for key in (*EDIT_NUMERIC_FEATURES, "caption_style", "voice", "music_style", "edit_type")
         ):
             has_settings = True
             break
@@ -964,7 +964,7 @@ def build_creative_feedback_context(
             categorical[key] = best
 
     numeric: dict[str, float] = {}
-    for key in NUMERIC_FEATURES:
+    for key in EDIT_NUMERIC_FEATURES:
         values = [
             parsed for row in preference_rows
             if (parsed := _finite_float(row.get(key))) is not None
