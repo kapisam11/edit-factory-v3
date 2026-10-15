@@ -155,7 +155,12 @@ def _valid_setting_record(record: Mapping[str, Any]) -> bool:
         "duration_seconds": (1.0, 3600.0),
     }
     for key in NUMERIC_FEATURES:
-        parsed = _finite_float(record.get(key, _DEFAULTS[key]))
+        raw_value = record.get(key, _DEFAULTS[key])
+        if key == "duration_seconds" and raw_value in (None, ""):
+            # Duration may be genuinely unavailable for older or unrendered records.
+            # Do not drop otherwise-valid measured feedback or invent a duration.
+            continue
+        parsed = _finite_float(raw_value)
         if parsed is None:
             return False
         minimum, maximum = bounds[key]
@@ -195,9 +200,15 @@ def _numeric_stats(examples: Sequence[Mapping[str, Any]]) -> tuple[dict[str, flo
     means: dict[str, float] = {}
     scales: dict[str, float] = {}
     for key in NUMERIC_FEATURES:
-        values = [float(record.get(key, _DEFAULTS[key])) for record in examples]
-        mean = sum(values) / max(1, len(values))
-        variance = sum((value - mean) ** 2 for value in values) / max(1, len(values))
+        values = [
+            parsed
+            for record in examples
+            if (parsed := _finite_float(record.get(key))) is not None
+        ]
+        if not values:
+            values = [float(_DEFAULTS[key])]
+        mean = sum(values) / len(values)
+        variance = sum((value - mean) ** 2 for value in values) / len(values)
         means[key] = mean
         scales[key] = max(0.05, math.sqrt(variance))
     return means, scales
