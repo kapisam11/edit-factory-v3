@@ -3,7 +3,7 @@
 ## Unreleased — dashboard and production workflow updates
 
 ### Dashboard
-- Rebranded the browser control panel header to Edit Factory V3 and added a responsive reliability/production overview.
+- Rebranded the browser control panel, sign-in, and autonomous-controls pages to Edit Factory V3; added a compact, expandable responsive reliability/production overview.
 - Added direct links from the dashboard to the rendering/recovery architecture, evidence-driven readiness checker, production setup, publishing guide, and GitHub Actions.
 - Aligned sign-in and autonomous controls branding, added a direct Quick Actions link to autonomous controls, and clarified that the overview is informational—not a live host check or a guarantee of platform-account eligibility.
 
