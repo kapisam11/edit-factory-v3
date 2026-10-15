@@ -43,7 +43,7 @@ def test_gaming_planning_context_has_angle_and_grounding_constraints() -> None:
     assert "Game supplied by creator: Valorant" in context
     assert "Creator's event brief" in context
     assert "strategy" in context.lower()
-    assert "Never invent" in context
+    assert "Do not invent" in context
     assert "verified creator context" in context
 
 
