@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from ai_video_factory.complete_factory import update_learning_history
-from ai_video_factory.learning_recommender import recommend
+from ai_video_factory.learning_recommender import build_recommendation_context, recommend
 from ai_video_factory.video_learning import train_preference_model
 
 
@@ -149,3 +149,28 @@ def test_learning_history_persists_explicit_gaming_context(tmp_path: Path) -> No
     assert record["hook"] == "The last flash changed the fight"
     stored = json.loads(history_path.read_text(encoding="utf-8"))
     assert stored[0]["game"] == "Valorant"
+
+
+
+def test_canonical_learning_context_carries_game_angle_and_duration() -> None:
+    context = build_recommendation_context(
+        {
+            "gaming_profile": {
+                "enabled": True,
+                "game_name": "Valorant",
+                "creator_angle": "strategy",
+            },
+            "cuts_per_minute": 18.0,
+            "hook_duration": 1.4,
+        },
+        platform="youtube_shorts",
+        target_seconds=75.0,
+    )
+
+    assert context["game"] == "Valorant"
+    assert context["content_type"] == "gaming"
+    assert context["format"] == "youtube_shorts:long"
+    assert context["duration_seconds"] == 75.0
+    assert context["hook_type"] == "instructional_problem"
+    assert context["commentary_style"] == "strategy"
+    assert context["cuts_per_minute"] == 18.0
