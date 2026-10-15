@@ -300,7 +300,11 @@ class VideoThinkingStage(PipelineStage):
             pass
         if os.path.isfile(history_path):
             try:
-                from .learning_recommender import load_experiments, recommend
+                from .learning_recommender import (
+                    build_recommendation_context,
+                    load_experiments,
+                    recommend,
+                )
                 from .video_learning import build_creative_feedback_context
                 history_records = load_experiments(history_path)
                 ctx.research["learned_creator_preferences"] = build_creative_feedback_context(history_records)
@@ -309,15 +313,13 @@ class VideoThinkingStage(PipelineStage):
                     os.environ.get("AIVF_LEARNING_MODEL_PATH", "").strip()
                     or os.path.join(os.path.dirname(history_path), "video_preference_model.json")
                 )
+                learned_context = build_recommendation_context(
+                    ctx.research,
+                    platform=str(ctx.research.get("platform") or "youtube_shorts"),
+                    target_seconds=ctx.target_seconds,
+                )
                 learned = recommend(
-                    {
-                        "platform": str(ctx.research.get("platform") or "youtube_shorts"),
-                        "content_type": str(ctx.research.get("content_type") or "short_video"),
-                        "cuts_per_minute": float(ctx.research.get("cuts_per_minute") or 12.0),
-                        "avg_shot_duration": float(ctx.research.get("avg_shot_duration") or 2.5),
-                        "hook_duration": float(ctx.research.get("hook_duration") or 2.0),
-                        "music_energy": float(ctx.research.get("music_energy") or 0.5),
-                    },
+                    learned_context,
                     history_records,
                     defaults={"caption_style": "karaoke", "voice": "en-US-GuyNeural"},
                     model_path=learning_model_path,
