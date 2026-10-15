@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — dashboard and production workflow updates
+
+### Dashboard
+- Rebranded the browser control panel header to Edit Factory V3 and added a responsive reliability/production overview.
+- Added direct links from the dashboard to the rendering/recovery architecture, evidence-driven readiness checker, production setup, publishing guide, and GitHub Actions.
+- Clearly disclosed that the overview is informational, not a live host check or a guarantee of platform-account eligibility.
+
+### Reliability and operations
+- Documented the six readiness-report statuses and the distinction between implemented code and verified behavior.
+- Surfaced the split between the source-built development launcher and the digest-pinned Windows production launcher, including explicit migrations and secure production configuration.
+- Explained output validation, job recovery/attempt fencing, host resource protections, platform-specific publishing reconciliation, rights evidence, and human review.
+
 ## 3.0.0 — 2026-09-14
 
 ### V3 creative system
