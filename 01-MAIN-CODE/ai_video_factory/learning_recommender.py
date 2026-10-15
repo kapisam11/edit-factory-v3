@@ -69,6 +69,65 @@ def load_experiments(path: str) -> List[Dict[str, Any]]:
     return []
 
 
+def build_recommendation_context(
+    summary: Dict[str, Any],
+    *,
+    platform: str,
+    target_seconds: float,
+) -> Dict[str, Any]:
+    """Build explicit learning context without treating target duration as an outcome."""
+    raw_profile = summary.get("gaming_profile")
+    profile = raw_profile if isinstance(raw_profile, dict) else {}
+    game = str(
+        profile.get("game_name")
+        or profile.get("game")
+        or summary.get("game")
+        or summary.get("game_name")
+        or ""
+    ).strip()
+    angle = str(
+        profile.get("creator_angle")
+        or summary.get("commentary_style")
+        or summary.get("creator_angle")
+        or ""
+    ).strip().lower()
+    hook_type = str(summary.get("hook_type") or "").strip().lower()
+    if not hook_type:
+        hook_type = {
+            "clutch": "decisive_action",
+            "strategy": "instructional_problem",
+            "funny": "reaction_or_reversal",
+            "challenge": "challenge",
+            "storytelling": "turning_point",
+        }.get(angle, "unspecified")
+
+    try:
+        duration = float(target_seconds)
+    except (TypeError, ValueError, OverflowError):
+        duration = 45.0
+    if not 1.0 <= duration <= 3600.0:
+        duration = 45.0
+    format_kind = "short" if duration <= 60.0 else "long"
+
+    context: Dict[str, Any] = {
+        "platform": str(platform or "youtube_shorts").strip().lower(),
+        "content_type": str(
+            summary.get("content_type") or ("gaming" if profile or game else "short_video")
+        ).strip().lower(),
+        "format": str(summary.get("format") or f"{platform}:{format_kind}").strip().lower(),
+        "duration_seconds": duration,
+        "cuts_per_minute": summary.get("cuts_per_minute", 12.0),
+        "avg_shot_duration": summary.get("avg_shot_duration", 2.5),
+        "hook_duration": summary.get("hook_duration", 2.0),
+        "music_energy": summary.get("music_energy", 0.5),
+        "hook_type": hook_type,
+        "commentary_style": angle or str(summary.get("commentary_style") or "unspecified"),
+    }
+    if game:
+        context["game"] = game
+    return context
+
+
 def recommend(
     context: Dict[str, Any],
     experiments: Iterable[Dict[str, Any]],
