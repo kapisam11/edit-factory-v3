@@ -42,10 +42,11 @@ def test_overview_covers_the_recent_operational_additions() -> None:
 
 def test_external_overview_links_have_safe_new_tab_attributes() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
+    overview = html.split('<details class="release-overview panel"', 1)[1].split("</details>", 1)[0]
 
-    assert html.count('target="_blank" rel="noopener noreferrer"') == 8
-    assert "https://github.com/kapisam11/edit-factory-v3/actions" in html
-    assert "00-INFO/UPLOAD-PACKAGE.md" in html
+    assert overview.count('target="_blank" rel="noopener noreferrer"') == 8
+    assert "https://github.com/kapisam11/edit-factory-v3/actions" in overview
+    assert "00-INFO/UPLOAD-PACKAGE.md" in overview
 
 
 def test_release_overview_has_responsive_styling_and_documentation() -> None:
