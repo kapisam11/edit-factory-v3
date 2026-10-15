@@ -53,16 +53,50 @@
 /* Recent release / production overview */
 .release-overview {
     margin-bottom: 20px;
-    padding: 22px;
+    padding: 0;
 }
 
-.release-overview-header {
-    align-items: flex-start;
-    gap: 14px;
+.release-overview-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 22px;
+    cursor: pointer;
+    list-style: none;
 }
 
-.release-overview-header h2 {
+.release-overview-summary::-webkit-details-marker {
+    display: none;
+}
+
+.release-overview-summary::after {
+    content: "⌄";
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-size: 1.25rem;
+    line-height: 1;
+    transition: transform 0.15s ease;
+}
+
+.release-overview[open] .release-overview-summary {
+    border-bottom: 1px solid var(--border);
+}
+
+.release-overview[open] .release-overview-summary::after {
+    transform: rotate(180deg);
+}
+
+.release-overview-summary h2 {
     margin-bottom: 6px;
+}
+
+.release-overview-summary-copy {
+    min-width: 0;
+}
+
+.release-overview-content {
+    padding: 18px 22px 20px;
 }
 
 .release-overview-intro {
@@ -170,12 +204,17 @@
 }
 
 @media (max-width: 640px) {
-    .release-overview {
+    .release-overview-summary {
         padding: 16px;
+        flex-wrap: wrap;
     }
 
-    .release-overview-header {
-        flex-direction: column;
+    .release-overview-summary-copy {
+        flex: 1 1 100%;
+    }
+
+    .release-overview-content {
+        padding: 16px;
     }
 
     .release-overview-grid {
