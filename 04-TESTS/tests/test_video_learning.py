@@ -473,12 +473,13 @@ def test_import_platform_export_refuses_unmatched_package_and_unobserved_outcome
 ) -> None:
     output_root = tmp_path / "output"
     output_root.mkdir()
-    outside = _make_learning_package(tmp_path, "outside")
+    _make_learning_package(tmp_path, "outside")
+    _make_learning_package(output_root, "views-only")
     export = tmp_path / "tiktok.csv"
     export.write_text(
         "video_id,package_dir,views,likes,comments\n"
         "tiktok-outside,../outside,1000,100,10\n"
-        "tiktok-views-only,unused,1000,,\n",
+        "tiktok-views-only,views-only,1000,,\n",
         encoding="utf-8",
     )
     history_path = tmp_path / "state" / "learning_history.json"
