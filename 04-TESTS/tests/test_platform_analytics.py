@@ -32,7 +32,7 @@ def test_tiktok_video_list_imports_counts_and_pages(monkeypatch: pytest.MonkeyPa
     assert rows[0]["comments"] == 8
     assert rows[0]["shares"] == 4
     assert rows[0]["published_at"].endswith("Z")
-    assert calls == [{"max_count": 20}, {"max_count": 1, "cursor": 777}]
+    assert calls == [{"max_count": 20}, {"max_count": 20, "cursor": 777}]
 
 
 def test_tiktok_repeated_cursor_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
