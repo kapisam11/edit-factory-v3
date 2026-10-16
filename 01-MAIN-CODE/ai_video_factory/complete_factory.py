@@ -357,7 +357,7 @@ def update_learning_history(path: str, *, topic: str, platform: str, package_dir
     if performance_metrics:
         from .content_factory import performance_feedback
         record.update(performance_feedback(performance_metrics))
-        record.update({k: performance_metrics[k] for k in ("views", "likes", "comments", "averageViewPercentage") if k in performance_metrics})
+        record.update({k: performance_metrics[k] for k in ("views", "likes", "comments", "averageViewPercentage", "shares", "saves", "reach", "total_interactions") if k in performance_metrics})
     record["performance_score"] = float(record.get("engagement_rate") or 0.0) + float(record.get("retention") or 0.0)
     if video_id:
         record["video_id"] = str(video_id).strip()
