@@ -552,3 +552,130 @@ def test_import_platform_export_refuses_post_id_reassignment_and_invalid_platfor
         import_platform_export_history(
             history_path, export, platform="youtube", output_root=output_root
         )
+
+
+
+def _make_live_learning_package(output_root: Path, name: str = "live-video") -> Path:
+    package = output_root / name
+    primary = package / "primary"
+    primary.mkdir(parents=True)
+    (primary / "final.v3.mp4").write_bytes(b"exact rendered source bytes")
+    (primary / "metrics.json").write_text(json.dumps({
+        "cuts_per_minute": 16.0,
+        "segment_count": 8,
+        "actual_duration_seconds": 30.0,
+    }), encoding="utf-8")
+    (primary / "metadata.json").write_text(json.dumps({
+        "recommendation": {"settings": {
+            "cuts_per_minute": 16.0,
+            "avg_shot_duration": 3.75,
+            "hook_duration": 1.25,
+            "music_energy": 0.65,
+            "caption_style": "minimal",
+            "voice": "voice_a",
+            "music_style": "dramatic",
+            "edit_type": "storytelling",
+        }}
+    }), encoding="utf-8")
+    return package
+
+
+def test_live_platform_learning_import_matches_published_file_by_content_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+    import sqlite3
+    from ai_video_factory import platform_analytics
+
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    package = _make_live_learning_package(output_root)
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    source_copy = incoming / "clip.mp4"
+    source_copy.write_bytes((package / "primary" / "final.v3.mp4").read_bytes())
+    source_hash = hashlib.sha256(source_copy.read_bytes()).hexdigest()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    database = state_dir / "folder-publisher.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE platform_publications ("
+            "platform TEXT, account_id TEXT, state TEXT, remote_post_id TEXT, "
+            "source_path TEXT, source_sha256 TEXT, source_size_bytes INTEGER)"
+        )
+        connection.execute(
+            "INSERT INTO platform_publications VALUES(?,?,?,?,?,?,?)",
+            ("tiktok", "creator", "published", "tt-post-1", str(source_copy),
+             source_hash, source_copy.stat().st_size),
+        )
+
+    monkeypatch.setattr(
+        platform_analytics, "fetch_platform_video_metrics",
+        lambda *args, **kwargs: [{
+            "video_id": "tt-post-1", "title": "Live stats", "published_at": "2026-10-01T12:00:00Z",
+            "views": 1000, "likes": 80, "comments": 10, "shares": 4,
+        }],
+    )
+    history_path = state_dir / "learning_history.json"
+
+    result = import_platform_live_history(
+        history_path,
+        platform="tiktok",
+        account_id="creator",
+        output_root=output_root,
+        state_dir=state_dir,
+    )
+
+    assert result["imported"] == 1
+    assert result["skipped_unmatched"] == 0
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    assert len(history) == 1
+    assert history[0]["video_id"] == "tiktok:tt-post-1"
+    assert history[0]["package_dir"] == str(package)
+    assert history[0]["platform"] == "tiktok"
+    assert history[0]["views"] == 1000
+    assert history[0]["shares"] == 4
+    assert observed_reward(history[0]) is not None
+
+    updated = import_platform_live_history(
+        history_path,
+        platform="tiktok",
+        account_id="creator",
+        output_root=output_root,
+        state_dir=state_dir,
+    )
+    assert updated["imported"] == 0
+    assert updated["updated"] == 1
+    assert len(json.loads(history_path.read_text(encoding="utf-8"))) == 1
+
+
+def test_live_platform_learning_skips_unmatched_and_ambiguous_posts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_video_factory import platform_analytics
+
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    _make_live_learning_package(output_root)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr(
+        platform_analytics, "fetch_platform_video_metrics",
+        lambda *args, **kwargs: [{
+            "video_id": "not-in-publication-ledger", "views": 500, "likes": 30, "comments": 1,
+        }],
+    )
+    history_path = state_dir / "learning_history.json"
+
+    result = import_platform_live_history(
+        history_path,
+        platform="tiktok",
+        account_id="creator",
+        output_root=output_root,
+        state_dir=state_dir,
+    )
+
+    assert result["imported"] == 0
+    assert result["skipped_unmatched"] == 1
+    assert not history_path.exists()
