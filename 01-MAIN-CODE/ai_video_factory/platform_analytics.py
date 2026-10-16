@@ -235,9 +235,13 @@ def fetch_instagram_video_metrics(
     base = f"https://graph.facebook.com/{version}"
     after: str | None = None
     seen_cursors: set[str] = set()
+    seen_media_ids: set[str] = set()
     media_rows: list[dict[str, Any]] = []
+    pages_read = 0
+    max_pages = min(100, max(5, ((limit + 99) // 100) * 10))
 
-    while len(media_rows) < limit:
+    while len(media_rows) < limit and pages_read < max_pages:
+        pages_read += 1
         params: dict[str, Any] = {
             "fields": _INSTAGRAM_MEDIA_FIELDS,
             "limit": min(100, limit - len(media_rows)),
@@ -269,8 +273,9 @@ def fetch_instagram_video_metrics(
             if media_type != "VIDEO" and product_type != "REELS":
                 continue
             media_id = str(media.get("id") or "").strip()
-            if not media_id:
+            if not media_id or media_id in seen_media_ids:
                 continue
+            seen_media_ids.add(media_id)
             insight = _read_instagram_insights(base=base, media_id=media_id, token=token)
             row: dict[str, Any] = {
                 "video_id": media_id,
