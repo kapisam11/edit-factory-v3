@@ -959,15 +959,19 @@ def _package_path_under_root(value: Any, output_root: Path) -> Path | None:
     if not raw:
         return None
     candidate = Path(raw).expanduser()
-    if candidate.is_symlink():
-        return None
-    try:
-        resolved = candidate.resolve(strict=True)
-        resolved.relative_to(output_root)
-    except (OSError, ValueError):
-        return None
-    if not resolved.is_dir() or not _package_has_observed_edit_settings(resolved):
-        return None
+    candidates = [candidate] if candidate.is_absolute() else [candidate, output_root / candidate]
+    resolved: Path | None = None
+    for possible in candidates:
+        if possible.is_symlink():
+            continue
+        try:
+            current = possible.resolve(strict=True)
+            current.relative_to(output_root)
+        except (OSError, ValueError):
+            continue
+        if current.is_dir() and _package_has_observed_edit_settings(current):
+            resolved = current
+            break
     return resolved
 
 
@@ -1106,10 +1110,12 @@ def _find_platform_video_packages(
     hash_matches: dict[str, set[Path]] = {key: set() for key in unmatched_hashes}
     if unmatched_hashes and output_root.is_dir():
         sizes_needed = set(unmatched_hashes.values())
-        scanned = 0
+        inspected = 0
+        bytes_hashed = 0
         for candidate in output_root.rglob("*"):
-            if scanned >= 5000:
+            if inspected >= 50000:
                 break
+            inspected += 1
             try:
                 if candidate.is_symlink() or not candidate.is_file():
                     continue
@@ -1118,13 +1124,15 @@ def _find_platform_video_packages(
                 stat = candidate.stat()
                 if stat.st_size not in sizes_needed or stat.st_size > 8 * 1024**3:
                     continue
+                if bytes_hashed + stat.st_size > 20 * 1024**3:
+                    break
             except OSError:
                 continue
-            scanned += 1
             try:
                 digest = _file_sha256(candidate)
             except OSError:
                 continue
+            bytes_hashed += stat.st_size
             if digest in hash_matches:
                 package = _package_for_media_path(candidate, output_root)
                 if package is not None:
