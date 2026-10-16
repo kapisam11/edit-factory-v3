@@ -13,6 +13,7 @@ from ai_video_factory.video_learning import (
     build_creative_feedback_context,
     eligible_examples,
     evaluate_preference_model,
+    import_platform_export_history,
     import_youtube_history,
     load_preference_model,
     observed_reward,
@@ -398,3 +399,155 @@ def test_youtube_analytics_become_trainable_settings_and_reward(tmp_path: Path) 
     assert record["retention"] == 0.75
     assert record["engagement_rate"] == 0.09
     assert observed_reward(record) == pytest.approx(0.795)
+
+
+def _make_learning_package(root: Path, name: str = "video-001") -> Path:
+    package = root / name
+    primary = package / "primary"
+    primary.mkdir(parents=True)
+    (primary / "metrics.json").write_text(json.dumps({
+        "cuts_per_minute": 16.0,
+        "segment_count": 8,
+        "actual_duration_seconds": 30.0,
+    }), encoding="utf-8")
+    (primary / "metadata.json").write_text(json.dumps({
+        "recommendation": {"settings": {
+            "cuts_per_minute": 16.0,
+            "avg_shot_duration": 3.75,
+            "hook_duration": 1.25,
+            "music_energy": 0.65,
+            "caption_style": "minimal",
+            "voice": "voice_a",
+            "music_style": "dramatic",
+            "edit_type": "storytelling",
+        }}
+    }), encoding="utf-8")
+    return package
+
+
+def test_import_platform_export_matches_local_package_and_updates_without_duplicates(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    package = _make_learning_package(output_root)
+    export = tmp_path / "instagram.csv"
+    export.write_text(
+        "post_id,package_dir,views,likes,comments,average_view_percentage,published_at\n"
+        "ig-post-123,video-001,1000,70,12,75,2026-10-01T12:00:00Z\n",
+        encoding="utf-8",
+    )
+    history_path = tmp_path / "state" / "learning_history.json"
+
+    result = import_platform_export_history(
+        history_path, export, platform="instagram", output_root=output_root
+    )
+
+    assert result["status"] == "complete"
+    assert result["platform"] == "instagram_reels"
+    assert result["imported"] == 1
+    assert result["updated"] == 0
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    assert len(history) == 1
+    record = history[0]
+    assert record["video_id"] == "instagram_reels:ig-post-123"
+    assert record["package_dir"] == str(package.resolve())
+    assert record["platform"] == "instagram_reels"
+    assert record["published_at"] == "2026-10-01T12:00:00Z"
+    assert record["retention"] == pytest.approx(0.75)
+    assert record["likes"] == 70.0
+    assert record["comments"] == 12.0
+    assert observed_reward(record) is not None
+
+    repeated = import_platform_export_history(
+        history_path, export, platform="instagram_reels", output_root=output_root
+    )
+    history_after_repeat = json.loads(history_path.read_text(encoding="utf-8"))
+    assert repeated["imported"] == 0
+    assert repeated["updated"] == 1
+    assert len(history_after_repeat) == 1
+
+
+def test_import_platform_export_refuses_unmatched_package_and_unobserved_outcome(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    outside = _make_learning_package(tmp_path, "outside")
+    export = tmp_path / "tiktok.csv"
+    export.write_text(
+        "video_id,package_dir,views,likes,comments\n"
+        "tiktok-outside,../outside,1000,100,10\n"
+        "tiktok-views-only,unused,1000,,\n",
+        encoding="utf-8",
+    )
+    history_path = tmp_path / "state" / "learning_history.json"
+
+    result = import_platform_export_history(
+        history_path, export, platform="tiktok", output_root=output_root
+    )
+
+    assert result["imported"] == 0
+    assert result["skipped_unmatched"] == 1
+    assert result["failed"] == 1
+    assert not history_path.exists()
+
+
+def test_import_platform_export_skips_packages_without_recorded_edit_settings(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "output"
+    package = output_root / "missing-settings"
+    package.mkdir(parents=True)
+    export = tmp_path / "tiktok.json"
+    export.write_text(json.dumps([{
+        "post_id": "tiktok-1",
+        "package_dir": "missing-settings",
+        "views": 100,
+        "likes": 10,
+        "comments": 2,
+    }]), encoding="utf-8")
+    history_path = tmp_path / "state" / "learning_history.json"
+
+    result = import_platform_export_history(
+        history_path, export, platform="tiktok", output_root=output_root
+    )
+
+    assert result["skipped_missing_edit_settings"] == 1
+    assert result["imported"] == 0
+    assert not history_path.exists()
+
+
+def test_import_platform_export_refuses_post_id_reassignment_and_invalid_platform(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    first = _make_learning_package(output_root, "first")
+    second = _make_learning_package(output_root, "second")
+    history_path = tmp_path / "state" / "learning_history.json"
+    history_path.parent.mkdir()
+    history_path.write_text(json.dumps([{
+        "video_id": "tiktok:existing-post",
+        "package_dir": str(first.resolve()),
+        "platform": "tiktok",
+    }]), encoding="utf-8")
+    export = tmp_path / "tiktok.csv"
+    export.write_text(
+        "post_id,package_dir,views,likes,comments\n"
+        "existing-post,second,1000,100,10\n",
+        encoding="utf-8",
+    )
+
+    result = import_platform_export_history(
+        history_path, export, platform="tiktok", output_root=output_root
+    )
+    assert result["failed"] == 1
+    stored = json.loads(history_path.read_text(encoding="utf-8"))
+    assert len(stored) == 1
+    assert stored[0]["package_dir"] == str(first.resolve())
+
+    with pytest.raises(ValueError, match="platform must be"):
+        import_platform_export_history(
+            history_path, export, platform="youtube", output_root=output_root
+        )
