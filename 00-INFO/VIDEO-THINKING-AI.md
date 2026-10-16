@@ -52,6 +52,31 @@ When Edit Factory already has the output package and saved edit settings for a v
 
 This uses the channel uploads playlist and YouTube Analytics with the OAuth token configured for Edit Factory. It only imports a channel video when it can match the video ID to a local Edit Factory package containing recorded edit settings. It reports unmatched videos rather than assigning them guessed/default editing settings. It also avoids duplicate imports on repeat runs. If there is no authorized token, the command will report that it cannot access the channel; it does not create fake metrics.
 
+### Import TikTok or Instagram Reels performance exports
+
+You can also feed real per-post metrics from a TikTok or Instagram export into the local learner. This path intentionally uses a **file you export and review yourself**; it does not call either platform's analytics API or require their credentials.
+
+Prepare one CSV row per post with a total-metrics snapshot. The required columns are `post_id` (or `video_id`, `media_id`), and `package_dir` (the local Edit Factory package path relative to `output/`). Use real values for at least one useful outcome: retention percentage, or positive views with likes/comments. Supported metric columns include `views`, `video_views`, `plays`, `likes`, `comments`, `average_view_percentage`, and `retention` (a fraction such as `0.75` means 75%). `published_at` is optional. A JSON list of the same row objects is supported too.
+
+Example CSV:
+
+```csv
+post_id,package_dir,views,likes,comments,average_view_percentage,published_at
+TT123,my-game-short,24000,1800,96,82.5,2026-10-01T12:00:00Z
+IG456,my-reel,9100,620,31,68.0,2026-10-03T12:00:00Z
+```
+
+Import files separately for each provider:
+
+```powershell
+uv run aivf-learn import-platform-export --history state/learning_history.json --platform tiktok --metrics-file state/exports/tiktok.csv --output-root output
+uv run aivf-learn import-platform-export --history state/learning_history.json --platform instagram_reels --metrics-file state/exports/instagram.csv --output-root output
+```
+
+Use exact local package names or paths under the output root. The importer verifies that the package already contains recorded media metrics and editing settings; it skips unmatched/missing-settings packages and rejects IDs that would be reassigned to a different package. Re-importing the same platform/post ID updates its history row instead of adding duplicate training weight. It does not infer a package from a title, interpret impressions as views, or synthesize missing measurements.
+
+TikTok/Instagram provider exports do not share one universal column schema, and column names can vary by account/export version. Normalize the exported file to the documented column names above before importing. This provides a real-data ingestion route, **not automatic cross-platform API synchronization**; fetching stats directly, verifying that the export is complete, and testing on your authorized accounts remain separate work.
+
 ### Retrain manually
 
     aivf-learn train --history state/learning_history.json
