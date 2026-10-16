@@ -14,6 +14,7 @@ from ai_video_factory.video_learning import (
     eligible_examples,
     evaluate_preference_model,
     import_platform_export_history,
+    import_platform_live_history,
     import_youtube_history,
     load_preference_model,
     observed_reward,
