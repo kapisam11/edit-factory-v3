@@ -954,6 +954,397 @@ def import_platform_export_history(
     }
 
 
+def _package_path_under_root(value: Any, output_root: Path) -> Path | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    candidates = [candidate] if candidate.is_absolute() else [candidate, output_root / candidate]
+    resolved: Path | None = None
+    for possible in candidates:
+        if possible.is_symlink():
+            continue
+        try:
+            current = possible.resolve(strict=True)
+            current.relative_to(output_root)
+        except (OSError, ValueError):
+            continue
+        if current.is_dir() and _package_has_observed_edit_settings(current):
+            resolved = current
+            break
+    return resolved
+
+
+def _package_for_media_path(value: Any, output_root: Path) -> Path | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    if candidate.is_symlink():
+        return None
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(output_root)
+    except (OSError, ValueError):
+        return None
+    current = resolved if resolved.is_dir() else resolved.parent
+    best: Path | None = None
+    # Prefer the outer Edit Factory package over its nested primary/ directory.
+    while current != output_root and current.is_relative_to(output_root):
+        if current.is_dir() and _package_has_observed_edit_settings(current):
+            best = current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return best
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _platform_publication_db(state_dir: str | Path) -> Path:
+    configured = os.environ.get("AIVF_FOLDER_STATE_DB", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(state_dir).expanduser() / "folder-publisher.sqlite"
+
+
+def _find_platform_video_packages(
+    platform: str,
+    *,
+    output_root: Path,
+    state_dir: str | Path,
+    account_id: str,
+    history: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, dict[str, str]], int]:
+    """Map remote IDs only from saved history or the durable publication ledger."""
+    mapping: dict[str, dict[str, str]] = {}
+    conflicts: set[str] = set()
+
+    def add(post_id: Any, package_dir: Any, topic: Any = "") -> None:
+        remote_id = str(post_id or "").strip()
+        if not remote_id or len(remote_id) > 200:
+            return
+        stable_id = remote_id if remote_id.startswith(f"{platform}:") else f"{platform}:{remote_id}"
+        package = _package_path_under_root(package_dir, output_root)
+        if package is None:
+            return
+        previous = mapping.get(stable_id)
+        if previous and Path(previous["package_dir"]).resolve() != package:
+            conflicts.add(stable_id)
+            mapping.pop(stable_id, None)
+            return
+        if stable_id in conflicts:
+            return
+        mapping[stable_id] = {
+            "package_dir": str(package),
+            "topic": str(topic or package.name)[:300],
+        }
+
+    for row in history:
+        if not isinstance(row, Mapping):
+            continue
+        raw_id = str(row.get("video_id") or "").strip()
+        if raw_id.startswith(f"{platform}:"):
+            add(raw_id, row.get("package_dir"), row.get("topic"))
+
+    state_root = Path(state_dir).expanduser()
+    database = _platform_publication_db(state_root)
+    hash_fallbacks: list[dict[str, Any]] = []
+    if database.is_file():
+        try:
+            with sqlite3.connect(str(database), timeout=5) as connection:
+                connection.row_factory = sqlite3.Row
+                table_info = connection.execute("PRAGMA table_info(platform_publications)").fetchall()
+                columns = {str(row["name"]) for row in table_info}
+                required = {
+                    "platform", "account_id", "state", "remote_post_id",
+                    "source_path", "source_sha256", "source_size_bytes",
+                }
+                if required.issubset(columns):
+                    # Older ledgers may not include the original file mtime.
+                    mtime_column = (
+                        "source_mtime_ns" if "source_mtime_ns" in columns
+                        else "NULL AS source_mtime_ns"
+                    )
+                    rows = connection.execute(
+                        "SELECT platform,account_id,state,remote_post_id,source_path,"
+                        f"source_sha256,source_size_bytes,{mtime_column} "
+                        "FROM platform_publications "
+                        "WHERE state='published' AND remote_post_id IS NOT NULL AND remote_post_id != '' "
+                        "AND platform=?",
+                        ("instagram" if platform == "instagram_reels" else platform,),
+                    ).fetchall()
+                    for row in rows:
+                        if str(row["account_id"] or "").casefold() != account_id.casefold():
+                            continue
+                        source_hash = str(row["source_sha256"] or "").strip().lower()
+                        try:
+                            source_size = int(row["source_size_bytes"])
+                        except (TypeError, ValueError, OverflowError):
+                            source_size = 0
+                        if not re.fullmatch(r"[0-9a-f]{64}", source_hash) or source_size <= 0:
+                            continue
+
+                        # A path alone is not proof that its bytes are still the
+                        # exact media that was published. Accept a direct path
+                        # match only when its recorded size+mtime still agree;
+                        # for older rows without mtime, verify the SHA-256.
+                        source_path = Path(str(row["source_path"] or "")).expanduser()
+                        package = _package_for_media_path(source_path, output_root)
+                        source_is_same = False
+                        if package is not None and not source_path.is_symlink():
+                            try:
+                                resolved_source = source_path.resolve(strict=True)
+                                resolved_source.relative_to(output_root)
+                                source_stat = resolved_source.stat()
+                                if not resolved_source.is_file() or source_stat.st_size != source_size:
+                                    source_is_same = False
+                                elif row["source_mtime_ns"] is not None:
+                                    source_is_same = (
+                                        source_stat.st_mtime_ns == int(row["source_mtime_ns"])
+                                    )
+                                else:
+                                    source_is_same = _file_sha256(resolved_source) == source_hash
+                            except (OSError, ValueError, TypeError, OverflowError):
+                                source_is_same = False
+                        if source_is_same and package is not None:
+                            add(row["remote_post_id"], package, package.name)
+                            continue
+
+                        # Watch-folder publishers often stage an unchanged copy
+                        # outside output/. Exact-hash fallback is bounded below,
+                        # and ambiguous duplicate packages are never associated.
+                        hash_fallbacks.append({
+                            "video_id": str(row["remote_post_id"]),
+                            "sha256": source_hash,
+                            "size": source_size,
+                        })
+        except (OSError, sqlite3.Error):
+            # A missing/unreadable ledger lowers coverage; it must not break
+            # import or cause an ID to be attached to a guessed package.
+            pass
+
+    # A publisher often stages an exact copy from output/ into incoming/. Only
+    # use content hashing to restore that association, and only when the exact
+    # source hash identifies a single Edit Factory package. This is bounded.
+    unmatched_hashes = {
+        str(item["sha256"]): int(item["size"])
+        for item in hash_fallbacks
+        if f"{platform}:{item['video_id']}" not in mapping
+        and f"{platform}:{item['video_id']}" not in conflicts
+    }
+    hash_matches: dict[str, set[Path]] = {key: set() for key in unmatched_hashes}
+    if unmatched_hashes and output_root.is_dir():
+        sizes_needed = set(unmatched_hashes.values())
+        inspected = 0
+        bytes_hashed = 0
+        for candidate in output_root.rglob("*"):
+            if inspected >= 50000:
+                break
+            inspected += 1
+            try:
+                if candidate.is_symlink() or not candidate.is_file():
+                    continue
+                if candidate.suffix.casefold() not in {".mp4", ".mov", ".m4v", ".mkv", ".webm"}:
+                    continue
+                stat = candidate.stat()
+                if stat.st_size not in sizes_needed or stat.st_size > 8 * 1024**3:
+                    continue
+                if bytes_hashed + stat.st_size > 20 * 1024**3:
+                    break
+            except OSError:
+                continue
+            try:
+                digest = _file_sha256(candidate)
+            except OSError:
+                continue
+            bytes_hashed += stat.st_size
+            if digest in hash_matches:
+                package = _package_for_media_path(candidate, output_root)
+                if package is not None:
+                    hash_matches[digest].add(package)
+
+    for item in hash_fallbacks:
+        stable_id = f"{platform}:{item['video_id']}"
+        if stable_id in mapping or stable_id in conflicts:
+            continue
+        packages = hash_matches.get(str(item["sha256"]), set())
+        if len(packages) == 1:
+            package = next(iter(packages))
+            add(item["video_id"], package, package.name)
+        elif len(packages) > 1:
+            conflicts.add(stable_id)
+            mapping.pop(stable_id, None)
+
+    return mapping, len(conflicts)
+
+
+def import_platform_live_history(
+    history_path: str | Path,
+    *,
+    platform: str,
+    output_root: str | Path = "output",
+    state_dir: str | Path = "state",
+    account_id: str | None = None,
+    max_videos: int = 100,
+) -> dict[str, Any]:
+    """Fetch live TikTok/Instagram totals and learn only from confidently matched packages.
+
+    Initial account authorization and provider app scopes are configured outside
+    this function. TikTok requires the video.list scope; Instagram requires
+    permission to read media and insights for the configured professional account.
+    """
+    canonical_platform = _canonical_learning_platform(platform)
+    if canonical_platform not in {"tiktok", "instagram_reels"}:
+        raise ValueError("live analytics import supports tiktok or instagram_reels")
+    limit = _valid_max_videos(max_videos)
+    selected_account = str(account_id or ("creator" if canonical_platform == "tiktok" else "brand")).strip()
+    if not selected_account:
+        raise ValueError("account_id must not be empty")
+
+    root = Path(output_root).expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("output_root must be a directory")
+    target = Path(history_path).expanduser()
+    from .learning_recommender import load_experiments
+    from .platform_analytics import fetch_platform_video_metrics
+
+    history = load_experiments(str(target))
+    mappings, mapping_conflicts = _find_platform_video_packages(
+        canonical_platform,
+        output_root=root,
+        state_dir=state_dir,
+        account_id=selected_account,
+        history=history,
+    )
+    remote_rows = fetch_platform_video_metrics(
+        canonical_platform,
+        account_id=selected_account,
+        max_videos=limit,
+    )
+    existing_ids = {
+        str(row.get("video_id") or "").strip()
+        for row in history
+        if isinstance(row, Mapping) and str(row.get("video_id") or "").strip()
+    }
+    imported = 0
+    updated = 0
+    skipped_unmatched = 0
+    skipped_missing_settings = 0
+    skipped_without_reward = 0
+    failed = 0
+    errors: list[dict[str, str]] = []
+
+    for metric in remote_rows:
+        remote_id = str(metric.get("video_id") or "").strip()
+        if not remote_id:
+            continue
+        stable_id = f"{canonical_platform}:{remote_id}"
+        package_info = mappings.get(stable_id)
+        if not package_info:
+            skipped_unmatched += 1
+            continue
+        package_dir = str(package_info["package_dir"])
+        if not _package_has_observed_edit_settings(package_dir):
+            skipped_missing_settings += 1
+            continue
+
+        performance: dict[str, Any] = {}
+        for key in ("views", "likes", "comments", "shares", "saves", "reach", "total_interactions"):
+            value = _finite_float(metric.get(key))
+            if value is not None and value >= 0:
+                performance[key] = value
+
+        previous = next(
+            (
+                row for row in history
+                if isinstance(row, Mapping) and str(row.get("video_id") or "").strip() == stable_id
+            ),
+            {},
+        )
+        # Live TikTok/Instagram endpoints do not provide retention. Preserve a
+        # real retention measurement previously imported from YouTube/creator
+        # exports rather than replacing it with an invented zero or null.
+        if "averageViewPercentage" in previous:
+            performance["averageViewPercentage"] = previous["averageViewPercentage"]
+        elif _finite_float(previous.get("retention")) is not None:
+            performance["averageViewPercentage"] = round(float(previous["retention"]) * 100.0, 4)
+
+        views = _finite_float(performance.get("views"))
+        likes = _finite_float(performance.get("likes"))
+        comments = _finite_float(performance.get("comments"))
+        has_retention = _finite_float(performance.get("averageViewPercentage")) is not None
+        has_engagement = views is not None and views > 0 and (likes is not None or comments is not None)
+        if not (has_retention or has_engagement):
+            skipped_without_reward += 1
+            continue
+
+        try:
+            from .complete_factory import update_learning_history
+
+            update_learning_history(
+                str(target),
+                topic=str(package_info.get("topic") or metric.get("title") or Path(package_dir).name)[:300],
+                platform=canonical_platform,
+                package_dir=package_dir,
+                metrics={},
+                performance_metrics=performance,
+                video_id=stable_id,
+                published_at=str(metric.get("published_at") or "") or None,
+            )
+            if stable_id in existing_ids:
+                updated += 1
+            else:
+                imported += 1
+                existing_ids.add(stable_id)
+        except Exception as exc:
+            failed += 1
+            errors.append({
+                "video_id": remote_id,
+                "error_type": type(exc).__name__,
+                "reason": str(exc)[:240],
+            })
+
+    return {
+        "status": "complete" if not failed else "completed_with_errors",
+        "platform": canonical_platform,
+        "account_id": selected_account,
+        "account_videos_seen": len(remote_rows),
+        "imported": imported,
+        "updated": updated,
+        "skipped_unmatched": skipped_unmatched,
+        "skipped_mapping_conflicts": mapping_conflicts,
+        "skipped_missing_edit_settings": skipped_missing_settings,
+        "skipped_without_usable_metrics": skipped_without_reward,
+        "failed": failed,
+        "errors": errors[:50],
+        "history_path": str(target),
+        "metrics_source": "authorized provider API, lifetime media counters",
+        "limitations": (
+            "TikTok Display API exposes public-video view/like/comment/share counters but not audience retention. "
+            "Instagram insights availability depends on account eligibility, app permissions, and pinned Graph API version. "
+            "No local package is inferred by title; unmatched or ambiguous published media is skipped."
+        ),
+    }
+
+
+def _valid_max_videos(max_videos: int) -> int:
+    try:
+        limit = int(max_videos)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("max_videos must be an integer between 1 and 1000") from exc
+    if not 1 <= limit <= 1000:
+        raise ValueError("max_videos must be an integer between 1 and 1000")
+    return limit
+
+
 def evaluate_preference_model(
     records: Iterable[Mapping[str, Any]],
     *,
@@ -1304,16 +1695,17 @@ def training_summary(model: Mapping[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train and inspect Edit Factory's local video preference model.")
-    parser.add_argument("action", choices=("train", "rate", "evaluate", "import-youtube", "import-platform-export"), help="retrain the preference model, rate a video, or test generalization on held-out videos")
+    parser.add_argument("action", choices=("train", "rate", "evaluate", "import-youtube", "import-platform-export", "import-platform-live"), help="retrain the preference model, rate a video, or test generalization on held-out videos")
     parser.add_argument("--history", default=os.environ.get("AIVF_LEARNING_HISTORY_PATH", "state/learning_history.json"))
     parser.add_argument("--model", default=os.environ.get("AIVF_LEARNING_MODEL_PATH") or None)
     parser.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
     parser.add_argument("--holdout-fraction", type=float, default=0.20, help="Fraction of videos reserved from training for evaluation (0.10–0.40)")
     parser.add_argument("--output-root", default=os.environ.get("AIVF_OUTPUT_DIR", "output"), help="Edit Factory outputs used to match channel video IDs to saved edit settings")
     parser.add_argument("--state-dir", default=os.environ.get("AIVF_STATE_DIR", "state"), help="State directory containing the autonomous queue DB")
-    parser.add_argument("--max-videos", type=int, default=100, help="Maximum recent channel uploads to inspect (1–1000)")
+    parser.add_argument("--max-videos", type=int, default=100, help="Maximum recent provider/channel videos to inspect (1–1000)")
     parser.add_argument("--metrics-file", default="", help="CSV/JSON metrics export for import-platform-export")
-    parser.add_argument("--platform", choices=("tiktok", "instagram", "instagram_reels"), default="", help="Provider for import-platform-export")
+    parser.add_argument("--platform", choices=("tiktok", "instagram", "instagram_reels"), default="", help="Provider for import-platform-export or import-platform-live")
+    parser.add_argument("--account-id", default="", help="Configured account alias for import-platform-live (default: creator for TikTok, brand for Instagram)")
     parser.add_argument("--client-secrets", default=os.environ.get("YOUTUBE_CLIENT_SECRETS") or None)
     parser.add_argument("--token-path", default=os.environ.get("YOUTUBE_TOKEN_PATH") or None)
     parser.add_argument("--package-dir", default="", help="Exact output package directory for a human rating")
@@ -1321,6 +1713,35 @@ def main() -> int:
     parser.add_argument("--note", default="", help="Optional brief reason for the rating")
     parser.add_argument("--corrected-script", default=None, help="Optional path to your edited script; the planner can learn your writing style from it")
     args = parser.parse_args()
+
+    if args.action == "import-platform-live":
+        if not args.platform:
+            parser.error("import-platform-live requires --platform")
+        try:
+            report = import_platform_live_history(
+                args.history,
+                platform=args.platform,
+                output_root=args.output_root,
+                state_dir=args.state_dir,
+                account_id=args.account_id or None,
+                max_videos=args.max_videos,
+            )
+        except Exception as exc:
+            parser.error(f"live platform analytics import failed: {type(exc).__name__}: {exc}")
+        try:
+            history = json.loads(Path(args.history).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            history = []
+        model_path = args.model or str(Path(args.history).with_name("video_preference_model.json"))
+        model = train_preference_model(history, model_path=model_path, min_samples=args.min_samples)
+        report["training"] = training_summary(model)
+        report["holdout_evaluation"] = evaluate_preference_model(
+            history,
+            holdout_fraction=args.holdout_fraction,
+            min_train_samples=args.min_samples,
+        )
+        print(json.dumps(report, indent=2))
+        return 0 if report["failed"] == 0 else 1
 
     if args.action == "import-platform-export":
         if not args.metrics_file or not args.platform:
@@ -1434,6 +1855,7 @@ __all__ = [
     "evaluate_preference_model",
     "import_youtube_history",
     "import_platform_export_history",
+    "import_platform_live_history",
     "load_preference_model",
     "observed_reward",
     "predict_reward",

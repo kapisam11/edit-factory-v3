@@ -77,6 +77,23 @@ Use exact local package names or paths under the output root. The importer verif
 
 TikTok/Instagram provider exports do not share one universal column schema, and column names can vary by account/export version. Normalize the exported file to the documented column names above before importing. This provides a real-data ingestion route, **not automatic cross-platform API synchronization**; fetching stats directly, verifying that the export is complete, and testing on your authorized accounts remain separate work.
 
+### Sync live TikTok or Instagram Reels metrics
+
+The learner can fetch lifetime aggregate metrics directly from an already-authorized publishing account, then update matching Edit Factory history rows. This does not publish anything. It needs the existing publisher credentials plus read permissions for the account.
+
+```powershell
+uv run aivf-learn import-platform-live --history state/learning_history.json --platform tiktok --account-id creator --output-root output --state-dir state --max-videos 100
+uv run aivf-learn import-platform-live --history state/learning_history.json --platform instagram_reels --account-id brand --output-root output --state-dir state --max-videos 100
+```
+
+TikTok needs the user-granted `video.list` scope in addition to any publishing scope. The Display API provides public-video views, likes, comments and shares; it does not provide audience retention. See the [official TikTok video-list documentation](https://developers.tiktok.com/docs/en/tiktok-api-v2-video-list/).
+
+Instagram needs a professional account, the configured pinned Graph API version, and app permissions that allow reading the account's media and insights. The live importer reads Reels/video media and requests aggregate views/engagement insights. Availability varies by account, permission, and Graph API version; credentials and permissions must be authorized outside Edit Factory.
+
+To avoid training on the wrong video, a remote post ID is matched only from an existing platform learning-history record or the durable publishing ledger. When the publisher watched a copy from an incoming folder, the importer can use a bounded exact-file SHA-256 match against media under the output root. It never joins videos by title. IDs that remain unmatched or map to multiple output packages are skipped and shown in the report. You can first import the provider's export using the section above to establish an explicit ID-to-package mapping.
+
+The importer records current lifetime counters, not a historical daily time series. It updates the same platform/post history record on repeat runs rather than duplicating it. After importing, the command retrains the preference model and reports the available holdout evaluation. Low-view posts or records without sufficient metrics are not silently given a fabricated reward.
+
 ### Retrain manually
 
     aivf-learn train --history state/learning_history.json

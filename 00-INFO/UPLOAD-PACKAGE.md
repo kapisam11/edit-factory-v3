@@ -30,6 +30,10 @@ These profiles describe output formats and metadata, not account eligibility. Th
 
 The autonomous `aivf-autopublish daemon` remains YouTube-specific and generates content from its persisted topic queue; it does not watch a folder of existing videos. For existing files, `aivf-folder-publisher` is the simpler YouTube-only path, while `aivf-publish` is the separate multi-platform path. The multi-platform implementation can host a local snapshot for Instagram using an explicitly configured S3-compatible store, or use a manual publicly reachable HTTPS `video_url` override. Account/app eligibility must be established, and each configured destination must pass controlled real-account upload/recovery checks. Both workflows still require Windows Task Scheduler/reboot/sleep acceptance before they are considered production-verified.
 
+## Live cross-platform learning
+
+After authorized TikTok/Instagram credentials are configured, use `aivf-learn import-platform-live` to read current lifetime view and engagement counters into the local preference model. TikTok requires `video.list`; Instagram needs media/insights permissions for the professional account. See [Video Thinking AI](VIDEO-THINKING-AI.md) for commands, matching requirements, and metric limitations. This command fetches metrics only; it does not publish videos.
+
 ## Existing video folder -> YouTube
 
 The folder publisher is separate from the topic-generation daemon. It watches a local folder recursively for MP4, MOV, M4V, MKV, and WebM files. A file must remain unchanged for the configured settle interval, pass FFprobe checks, and be copied to a content-addressed staging snapshot before it can enter the upload-ready state. Upload attempts always use that snapshot, so a retry does not silently switch to bytes that were edited after the first attempt.
@@ -118,8 +122,8 @@ Configure an account-specific environment prefix. Account IDs are uppercased; pu
 | Platform | Required configuration | Notes |
 | --- | --- | --- |
 | YouTube | `AIVF_YOUTUBE_DEFAULT_CLIENT_SECRETS`, `AIVF_YOUTUBE_DEFAULT_TOKEN_PATH` | Existing authorized OAuth token; YouTube's uploader refreshes it when possible. Legacy `YOUTUBE_CLIENT_SECRETS` and `YOUTUBE_TOKEN_PATH` work for `youtube:default`. |
-| Instagram Reels | `AIVF_INSTAGRAM_BRAND_ACCESS_TOKEN`, `AIVF_INSTAGRAM_BRAND_USER_ID`, `AIVF_INSTAGRAM_BRAND_GRAPH_API_VERSION` | Requires an eligible professional account and approved app permissions. For long-lived token exchange, also set `AIVF_INSTAGRAM_BRAND_APP_ID` and `AIVF_INSTAGRAM_BRAND_APP_SECRET`. For local input hosting, see S3-compatible setup below; an explicit `video_url` override can be used instead. |
-| TikTok Direct Post | `AIVF_TIKTOK_CREATOR_ACCESS_TOKEN`, `AIVF_TIKTOK_CREATOR_REFRESH_TOKEN`, `AIVF_TIKTOK_CREATOR_CLIENT_KEY`, `AIVF_TIKTOK_CREATOR_CLIENT_SECRET` | Requires a TikTok developer app/user authorization with `video.publish` permission and any applicable app audit. Refresh tokens rotate and are persisted by the publisher. Set a creator-supported `privacy_level` override; public posts also require `AIVF_TIKTOK_ALLOW_PUBLIC=1`. |
+| Instagram Reels | `AIVF_INSTAGRAM_BRAND_ACCESS_TOKEN`, `AIVF_INSTAGRAM_BRAND_USER_ID`, `AIVF_INSTAGRAM_BRAND_GRAPH_API_VERSION` | Requires an eligible professional account and approved app permissions for reading media and insights when using live learning sync. For long-lived token exchange, also set `AIVF_INSTAGRAM_BRAND_APP_ID` and `AIVF_INSTAGRAM_BRAND_APP_SECRET`. For local input hosting, see S3-compatible setup below; an explicit `video_url` override can be used instead. |
+| TikTok Direct Post | `AIVF_TIKTOK_CREATOR_ACCESS_TOKEN`, `AIVF_TIKTOK_CREATOR_REFRESH_TOKEN`, `AIVF_TIKTOK_CREATOR_CLIENT_KEY`, `AIVF_TIKTOK_CREATOR_CLIENT_SECRET` | Requires a TikTok developer app/user authorization with `video.publish` for posting and `video.list` for live learning analytics, plus any applicable app audit. Refresh tokens rotate and are persisted by the publisher. Set a creator-supported `privacy_level` override; public posts also require `AIVF_TIKTOK_ALLOW_PUBLIC=1`. |
 
 #### Instagram media hosting for local video files
 

@@ -99,6 +99,10 @@ Low-confidence decisions can explicitly resolve to `DO_NOTHING`.
 
 Edit Factory retrains a small local preference model from real video performance and ratings. Configure `AIVF_LEARNING_HISTORY_PATH` and optionally `AIVF_LEARNING_MODEL_PATH`; the trained weights are stored in `video_preference_model.json`. Rate an output package with `aivf-learn rate --history state/learning_history.json --package-dir output/my-video --rating 5 --note "Strong hook and pacing"`. See [00-INFO/VIDEO-THINKING-AI.md](00-INFO/VIDEO-THINKING-AI.md) for how training data and recommendations work.
 
+### Cross-platform analytics learning
+
+The local preference model can import live lifetime views/engagement metrics from an authorized TikTok or Instagram professional account with `aivf-learn import-platform-live`; it matches post IDs only to known Edit Factory packages from learning history or the publishing ledger and skips unmatched or ambiguous videos. TikTok needs `video.list`; Instagram requires access to media insights. This is read-only analytics, not automatic publishing or a guarantee of retention data. See [Video Thinking AI](00-INFO/VIDEO-THINKING-AI.md).
+
 ## Windows one-click start
 
 On Windows, double-click **[START-ALL.bat](START-ALL.bat)** in the repository root. It is the main local launcher and stays next to this README.
