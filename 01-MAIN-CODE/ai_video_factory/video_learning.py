@@ -1068,9 +1068,15 @@ def _find_platform_video_packages(
                     "source_path", "source_sha256", "source_size_bytes",
                 }
                 if required.issubset(columns):
+                    # Older ledgers may not include the original file mtime.
+                    mtime_column = (
+                        "source_mtime_ns" if "source_mtime_ns" in columns
+                        else "NULL AS source_mtime_ns"
+                    )
                     rows = connection.execute(
                         "SELECT platform,account_id,state,remote_post_id,source_path,"
-                        "source_sha256,source_size_bytes FROM platform_publications "
+                        f"source_sha256,source_size_bytes,{mtime_column} "
+                        "FROM platform_publications "
                         "WHERE state='published' AND remote_post_id IS NOT NULL AND remote_post_id != '' "
                         "AND platform=?",
                         ("instagram" if platform == "instagram_reels" else platform,),
@@ -1078,21 +1084,48 @@ def _find_platform_video_packages(
                     for row in rows:
                         if str(row["account_id"] or "").casefold() != account_id.casefold():
                             continue
-                        package = _package_for_media_path(row["source_path"], output_root)
-                        if package is not None:
-                            add(row["remote_post_id"], package, package.name)
-                            continue
                         source_hash = str(row["source_sha256"] or "").strip().lower()
                         try:
                             source_size = int(row["source_size_bytes"])
                         except (TypeError, ValueError, OverflowError):
                             source_size = 0
-                        if re.fullmatch(r"[0-9a-f]{64}", source_hash) and source_size > 0:
-                            hash_fallbacks.append({
-                                "video_id": str(row["remote_post_id"]),
-                                "sha256": source_hash,
-                                "size": source_size,
-                            })
+                        if not re.fullmatch(r"[0-9a-f]{64}", source_hash) or source_size <= 0:
+                            continue
+
+                        # A path alone is not proof that its bytes are still the
+                        # exact media that was published. Accept a direct path
+                        # match only when its recorded size+mtime still agree;
+                        # for older rows without mtime, verify the SHA-256.
+                        source_path = Path(str(row["source_path"] or "")).expanduser()
+                        package = _package_for_media_path(source_path, output_root)
+                        source_is_same = False
+                        if package is not None and not source_path.is_symlink():
+                            try:
+                                resolved_source = source_path.resolve(strict=True)
+                                resolved_source.relative_to(output_root)
+                                source_stat = resolved_source.stat()
+                                if not resolved_source.is_file() or source_stat.st_size != source_size:
+                                    source_is_same = False
+                                elif row["source_mtime_ns"] is not None:
+                                    source_is_same = (
+                                        source_stat.st_mtime_ns == int(row["source_mtime_ns"])
+                                    )
+                                else:
+                                    source_is_same = _file_sha256(resolved_source) == source_hash
+                            except (OSError, ValueError, TypeError, OverflowError):
+                                source_is_same = False
+                        if source_is_same and package is not None:
+                            add(row["remote_post_id"], package, package.name)
+                            continue
+
+                        # Watch-folder publishers often stage an unchanged copy
+                        # outside output/. Exact-hash fallback is bounded below,
+                        # and ambiguous duplicate packages are never associated.
+                        hash_fallbacks.append({
+                            "video_id": str(row["remote_post_id"]),
+                            "sha256": source_hash,
+                            "size": source_size,
+                        })
         except (OSError, sqlite3.Error):
             # A missing/unreadable ledger lowers coverage; it must not break
             # import or cause an ID to be attached to a guessed package.
