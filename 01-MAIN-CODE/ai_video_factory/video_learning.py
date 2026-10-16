@@ -9,6 +9,7 @@ Python's standard library.
 from __future__ import annotations
 
 import argparse
+import csv
 from collections import Counter
 from datetime import datetime, timezone
 import hashlib
@@ -713,6 +714,246 @@ def import_youtube_history(
     }
 
 
+def _export_key(value: Any) -> str:
+    """Normalize provider-export column names without guessing their meaning."""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _export_value(row: Mapping[str, Any], *names: str) -> Any:
+    wanted = {_export_key(name) for name in names}
+    for key, value in row.items():
+        if _export_key(key) in wanted and value not in (None, ""):
+            return value
+    return None
+
+
+def _platform_export_rows(path: str | Path) -> list[dict[str, Any]]:
+    """Read a bounded CSV/JSON export; do not access any provider account."""
+    target = Path(path).expanduser()
+    if not target.is_file() or target.is_symlink():
+        raise FileNotFoundError(f"metrics export is not a regular file: {target}")
+    if target.stat().st_size > 25 * 1024 * 1024:
+        raise ValueError("metrics export must be at most 25 MiB")
+
+    if target.suffix.casefold() == ".csv":
+        with target.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not reader.fieldnames:
+                raise ValueError("metrics CSV must have a header row")
+            rows = [dict(row) for row in reader]
+    elif target.suffix.casefold() == ".json":
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        if isinstance(payload, list):
+            rows = [dict(row) for row in payload if isinstance(row, Mapping)]
+            if len(rows) != len(payload):
+                raise ValueError("metrics JSON list must contain only objects")
+        elif isinstance(payload, Mapping):
+            candidates = next(
+                (payload[key] for key in ("rows", "data", "videos", "items") if isinstance(payload.get(key), list)),
+                None,
+            )
+            if candidates is None:
+                raise ValueError("metrics JSON must be a list or contain a rows/data/videos/items list")
+            rows = [dict(row) for row in candidates if isinstance(row, Mapping)]
+            if len(rows) != len(candidates):
+                raise ValueError("metrics JSON rows must contain only objects")
+        else:
+            raise ValueError("metrics JSON must be a list or an object containing a row list")
+    else:
+        raise ValueError("metrics export must use .csv or .json")
+
+    if len(rows) > 10000:
+        raise ValueError("metrics export must contain at most 10,000 rows")
+    return rows
+
+
+def _canonical_learning_platform(value: str) -> str:
+    platform = str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "tiktok": "tiktok",
+        "tik_tok": "tiktok",
+        "instagram": "instagram_reels",
+        "instagram_reel": "instagram_reels",
+        "instagram_reels": "instagram_reels",
+        "reels": "instagram_reels",
+    }
+    try:
+        return aliases[platform]
+    except KeyError as exc:
+        raise ValueError("platform must be tiktok or instagram_reels") from exc
+
+
+def _metric_number(value: Any, name: str, *, maximum: float = 1e15) -> float:
+    parsed = _finite_float(value)
+    if parsed is None or parsed < 0 or parsed > maximum:
+        raise ValueError(f"{name} must be a finite non-negative number")
+    return parsed
+
+
+def import_platform_export_history(
+    history_path: str | Path,
+    metrics_path: str | Path,
+    *,
+    platform: str,
+    output_root: str | Path = "output",
+) -> dict[str, Any]:
+    """Import manually exported TikTok/Instagram metrics for explicitly matched packages.
+
+    Each row must identify a local package directory relative to output_root (or
+    an absolute path contained by output_root) and that provider's post ID.
+    The importer only trains on packages with observed media metrics and edit
+    settings; it never guesses a package from a title or assigns fake outcomes.
+    """
+    canonical_platform = _canonical_learning_platform(platform)
+    root = Path(output_root).expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("output_root must be a directory")
+    target = Path(history_path).expanduser()
+    rows = _platform_export_rows(metrics_path)
+    if not rows:
+        raise ValueError("metrics export contains no data rows")
+
+    try:
+        current_payload = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        current_payload = []
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read existing learning history: {type(exc).__name__}") from exc
+    if not isinstance(current_payload, list) or any(not isinstance(row, Mapping) for row in current_payload):
+        raise ValueError("learning history must be a JSON list of objects")
+
+    existing_by_id = {
+        str(row.get("video_id") or "").strip(): dict(row)
+        for row in current_payload
+        if str(row.get("video_id") or "").strip()
+    }
+    seen_ids: set[str] = set()
+    imported = 0
+    updated = 0
+    skipped_missing_settings = 0
+    skipped_unmatched = 0
+    failed = 0
+    errors: list[dict[str, str]] = []
+
+    for row_number, row in enumerate(rows, start=2):
+        try:
+            raw_id = _export_value(row, "post_id", "video_id", "media_id", "content_id", "id")
+            post_id = str(raw_id or "").strip()
+            if not post_id or len(post_id) > 200:
+                raise ValueError("row needs a post_id/video_id/media_id no longer than 200 characters")
+            stable_id = f"{canonical_platform}:{post_id}"
+            if stable_id in seen_ids:
+                raise ValueError("duplicate post ID in one export; provide one total-metrics row per post")
+            seen_ids.add(stable_id)
+
+            raw_package = _export_value(
+                row, "package_dir", "local_package_dir", "package_path", "output_package"
+            )
+            if not str(raw_package or "").strip():
+                raise ValueError("row needs package_dir so metrics cannot be attached to the wrong video")
+            raw_path = Path(str(raw_package).strip()).expanduser()
+            candidate = raw_path if raw_path.is_absolute() else root / raw_path
+            if candidate.is_symlink():
+                raise ValueError("package_dir must not be a symlink")
+            try:
+                package_dir = candidate.resolve(strict=True)
+                package_dir.relative_to(root)
+            except (OSError, ValueError):
+                skipped_unmatched += 1
+                continue
+            if not package_dir.is_dir():
+                skipped_unmatched += 1
+                continue
+
+            prior = existing_by_id.get(stable_id)
+            if prior:
+                old_package = str(prior.get("package_dir") or "")
+                try:
+                    same_package = Path(old_package).expanduser().resolve(strict=True) == package_dir
+                except OSError:
+                    same_package = False
+                if not same_package:
+                    raise ValueError("post ID already belongs to a different local package in learning history")
+
+            if not _package_has_observed_edit_settings(package_dir):
+                skipped_missing_settings += 1
+                continue
+
+            performance: dict[str, Any] = {}
+            raw_views = _export_value(row, "views", "video_views", "play_count", "plays")
+            raw_likes = _export_value(row, "likes", "like_count")
+            raw_comments = _export_value(row, "comments", "comment_count")
+            raw_percentage = _export_value(
+                row, "average_view_percentage", "averageViewPercentage",
+                "avg_view_percentage", "average_watched_percentage", "retention_percent",
+            )
+            raw_fraction = _export_value(row, "retention", "retention_fraction")
+            for field, value in (("views", raw_views), ("likes", raw_likes), ("comments", raw_comments)):
+                if value is not None:
+                    performance[field] = _metric_number(value, field)
+            if raw_percentage is not None:
+                performance["averageViewPercentage"] = _metric_number(
+                    raw_percentage, "average_view_percentage", maximum=1000.0
+                )
+            elif raw_fraction is not None:
+                fraction_or_percent = _metric_number(raw_fraction, "retention", maximum=1000.0)
+                performance["averageViewPercentage"] = (
+                    fraction_or_percent * 100.0 if fraction_or_percent <= 1.0 else fraction_or_percent
+                )
+
+            has_retention = "averageViewPercentage" in performance
+            has_view_engagement = (
+                performance.get("views", 0.0) > 0
+                and ("likes" in performance or "comments" in performance)
+            )
+            if not performance or not (has_retention or has_view_engagement):
+                raise ValueError("row needs retention percentage, or positive views plus likes/comments")
+
+            published_at = str(_export_value(row, "published_at", "publish_date", "created_at") or "").strip()
+            from .complete_factory import update_learning_history
+
+            update_learning_history(
+                str(target),
+                topic=str(_export_value(row, "topic", "title", "video_title") or package_dir.name)[:300],
+                platform=canonical_platform,
+                package_dir=str(package_dir),
+                metrics={},
+                performance_metrics=performance,
+                video_id=stable_id,
+                published_at=published_at or None,
+            )
+            if prior:
+                updated += 1
+            else:
+                imported += 1
+            existing_by_id[stable_id] = {
+                **dict(prior or {}),
+                "video_id": stable_id,
+                "package_dir": str(package_dir),
+                "platform": canonical_platform,
+            }
+        except Exception as exc:
+            failed += 1
+            errors.append({"row": str(row_number), "error_type": type(exc).__name__, "reason": str(exc)[:240]})
+
+    return {
+        "status": "complete" if not failed else "completed_with_errors",
+        "platform": canonical_platform,
+        "rows_seen": len(rows),
+        "imported": imported,
+        "updated": updated,
+        "skipped_unmatched": skipped_unmatched,
+        "skipped_missing_edit_settings": skipped_missing_settings,
+        "failed": failed,
+        "errors": errors[:50],
+        "history_path": str(target),
+        "training_notice": (
+            "Imported values came from the supplied provider export. Each row was matched by an explicit local "
+            "package path; rows without a matching package/settings were not used. The exporter/API itself was not contacted."
+        ),
+    }
+
+
 def evaluate_preference_model(
     records: Iterable[Mapping[str, Any]],
     *,
@@ -1063,7 +1304,7 @@ def training_summary(model: Mapping[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train and inspect Edit Factory's local video preference model.")
-    parser.add_argument("action", choices=("train", "rate", "evaluate", "import-youtube"), help="retrain the preference model, rate a video, or test generalization on held-out videos")
+    parser.add_argument("action", choices=("train", "rate", "evaluate", "import-youtube", "import-platform-export"), help="retrain the preference model, rate a video, or test generalization on held-out videos")
     parser.add_argument("--history", default=os.environ.get("AIVF_LEARNING_HISTORY_PATH", "state/learning_history.json"))
     parser.add_argument("--model", default=os.environ.get("AIVF_LEARNING_MODEL_PATH") or None)
     parser.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
@@ -1071,6 +1312,8 @@ def main() -> int:
     parser.add_argument("--output-root", default=os.environ.get("AIVF_OUTPUT_DIR", "output"), help="Edit Factory outputs used to match channel video IDs to saved edit settings")
     parser.add_argument("--state-dir", default=os.environ.get("AIVF_STATE_DIR", "state"), help="State directory containing the autonomous queue DB")
     parser.add_argument("--max-videos", type=int, default=100, help="Maximum recent channel uploads to inspect (1–1000)")
+    parser.add_argument("--metrics-file", default="", help="CSV/JSON metrics export for import-platform-export")
+    parser.add_argument("--platform", choices=("tiktok", "instagram", "instagram_reels"), default="", help="Provider for import-platform-export")
     parser.add_argument("--client-secrets", default=os.environ.get("YOUTUBE_CLIENT_SECRETS") or None)
     parser.add_argument("--token-path", default=os.environ.get("YOUTUBE_TOKEN_PATH") or None)
     parser.add_argument("--package-dir", default="", help="Exact output package directory for a human rating")
@@ -1078,6 +1321,33 @@ def main() -> int:
     parser.add_argument("--note", default="", help="Optional brief reason for the rating")
     parser.add_argument("--corrected-script", default=None, help="Optional path to your edited script; the planner can learn your writing style from it")
     args = parser.parse_args()
+
+    if args.action == "import-platform-export":
+        if not args.metrics_file or not args.platform:
+            parser.error("import-platform-export requires --metrics-file and --platform")
+        try:
+            report = import_platform_export_history(
+                args.history,
+                args.metrics_file,
+                platform=args.platform,
+                output_root=args.output_root,
+            )
+        except Exception as exc:
+            parser.error(f"platform export import failed: {type(exc).__name__}: {exc}")
+        try:
+            history = json.loads(Path(args.history).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            history = []
+        model_path = args.model or str(Path(args.history).with_name("video_preference_model.json"))
+        model = train_preference_model(history, model_path=model_path, min_samples=args.min_samples)
+        report["training"] = training_summary(model)
+        report["holdout_evaluation"] = evaluate_preference_model(
+            history,
+            holdout_fraction=args.holdout_fraction,
+            min_train_samples=args.min_samples,
+        )
+        print(json.dumps(report, indent=2))
+        return 0 if report["failed"] == 0 else 1
 
     if args.action == "import-youtube":
         try:
@@ -1163,6 +1433,7 @@ __all__ = [
     "eligible_examples",
     "evaluate_preference_model",
     "import_youtube_history",
+    "import_platform_export_history",
     "load_preference_model",
     "observed_reward",
     "predict_reward",
