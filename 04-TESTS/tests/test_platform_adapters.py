@@ -214,6 +214,60 @@ def test_http_429_retry_after_is_preserved_for_the_durable_queue(
     assert caught.value.retry_after_seconds == 120.0
 
 
+def test_http_5xx_is_retryable_and_signed_url_details_are_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signed_url = (
+        "https://storage.example.test/clip.mp4?"
+        "X-Amz-Credential=credential-value&X-Amz-Signature=signature-value"
+    )
+    response = FakeResponse(
+        {"error": {"message": f"upstream fetch failed for {signed_url}"}},
+        status_code=503,
+    )
+    monkeypatch.setattr(platform.requests, "request", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(PlatformPublishError) as caught:
+        platform._request_json(
+            "POST",
+            "https://api.example.test/publish",
+            headers={},
+            json_body={"title": "test"},
+        )
+
+    assert caught.value.code == "HTTP_503"
+    assert caught.value.retryable is True
+    assert "credential-value" not in str(caught.value)
+    assert "signature-value" not in str(caught.value)
+    assert "<REDACTED>" in str(caught.value)
+
+
+def test_platform_transport_timeout_is_retryable_and_does_not_echo_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_url = (
+        "https://storage.example.test/clip.mp4?"
+        "X-Amz-Signature=signature-value"
+    )
+
+    def timeout(*_args: Any, **_kwargs: Any) -> FakeResponse:
+        raise platform.requests.Timeout(f"timed out while fetching {secret_url}")
+
+    monkeypatch.setattr(platform.requests, "request", timeout)
+
+    with pytest.raises(PlatformPublishError) as caught:
+        platform._request_json(
+            "GET",
+            "https://api.example.test/status",
+            headers={},
+        )
+
+    assert caught.value.code == "NETWORK_ERROR"
+    assert caught.value.retryable is True
+    assert "signature-value" not in str(caught.value)
+    assert secret_url not in str(caught.value)
+
+
 def test_tiktok_chunk_plan_matches_current_transfer_contract() -> None:
     from ai_video_factory.platform_adapters import (
         PlatformPublishError,
