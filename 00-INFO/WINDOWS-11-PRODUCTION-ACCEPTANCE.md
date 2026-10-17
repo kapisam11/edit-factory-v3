@@ -4,7 +4,7 @@ Use this checklist on the actual Windows 11 PC with your normal footage, caption
 
 ## 1. Start once with checks enabled
 
-From the repository root, run `START-ALL.bat` without `-SkipChecks`. Make sure `uv` is installed so the Python tests are not skipped. Wait for the checks to finish; inspect the terminal output if any step fails. Confirm the dashboard becomes healthy at the local URL printed by the launcher.
+From the repository root, run `START-ALL.bat` without `-SkipChecks`. `uv` must be installed: the launcher now stops before starting the dashboard if `uv` is missing, rather than silently skipping code checks. Use `-SkipChecks` only as an explicit development opt-out, not for production acceptance. Wait for the checks to finish; inspect the terminal output if any step fails. Confirm the dashboard becomes healthy at the local URL printed by the launcher.
 
 The local development Compose configuration should keep the dashboard bound to `127.0.0.1`, one concurrent job, and its current 4-CPU/8-GB container limits. Do not raise the CPU/memory limits or worker concurrency just because the PC has 32 GB RAM; measure a representative job first.
 
