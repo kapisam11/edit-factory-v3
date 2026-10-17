@@ -12,6 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Validate rendered dashboard ports stay on loopback
         shell: bash
         run: |
@@ -48,7 +49,6 @@ jobs:
           print(f"{compose_path}: dashboard published only on 127.0.0.1:5000")
           PY
           done
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Build production image
         run: docker build -f 06-CONFIG-AND-DEPLOYMENT/Dockerfile -t edit-factory-v3:test .
       - name: Start production Gunicorn container
