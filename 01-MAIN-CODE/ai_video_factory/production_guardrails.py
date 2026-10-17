@@ -313,9 +313,9 @@ def redact_log_message(message: object, *, max_length: int = 4000) -> str:
     value = str(message or "")
     patterns = (
         r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
-        r"(?i)(\b(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+",
+        r"(?i)(\b(?:access[_ -]?token|refresh[_ -]?token|client[_ -]?(?:secret|key)|api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;&]+",
         r"(?i)(https?://)([^\s/@:]+):([^\s/@]+)@",
-        r"(?i)([?&](?:access_token|api_key|token|secret|password)=)[^&\s]+",
+        r"(?i)([?&](?:access[_-]?token|refresh[_-]?token|client[_-]?(?:secret|key)|api[_-]?key|token|secret|password|signature|sig|x-amz-signature|x-amz-credential|x-amz-security-token|x-goog-signature|x-goog-credential|x-goog-security-token|awsaccesskeyid|googleaccessid|key-pair-id|se|sp|sv|sr|st|spr|skoid|sktid|skt|ske|sks|skv)=)[^&#\s]+",
     )
     for index, pattern in enumerate(patterns):
         if index == 2:
