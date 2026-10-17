@@ -37,6 +37,21 @@ def test_dev_memory_admission_is_below_default_container_limit() -> None:
     assert "AIVF_MAX_RESERVED_MEMORY_MB: ${AIVF_MAX_RESERVED_MEMORY_MB:-7168}" in compose
 
 
+def test_windows_launcher_fails_closed_without_uv_unless_checks_are_explicitly_skipped() -> None:
+    launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
+    uv_guard = (
+        "if (-not $SkipChecks -and -not "
+        "(Get-Command uv -ErrorAction SilentlyContinue))"
+    )
+    compose_start = 'Invoke-Native "docker" $composeUpArgs'
+
+    assert uv_guard in launcher
+    assert launcher.index(uv_guard) < launcher.index(compose_start)
+    assert "uv is required to run startup checks" in launcher
+    assert "or use -SkipChecks to explicitly skip code checks" in launcher
+    assert "uv is not installed, so the full Python check suite was skipped." not in launcher
+
+
 def test_windows_launcher_uses_buildable_development_compose() -> None:
     launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
     compose_assignment = next(
