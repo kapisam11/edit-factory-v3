@@ -20,12 +20,23 @@ def should_recover(*, heartbeat_epoch:float|None,last_seen_epoch:float,now:float
     return current-last_seen_epoch>float(timeout_seconds)
 
 def reconcile_job(*, job_id:str,pid:int|None,heartbeat_epoch:float|None,last_seen_epoch:float,mark_interrupted:Callable[[str,str],None],timeout_seconds:float=3600.0)->bool:
-    """Recover only when a lease is stale and the recorded worker is not alive."""
+    """Reclaim an expired heartbeat even if its recorded PID appears alive.
+
+    PID liveness alone cannot distinguish a healthy worker from a hung process
+    or a different process that reused the PID. The persisted heartbeat/lease is
+    authoritative: after it expires, the caller must fence the job state so the
+    old worker cannot publish. PID liveness is retained only as diagnostic context.
+    """
     if not should_recover(heartbeat_epoch=heartbeat_epoch,last_seen_epoch=last_seen_epoch,timeout_seconds=timeout_seconds):
         return False
     if pid is not None and process_is_alive(int(pid)):
-        return False
-    mark_interrupted(job_id,"worker heartbeat expired and worker process is not running")
+        reason = (
+            "worker heartbeat expired while the recorded PID still appears alive; "
+            "reclaiming the stale lease to avoid a hung or PID-reused worker blocking recovery"
+        )
+    else:
+        reason = "worker heartbeat expired and worker process is not running"
+    mark_interrupted(job_id, reason)
     return True
 
 __all__=["process_is_alive","should_recover","reconcile_job"]
