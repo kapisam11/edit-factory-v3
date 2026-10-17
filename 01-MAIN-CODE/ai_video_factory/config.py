@@ -6,7 +6,33 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-_DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "06-CONFIG-AND-DEPLOYMENT" / "aivf_config.json"
+def _default_config_path() -> Path:
+    """Return a writable config path for source checkouts and installed wheels."""
+    configured = os.environ.get("AIVF_CONFIG_PATH", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+
+    module_file = Path(__file__).resolve()
+    for candidate in module_file.parents:
+        source_module = candidate / "01-MAIN-CODE" / "ai_video_factory" / "config.py"
+        config_directory = candidate / "06-CONFIG-AND-DEPLOYMENT"
+        if source_module.resolve() == module_file and config_directory.is_dir():
+            return config_directory / "aivf_config.json"
+
+    # Installed wheels must not try to write below site-packages. Prefer the
+    # Windows per-user location, while honoring XDG on non-Windows systems.
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        return Path(local_app_data).expanduser() / "EditFactoryV3" / "aivf_config.json"
+    if os.name == "nt":
+        return Path.home() / "AppData" / "Local" / "EditFactoryV3" / "aivf_config.json"
+
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    config_home = Path(xdg_config_home).expanduser() if xdg_config_home else Path.home() / ".config"
+    return config_home / "edit-factory-v3" / "aivf_config.json"
+
+
+_DEFAULT_CONFIG_PATH = _default_config_path()
 
 
 @dataclass
@@ -127,10 +153,10 @@ class AIVFConfig:
             data["api_keys"] = {key: "" for key in data.get("api_keys", {})}
         return data
 
-    def save(self, path: str = str(_DEFAULT_CONFIG_PATH)) -> None:
+    def save(self, path: str | Path | None = None) -> None:
         """Persist configuration atomically without writing API credentials."""
         self.validate()
-        target = Path(path)
+        target = Path(path).expanduser() if path is not None else _default_config_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, temp_path = tempfile.mkstemp(prefix=".aivf-config-", suffix=".partial", dir=str(target.parent), text=True)
         try:
@@ -148,13 +174,14 @@ class AIVFConfig:
             raise
 
     @classmethod
-    def load(cls, path: str = str(_DEFAULT_CONFIG_PATH)) -> "AIVFConfig":
-        if not os.path.exists(path):
+    def load(cls, path: str | Path | None = None) -> "AIVFConfig":
+        target = Path(path).expanduser() if path is not None else _default_config_path()
+        if not target.exists():
             config = cls()
-            config.save(path)
+            config.save(target)
             return config
 
-        with open(path, "r", encoding="utf-8") as f:
+        with target.open("r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             raise ValueError("Configuration root must be a JSON object")
