@@ -46,6 +46,43 @@ def _terminate_current_worker_tree() -> None:
         os.kill(os.getpid(), signal.SIGKILL)
 
 
+def _heartbeat_loop(
+    heartbeat_store,
+    job_id: str,
+    attempt_id: str,
+    lease_token: str,
+    stop_event: threading.Event,
+    interval: float,
+    *,
+    terminate_worker_tree=None,
+) -> None:
+    """Keep only workers with a confirmed lease alive.
+
+    An explicit False means the attempt fence is gone (or revoked) and the worker
+    must not continue rendering. Transient store exceptions are retried, but five
+    consecutive failures are fail-closed because the lease can no longer be
+    refreshed or trusted.
+    """
+    terminate = terminate_worker_tree or _terminate_current_worker_tree
+    consecutive_errors = 0
+    while not stop_event.wait(interval):
+        try:
+            lease_is_current = heartbeat_store.heartbeat_attempt(
+                job_id, attempt_id, lease_token
+            )
+        except Exception:
+            consecutive_errors += 1
+            if consecutive_errors >= 5:
+                terminate()
+                return
+            continue
+
+        if not lease_is_current:
+            terminate()
+            return
+        consecutive_errors = 0
+
+
 def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path: str) -> None:
     """Spawn-safe worker entrypoint; all pipeline choices are explicit arguments."""
     os.environ["AIVF_WORKER_PROCESS"] = "1"
@@ -82,19 +119,14 @@ def run_job(job_id: str, params: dict, secrets: dict, output_root: str, db_path:
         return
 
     def heartbeat() -> None:
-        failures = 0
-        while not heartbeat_stop.wait(interval):
-            try:
-                alive = heartbeat_store.heartbeat_attempt(job_id, attempt_id, lease_token)
-            except Exception:
-                alive = False
-            if alive:
-                failures = 0
-            else:
-                failures += 1
-                # A transient SQLite lock must not terminate the lease-refresh thread.
-                if failures >= 5:
-                    failures = 0
+        _heartbeat_loop(
+            heartbeat_store,
+            job_id,
+            attempt_id,
+            lease_token,
+            heartbeat_stop,
+            interval,
+        )
 
     worker_id = f"pid:{os.getpid()}:{uuid.uuid4().hex[:12]}"
     attempt = heartbeat_store.begin_attempt(
