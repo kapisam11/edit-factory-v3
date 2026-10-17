@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH="/app/.venv/bin:$PATH" \
     AIVF_STATE_DIR=/app/state \
+    AIVF_CONFIG_PATH=/app/state/aivf_config.json \
     AIVF_UPLOAD_DIR=/app/uploads \
     AIVF_OUTPUT_DIR=/app/output
 
