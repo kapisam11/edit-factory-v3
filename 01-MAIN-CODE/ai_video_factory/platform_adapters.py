@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 import requests
 
 from .platform_auth import TokenRefreshError, get_platform_access_token
+from .production_guardrails import redact_log_message
 
 
 @dataclass(frozen=True)
@@ -170,7 +171,7 @@ def _request_json(
             detail = str(api_error.get("message") or api_error.get("code") or "")
         elif isinstance(payload.get("message"), str):
             detail = str(payload["message"])
-        detail = " ".join(detail.split())[:300]
+        detail = redact_log_message(" ".join(detail.split()), max_length=300)
         retryable = response.status_code in {408, 425, 429} or response.status_code >= 500
         code = f"HTTP_{response.status_code}"
         safe_detail = f": {detail}" if detail else ""

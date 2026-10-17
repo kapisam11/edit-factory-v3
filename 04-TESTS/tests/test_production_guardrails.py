@@ -9,7 +9,7 @@ import pytest
 from ai_video_factory.ai_gateway import AIResponseError, classify_api_failure, parse_json_object, reject_prompt_injection, validate_confidence
 from ai_video_factory.retry_policy import backoff_seconds, classify_failure, idempotency_key, is_stale, is_retryable_error, retry_after, retry_deadline_exceeded
 from ai_video_factory.metadata_guardrails import build_upload_metadata, duplicate_phrase_score, hashtags_from_text, validate_metadata
-from ai_video_factory.production_guardrails import GuardrailError, atomic_write_json, redact_mapping, run_tool, safe_filename, validate_path_inside
+from ai_video_factory.production_guardrails import GuardrailError, atomic_write_json, redact_log_message, redact_mapping, run_tool, safe_filename, validate_path_inside
 from ai_video_factory.provenance import build_asset_record, manifest_needs_rights_review, provenance_manifest
 from ai_video_factory.system_diagnostics import diagnostics_json, summarize_failures
 
@@ -41,6 +41,27 @@ def test_redaction_is_recursive() -> None:
     assert result["outer"]["api_key"] == "[REDACTED]"
     assert result["outer"]["items"][0]["password"] == "[REDACTED]"
     assert result["outer"]["items"][1]["safe"] == "ok"
+
+
+def test_log_redaction_scrubs_signed_urls_and_common_credential_fields() -> None:
+    message = (
+        "upload failed: https://storage.example.test/clip.mp4?"
+        "X-Amz-Credential=credential-value&X-Amz-Signature=signature-value"
+        "&X-Amz-Security-Token=security-token-value "
+        "client_secret=client-secret-value refresh_token=refresh-token-value"
+    )
+
+    redacted = redact_log_message(message)
+
+    for secret in (
+        "credential-value",
+        "signature-value",
+        "security-token-value",
+        "client-secret-value",
+        "refresh-token-value",
+    ):
+        assert secret not in redacted
+    assert "X-Amz-Signature=<REDACTED>" in redacted
 
 def test_ai_output_guards() -> None:
     assert parse_json_object('{"lines":["first","second"]}')['lines'] == ['first','second']

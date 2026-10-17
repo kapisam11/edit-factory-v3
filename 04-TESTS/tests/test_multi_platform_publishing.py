@@ -11,6 +11,7 @@ from ai_video_factory.multi_platform_publishing import (
     MultiPlatformPublisher,
     PublicationStore,
     Target,
+    _safe_error_message,
     publication_key,
 )
 from ai_video_factory.platform_adapters import PlatformPublishError, PublishResult
@@ -153,6 +154,20 @@ def test_configured_daily_cap_allows_multiple_posts_when_limit_is_greater_than_o
     )
     second = store.claim_next(max_per_day=2, now=now + 2)
     assert second is not None and second["id"] == second_id
+
+
+def test_persisted_publication_error_redacts_signed_url_credentials() -> None:
+    message = (
+        "provider said upload failed for "
+        "https://storage.example.test/clip.mp4?"
+        "X-Amz-Credential=credential-value&X-Amz-Signature=signature-value"
+    )
+
+    safe = _safe_error_message(RuntimeError(message))
+
+    assert "credential-value" not in safe
+    assert "signature-value" not in safe
+    assert "X-Amz-Signature=<REDACTED>" in safe
 
 
 def test_failed_notifications_can_retry_but_successful_notifications_are_deduplicated(
