@@ -140,6 +140,10 @@ if (-not (Test-Path $ComposeFile)) {
     throw "Docker Compose file not found: $ComposeFile"
 }
 
+if (-not $SkipChecks -and -not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw "uv is required to run startup checks. Install uv before starting, or use -SkipChecks to explicitly skip code checks."
+}
+
 function Test-UsableSecret([string]$Value) {
     $candidate = if ($null -eq $Value) { "" } else { $Value.Trim() }
     if ($candidate.Length -lt 32) {
@@ -273,44 +277,39 @@ if ($SkipChecks) {
 
 Write-Step "Running local code checks"
 
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Warn "uv is not installed, so the full Python check suite was skipped."
-    Write-Warn "Install uv and run START-ALL.bat again to enable compile, Ruff, mypy, and pytest checks."
-} else {
-    $env:PYTHONPATH = "01-MAIN-CODE;02-WEB-FILES;03-SIDE-CODE"
+$env:PYTHONPATH = "01-MAIN-CODE;02-WEB-FILES;03-SIDE-CODE"
 
-    Invoke-Uv @(
-        "sync",
-        "--frozen",
-        "--python", "3.12",
-        "--extra", "web",
-        "--extra", "dev"
-    )
-    Write-Ok "Locked development environment is ready."
+Invoke-Uv @(
+    "sync",
+    "--frozen",
+    "--python", "3.12",
+    "--extra", "web",
+    "--extra", "dev"
+)
+Write-Ok "Locked development environment is ready."
 
-    Invoke-Uv @("pip", "check")
-    Write-Ok "Dependency check passed."
+Invoke-Uv @("pip", "check")
+Write-Ok "Dependency check passed."
 
-    Invoke-Uv @(
-        "run", "python", "-m", "compileall", "-q",
-        "01-MAIN-CODE", "02-WEB-FILES", "03-SIDE-CODE"
-    )
-    Write-Ok "Python compilation check passed."
+Invoke-Uv @(
+    "run", "python", "-m", "compileall", "-q",
+    "01-MAIN-CODE", "02-WEB-FILES", "03-SIDE-CODE"
+)
+Write-Ok "Python compilation check passed."
 
-    Invoke-Uv @(
-        "run", "ruff", "check",
-        "01-MAIN-CODE", "02-WEB-FILES", "03-SIDE-CODE",
-        "--select", "E9,F",
-        "--ignore", "F401,F811,F841"
-    )
-    Write-Ok "Ruff correctness check passed."
+Invoke-Uv @(
+    "run", "ruff", "check",
+    "01-MAIN-CODE", "02-WEB-FILES", "03-SIDE-CODE",
+    "--select", "E9,F",
+    "--ignore", "F401,F811,F841"
+)
+Write-Ok "Ruff correctness check passed."
 
-    Invoke-Uv @("run", "mypy")
-    Write-Ok "mypy check passed."
+Invoke-Uv @("run", "mypy")
+Write-Ok "mypy check passed."
 
-    Invoke-Uv @("run", "pytest", "-q", "04-TESTS/tests")
-    Write-Ok "Full pytest suite passed."
-}
+Invoke-Uv @("run", "pytest", "-q", "04-TESTS/tests")
+Write-Ok "Full pytest suite passed."
 
 Write-Step "Final runtime verification"
 
