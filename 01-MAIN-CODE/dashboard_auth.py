@@ -87,27 +87,8 @@ def _same_origin_request() -> bool:
 
 
 def _validate_dashboard_secrets() -> None:
-    """Require stable, non-placeholder dashboard secrets outside explicit tests."""
-    if os.environ.get("AIVF_ENV", "").strip().lower() == "test":
-        return
-
-    placeholders = {
-        "change-me", "changeme", "dev-secret-change-me",
-        "dev-token-change-me", "replace-me", "your-secret",
-        "your-token", "secret", "password",
-    }
-    for name in ("FLASK_SECRET_KEY", "AIVF_DASHBOARD_TOKEN"):
-        value = os.environ.get(name, "").strip()
-        lowered = value.lower()
-        looks_like_placeholder = (
-            lowered in placeholders
-            or lowered.startswith(("change-me-", "changeme-", "replace-me-", "your-", "example-"))
-        )
-        if len(value) < 32 or looks_like_placeholder:
-            raise RuntimeError(
-                f"{name} must be configured with a non-placeholder secret of at least 32 characters. "
-                "Use the Windows launcher to generate local secrets, or set them in the deployment environment."
-            )
+    """Compatibility wrapper for the canonical fail-closed secret policy."""
+    validate_dashboard_secrets()
 
 
 def validate_dashboard_secrets() -> None:
