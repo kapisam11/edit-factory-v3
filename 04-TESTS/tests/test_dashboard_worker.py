@@ -149,3 +149,68 @@ def test_run_job_marks_invalid_heartbeat_interval_as_error(monkeypatch):
             "error": "AIVF_WORKER_HEARTBEAT_SECONDS must be numeric and greater than 0",
         },
     )
+
+
+
+def test_heartbeat_stops_worker_immediately_when_lease_is_lost():
+    class NeverStop:
+        def __init__(self):
+            self.wait_calls = 0
+
+        def wait(self, _interval):
+            self.wait_calls += 1
+            return False
+
+    class LostLeaseStore:
+        def heartbeat_attempt(self, *_args):
+            return False
+
+    stop = NeverStop()
+    terminated = []
+    dashboard_worker._heartbeat_loop(
+        LostLeaseStore(),
+        "job-lost",
+        "attempt-lost",
+        "lease-lost",
+        stop,
+        0.01,
+        terminate_worker_tree=lambda: terminated.append(True),
+    )
+
+    assert stop.wait_calls == 1
+    assert terminated == [True]
+
+
+def test_heartbeat_stops_worker_after_five_consecutive_store_errors():
+    class NeverStop:
+        def __init__(self):
+            self.wait_calls = 0
+
+        def wait(self, _interval):
+            self.wait_calls += 1
+            return False
+
+    class UnavailableStore:
+        def __init__(self):
+            self.calls = 0
+
+        def heartbeat_attempt(self, *_args):
+            self.calls += 1
+            raise OSError("simulated SQLite outage")
+
+    store = UnavailableStore()
+    stop = NeverStop()
+    terminated = []
+    dashboard_worker._heartbeat_loop(
+        store,
+        "job-unavailable",
+        "attempt-unavailable",
+        "lease-unavailable",
+        stop,
+        0.01,
+        terminate_worker_tree=lambda: terminated.append(True),
+    )
+
+    assert store.calls == 5
+    assert stop.wait_calls == 5
+    assert terminated == [True]
