@@ -234,6 +234,7 @@ def test_docker_build_verifies_model_assets_against_locked_hashes() -> None:
     generated_sums = "sha256sum /app/.models/mobilenet_ssd/deploy.prototxt"
     generated_manifest = "python 03-SIDE-CODE/tools/generate_model_manifest.py"
 
+    assert "AIVF_CONFIG_PATH=/app/state/aivf_config.json" in dockerfile
     assert verify in dockerfile
     assert dockerfile.index(verify) < dockerfile.index(generated_sums)
     assert dockerfile.index(generated_sums) < dockerfile.index(generated_manifest)
