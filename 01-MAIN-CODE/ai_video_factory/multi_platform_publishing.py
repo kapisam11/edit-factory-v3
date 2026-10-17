@@ -28,6 +28,7 @@ import requests
 
 from .folder_publisher import FolderPublisher, FolderPublisherConfig, _sha256
 from .platform_adapters import PlatformPublishError, PublishResult, adapter_for
+from .production_guardrails import redact_log_message
 from .retry_policy import retry_after
 
 LOG = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ def _safe_error_message(exc: Exception) -> str:
         r"\1=<REDACTED>",
         message,
     )
+    message = redact_log_message(message, max_length=1200)
     return message[:1200] or type(exc).__name__
 
 
