@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from pathlib import Path
 
 from ai_video_factory import v3_stage_pipeline
@@ -66,6 +68,34 @@ def test_failed_rerun_restores_previous_final_v3_file(monkeypatch, tmp_path):
     assert result.artifacts["last_good_final_preserved"] == str(final)
     assert any("previous final.v3.mp4 was restored" in item for item in result.warnings)
     assert not list(tmp_path.glob(".aivf-v3-last-good-*"))
+
+
+def test_low_disk_blocks_rerun_before_touching_last_good_final(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source fixture")
+    package = tmp_path / "package"
+    package.mkdir()
+    final = package / "final.v3.mp4"
+    original = b"previous-known-good-final"
+    final.write_bytes(original)
+
+    # Snapshotting needs the original size plus 128 MiB of safety headroom.
+    monkeypatch.setattr(
+        v3_stage_pipeline.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=1024 * 1024),
+    )
+
+    with pytest.raises(v3_stage_pipeline.V3InputError, match="rerun blocked to preserve"):
+        v3_stage_pipeline._snapshot_last_good_final(package)
+
+    snapshot, manifest, partial = v3_stage_pipeline._last_good_snapshot_paths(package)
+    assert final.read_bytes() == original
+    assert not snapshot.exists()
+    assert not manifest.exists()
+    assert not partial.exists()
 
 
 def test_failed_first_render_does_not_leave_fake_canonical_final(monkeypatch, tmp_path):
