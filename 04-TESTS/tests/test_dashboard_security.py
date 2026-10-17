@@ -52,3 +52,17 @@ def test_invalid_video_upload_is_rejected(monkeypatch, tmp_path):
         content_type="multipart/form-data",
     )
     assert response.status_code == 400
+
+
+
+def test_dashboard_private_secret_validator_uses_canonical_distinct_secret_policy(monkeypatch):
+    import pytest
+    import dashboard_auth
+
+    monkeypatch.setenv("AIVF_ENV", "development")
+    same_secret = "a-high-entropy-test-secret-value-1234567890"
+    monkeypatch.setenv("FLASK_SECRET_KEY", same_secret)
+    monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", same_secret)
+
+    with pytest.raises(RuntimeError, match="must be different values"):
+        dashboard_auth._validate_dashboard_secrets()
