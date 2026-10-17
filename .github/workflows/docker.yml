@@ -20,8 +20,8 @@ jobs:
           env_file="06-CONFIG-AND-DEPLOYMENT/.env"
           trap 'rm -f "$env_file"' EXIT
           cat > "$env_file" <<'EOF'
-          FLASK_SECRET_KEY=ci-compose-secret-0123456789abcdef
-          AIVF_DASHBOARD_TOKEN=ci-compose-token-0123456789abcdef
+          FLASK_SECRET_KEY=test
+          AIVF_DASHBOARD_TOKEN=test
           EOF
           export AIVF_IMAGE="edit-factory-v3:test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           export AIVF_DASHBOARD_PORT=5000
