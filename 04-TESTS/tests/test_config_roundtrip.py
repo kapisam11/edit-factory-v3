@@ -1,3 +1,4 @@
+from ai_video_factory import config as config_module
 from ai_video_factory.config import (
     AIVFConfig,
     APIKeys,
@@ -61,3 +62,33 @@ def test_config_save_is_not_left_with_partial_file_on_failure(tmp_path, monkeypa
     assert not partials
     assert not path.exists()
     monkeypatch.setattr(__import__("os"), "replace", original_replace)
+
+
+
+def test_default_config_path_for_installed_wheel_is_user_writable(tmp_path, monkeypatch):
+    fake_installed_module = (
+        tmp_path / "venv" / "Lib" / "site-packages" / "ai_video_factory" / "config.py"
+    )
+    monkeypatch.setattr(config_module, "__file__", str(fake_installed_module))
+    monkeypatch.delenv("AIVF_CONFIG_PATH", raising=False)
+    user_config_root = tmp_path / "local-app-data"
+    monkeypatch.setenv("LOCALAPPDATA", str(user_config_root))
+
+    expected = user_config_root / "EditFactoryV3" / "aivf_config.json"
+    assert config_module._default_config_path() == expected
+
+    config = AIVFConfig()
+    config.heuristics["optimal_length_seconds"] = 37
+    config.save()
+    assert expected.is_file()
+    assert AIVFConfig.load().heuristics["optimal_length_seconds"] == 37
+
+
+def test_explicit_config_path_environment_override_is_respected(tmp_path, monkeypatch):
+    configured = tmp_path / "custom" / "aivf_config.json"
+    monkeypatch.setenv("AIVF_CONFIG_PATH", str(configured))
+
+    AIVFConfig().save()
+
+    assert configured.is_file()
+    assert config_module._default_config_path() == configured

@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH="/app/.venv/bin:$PATH" \
     AIVF_STATE_DIR=/app/state \
+    AIVF_CONFIG_PATH=/app/state/aivf_config.json \
     AIVF_UPLOAD_DIR=/app/uploads \
     AIVF_OUTPUT_DIR=/app/output
 
@@ -37,6 +38,7 @@ RUN mkdir -p /app/.models/mobilenet_ssd \
        -o /app/.models/mobilenet_ssd/mobilenet.caffemodel \
     && test -s /app/.models/mobilenet_ssd/deploy.prototxt \
     && test -s /app/.models/mobilenet_ssd/mobilenet.caffemodel \
+    && python 03-SIDE-CODE/tools/verify_model_lock.py /app \
     && sha256sum /app/.models/mobilenet_ssd/deploy.prototxt /app/.models/mobilenet_ssd/mobilenet.caffemodel > /app/.models/mobilenet_ssd/SHA256SUMS \
     && python 03-SIDE-CODE/tools/generate_model_manifest.py /app/.models/mobilenet_ssd $MOBILENET_COMMIT
 RUN groupadd --system aivf \
