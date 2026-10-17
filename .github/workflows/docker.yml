@@ -12,6 +12,42 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate rendered dashboard ports stay on loopback
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_file="06-CONFIG-AND-DEPLOYMENT/.env"
+          trap 'rm -f "$env_file"' EXIT
+          cat > "$env_file" <<'EOF'
+          FLASK_SECRET_KEY=ci-compose-secret-0123456789abcdef
+          AIVF_DASHBOARD_TOKEN=ci-compose-token-0123456789abcdef
+          EOF
+          export AIVF_IMAGE="edit-factory-v3:test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          export AIVF_DASHBOARD_PORT=5000
+          for compose in "06-CONFIG-AND-DEPLOYMENT/docker-compose.yml" "06-CONFIG-AND-DEPLOYMENT/docker-compose.dev.yml"; do
+            docker compose --env-file "$env_file" -f "$compose" config --format json > /tmp/aivf-compose-config.json
+            python - "$compose" <<'PY'
+          import json
+          import sys
+
+          compose_path = sys.argv[1]
+          with open("/tmp/aivf-compose-config.json", encoding="utf-8") as stream:
+              config = json.load(stream)
+          ports = [
+              item for item in config["services"]["web"]["ports"]
+              if int(item["target"]) == 5000
+          ]
+          assert len(ports) == 1, f"{compose_path}: expected one dashboard port, got {ports!r}"
+          port = ports[0]
+          assert port.get("host_ip") == "127.0.0.1", (
+              f"{compose_path}: dashboard binds to {port.get('host_ip')!r}, not loopback"
+          )
+          assert str(port.get("published")) == "5000", (
+              f"{compose_path}: unexpected dashboard host port {port.get('published')!r}"
+          )
+          print(f"{compose_path}: dashboard published only on 127.0.0.1:5000")
+          PY
+          done
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - name: Build production image
         run: docker build -f 06-CONFIG-AND-DEPLOYMENT/Dockerfile -t edit-factory-v3:test .
