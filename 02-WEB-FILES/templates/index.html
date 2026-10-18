@@ -303,7 +303,13 @@
                                         <span class="toggle-slider"></span>
                                         <span class="toggle-label">Speaker diarization</span>
                                     </label>
+                                    <label class="toggle">
+                                        <input type="checkbox" name="enable_transcription" id="enable_transcription">
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Local source speech transcription</span>
+                                    </label>
                                 </div>
+                                <small>Uses a local faster-whisper model to attach timed speech to scenes. It is off by default and requires an ASR-enabled build plus a local model path; footage is not sent to an external transcription service.</small>
                             </div>
 
                             <div class="toggles">
@@ -965,6 +971,7 @@
             if (p.enable_ocr !== undefined) document.getElementById('enable_ocr').checked = Boolean(p.enable_ocr);
             if (p.enable_object_detection !== undefined) document.getElementById('enable_object_detection').checked = Boolean(p.enable_object_detection);
             if (p.enable_diarization !== undefined) document.getElementById('enable_diarization').checked = Boolean(p.enable_diarization);
+            if (p.enable_transcription !== undefined) document.getElementById('enable_transcription').checked = Boolean(p.enable_transcription);
             toggleV3Controls();
         }
 
@@ -988,6 +995,7 @@
                 enable_ocr: document.getElementById('enable_ocr').checked,
                 enable_object_detection: document.getElementById('enable_object_detection').checked,
                 enable_diarization: document.getElementById('enable_diarization').checked,
+                enable_transcription: document.getElementById('enable_transcription').checked,
             };
             try {
                 const res = await fetch('/api/presets', {
