@@ -90,7 +90,7 @@ def test_clip_factory_writes_source_timestamps_without_duplicate_padding(tmp_pat
         str(source),
         str(package_dir),
         count=5,
-        windows=[(100.0, 30.0), (300.0, 25.0)],
+        windows=[(100.0, 30.0), (105.0, 30.0), (300.0, 25.0)],
     )
 
     assert len(outputs) == 2
