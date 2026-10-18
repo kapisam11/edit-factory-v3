@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib.util
+import os
+from pathlib import Path
 import shutil
 
 
@@ -27,12 +29,24 @@ def _module(name: str) -> bool:
 
 def capabilities() -> dict[str, CapabilityStatus]:
     vision = _module("cv2")
+    asr_model_raw = os.environ.get("AIVF_ASR_MODEL_PATH", "").strip()
+    try:
+        asr_model_dir = Path(asr_model_raw).expanduser()
+        transcription_available = bool(
+            asr_model_raw
+            and _module("faster_whisper")
+            and asr_model_dir.is_dir()
+            and (asr_model_dir / "model.bin").is_file()
+        )
+    except (OSError, RuntimeError):
+        transcription_available = False
     return {
         "vision": CapabilityStatus("vision", vision, "the 'vision' extra (opencv-python-headless)", "OpenCV frame analysis"),
         "ocr": CapabilityStatus("ocr", vision and _module("pytesseract") and shutil.which("tesseract") is not None, "the 'ocr' extra and the tesseract executable", "OCR scene analysis"),
         "audio_analysis": CapabilityStatus("audio_analysis", _module("librosa"), "the 'beats' or 'full' extra", "music and beat analysis"),
         "embeddings": CapabilityStatus("embeddings", _module("sentence_transformers"), "the 'intelligence' or 'full' extra", "semantic similarity"),
         "diarization": CapabilityStatus("diarization", _module("pyannote.audio"), "the diarization/full extra plus a provider token", "speaker diarization"),
+        "transcription": CapabilityStatus("transcription", transcription_available, "an ASR-enabled runtime with faster-whisper installed and AIVF_ASR_MODEL_PATH pointing to a local model directory containing model.bin", "local-only source speech transcription and timed scene evidence"),
         "groq": CapabilityStatus("groq", _module("groq"), "the groq extra plus GROQ_API_KEY", "Groq AI provider"),
         "ffmpeg": CapabilityStatus("ffmpeg", shutil.which("ffmpeg") is not None, "FFmpeg installed on PATH", "media rendering"),
         "ffprobe": CapabilityStatus("ffprobe", shutil.which("ffprobe") is not None, "FFmpeg/FFprobe installed on PATH", "media validation"),
