@@ -245,6 +245,16 @@ def render_clip_factory(
             key = (round(start, 3), round(length, 3))
             if key in seen:
                 continue
+            end = key[0] + key[1]
+            redundant = False
+            for prior_start, prior_length in starts:
+                prior_end = prior_start + prior_length
+                overlap = max(0.0, min(end, prior_end) - max(key[0], prior_start))
+                if overlap / max(0.001, min(key[1], prior_length)) > 0.55:
+                    redundant = True
+                    break
+            if redundant:
+                continue
             seen.add(key)
             starts.append(key)
 
