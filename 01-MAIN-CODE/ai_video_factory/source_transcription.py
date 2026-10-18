@@ -110,7 +110,7 @@ def transcribe_source(
 ) -> dict[str, Any]:
     """Transcribe input audio with bounded, timestamp-validated local inference."""
     source = Path(video_path)
-    if not source.is_file() or source.is_symlink():
+    if not source.is_file():
         raise SourceTranscriptionError("Source transcription requires a regular source video file")
     if max_segments < 1 or max_words < 1 or max_text_chars < 1:
         raise ValueError("transcription bounds must be positive integers")
