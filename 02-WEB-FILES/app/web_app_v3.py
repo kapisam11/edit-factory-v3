@@ -492,6 +492,7 @@ def _runtime_capabilities() -> dict[str, bool]:
         "ocr": detected["ocr"].available,
         "object_detection": object_detection,
         "diarization": detected["diarization"].available,
+        "transcription": detected["transcription"].available,
     }
 
 
@@ -768,6 +769,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
                 enable_ocr=params.get("enable_ocr", False),
                 enable_object_detection=params.get("enable_object_detection", True),
                 enable_diarization=params.get("enable_diarization", False),
+                enable_transcription=params.get("enable_transcription", False),
                 diarization_token=secrets.get("diarization_token"),
                 source_metadata=params.get("source_metadata"),
                 content_profile=params.get("content_profile", "general"),
@@ -1219,9 +1221,18 @@ def create_job():
             ("enable_ocr", "ocr", "OCR"),
             ("enable_object_detection", "object_detection", "Object detection"),
             ("enable_diarization", "diarization", "Speaker diarization"),
+            ("enable_transcription", "transcription", "Local source transcription"),
         )
         for param_key, capability_key, display_name in requested:
             if params.get(param_key) and not capabilities[capability_key]:
+                if param_key == "enable_transcription":
+                    return jsonify({
+                        "error": (
+                            "Local source transcription requires an ASR-enabled runtime, "
+                            "faster-whisper, and AIVF_ASR_MODEL_PATH pointing at a local model "
+                            "directory containing model.bin."
+                        )
+                    }), 400
                 return jsonify({"error": f"{display_name} is not available in this production environment"}), 400
         if params.get("enable_diarization") and not secrets.get("diarization_token"):
             return jsonify({"error": "Speaker diarization is enabled but no diarization token is configured"}), 400
