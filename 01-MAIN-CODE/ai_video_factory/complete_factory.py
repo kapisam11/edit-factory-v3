@@ -71,6 +71,40 @@ def _validate_output(path: str, *, width: Optional[int] = None, height: Optional
     return {**result, "probe": result.get("format") or {}, "streams": [result.get("video"), result.get("audio")]}
 
 
+def _scene_rows(payload: Any) -> list[Dict[str, Any]]:
+    """Load both legacy list-shaped and versioned scene-index JSON."""
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, Mapping):
+        rows = payload.get("scenes", [])
+    else:
+        rows = []
+    if not isinstance(rows, list):
+        return []
+    return [dict(row) for row in rows if isinstance(row, Mapping)]
+
+
+def _scene_crop_subjects(scene: Mapping[str, Any]) -> list[Dict[str, float]]:
+    """Accept normalized subject centers only; object names are not coordinates."""
+    raw_subjects = scene.get("faces") or scene.get("face_centers") or scene.get("subjects") or []
+    if not isinstance(raw_subjects, (list, tuple)):
+        return []
+    subjects: list[Dict[str, float]] = []
+    for item in raw_subjects:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            x = float(item.get("x"))
+            y = float(item.get("y"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(x) or not math.isfinite(y):
+            continue
+        if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+            subjects.append({"x": x, "y": y})
+    return subjects
+
+
 def _crop_offsets(crop: Optional[Mapping[str, Any]]) -> tuple[int, int]:
     if not crop:
         return 0, 0
@@ -643,8 +677,8 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
     if scene_path.exists():
         try:
             payload = json.loads(scene_path.read_text(encoding="utf-8"))
-            scenes = payload if isinstance(payload, list) else []
-        except Exception:
+            scenes = _scene_rows(payload)
+        except (OSError, ValueError, TypeError):
             scenes = []
     scored_shots = score_shots(scenes, topic)
     redundancy = detect_visual_redundancy(scenes)
@@ -671,7 +705,9 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         first = scenes[0]
         width = int(first.get("width", 1920) or 1920)
         height = int(first.get("height", 1080) or 1080)
-        subjects = first.get("faces") or first.get("objects") or []
+        # The scene schema stores object labels as strings, not bounding boxes.
+        # Only normalized subject centers are valid inputs to the crop planner.
+        subjects = _scene_crop_subjects(first)
         if subjects:
             from .content_factory import get_layout
             crop_plan = plan_source_aware_crop(width, height, get_layout("shorts"), subjects)
