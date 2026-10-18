@@ -23,8 +23,17 @@ COPY 02-WEB-FILES ./02-WEB-FILES
 COPY 03-SIDE-CODE ./03-SIDE-CODE
 COPY 06-CONFIG-AND-DEPLOYMENT ./06-CONFIG-AND-DEPLOYMENT
 
+ARG AIVF_ENABLE_LOCAL_TRANSCRIPTION=0
 RUN python -m pip install --no-cache-dir --upgrade pip uv==0.12.17 \
     && uv sync --frozen --no-dev --extra web --extra ocr
+
+# Speech recognition is optional and off in the standard image. The direct ASR
+# dependency is pinned in requirements-asr.txt; model weights remain user-supplied.
+RUN if [ "$AIVF_ENABLE_LOCAL_TRANSCRIPTION" = "1" ]; then \
+      uv pip install --python /app/.venv/bin/python --requirement /app/06-CONFIG-AND-DEPLOYMENT/requirements-asr.txt; \
+    elif [ "$AIVF_ENABLE_LOCAL_TRANSCRIPTION" != "0" ]; then \
+      echo "AIVF_ENABLE_LOCAL_TRANSCRIPTION must be 0 or 1" >&2; exit 2; \
+    fi
 
 # Production ML assets are baked into the immutable image from an immutable source
 # commit. Runtime network downloads remain disabled by asset_manager.py.
