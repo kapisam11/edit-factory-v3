@@ -8,6 +8,8 @@ from ai_video_factory.complete_factory import (
     PLATFORM_LAYOUTS,
     _clip_window_candidates,
     _resolve_clip_source,
+    _scene_crop_subjects,
+    _scene_rows,
     render_all_platforms,
     render_clip_factory,
 )
@@ -124,3 +126,33 @@ def test_clip_factory_fallback_does_not_pad_with_near_duplicates(tmp_path: Path,
 
     assert len(outputs) == report["candidate_count"] == 2
     assert [item["source_start_seconds"] for item in report["candidates"]] == [0.0, 6.0]
+
+
+
+def test_versioned_scene_index_is_loaded_for_candidate_selection():
+    versioned = {
+        "version": 1,
+        "source_video": "original.mp4",
+        "scene_count": 2,
+        "scenes": [
+            {"id": "scene-1", "start": 0.0, "end": 3.0},
+            {"id": "scene-2", "start": 8.0, "end": 12.0},
+            "malformed-row",
+        ],
+    }
+
+    assert [row["id"] for row in _scene_rows(versioned)] == ["scene-1", "scene-2"]
+    assert [row["id"] for row in _scene_rows([{"id": "legacy"}])] == ["legacy"]
+    assert _scene_rows({"scenes": "not-a-list"}) == []
+
+
+def test_crop_planner_ignores_object_labels_and_invalid_face_coordinates():
+    assert _scene_crop_subjects({"objects": ["person", "car"]}) == []
+    assert _scene_crop_subjects({"faces": [{"x": 1200, "y": 650}]}) == []
+    assert _scene_crop_subjects({
+        "faces": [
+            {"x": 0.72, "y": 0.38},
+            {"x": "nan", "y": 0.4},
+            "person",
+        ],
+    }) == [{"x": 0.72, "y": 0.38}]
