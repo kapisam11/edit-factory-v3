@@ -213,6 +213,15 @@ def render_clip_factory(
     except (TypeError, ValueError, OverflowError):
         duration = 0.0
     if not math.isfinite(duration) or duration <= 0.5:
+        _write_json(os.path.join(package_dir, "clip_candidates.json"), {
+            "schema_version": 1,
+            "source_video": os.path.abspath(source),
+            "source_duration_seconds": round(duration, 3) if math.isfinite(duration) else None,
+            "selection_method": "source-too-short",
+            "score_semantics": "not_applicable",
+            "candidate_count": 0,
+            "candidates": [],
+        })
         return []
 
     requested_count = max(1, min(20, int(count)))
@@ -249,7 +258,17 @@ def render_clip_factory(
         for index in range(requested_count):
             start = round(max_start * index / max(1, requested_count - 1), 3)
             key = (start, round(min(clip_len, duration - start), 3))
-            if key[1] >= 0.5 and key not in starts:
+            if key[1] < 0.5 or key in starts:
+                continue
+            end = key[0] + key[1]
+            redundant = False
+            for prior_start, prior_length in starts:
+                prior_end = prior_start + prior_length
+                overlap = max(0.0, min(end, prior_end) - max(key[0], prior_start))
+                if overlap / max(0.001, min(key[1], prior_length)) > 0.55:
+                    redundant = True
+                    break
+            if not redundant:
                 starts.append(key)
 
     outputs: list[str] = []
