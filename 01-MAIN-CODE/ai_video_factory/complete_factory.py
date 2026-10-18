@@ -111,46 +111,146 @@ def render_long_form_master(source: str, package_dir: str) -> str:
     return out
 
 
-def _clip_window_candidates(scenes: Sequence[Mapping[str, Any]], scored: Sequence[Mapping[str, Any]], count: int, duration: float) -> list[tuple[float, float]]:
-    by_id = {str(scene.get("id", index)): scene for index, scene in enumerate(scenes)}
-    windows: list[tuple[float, float]] = []
-    default_len = min(35.0, max(12.0, duration / max(1, min(count, 6))))
-    for item in scored[:count]:
-        scene = by_id.get(str(item.get("shot_id")))
-        if not scene:
+def _resolve_clip_source(input_video: Optional[str], primary_video: str) -> str:
+    """Use the original source for repurposing; never silently substitute a rendered short."""
+    if input_video:
+        original = Path(input_video).expanduser()
+        if not original.is_file():
+            raise FileNotFoundError(
+                "The original input video is unavailable for clip extraction; "
+                "refusing to generate candidates from the already-rendered short."
+            )
+        return str(original.resolve())
+
+    primary = Path(primary_video).expanduser()
+    if not primary.is_file():
+        raise FileNotFoundError("Neither an original source video nor a primary rendered video is available")
+    return str(primary.resolve())
+
+
+def _clip_window_candidates(
+    scenes: Sequence[Mapping[str, Any]],
+    scored: Sequence[Mapping[str, Any]],
+    count: int,
+    duration: float,
+) -> list[tuple[float, float]]:
+    """Select high-scoring, source-bounded, temporally diverse clip windows.
+
+    Scores are explainable scene heuristics, not predicted views or retention.
+    Candidates are centered around their selected scene wherever source bounds allow.
+    """
+    try:
+        source_duration = float(duration)
+        requested_count = max(0, min(20, int(count)))
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if not math.isfinite(source_duration) or source_duration <= 0.5 or requested_count == 0:
+        return []
+
+    by_id = {
+        str(scene.get("id", index)): scene
+        for index, scene in enumerate(scenes)
+        if isinstance(scene, Mapping)
+    }
+    clip_length = min(
+        source_duration,
+        min(35.0, max(min(12.0, source_duration), source_duration / max(1, min(requested_count, 6)))),
+    )
+    candidates: list[tuple[float, float]] = []
+
+    for item in scored:
+        if not isinstance(item, Mapping):
             continue
-        start = float(scene.get("start", scene.get("start_time", scene.get("timestamp", 0.0))) or 0.0)
-        end = float(scene.get("end", scene.get("end_time", start + default_len)) or (start + default_len))
-        center = (start + end) / 2.0
-        clip_len = min(35.0, max(12.0, end - start if end > start else default_len))
-        clip_start = max(0.0, center - clip_len / 2.0)
-        clip_end = min(duration, clip_start + clip_len)
-        clip_start = max(0.0, clip_end - clip_len)
-        windows.append((round(clip_start, 3), round(clip_end - clip_start, 3)))
-    return windows
+        scene = by_id.get(str(item.get("shot_id", "")))
+        if scene is None:
+            continue
+        try:
+            scene_start = float(scene.get("start", scene.get("start_time", scene.get("timestamp", 0.0))) or 0.0)
+            scene_end = float(scene.get("end", scene.get("end_time", scene_start)) or scene_start)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(scene_start) or not math.isfinite(scene_end) or scene_end <= scene_start:
+            continue
 
+        center = max(0.0, min(source_duration, (scene_start + scene_end) / 2.0))
+        start = max(0.0, min(source_duration - clip_length, center - clip_length / 2.0))
+        end = start + clip_length
 
-def render_clip_factory(source: str, package_dir: str, *, count: int, crop_plan: Optional[Mapping[str, Any]] = None, windows: Optional[Sequence[tuple[float, float]]] = None) -> list[str]:
+        # Avoid selecting several near-identical clips from adjacent high-scoring
+        # scenes. The comparison uses overlap divided by the shorter clip length.
+        redundant = False
+        for prior_start, prior_length in candidates:
+            prior_end = prior_start + prior_length
+            overlap = max(0.0, min(end, prior_end) - max(start, prior_start))
+            if overlap / max(0.001, min(clip_length, prior_length)) > 0.55:
+                redundant = True
+                break
+        if redundant:
+            continue
+
+        candidates.append((round(start, 3), round(clip_length, 3)))
+        if len(candidates) >= requested_count:
+            break
+
+    return candidates
+def render_clip_factory(
+    source: str,
+    package_dir: str,
+    *,
+    count: int,
+    crop_plan: Optional[Mapping[str, Any]] = None,
+    windows: Optional[Sequence[tuple[float, float]]] = None,
+) -> list[str]:
+    """Render source clips and persist timestamps/method so candidates are reviewable."""
     if not _ffmpeg_available():
         raise RuntimeError("ffmpeg is required for the clip factory")
     probe = _probe(source)
     try:
         duration = float((probe.get("format") or {}).get("duration") or 0.0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         duration = 0.0
-    if duration <= 0.5:
+    if not math.isfinite(duration) or duration <= 0.5:
         return []
-    count = max(5, min(20, int(count)))
+
+    requested_count = max(1, min(20, int(count)))
+    starts: list[tuple[float, float]] = []
+    selection_method = "scene-ranked-diverse"
+
     if windows:
-        starts = list(windows[:count])
-    else:
-        clip_len = min(35.0, max(12.0, duration / max(1, min(count, 6))))
+        seen = set()
+        for raw_start, raw_length in windows[:requested_count]:
+            try:
+                start = float(raw_start)
+                length = float(raw_length)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(start) or not math.isfinite(length) or length <= 0:
+                continue
+            start = max(0.0, min(duration - 0.25, start))
+            length = min(length, duration - start)
+            if length < 0.5:
+                continue
+            key = (round(start, 3), round(length, 3))
+            if key in seen:
+                continue
+            seen.add(key)
+            starts.append(key)
+
+    if not starts:
+        selection_method = "evenly-spaced-fallback"
+        clip_len = min(
+            duration,
+            min(35.0, max(min(12.0, duration), duration / max(1, min(requested_count, 6)))),
+        )
         max_start = max(0.0, duration - clip_len)
-        starts = [(round(max_start * i / max(1, count - 1), 3), min(clip_len, duration - round(max_start * i / max(1, count - 1), 3))) for i in range(count)]
-    while len(starts) < count:
-        clip_len = min(35.0, max(12.0, duration))
-        starts.append((0.0, clip_len))
+        for index in range(requested_count):
+            start = round(max_start * index / max(1, requested_count - 1), 3)
+            key = (start, round(min(clip_len, duration - start), 3))
+            if key[1] >= 0.5 and key not in starts:
+                starts.append(key)
+
     outputs: list[str] = []
+    candidate_rows: list[Dict[str, Any]] = []
     for index, (start, length) in enumerate(starts, start=1):
         out = os.path.join(package_dir, "clip_factory", f"short_{index:02d}.mp4")
         Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -158,14 +258,42 @@ def render_clip_factory(source: str, package_dir: str, *, count: int, crop_plan:
         if crop_plan:
             left, top = _crop_offsets(crop_plan)
             vf = f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:{left}:{top}"
-        _run(["ffmpeg", "-y", "-ss", str(start), "-i", source, "-t", str(min(length, max(0.25, duration - start))), "-vf", vf, "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-c:a", "aac", "-movflags", "+faststart", out])
+        actual_length = min(length, max(0.0, duration - start))
+        _run([
+            "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", source,
+            "-t", f"{actual_length:.3f}", "-vf", vf, "-c:v", "libx264",
+            "-preset", "medium", "-crf", "20", "-c:a", "aac",
+            "-movflags", "+faststart", out,
+        ])
         check = _validate_output(out, width=1080, height=1920)
         if not check["ok"]:
             raise RuntimeError(f"Clip {index} validation failed: {check['errors']}")
         outputs.append(out)
+        candidate_rows.append({
+            "rank": index,
+            "file": os.path.relpath(out, package_dir).replace("\\", "/"),
+            "source_start_seconds": round(start, 3),
+            "source_end_seconds": round(start + actual_length, 3),
+            "duration_seconds": round(actual_length, 3),
+            "selection_method": selection_method,
+            "selection_score_semantics": "not_calibrated_to_views_or_retention",
+            "reason": (
+                "Ranked by source-scene evidence with temporal-diversity filtering."
+                if selection_method == "scene-ranked-diverse"
+                else "Fallback candidate placed at a deterministic source position because no valid scene windows were available."
+            ),
+        })
+
+    _write_json(os.path.join(package_dir, "clip_candidates.json"), {
+        "schema_version": 1,
+        "source_video": os.path.abspath(source),
+        "source_duration_seconds": round(duration, 3),
+        "selection_method": selection_method,
+        "score_semantics": "heuristic_scene_score_not_predicted_performance",
+        "candidate_count": len(candidate_rows),
+        "candidates": candidate_rows,
+    })
     return outputs
-
-
 def update_learning_history(path: str, *, topic: str, platform: str, package_dir: str, metrics: Mapping[str, Any], performance_metrics: Optional[Mapping[str, Any]] = None, video_id: Optional[str] = None, published_at: Optional[str] = None) -> Dict[str, Any]:
     history = load_experiments(path) if os.path.exists(path) else []
     observed_metrics: Dict[str, Any] = dict(metrics)
@@ -396,8 +524,8 @@ def _fact_check_review(script: str, research: Mapping[str, Any]) -> Dict[str, An
     return {"status": "review_required" if claims else "no_obvious_factual_claims", "claims_to_verify": claims[:25], "research_available": bool(research)}
 
 
-def _build_dependency_inputs(topic: str, research: Mapping[str, Any], script: str, primary_video: str, formats: Mapping[str, str], clips: Sequence[str]) -> Dict[str, Any]:
-    return {"topic": {"inputs": {"topic": topic}}, "research": {"inputs": {"topic": topic, "research": research}}, "script": {"inputs": {"topic": topic, "research_fingerprint": dependency_fingerprint(research)}}, "primary_video": {"inputs": {"script_fingerprint": dependency_fingerprint({"script": script}), "source": primary_video}}, "platform_renders": {"inputs": {"primary_video": primary_video, "platforms": sorted(formats)}}, "short_clips": {"inputs": {"primary_video": primary_video, "count": len(clips), "formats": sorted(formats)}}}
+def _build_dependency_inputs(topic: str, research: Mapping[str, Any], script: str, primary_video: str, formats: Mapping[str, str], clips: Sequence[str], *, clip_source: Optional[str] = None) -> Dict[str, Any]:
+    return {"topic": {"inputs": {"topic": topic}}, "research": {"inputs": {"topic": topic, "research": research}}, "script": {"inputs": {"topic": topic, "research_fingerprint": dependency_fingerprint(research)}}, "primary_video": {"inputs": {"script_fingerprint": dependency_fingerprint({"script": script}), "source": primary_video}}, "platform_renders": {"inputs": {"primary_video": primary_video, "platforms": sorted(formats)}}, "short_clips": {"inputs": {"source_video": clip_source or primary_video, "count": len(clips), "clip_files": list(clips)}}}
 
 
 def _ranked_thumbnail(package_dir: str, variants: Sequence[str], topic: str) -> Dict[str, Any]:
@@ -525,16 +653,87 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
     formats = provider_retry(lambda: render_all_platforms(primary_result.final_video, str(root), platforms, crop_plan=crop_plan), attempts=3)
     long_form = provider_retry(lambda: render_long_form_master(input_video or primary_result.final_video, str(root)), attempts=3)
     clip_count = max(5, min(20, int(clip_count if clip_count is not None else choose_clip_count(len(words), 0.6, target_seconds))))
-    clip_windows = _clip_window_candidates(scenes, scored_shots, clip_count, _probe_duration(primary_result.final_video)) if False else None
-    # Prefer highest-scoring scene windows; when scene timing is unavailable, the clip factory deterministically spreads windows.
-    if scenes and scored_shots:
-        probe = _probe(primary_result.final_video)
-        try:
-            source_duration = float((probe.get("format") or {}).get("duration") or 0.0)
-        except (TypeError, ValueError):
-            source_duration = 0.0
-        clip_windows = _clip_window_candidates(scenes, scored_shots, clip_count, source_duration) if source_duration else None
-    clips = provider_retry(lambda: render_clip_factory(primary_result.final_video, str(root), count=clip_count, crop_plan=crop_plan, windows=clip_windows), attempts=3)
+    # Repurposing must operate on the full original file, not the short already
+    # composed by the primary pipeline. When the workflow starts from a topic
+    # only, the primary render is the intended source.
+    clip_source = _resolve_clip_source(input_video, primary_result.final_video)
+    clip_probe = _probe(clip_source)
+    try:
+        source_duration = float((clip_probe.get("format") or {}).get("duration") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        source_duration = 0.0
+    clip_windows = (
+        _clip_window_candidates(scenes, scored_shots, clip_count, source_duration)
+        if source_duration > 0.5 and scenes and scored_shots
+        else None
+    )
+    clips = provider_retry(
+        lambda: render_clip_factory(
+            clip_source, str(root), count=clip_count, crop_plan=crop_plan, windows=clip_windows
+        ),
+        attempts=3,
+    )
+
+    clip_candidate_report: Dict[str, Any] = {
+        "schema_version": 1,
+        "source_video": clip_source,
+        "selection_method": "unknown",
+        "candidates": [],
+    }
+    try:
+        clip_candidate_report = json.loads((root / "clip_candidates.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        pass
+
+    # Attach the evidence behind each ranked candidate so a human can review
+    # why it was selected without mistaking heuristic scores for performance predictions.
+    scored_by_id = {
+        str(item.get("shot_id", "")): item
+        for item in scored_shots
+        if isinstance(item, Mapping)
+    }
+    if clip_candidate_report.get("selection_method") == "scene-ranked-diverse":
+        for candidate in clip_candidate_report.get("candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            try:
+                center = (
+                    float(candidate.get("source_start_seconds", 0.0))
+                    + float(candidate.get("source_end_seconds", 0.0))
+                ) / 2.0
+            except (TypeError, ValueError, OverflowError):
+                continue
+            nearest = None
+            nearest_distance = float("inf")
+            for scene in scenes:
+                try:
+                    scene_start = float(scene.get("start", scene.get("start_time", scene.get("timestamp", 0.0))) or 0.0)
+                    scene_end = float(scene.get("end", scene.get("end_time", scene_start)) or scene_start)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                scene_center = (scene_start + scene_end) / 2.0
+                distance = abs(scene_center - center)
+                if distance < nearest_distance:
+                    nearest, nearest_distance = scene, distance
+            if nearest is not None:
+                scene_id = str(nearest.get("id", ""))
+                evidence = scored_by_id.get(scene_id)
+                candidate["source_scene_id"] = scene_id
+                if evidence:
+                    candidate["scene_score"] = evidence.get("score")
+                    candidate["score_evidence"] = {
+                        key: evidence[key]
+                        for key in (
+                            "motion", "faces", "brightness", "uniqueness",
+                            "audio_relevance", "semantic_similarity",
+                        )
+                        if key in evidence
+                    }
+                    candidate["selection_reason"] = (
+                        "Selected from a high-ranked source scene; component scores are explainable "
+                        "heuristics, not estimates of views, clicks, or retention."
+                    )
+    _write_json(str(root / "clip_candidates.json"), clip_candidate_report)
     checkpoints.mark("renders", status="complete", artifacts=list(formats.values()) + [long_form] + list(clips))
 
     captions_json = Path(primary_result.package_dir) / "caption_choreography.json"
@@ -548,12 +747,15 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             chapters = []
     _write_json(str(root / "chapters.json"), chapters)
 
-    dependency = artifact_dependency_graph(_build_dependency_inputs(topic, research, script, primary_result.final_video, formats, clips))
+    dependency = artifact_dependency_graph(_build_dependency_inputs(topic, research, script, primary_result.final_video, formats, clips, clip_source=clip_source))
     fingerprint = duplicate_fingerprint(script=script, title=topic, clip_paths=clips)
     manifest: Dict[str, Any] = {
         "version": 5, "status": "complete", "topic": topic,
         "primary": primary_result.package_dir, "primary_video": primary_result.final_video,
         "long_form_master": long_form, "platform_renders": formats, "short_clips": clips,
+        "clip_source": clip_source,
+        "clip_candidates": clip_candidate_report.get("candidates", []),
+        "clip_selection_method": clip_candidate_report.get("selection_method", "unknown"),
         "clip_count": len(clips), "research": research, "hook_candidates": hooks,
         "pacing": pacing, "shot_scores": scored_shots[:20], "visual_redundancy": redundancy,
         "dead_time": dead_time, "voiceover_cleanup": cleaned_words,
