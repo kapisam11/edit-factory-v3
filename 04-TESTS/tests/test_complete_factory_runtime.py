@@ -102,3 +102,25 @@ def test_clip_factory_writes_source_timestamps_without_duplicate_padding(tmp_pat
     assert [item["source_start_seconds"] for item in report["candidates"]] == [100.0, 300.0]
     assert all(item["source_end_seconds"] <= 600.0 for item in report["candidates"])
     assert all("not_calibrated_to_views_or_retention" == item["selection_score_semantics"] for item in report["candidates"])
+
+
+
+def test_clip_factory_fallback_does_not_pad_with_near_duplicates(tmp_path: Path, monkeypatch):
+    source = tmp_path / "short-source.mp4"
+    source.write_bytes(b"placeholder")
+    package_dir = tmp_path / "package"
+
+    monkeypatch.setattr(complete_factory, "_ffmpeg_available", lambda: True)
+    monkeypatch.setattr(complete_factory, "_probe", lambda path: {"format": {"duration": "20"}})
+    monkeypatch.setattr(complete_factory, "_run", lambda command: None)
+    monkeypatch.setattr(
+        complete_factory,
+        "_validate_output",
+        lambda *args, **kwargs: {"ok": True, "errors": []},
+    )
+
+    outputs = render_clip_factory(str(source), str(package_dir), count=5)
+    report = json.loads((package_dir / "clip_candidates.json").read_text(encoding="utf-8"))
+
+    assert len(outputs) == report["candidate_count"] == 2
+    assert [item["source_start_seconds"] for item in report["candidates"]] == [0.0, 6.0]
