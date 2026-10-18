@@ -21,6 +21,16 @@ def test_job_service_builds_valid_v3_parameters():
     assert params['platform'] == 'tiktok'
     assert params['bpm'] == 140
     assert params['edit_type'] == 'Funny'
+    assert params['enable_transcription'] is False
+
+def test_job_service_accepts_opt_in_source_transcription():
+    params = build_job_params(
+        {"topic": "A subject", "workflow": "v3", "enable_transcription": "true"},
+        _settings(),
+        allow_skip_qc=False,
+    )
+    assert params["enable_transcription"] is True
+
 
 def test_job_service_rejects_invalid_v3_configuration():
     with pytest.raises(ValueError, match='unsupported platform|Unsupported V3 platform'):
