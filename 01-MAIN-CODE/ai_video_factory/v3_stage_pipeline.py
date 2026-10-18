@@ -178,6 +178,8 @@ _V3_GENERATED_FILES = frozenset({
     "source_media_health.json",
     "source_media_metadata.json",
     "scenes.json",
+    "source_transcription.json",
+    "source_transcript.srt",
     "final_media_health.json",
     "final_media_metadata.json",
     "provenance.json",
@@ -241,6 +243,11 @@ def _request_identity(
         "skip_qc": request.skip_qc,
         "music_fingerprint": music_fingerprint,
         "enable_ocr": request.enable_ocr,
+        "enable_transcription": request.enable_transcription,
+        "transcription_model_path": os.environ.get("AIVF_ASR_MODEL_PATH", "") if request.enable_transcription else "",
+        "transcription_language": os.environ.get("AIVF_ASR_LANGUAGE", "") if request.enable_transcription else "",
+        "transcription_device": os.environ.get("AIVF_ASR_DEVICE", "cpu") if request.enable_transcription else "",
+        "transcription_compute_type": os.environ.get("AIVF_ASR_COMPUTE_TYPE", "") if request.enable_transcription else "",
         "enable_object_detection": request.enable_object_detection,
         "enable_diarization": request.enable_diarization,
         "allow_unsupported_critical_evidence": request.allow_unsupported_critical_evidence,
@@ -746,6 +753,38 @@ class SourceAnalysisStage:
             )
         except SceneAnalysisError:
             raise
+        transcription_summary: dict[str, Any] | None = None
+        if context.request.enable_transcription:
+            from .source_transcription import (
+                SourceTranscriptionError,
+                apply_transcription_to_scenes,
+                transcribe_source,
+                write_transcription_artifacts,
+            )
+
+            media_summary = context.source_health.get("summary") or {}
+            source_duration = media_summary.get("duration", media_summary.get("duration_seconds"))
+            try:
+                transcription = transcribe_source(
+                    context.request.input_video,
+                    duration_seconds=source_duration,
+                )
+                apply_transcription_to_scenes(scenes, transcription)
+                write_transcription_artifacts(context.package, transcription)
+            except SourceTranscriptionError as exc:
+                raise V3InputError(str(exc)) from exc
+            transcription_summary = {
+                "enabled": True,
+                "engine": transcription.get("engine", "faster-whisper"),
+                "model_name": transcription.get("model_name", ""),
+                "language": transcription.get("language", ""),
+                "segment_count": transcription.get("segment_count", 0),
+                "word_count": transcription.get("word_count", 0),
+                "transcript_artifact": "source_transcription.json",
+                "subtitle_artifact": "source_transcript.srt",
+                "privacy": "local_only",
+            }
+
         try:
             save_scene_index(
                 scenes,
@@ -779,6 +818,8 @@ class SourceAnalysisStage:
                 for scene in ranked[:12]
             ],
         }
+        if transcription_summary is not None:
+            context.footage_evidence["source_transcription"] = transcription_summary
 
 
 class RenderStage:
