@@ -183,7 +183,13 @@ def score_shots(shots: Sequence[Mapping[str, Any]], topic: str = "") -> List[Dic
 
         raw_faces = shot.get("faces", shot.get("face_score"))
         if raw_faces is None:
-            raw_faces = min(1.0, max(0.0, _unit_signal(shot.get("face_count"), 0.0) / 2.0))
+            try:
+                face_count = float(shot.get("face_count", 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                face_count = 0.0
+            if not math.isfinite(face_count):
+                face_count = 0.0
+            raw_faces = min(1.0, max(0.0, face_count / 2.0))
         elif isinstance(raw_faces, (list, tuple, set)):
             raw_faces = min(1.0, len(raw_faces) / 2.0)
 
