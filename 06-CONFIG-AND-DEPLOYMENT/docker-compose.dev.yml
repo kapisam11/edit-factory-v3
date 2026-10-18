@@ -3,6 +3,8 @@ services:
     build:
       context: ..
       dockerfile: 06-CONFIG-AND-DEPLOYMENT/Dockerfile
+      args:
+        AIVF_ENABLE_LOCAL_TRANSCRIPTION: ${AIVF_ENABLE_LOCAL_TRANSCRIPTION:-0}
     image: edit-factory-v3:dev
     restart: unless-stopped
     ports:
@@ -35,11 +37,19 @@ services:
       AIVF_MAX_RESERVED_MEMORY_MB: ${AIVF_MAX_RESERVED_MEMORY_MB:-7168}
       AIVF_MAX_SSE_CONNECTIONS: ${AIVF_MAX_SSE_CONNECTIONS:-2}
       AIVF_V3_SEMANTIC_QC: ${AIVF_V3_SEMANTIC_QC:-1}
+      AIVF_ASR_MODEL_PATH: ${AIVF_ASR_MODEL_PATH:-}
+      AIVF_ASR_LANGUAGE: ${AIVF_ASR_LANGUAGE:-}
+      AIVF_ASR_DEVICE: ${AIVF_ASR_DEVICE:-cpu}
+      AIVF_ASR_COMPUTE_TYPE: ${AIVF_ASR_COMPUTE_TYPE:-int8}
     volumes:
       - aivf-dev-output:/app/output
       - aivf-dev-uploads:/app/uploads
       - aivf-dev-knowledge:/app/knowledge_base_v3
       - aivf-dev-state:/app/state
+      - type: bind
+        source: ${AIVF_ASR_HOST_MODEL_DIR:-./models/asr}
+        target: /app/asr-models
+        read_only: true
 
 volumes:
   aivf-dev-output:
