@@ -27,12 +27,12 @@ class V3Request:
     skip_qc: bool = False
     music_path: str | None = None
     enable_ocr: bool = False
-    enable_transcription: bool = False
     enable_object_detection: bool = True
     enable_diarization: bool = False
     diarization_token: str | None = None
     seed: int = 0
     allow_unsupported_critical_evidence: bool = False
+    enable_transcription: bool = False
 
     def config(self) -> V3Config:
         return V3Config(
