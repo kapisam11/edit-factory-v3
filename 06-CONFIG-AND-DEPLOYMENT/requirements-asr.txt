@@ -1,0 +1,2 @@
+# Optional local source transcription. This package is installed only in ASR-enabled builds.
+faster-whisper==1.2.1
