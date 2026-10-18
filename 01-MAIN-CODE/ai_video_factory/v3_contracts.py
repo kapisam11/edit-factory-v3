@@ -27,6 +27,7 @@ class V3Request:
     skip_qc: bool = False
     music_path: str | None = None
     enable_ocr: bool = False
+    enable_transcription: bool = False
     enable_object_detection: bool = True
     enable_diarization: bool = False
     diarization_token: str | None = None
@@ -75,6 +76,9 @@ class V3Request:
             )
             if errors:
                 raise V3InputError("; ".join(errors))
+
+        if type(self.enable_transcription) is not bool:
+            raise V3InputError("enable_transcription must be a boolean")
 
         try:
             self.config().validate()
