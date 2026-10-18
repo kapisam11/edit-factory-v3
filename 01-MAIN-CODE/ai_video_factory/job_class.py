@@ -27,7 +27,7 @@ DEFAULT_CLASS_BUDGETS = {
 
 
 def classify_job_class(params: dict) -> str:
-    if params.get("enable_diarization") or params.get("enable_object_detection") or params.get("enable_ocr"):
+    if params.get("enable_transcription") or params.get("enable_diarization") or params.get("enable_object_detection") or params.get("enable_ocr"):
         return JobClass.AI_HEAVY.value
     if params.get("gpu_render") or params.get("encoder", "").lower() in {"h264_nvenc", "hevc_nvenc", "h264_vaapi", "h264_amf"}:
         return JobClass.GPU_RENDER.value
