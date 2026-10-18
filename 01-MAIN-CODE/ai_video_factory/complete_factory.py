@@ -194,6 +194,8 @@ def _clip_window_candidates(
             break
 
     return candidates
+
+
 def render_clip_factory(
     source: str,
     package_dir: str,
@@ -295,6 +297,8 @@ def render_clip_factory(
         "candidates": candidate_rows,
     })
     return outputs
+
+
 def update_learning_history(path: str, *, topic: str, platform: str, package_dir: str, metrics: Mapping[str, Any], performance_metrics: Optional[Mapping[str, Any]] = None, video_id: Optional[str] = None, published_at: Optional[str] = None) -> Dict[str, Any]:
     history = load_experiments(path) if os.path.exists(path) else []
     observed_metrics: Dict[str, Any] = dict(metrics)
