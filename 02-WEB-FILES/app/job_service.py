@@ -65,6 +65,7 @@ def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, al
         "gaming_angle": gaming_angle,
         "context": str(data.get("context", "")).strip()[:2000],
         "enable_ocr": _flag(data.get("enable_ocr")),
+        "enable_transcription": _flag(data.get("enable_transcription")),
         "enable_object_detection": _flag(data.get("enable_object_detection", "false")),
         "enable_diarization": _flag(data.get("enable_diarization")),
         "allow_unsupported_critical_evidence": bool(
