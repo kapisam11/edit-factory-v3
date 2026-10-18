@@ -182,6 +182,7 @@
             ['enable_ocr', 'ocr', 'OCR analysis'],
             ['enable_object_detection', 'object_detection', 'Object detection'],
             ['enable_diarization', 'diarization', 'Speaker diarization'],
+            ['enable_transcription', 'transcription', 'Local source transcription'],
         ];
         mappings.forEach(([id, key, label]) => {
             const input = document.getElementById(id);
