@@ -84,3 +84,37 @@ def test_package_ops_feedback_learning_and_queue(tmp_path):
 def test_validate_render_missing_file(tmp_path):
     result = validate_render(str(Path(tmp_path) / "missing.mp4"))
     assert result["ok"] is False
+
+
+
+def test_score_shots_combines_transcript_ocr_and_observed_media_signals():
+    ranked = score_shots(
+        [
+            {
+                "id": "relevant",
+                "text": ["SUBSCRIBE NOW"],
+                "description": "Source footage from 12.0s to 15.0s",
+                "transcript": "The decisive Manchester United winning goal stunned everyone.",
+                "motion_score": 0.2,
+                "face_count": 2,
+                "audio_energy": 0.95,
+                "brightness": 0.5,
+            },
+            {
+                "id": "irrelevant",
+                "text": ["SUBSCRIBE NOW"],
+                "description": "Source footage from 25.0s to 28.0s",
+                "transcript": "A quiet afternoon in the forest.",
+                "motion_score": 0.2,
+                "face_count": 2,
+                "audio_energy": 0.95,
+                "brightness": 0.5,
+            },
+        ],
+        "decisive Manchester United winning goal",
+    )
+
+    assert ranked[0]["shot_id"] == "relevant"
+    assert ranked[0]["semantic_similarity"] == 1.0
+    assert ranked[0]["faces"] == 1.0
+    assert ranked[0]["audio_relevance"] == 0.95

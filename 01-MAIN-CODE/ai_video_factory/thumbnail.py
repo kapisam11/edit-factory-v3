@@ -321,28 +321,46 @@ def _load_background(background_path: Optional[str], size: tuple, focus=(0.68, 0
     return _create_gradient_background(size, (18, 20, 28), (170, 22, 52))
 
 
-def _add_thumbnail_overlay(img: Image.Image, width_fraction: float = 0.56) -> Image.Image:
+def _add_thumbnail_overlay(
+    img: Image.Image, width_fraction: float = 0.56, layout: str = "left"
+) -> Image.Image:
+    """Add a layout-specific contrast treatment behind thumbnail text."""
     w, h = img.size
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    panel_w = int(w * width_fraction)
-    draw.rectangle((0, 0, panel_w, h), fill=(0, 0, 0, 155))
-    draw.rectangle((panel_w, 0, w, h), fill=(0, 0, 0, 35))
-    draw.polygon(
-        [(int(w * 0.36), 0), (int(w * 0.58), 0), (int(w * 0.42), h), (int(w * 0.20), h)],
-        fill=(0, 0, 0, 35),
-    )
+    if layout == "bottom":
+        panel_top = int(h * 0.48)
+        draw.rectangle((0, panel_top, w, h), fill=(0, 0, 0, 188))
+        draw.rectangle((0, panel_top - max(4, h // 100), w, panel_top), fill=(0, 0, 0, 85))
+    elif layout == "top":
+        panel_bottom = int(h * 0.52)
+        draw.rectangle((0, 0, w, panel_bottom), fill=(0, 0, 0, 178))
+        draw.rectangle((0, panel_bottom, w, h), fill=(0, 0, 0, 25))
+    else:
+        panel_w = int(w * width_fraction)
+        draw.rectangle((0, 0, panel_w, h), fill=(0, 0, 0, 155))
+        draw.rectangle((panel_w, 0, w, h), fill=(0, 0, 0, 35))
+        draw.polygon(
+            [(int(w * 0.36), 0), (int(w * 0.58), 0), (int(w * 0.42), h), (int(w * 0.20), h)],
+            fill=(0, 0, 0, 35),
+        )
     return Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
 
 
-def _draw_thumbnail_text(img: Image.Image, text: str, primary: tuple, accent: tuple) -> None:
+def _draw_thumbnail_text(
+    img: Image.Image, text: str, primary: tuple, accent: tuple, layout: str = "left"
+) -> None:
     w, h = img.size
     draw = ImageDraw.Draw(img)
 
     horizontal = w >= h
-    max_width = int(w * (0.52 if horizontal else 0.88))
-    font_size = int(h * (0.18 if horizontal else 0.075))
-    font_size = max(46, min(font_size, 150))
+    if layout in {"bottom", "top"} and horizontal:
+        max_width = int(w * 0.88)
+        font_size = int(h * 0.13)
+    else:
+        max_width = int(w * (0.52 if horizontal else 0.88))
+        font_size = int(h * (0.18 if horizontal else 0.075))
+    font_size = max(42, min(font_size, 150))
     font = _get_font(font_size)
 
     while font_size > 42:
@@ -357,10 +375,15 @@ def _draw_thumbnail_text(img: Image.Image, text: str, primary: tuple, accent: tu
     line_gap = max(8, font_size // 8)
     total_height = sum(draw.textbbox((0, 0), line, font=font)[3] for line in lines) + line_gap * (len(lines) - 1)
 
-    x = int(w * (0.07 if horizontal else 0.06))
-    y = int((h - total_height) * (0.46 if horizontal else 0.74))
-    if horizontal:
-        y = max(int(h * 0.16), y)
+    x = int(w * (0.06 if horizontal else 0.06))
+    if horizontal and layout == "bottom":
+        y = max(int(h * 0.51), int(h - total_height - h * 0.06))
+    elif horizontal and layout == "top":
+        y = int(h * 0.08)
+    else:
+        y = int((h - total_height) * (0.46 if horizontal else 0.74))
+        if horizontal:
+            y = max(int(h * 0.16), y)
 
     for idx, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=font)
@@ -386,8 +409,9 @@ def make_thumbnail(
     style_profile: Optional[dict] = None,
     background_path: Optional[str] = None,
     background_focus: tuple = (0.68, 0.5),
+    variant_index: int = 0,
 ) -> str:
-    """Create a polished thumbnail using a real focal image when available."""
+    """Create a polished thumbnail; variant_index selects a distinct A/B layout."""
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
     if style_profile:
@@ -408,17 +432,27 @@ def make_thumbnail(
         accent = (255, 210, 60)
     if max(primary) < 100:
         primary = (255, 255, 255)
+    layout = ("left", "bottom", "top")[int(variant_index) % 3]
+    # Preserve the learned creator palette for the default variant. Alternative
+    # variants deliberately test contrasting accents as well as composition.
+    variant_accent = accent if int(variant_index) % 3 == 0 else (
+        (62, 225, 205) if int(variant_index) % 3 == 1 else (255, 184, 55)
+    )
     img = _load_background(background_path, size, focus=background_focus)
-    img = _add_thumbnail_overlay(img, width_fraction=0.58 if size[0] >= size[1] else 1.0)
+    img = _add_thumbnail_overlay(
+        img,
+        width_fraction=0.58 if size[0] >= size[1] else 1.0,
+        layout=layout,
+    )
 
-    if size[0] >= size[1]:
-        # Add a simple accent edge to make the card feel intentional without clutter.
+    if size[0] >= size[1] and layout == "left":
+        # The default layout retains the original creator-style accent edge.
         draw = ImageDraw.Draw(img)
         edge_w = max(6, int(size[0] * 0.008))
-        draw.rectangle((0, 0, edge_w, size[1]), fill=accent)
+        draw.rectangle((0, 0, edge_w, size[1]), fill=variant_accent)
 
     text = _prepare_thumbnail_text(subject, max_words=5)
-    _draw_thumbnail_text(img, text, primary=(248, 248, 248), accent=accent)
+    _draw_thumbnail_text(img, text, primary=(248, 248, 248), accent=variant_accent, layout=layout)
 
     img.save(out_path, format="PNG", optimize=True)
     logger.info("[THUMB] Created: %s (%s; background=%s)", out_path, style, bool(background_path))
@@ -457,6 +491,7 @@ def make_thumbnail_variants(
             style_profile=mod_style,
             background_path=background_path,
             background_focus=focus,
+            variant_index=i,
         )
         variants.append(out)
         try:

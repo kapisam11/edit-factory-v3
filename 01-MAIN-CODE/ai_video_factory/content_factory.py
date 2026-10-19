@@ -127,20 +127,82 @@ SHOT_BRIGHTNESS_WEIGHT = 0.10
 SHOT_UNIQUENESS_WEIGHT = 0.20
 SHOT_AUDIO_WEIGHT = 0.15
 SHOT_SEMANTIC_WEIGHT = 0.25
+
+
+def _evidence_text(value: Any) -> str:
+    """Flatten scene text fields without letting one populated field hide another."""
+    if value is None:
+        return ""
+    if isinstance(value, Mapping):
+        return " ".join(_evidence_text(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_evidence_text(item) for item in value)
+    return str(value)
+
+
+def _unit_signal(value: Any, default: float = 0.0) -> float:
+    """Convert optional runtime evidence into a finite normalized signal."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return max(0.0, min(1.0, number))
+
+
 def score_shots(shots: Sequence[Mapping[str, Any]], topic: str = "") -> List[Dict[str, Any]]:
-    """Rank candidate shots using explainable visual/audio/semantic signals."""
+    """Rank source scenes using combined transcript, OCR, description and media evidence.
+
+    Scores are explainable editorial heuristics, not predicted engagement metrics.
+    Missing evidence gets a documented neutral/default value rather than an invented observation.
+    """
     topic_words = set(_words(topic.lower()))
     scored: List[ShotScore] = []
     for index, shot in enumerate(shots):
-        text = str(shot.get("text") or shot.get("description") or "").lower()
-        overlap = len(topic_words.intersection(_words(text)))
+        # Scene intelligence stores transcript, OCR text, object labels, and a
+        # short description in separate fields. Combine them rather than letting
+        # a non-empty OCR field silently mask stronger spoken-content evidence.
+        evidence_parts = [
+            _evidence_text(shot.get(key))
+            for key in (
+                "text",
+                "description",
+                "transcript",
+                "spoken_text",
+                "caption",
+                "captions",
+                "objects",
+                "tags",
+                "labels",
+            )
+        ]
+        evidence_words = set(_words(" ".join(evidence_parts).lower()))
+        overlap = len(topic_words.intersection(evidence_words))
         semantic = min(1.0, overlap / max(1, len(topic_words))) if topic_words else 0.0
+
+        raw_faces = shot.get("faces", shot.get("face_score"))
+        if raw_faces is None:
+            try:
+                face_count = float(shot.get("face_count", 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                face_count = 0.0
+            if not math.isfinite(face_count):
+                face_count = 0.0
+            raw_faces = min(1.0, max(0.0, face_count / 2.0))
+        elif isinstance(raw_faces, (list, tuple, set)):
+            raw_faces = min(1.0, len(raw_faces) / 2.0)
+
+        audio_value = shot.get("audio_relevance")
+        if audio_value is None:
+            audio_value = shot.get("audio_energy", 0.5)
+
         values = {
-            "motion": max(0.0, min(1.0, float(shot.get("motion", shot.get("motion_score", 0.0))))),
-            "faces": max(0.0, min(1.0, float(shot.get("faces", shot.get("face_score", 0.0))))),
-            "brightness": max(0.0, min(1.0, float(shot.get("brightness", 0.5)))),
-            "uniqueness": max(0.0, min(1.0, float(shot.get("uniqueness", shot.get("novelty", 0.5))))),
-            "audio_relevance": max(0.0, min(1.0, float(shot.get("audio_relevance", 0.5)))),
+            "motion": _unit_signal(shot.get("motion", shot.get("motion_score", 0.0))),
+            "faces": _unit_signal(raw_faces),
+            "brightness": _unit_signal(shot.get("brightness", 0.5), default=0.5),
+            "uniqueness": _unit_signal(shot.get("uniqueness", shot.get("novelty", 0.5)), default=0.5),
+            "audio_relevance": _unit_signal(audio_value, default=0.5),
             "semantic_similarity": semantic,
         }
         total = (

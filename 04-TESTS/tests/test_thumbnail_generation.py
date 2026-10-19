@@ -30,6 +30,23 @@ def test_thumbnail_uses_real_background_and_readable_composition(tmp_path: Path)
     assert len(variants) == 3
     assert all(Path(path).is_file() for path in variants)
 
+    # A/B variants must test genuinely different compositions, not merely write
+    # several filenames for effectively identical thumbnails.
+    from PIL import ImageChops
+
+    with Image.open(variants[0]).convert("RGB") as first:
+        for path in variants[1:]:
+            with Image.open(path).convert("RGB") as other:
+                assert ImageChops.difference(first, other).getbbox() is not None
+
+    quality_report = tmp_path / "variants" / "thumbnail_quality.json"
+    assert quality_report.is_file()
+    import json
+
+    report = json.loads(quality_report.read_text(encoding="utf-8"))
+    assert len(report["variants"]) == 3
+    assert len(report["ranked"]) == 3
+
 
 def test_thumbnail_fallback_is_still_valid(tmp_path: Path):
     output = tmp_path / "fallback.png"
