@@ -62,6 +62,21 @@ def register_autonomous_routes(app) -> None:
             }), 400
         return jsonify({"job_id": job_id, "job": manager.store.get(job_id)}), 201
 
+    @app.post("/api/autonomous/reschedule/<job_id>")
+    def autonomous_reschedule(job_id: str):
+        require_admin()
+        payload = request.get_json(silent=True) or {}
+        try:
+            scheduled_at = manager.store.reschedule(job_id, str(payload.get("publish_at") or ""))
+        except KeyError:
+            return jsonify({"error": "job not found"}), 404
+        except (ValueError, TypeError) as exc:
+            return jsonify({
+                "error": str(exc),
+                "code": "AUTONOMY_RESCHEDULE_REJECTED",
+            }), 400
+        return jsonify({"job_id": job_id, "scheduled_at": scheduled_at, "job": manager.store.get(job_id)})
+
     @app.post("/api/autonomous/approve/<job_id>")
     def autonomous_approve(job_id: str):
         require_admin()
