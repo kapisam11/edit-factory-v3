@@ -640,3 +640,44 @@ def test_video_thinking_gate_fails_closed_for_weak_or_missing_reports(
     report, enabled, found, expected
 ):
     assert _video_thinking_review_pending(report, enabled=enabled, found=found) is expected
+
+
+def test_reschedule_requires_approved_scheduled_job_and_future_utc_time(tmp_path: Path):
+    store = AutonomousStore(_config(tmp_path))
+    job_id = store.enqueue("A reschedulable documentary topic")
+    with pytest.raises(ValueError, match="only approved"):
+        store.reschedule(job_id, "2099-01-01T12:00:00Z")
+
+    store.update(
+        job_id,
+        state="SCHEDULED",
+        approval="approved",
+        publish_requested=1,
+        scheduled_at="2099-01-01T12:00:00Z",
+    )
+    target = store.reschedule(job_id, "2099-01-02T15:30:00Z")
+    job = store.get(job_id)
+    assert target == "2099-01-02T15:30:00Z"
+    assert job is not None
+    assert job["scheduled_at"] == target
+    assert job["state"] == "SCHEDULED"
+    assert job["approval"] == "approved"
+
+
+def test_reschedule_rejects_past_and_unreviewed_synthetic_jobs(tmp_path: Path):
+    store = AutonomousStore(_config(tmp_path))
+    job_id = store.enqueue("Synthetic documentary topic")
+    store.update(
+        job_id,
+        state="SCHEDULED",
+        approval="approved",
+        publish_requested=1,
+        ai_generated=1,
+        disclosure_reviewed=0,
+        scheduled_at="2099-01-01T12:00:00Z",
+    )
+    with pytest.raises(ValueError, match="disclosure review"):
+        store.reschedule(job_id, "2099-01-02T15:30:00Z")
+    store.update(job_id, disclosure_reviewed=1)
+    with pytest.raises(ValueError, match="future"):
+        store.reschedule(job_id, "2000-01-01T12:00:00Z")
