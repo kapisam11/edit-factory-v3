@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -41,7 +42,7 @@ def validate_caption_cues(cues: Sequence[Mapping[str, Any]], *, media_duration: 
             raise EditorialReviewError("caption cue IDs must be non-empty and unique")
         if not text or len(text) > max_chars:
             raise EditorialReviewError(f"caption cue {cue_id} text is empty or too long")
-        if start < 0 or end <= start:
+        if not all(math.isfinite(value) for value in (start, end)) or start < 0 or end <= start:
             raise EditorialReviewError(f"caption cue {cue_id} has invalid timing")
         if start < previous_end - 0.001:
             raise EditorialReviewError(f"caption cue {cue_id} overlaps the previous cue")
@@ -94,8 +95,8 @@ def build_editorial_review(*, job_id: str, candidates: Sequence[Mapping[str, Any
             score = float(item.get("score", 0))
         except (TypeError, ValueError, OverflowError) as exc:
             raise EditorialReviewError(f"candidate {item_id} has invalid numeric fields") from exc
-        if not item_id or item_id in seen or start < 0 or end <= start:
-            raise EditorialReviewError(f"candidate {item_id} has invalid ID or source bounds")
+        if not item_id or item_id in seen or not all(math.isfinite(value) for value in (start, end, score)) or start < 0 or end <= start:
+            raise EditorialReviewError(f"candidate {item_id} has invalid ID, score, or source bounds")
         if media_duration is not None and end > float(media_duration) + 0.001:
             raise EditorialReviewError(f"candidate {item_id} exceeds media duration")
         item.update({"id": item_id, "start": round(start, 3), "end": round(end, 3), "score": score})
@@ -125,10 +126,11 @@ def approve_editorial_review(review: Mapping[str, Any], *, expected_revision: st
 
 
 def require_approved_review(review: Mapping[str, Any], *, revision: str) -> None:
-    """Fail closed unless the exact revision was explicitly approved."""
+    """Fail closed unless the exact, unmodified revision was explicitly approved."""
     if review.get("status") != "approved":
         raise EditorialReviewError("human editorial approval is required before rendering")
-    if not revision or revision != review.get("revision") or revision != review.get("approved_revision"):
+    actual = _hash({key: review.get(key, {} if key == "metadata" else []) for key in ("job_id", "metadata", "candidates", "captions")})
+    if not revision or revision != actual or revision != review.get("revision") or revision != review.get("approved_revision"):
         raise EditorialReviewError("approved review revision does not match render inputs")
 
 
