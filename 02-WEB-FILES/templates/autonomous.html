@@ -72,6 +72,15 @@
 
         <section class="panel packages-panel">
           <div class="panel-header">
+            <h2>7-day publishing calendar (UTC)</h2>
+            <button class="btn-sm" onclick="refresh()">Refresh</button>
+          </div>
+          <p class="log-status">Scheduled items appear on their UTC publish date. Items without a scheduled time are listed separately so they are not mistaken for scheduled posts.</p>
+          <div id="publishCalendar"></div>
+        </section>
+
+        <section class="panel packages-panel">
+          <div class="panel-header">
             <h2>Autonomous Queue</h2>
             <button class="btn-sm" onclick="refresh()">Refresh</button>
           </div>
@@ -109,6 +118,37 @@
       }
       return '';
     }
+    function renderPublishingCalendar(queue) {
+      const root = document.getElementById('publishCalendar');
+      const now = new Date();
+      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      const days = Array.from({length:7}, (_, index) => {
+        const date = new Date(today.getTime() + index * 86400000);
+        const key = date.toISOString().slice(0, 10);
+        return {key, label: date.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric', timeZone:'UTC'}), jobs:[]};
+      });
+      const byDay = new Map(days.map(day => [day.key, day]));
+      const unscheduled = [];
+      for (const job of queue) {
+        if (!job.scheduled_at) { unscheduled.push(job); continue; }
+        const date = new Date(job.scheduled_at);
+        if (Number.isNaN(date.getTime())) continue;
+        const day = byDay.get(date.toISOString().slice(0, 10));
+        if (day) day.jobs.push(job);
+      }
+      root.innerHTML = days.map(day => {
+        const entries = day.jobs.sort((a,b) => String(a.scheduled_at).localeCompare(String(b.scheduled_at))).map(job => {
+          const time = new Date(job.scheduled_at).toISOString().slice(11,16) + ' UTC';
+          return '<div class="log-status"><strong>' + esc(time) + '</strong> · ' + esc(job.topic) +
+            '<br><small>' + esc(job.state) + ' · approval=' + esc(job.approval) + '</small></div>';
+        }).join('');
+        return '<section class="panel" style="margin-bottom:8px"><strong>' + esc(day.label) + '</strong>' +
+          (entries || '<div class="log-status">No scheduled videos</div>') + '</section>';
+      }).join('') +
+      '<section class="panel"><strong>Needs scheduling (' + unscheduled.length + ')</strong>' +
+      (unscheduled.slice(0, 20).map(job => '<div class="log-status">' + esc(job.topic) + ' · ' + esc(job.state) + '</div>').join('') ||
+        '<div class="log-status">No unscheduled queue items</div>') + '</section>';
+    }
     async function refresh() {
       try {
         const data = await requestJson('/api/autonomous/status');
@@ -123,6 +163,7 @@
           `<div>Human approval required: ${esc(data.config.require_human_approval)}</div>` +
           `<div>Automatic disclosure-policy acknowledgement: ${esc(data.config.auto_disclosure_policy_acknowledged)}</div>`;
         const queue = await requestJson('/api/autonomous/queue?limit=100');
+        renderPublishingCalendar(queue);
         document.getElementById('queueList').innerHTML = queue.map(job =>
           `<div class="panel" style="margin-bottom:8px"><strong>${esc(job.topic)}</strong><br>` +
           `<small>${esc(job.id)} · ${esc(job.state)} · approval=${esc(job.approval)} · scheduled=${esc(job.scheduled_at || 'auto')}</small><br>` +
