@@ -27,3 +27,4 @@ jobs:
           04-TESTS/tests/test_editorial_regression.py
           04-TESTS/tests/test_editorial_benchmark.py
           04-TESTS/tests/test_editorial_decision_provenance.py
+          04-TESTS/tests/test_editorial_review.py
