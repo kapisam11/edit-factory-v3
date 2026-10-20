@@ -31,11 +31,32 @@ def test_editorial_review_route_exposes_preview_and_preserves_it_after_save(monk
     package.mkdir(parents=True, exist_ok=True)
     (package / "final.v3.mp4").write_bytes(b"not-a-real-video-route-fixture")
     (package / "captions.srt").write_text(SRT, encoding="utf-8")
+    (package / "clip_source_evidence.json").write_text(
+        json.dumps([{
+            "clip_index": 1,
+            "status": "supported",
+            "purpose": "Hook",
+            "source_scene": "scene-1",
+            "evidence_score": 0.81,
+            "relevance_score": 0.79,
+            "editorial_judgement": {
+                "overall": 81.0,
+                "dimensions": {"hook_strength": 90.0, "pacing": 72.0},
+                "reasons": ["strong hook"],
+            },
+            "candidate_rankings": [],
+        }]),
+        encoding="utf-8",
+    )
 
     client = appmod.app.test_client()
     page = client.get("/editorial-review/review-route-fixture")
     assert page.status_code == 200
     assert b"Editorial Review Workbench" in page.data
+    assert b"Editorial decision report" in page.data
+    evidence = client.get("/api/package/review-route-fixture/file/clip_source_evidence.json")
+    assert evidence.status_code == 200
+    assert evidence.json[0]["editorial_judgement"]["dimensions"]["hook_strength"] == 90.0
 
     first = client.get("/api/package/review-route-fixture/review")
     assert first.status_code == 200
