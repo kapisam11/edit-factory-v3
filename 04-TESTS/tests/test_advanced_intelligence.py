@@ -27,3 +27,14 @@ def test_choreographed_captions_split_on_speaker_and_word_limit():
 def test_music_aware_cut_plan_falls_back_without_beats():
     plan = music_aware_cut_plan([1.0, 2.0, 1.5], {"beats": []})
     assert plan == [(0.0, 1.0), (1.0, 3.0), (3.0, 4.5)]
+
+ 
+def test_face_focus_track_rejects_invalid_parameters_before_opening_video():
+    import pytest
+
+    from ai_video_factory.advanced_intelligence import build_face_focus_track
+
+    with pytest.raises(ValueError, match="start_time"):
+        build_face_focus_track("missing.mp4", start_time=-1)
+    with pytest.raises(ValueError, match="smoothing"):
+        build_face_focus_track("missing.mp4", smoothing=0)
