@@ -262,3 +262,59 @@ def test_compositor_does_not_overwrite_reviewed_srt(tmp_path: Path, monkeypatch)
     assert result == str(output)
     assert captured["subtitle"] == reviewed_srt
     assert output.read_bytes() == b"final-video"
+
+
+def test_metadata_only_review_edit_preserves_valid_corrected_render(tmp_path: Path) -> None:
+    import hashlib
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    first = save_review(package, {"title": "Original title", "description": "", "captions_srt": SRT})
+    reviewed_video = package / "reviewed" / "renders" / "corrected.mp4"
+    reviewed_video.parent.mkdir(parents=True)
+    reviewed_video.write_bytes(b"validated-render")
+    state_path = package / "reviewed" / "review-overrides.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.update({
+        "render_status": "rendered",
+        "rendered_for_version": first["version"],
+        "rendered_at": "2026-10-20T10:00:00Z",
+        "rendered_video_file": "reviewed/renders/corrected.mp4",
+        "rendered_video_sha256": hashlib.sha256(reviewed_video.read_bytes()).hexdigest(),
+    })
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    second = save_review(package, {**state, "title": "New upload title"})
+
+    assert second["version"] == 2
+    assert second["render_status"] == "rendered"
+    assert second["rendered_for_version"] == 2
+    assert second["rendered_video_file"] == "reviewed/renders/corrected.mp4"
+    assert second["rendered_video_sha256"] == hashlib.sha256(reviewed_video.read_bytes()).hexdigest()
+
+
+def test_caption_edit_invalidates_corrected_render_link(tmp_path: Path) -> None:
+    import hashlib
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    first = save_review(package, {"title": "Original title", "description": "", "captions_srt": SRT})
+    reviewed_video = package / "reviewed" / "renders" / "corrected.mp4"
+    reviewed_video.parent.mkdir(parents=True)
+    reviewed_video.write_bytes(b"validated-render")
+    state_path = package / "reviewed" / "review-overrides.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.update({
+        "rendered_video_file": "reviewed/renders/corrected.mp4",
+        "rendered_video_sha256": hashlib.sha256(reviewed_video.read_bytes()).hexdigest(),
+    })
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    next_review = save_review(
+        package,
+        {**state, "captions_srt": SRT.replace("A strong opening", "An improved opening")},
+    )
+
+    assert next_review["render_status"] == "requires_rerender"
+    assert "rendered_video_file" not in next_review
+    assert reviewed_video.is_file()
