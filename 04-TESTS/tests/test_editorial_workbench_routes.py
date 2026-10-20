@@ -113,3 +113,38 @@ def test_preset_history_versions_and_legacy_migration(monkeypatch, tmp_path: Pat
     assert migrated.json["version"] == 2
     legacy_history = client.get("/api/presets/legacy-preset/history")
     assert [item["version"] for item in legacy_history.json["history"]] == [1, 2]
+
+
+def test_editorial_review_rating_updates_existing_local_learning_history(monkeypatch, tmp_path: Path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    package = Path(appmod.OUTPUT_FOLDER) / "rated-package"
+    package.mkdir(parents=True, exist_ok=True)
+    history_path = Path(appmod.STATE_DIR) / "learning_history.json"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    history_path.write_text(
+        json.dumps([{
+            "package_dir": str(package.resolve()),
+            "topic": "test topic",
+            "duration_seconds": 30,
+            "caption_style": "karaoke",
+            "user_rating": 3,
+        }]),
+        encoding="utf-8",
+    )
+
+    client = appmod.app.test_client()
+    initial = client.get("/api/package/rated-package/rating")
+    assert initial.status_code == 200
+    assert initial.json["rating"] == 3
+
+    saved = client.post(
+        "/api/package/rated-package/rating",
+        json={"rating": 5, "note": "Excellent hook and captions"},
+    )
+    assert saved.status_code == 200
+    assert saved.json["rating"] == 5
+
+    persisted = json.loads(history_path.read_text(encoding="utf-8"))
+    assert persisted[0]["user_rating"] == 5
+    assert persisted[0]["user_feedback"] == "Excellent hook and captions"
+    assert persisted[0]["user_feedback_at"]
