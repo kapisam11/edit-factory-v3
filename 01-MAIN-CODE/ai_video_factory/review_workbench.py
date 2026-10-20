@@ -7,6 +7,7 @@ Changing burned-in captions still requires an explicit re-render or NLE export.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -152,6 +153,9 @@ def _load_state(package: Path) -> dict[str, Any] | None:
         raise ValueError("Saved review state is damaged; original package files were left untouched") from exc
     if not isinstance(state, dict) or state.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("Unsupported review state version; original package files were left untouched")
+    stored_digest = str(state.get("sha256") or "")
+    if not stored_digest or not hmac.compare_digest(stored_digest, _digest(state)):
+        raise ValueError("Saved review state failed its integrity check; original package files were left untouched")
     return state
 
 
@@ -290,6 +294,17 @@ def restore_review(package: Path, version: int) -> dict[str, Any]:
         previous = json.loads(snapshot.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("Requested review revision snapshot is damaged") from exc
+    history_entry = next(
+        (item for item in current.get("history", []) if int(item.get("version", 0)) == int(version)),
+        None,
+    )
+    expected_digest = str(history_entry.get("sha256") or "") if isinstance(history_entry, dict) else ""
+    if (
+        not isinstance(previous, dict)
+        or not expected_digest
+        or not hmac.compare_digest(expected_digest, _digest(previous))
+    ):
+        raise ValueError("Requested review revision failed its integrity check")
     return save_review(package, previous, restored_from=int(version))
 
 
