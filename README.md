@@ -240,7 +240,7 @@ The dashboard adds an Editorial Review link to completed packages. The review wo
 
 V3 source-scene evidence now includes an explainable editorial jury: hook strength, context independence, narrative fit, pacing, information density, visual energy, and semantic support. Top scene candidates and their reasons are retained with clip evidence. These deterministic heuristics are not predicted views or promises of virality; source-evidence matching remains the gate, so a high general score cannot make an unrelated scene count as evidence.
 
-Saved production presets keep the last 20 revisions. Use Preset History next to Save Preset to inspect and restore a version. Restoring creates a new revision instead of removing later changes; the restore action requires the dashboard admin role.
+Saved production presets keep the last 20 revisions. Use Preset History next to Save Preset to inspect and restore a version. Restoring creates a new revision instead of removing later changes; the restore action requires the dashboard admin role. The review workbench also has a structured cue editor and metadata export, plus a 1–5 creator rating and note. Ratings are written to the existing `AIVF_LEARNING_HISTORY_PATH` (default `state/learning_history.json`) only when the package already has a matching learning-history row; it will return a clear message rather than fabricate a training example. Existing YouTube/TikTok/Instagram analytics import and the local preference model continue to provide measured performance feedback.
 
 ### Face-aware reframing
 
