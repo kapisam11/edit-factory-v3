@@ -6,6 +6,7 @@ why a scene appears higher or lower in a review list.
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Mapping
 
@@ -36,14 +37,16 @@ def _tokens(value: Any) -> list[str]:
     return _WORD_RE.findall(str(value or "").lower())
 
 
-def _number(value: Any, default: float = 0.0) -> float:
+def _finite(value: Any, default: float = 0.0) -> float:
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
-    if number != number or number in (float("inf"), float("-inf")):
-        return default
-    return max(0.0, min(1.0, number))
+    return number if math.isfinite(number) else default
+
+
+def _number(value: Any, default: float = 0.0) -> float:
+    return max(0.0, min(1.0, _finite(value, default)))
 
 
 def _score(value: float) -> float:
@@ -78,7 +81,7 @@ def score_clip_candidate(
     audio = _number(scene.get("audio_energy"))
     try:
         face_count = max(0, int(scene.get("face_count") or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         face_count = 0
     face_signal = 1.0 if face_count else 0.0
 
@@ -103,11 +106,8 @@ def score_clip_candidate(
     hook_strength = min(1.0, 0.42 * importance + 0.25 * motion + 0.18 * audio + 0.15 * curiosity)
     narrative_fit = min(1.0, 0.65 * purpose_overlap + 0.20 * context_overlap + 0.15 * importance)
 
-    try:
-        start = max(0.0, float(scene.get("start", 0.0)))
-        end = max(start, float(scene.get("end", start)))
-    except (TypeError, ValueError):
-        start = end = 0.0
+    start = max(0.0, _finite(scene.get("start", 0.0)))
+    end = max(start, _finite(scene.get("end", start), start))
     duration = max(0.0, end - start)
     if duration <= 0:
         pacing = 0.25
@@ -227,11 +227,8 @@ def rank_clip_candidates(
             topic=topic,
             target_emotion=target_emotion,
         )
-        try:
-            start = round(float(scene.get("start", 0.0)), 3)
-            end = round(float(scene.get("end", start)), 3)
-        except (TypeError, ValueError):
-            start = end = 0.0
+        start = round(max(0.0, _finite(scene.get("start", 0.0))), 3)
+        end = round(max(start, _finite(scene.get("end", start), start)), 3)
         ranked.append({
             "rank": 0,
             "scene_id": str(scene.get("id") or f"scene-{index + 1}"),
