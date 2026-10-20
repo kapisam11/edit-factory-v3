@@ -18,6 +18,13 @@
         .review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
         .review-history { display: flex; flex-wrap: wrap; gap: 7px; }
         .review-muted { opacity: .76; font-size: .92em; }
+        .editorial-report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+        .editorial-clip-card { border: 1px solid var(--border-color, #cbd5e1); border-radius: 8px; padding: 12px; min-width: 0; }
+        .editorial-clip-card h3 { margin-top: 0; margin-bottom: 8px; }
+        .editorial-dimensions { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; margin: 8px 0; }
+        .editorial-reasons { padding-left: 20px; margin: 8px 0; }
+        .editorial-candidate { border-top: 1px solid var(--border-color, #cbd5e1); padding-top: 7px; margin-top: 7px; }
+        .editorial-score { font-weight: 700; font-variant-numeric: tabular-nums; }
         .review-status { min-height: 1.5em; margin-top: 10px; }
         .cue-list { display: grid; gap: 10px; margin-top: 12px; }
         .cue-row { border: 1px solid var(--border-color, #cbd5e1); border-radius: 8px; padding: 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -43,6 +50,14 @@
         <div class="review-note" role="note">
             <strong>Important:</strong> saved edits create separate reviewed sidecar files and a revision history. They do not alter the original MP4 or remove captions already burned into its picture. Use the reviewed SRT as a sidecar or export the project to an editor/re-render workflow to change the actual video.
         </div>
+
+        <section class="panel" style="margin-top: 18px;">
+            <h2>Editorial decision report</h2>
+            <p class="review-muted">Candidate scores are explainable heuristics, not a prediction of views. Semantic evidence remains the gate for selecting a scene.</p>
+            <div id="editorialReport" class="editorial-report-grid">
+                <p class="review-muted">Loading clip evidence…</p>
+            </div>
+        </section>
 
         <div class="review-grid" style="margin-top: 18px;">
             <section class="panel">
@@ -154,6 +169,89 @@
         }, { once: true });
         if (video.readyState >= 1) {
             try { if (track.track) track.track.mode = "showing"; } catch (_) {}
+        }
+    }
+
+    function element(tag, text, className) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = String(text);
+        return node;
+    }
+
+    async function loadEditorialReport() {
+        const container = document.getElementById("editorialReport");
+        try {
+            const url = "/api/package/" + encodeURIComponent(packageName) + "/file/clip_source_evidence.json";
+            const response = await fetch(url, { cache: "no-store" });
+            if (!response.ok) throw new Error("No clip-source evidence report is available for this package.");
+            const rows = await response.json();
+            if (!Array.isArray(rows) || !rows.length) throw new Error("The clip-source evidence report contains no candidates.");
+            container.replaceChildren();
+            rows.forEach((item) => {
+                const card = element("article", null, "editorial-clip-card");
+                const status = String(item.status || "unknown").toUpperCase();
+                card.appendChild(element("h3", "Clip " + String(item.clip_index || "?") + " — " + status));
+                card.appendChild(element("p",
+                    "Purpose: " + String(item.purpose || "unspecified") +
+                    " · Scene: " + String(item.source_scene || "not selected"),
+                    "review-muted"
+                ));
+                const start = Number(item.source_start);
+                const end = Number(item.source_end);
+                if (Number.isFinite(start) && Number.isFinite(end)) {
+                    card.appendChild(element("p", "Source range: " + start.toFixed(2) + "s – " + end.toFixed(2) + "s"));
+                }
+                card.appendChild(element("p",
+                    "Evidence: " + (Number.isFinite(Number(item.evidence_score)) ? Number(item.evidence_score).toFixed(3) : "n/a") +
+                    " · Relevance: " + (Number.isFinite(Number(item.relevance_score)) ? Number(item.relevance_score).toFixed(3) : "n/a"),
+                    "editorial-score"
+                ));
+
+                const judgement = item.editorial_judgement && typeof item.editorial_judgement === "object" ? item.editorial_judgement : {};
+                const dimensions = judgement.dimensions && typeof judgement.dimensions === "object" ? judgement.dimensions : {};
+                const dimensionBox = element("div", null, "editorial-dimensions");
+                Object.entries(dimensions).forEach(([name, value]) => {
+                    dimensionBox.appendChild(element("span", name.replaceAll("_", " ")));
+                    dimensionBox.appendChild(element("span", Number(value).toFixed(1) + "/100", "editorial-score"));
+                });
+                if (Object.keys(dimensions).length) {
+                    card.appendChild(element("h4", "Editorial dimensions"));
+                    card.appendChild(dimensionBox);
+                }
+
+                const reasons = Array.isArray(judgement.reasons) ? judgement.reasons : [];
+                if (reasons.length) {
+                    card.appendChild(element("h4", "Why it ranked this way"));
+                    const list = element("ul", null, "editorial-reasons");
+                    reasons.forEach((reason) => list.appendChild(element("li", reason)));
+                    card.appendChild(list);
+                }
+                const alternatives = Array.isArray(item.candidate_rankings) ? item.candidate_rankings : [];
+                if (alternatives.length) {
+                    card.appendChild(element("h4", "Other candidates"));
+                    alternatives.forEach((candidate) => {
+                        const alternative = element("div", null, "editorial-candidate");
+                        alternative.appendChild(element("strong",
+                            "#" + String(candidate.rank || "?") + " " + String(candidate.scene_id || "scene") +
+                            " — " + String(candidate.editorial_score ?? "n/a") + "/100"
+                        ));
+                        const altStart = Number(candidate.source_start);
+                        const altEnd = Number(candidate.source_end);
+                        if (Number.isFinite(altStart) && Number.isFinite(altEnd)) {
+                            alternative.appendChild(element("p", altStart.toFixed(2) + "s – " + altEnd.toFixed(2) + "s", "review-muted"));
+                        }
+                        const altReasons = candidate.editorial_judgement && Array.isArray(candidate.editorial_judgement.reasons)
+                            ? candidate.editorial_judgement.reasons.slice(0, 2) : [];
+                        altReasons.forEach((reason) => alternative.appendChild(element("p", reason, "review-muted")));
+                        card.appendChild(alternative);
+                    });
+                }
+                if (item.reason) card.appendChild(element("p", item.reason, "review-muted"));
+                container.appendChild(card);
+            });
+        } catch (error) {
+            container.replaceChildren(element("p", error.message || String(error), "review-muted"));
         }
     }
 
@@ -370,6 +468,7 @@
     document.getElementById("applyCueEdits").addEventListener("click", applyCueEdits);
     document.getElementById("showCaptionTrack").addEventListener("change", refreshCaptionTrack);
     loadReview();
+    loadEditorialReport();
 })();
 </script>
 </body>
