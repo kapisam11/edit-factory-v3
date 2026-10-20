@@ -123,6 +123,7 @@ def test_render_reviewed_video_uses_isolated_workspace_and_preserves_original(tm
     assert calls["source"] == str(source.resolve())
     assert calls["kwargs"]["strict_voiceover"] is True
     assert calls["kwargs"]["reuse_existing_voiceover"] is True
+    assert calls["kwargs"]["reuse_existing_subtitles"] is True
     assert calls["kwargs"]["review"] is False
     assert original_video.read_bytes() == b"original-final-video-sentinel"
     assert (package / "plan.json").read_text(encoding="utf-8").find("blueprint_contract") >= 0
@@ -190,3 +191,74 @@ def test_load_review_converts_ass_and_prefers_upload_caption_srt_over_script_srt
         "1\n00:00:00,000 --> 00:00:01,250\nFirst line\nsecond line, with comma\n"
     )
     assert converted["source_caption_file"] == "captions.ass"
+
+
+def test_compositor_does_not_overwrite_reviewed_srt(tmp_path: Path, monkeypatch) -> None:
+    import ai_video_factory.composer as composer
+
+    monkeypatch.setenv("AIVF_ENV", "test")
+    monkeypatch.setenv("AIVF_TEST_DISABLE_EXTERNAL_TTS", "1")
+    monkeypatch.setenv("AIVF_SMART_REFRAME", "0")
+    package = tmp_path / "package"
+    package.mkdir()
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"fake-source")
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"fake-clip")
+    reviewed_srt = (
+        "1\n00:00:00,000 --> 00:00:00,600\nCorrected wording\n\n"
+        "2\n00:00:00,600 --> 00:00:01,000\nCorrected payoff\n"
+    )
+    (package / "script.srt").write_text(reviewed_srt, encoding="utf-8")
+    (package / "plan.json").write_text(
+        json.dumps({
+            "script": "Original plan script that must not replace reviewed captions.",
+            "edit_plan": [[1.0, "hook"]],
+            "v3_directives": {"blueprint_contract": "3.0.0", "platform_profile": {"width": 360, "height": 640}},
+        }),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    monkeypatch.setattr(composer, "_load_source_segments", lambda *_args: [(0.0, 1.0)])
+    monkeypatch.setattr(composer, "detect_beats", lambda *_args: [])
+    monkeypatch.setattr(composer, "generate_clip_paths", lambda *_args: [str(clip)])
+    monkeypatch.setattr(composer, "_get_duration_safe", lambda *_args: 1.0)
+    monkeypatch.setattr(composer, "snap_to_beat", lambda start, _end, duration, _beats: start + duration)
+    monkeypatch.setattr(composer, "build_cinematic_filter", lambda *_args, **_kwargs: "null")
+    monkeypatch.setattr(composer, "choose_encoder", lambda: "libx264")
+
+    def fake_render_segment(_source, _start, _duration, _filter, destination):
+        Path(destination).write_bytes(b"rendered-segment")
+
+    def fake_concat(_list_path, output_path, encoder="libx264"):
+        Path(output_path).write_bytes(b"concatenated-video")
+
+    def fake_burn(_video, subtitle_path, output_path):
+        captured["subtitle"] = Path(subtitle_path).read_text(encoding="utf-8")
+        Path(output_path).write_bytes(b"final-video")
+
+    monkeypatch.setattr(composer, "render_segment", fake_render_segment)
+    monkeypatch.setattr(composer, "concat_segments", fake_concat)
+    monkeypatch.setattr(composer, "burn_subtitles", fake_burn)
+    monkeypatch.setattr(
+        composer,
+        "script_to_srt",
+        lambda *_args, **_kwargs: pytest.fail("reviewed subtitle file must not be regenerated"),
+    )
+
+    output = package / "corrected.mp4"
+    result = composer.compose_short_from_video(
+        str(source),
+        str(package),
+        out_file=str(output),
+        review=False,
+        skip_qc=True,
+        strict_voiceover=True,
+        reuse_existing_voiceover=False,
+        reuse_existing_subtitles=True,
+    )
+
+    assert result == str(output)
+    assert captured["subtitle"] == reviewed_srt
+    assert output.read_bytes() == b"final-video"
