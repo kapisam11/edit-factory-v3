@@ -102,12 +102,20 @@ def validate_srt(value: str) -> str:
 
 def _find_artifact(package: Path, names: tuple[str, ...]) -> Path | None:
     excluded = {"reviewed", "review-revisions", ".review-revisions"}
-    candidates = [
-        path for path in package.rglob("*")
-        if path.is_file() and path.name.lower() in names
-        and not (set(path.relative_to(package).parts) & excluded)
-        and path.stat().st_size <= 2_000_000
-    ]
+    root = package.resolve()
+    candidates = []
+    for path in package.rglob("*"):
+        if path.is_symlink() or not path.is_file() or path.name.lower() not in names:
+            continue
+        if set(path.relative_to(package).parts) & excluded:
+            continue
+        try:
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(root) or path.stat().st_size > 2_000_000:
+                continue
+        except (OSError, RuntimeError):
+            continue
+        candidates.append(path)
     if not candidates:
         return None
     def priority(path: Path) -> tuple[int, int, str]:
@@ -155,11 +163,19 @@ def load_review(package: Path) -> dict[str, Any]:
     captions = _find_artifact(package, ("captions.srt", "subtitle.srt"))
     title = _find_artifact(package, ("title.txt",))
     description = _find_artifact(package, ("description.txt",))
-    video_candidates = [
-        path for path in package.rglob("*.mp4")
-        if path.is_file() and "reviewed" not in path.relative_to(package).parts
-        and path.stat().st_size <= 20 * 1024 * 1024 * 1024
-    ]
+    package_root = package.resolve()
+    video_candidates = []
+    for path in package.rglob("*.mp4"):
+        if path.is_symlink() or not path.is_file() or "reviewed" in path.relative_to(package).parts:
+            continue
+        try:
+            if not path.resolve(strict=True).is_relative_to(package_root):
+                continue
+            if path.stat().st_size > 20 * 1024 * 1024 * 1024:
+                continue
+        except (OSError, RuntimeError):
+            continue
+        video_candidates.append(path)
     preferred = {"final.v3.mp4": 0, "final.mp4": 1, "final_video.mp4": 2, "output.mp4": 3}
     videos = sorted(video_candidates, key=lambda path: (
         preferred.get(path.name.lower(), 99),
