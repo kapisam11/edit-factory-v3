@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Sequence
 
+from ..editorial_jury import score_clip_candidate
+
 
 _PURPOSE_TERMS = {
     "hook": {"hook", "opening", "reveal", "reaction", "result"},
@@ -85,10 +87,8 @@ def build_clip_evidence(
     for index, clip in enumerate(clip_plan, start=1):
         purpose = str(clip.get("purpose", "")).strip().lower()
         visual = str(clip.get("visual_style", "")).strip()
-        best: Mapping[str, Any] | None = None
-        best_score = 0.0
-        best_relevance = 0.0
-        for scene in scenes:
+        ranked: list[dict[str, Any]] = []
+        for scene_index, scene in enumerate(scenes, start=1):
             scene_tokens = _tokens(
                 " ".join(
                     str(scene.get(key, ""))
@@ -104,16 +104,59 @@ def build_clip_evidence(
                 source_duration=source_duration,
             )
             importance = min(1.0, max(0.0, float(scene.get("importance_score", 0.0))))
-            # Importance can break ties, but can never create relevance by itself.
+            # Keep semantic support primary. The editorial jury is a transparent
+            # tie-breaker, and it cannot turn an unrelated scene into evidence.
             total = 0.80 * relevance + 0.20 * importance
-            if relevance > best_relevance or (
-                abs(relevance - best_relevance) <= 1e-9 and total > best_score
-            ):
-                best_score = total
-                best_relevance = relevance
-                best = scene
+            judgement = score_clip_candidate(
+                scene,
+                purpose,
+                visual_style=visual,
+                source_duration=source_duration,
+                topic=str(footage_evidence.get("topic", "")),
+                target_emotion=str(footage_evidence.get("target_emotion", "")),
+            )
+            gated_jury_score = (float(judgement["overall"]) / 100.0) * min(1.0, relevance / 0.30)
+            selection_score = 0.85 * relevance + 0.15 * gated_jury_score if relevance > 0 else 0.0
+            ranked.append({
+                "scene": scene,
+                "scene_index": scene_index,
+                "relevance": relevance,
+                "total": total,
+                "selection_score": selection_score,
+                "judgement": judgement,
+                "lexical": lexical,
+                "semantic": semantic,
+            })
 
-        if best is None:
+        ranked.sort(
+            key=lambda item: (
+                float(item["selection_score"]),
+                float(item["relevance"]),
+                float(item["total"]),
+                float(item["judgement"]["overall"]),
+            ),
+            reverse=True,
+        )
+        best = ranked[0] if ranked else None
+        best_scene = best["scene"] if best else None
+        best_score = float(best["total"]) if best else 0.0
+        best_relevance = float(best["relevance"]) if best else 0.0
+        best_judgement = best["judgement"] if best else None
+        alternative_candidates = [
+            {
+                "rank": rank,
+                "scene_id": str(item["scene"].get("id") or f"scene-{item['scene_index']}"),
+                "source_start": float(item["scene"].get("start", 0.0)),
+                "source_end": float(item["scene"].get("end", 0.0)),
+                "relevance_score": round(min(1.0, max(0.0, float(item["relevance"]))), 3),
+                "ranking_score": round(min(1.0, max(0.0, float(item["selection_score"]))), 3),
+                "editorial_score": item["judgement"]["overall"],
+                "editorial_judgement": item["judgement"],
+            }
+            for rank, item in enumerate(ranked[:3], start=1)
+        ]
+
+        if best_scene is None:
             results.append({
                 "clip_index": index,
                 "source_asset": source_asset,
@@ -122,12 +165,17 @@ def build_clip_evidence(
                 "relevance_score": 0.0,
                 "reason": "no analyzed source scene available",
                 "purpose": clip.get("purpose", ""),
+                "editorial_judgement": None,
+                "candidate_rankings": [],
             })
             continue
 
-        motion = min(1.0, max(0.0, float(best.get("motion_score", 0.0))))
-        audio = min(1.0, max(0.0, float(best.get("audio_energy", 0.0))))
-        face_count = max(0, int(best.get("face_count", 0) or 0))
+        motion = min(1.0, max(0.0, float(best_scene.get("motion_score", 0.0))))
+        audio = min(1.0, max(0.0, float(best_scene.get("audio_energy", 0.0))))
+        try:
+            face_count = max(0, int(best_scene.get("face_count", 0) or 0))
+        except (TypeError, ValueError):
+            face_count = 0
         visual_evidence = min(1.0, 0.55 * motion + 0.35 * audio + (0.10 if face_count > 0 else 0.0))
         semantic_supported = best_relevance > 0.0 and (
             best_score > 0.10 and best_relevance >= 0.25
@@ -149,27 +197,29 @@ def build_clip_evidence(
         results.append({
             "clip_index": index,
             "source_asset": source_asset,
-            "source_scene": str(best.get("id", "")),
-            "source_start": float(best.get("start", 0.0)),
-            "source_end": float(best.get("end", 0.0)),
+            "source_scene": str(best_scene.get("id", "")),
+            "source_start": float(best_scene.get("start", 0.0)),
+            "source_end": float(best_scene.get("end", 0.0)),
             "semantic_tags": sorted(_tokens(
                 " ".join(
-                    str(best.get(key, ""))
+                    str(best_scene.get(key, ""))
                     for key in ("description", "objects", "text")
                 )
             ))[:16],
             "evidence_score": round(min(1.0, best_score), 3),
-            "relevance_score": round(min(1.0, best_relevance), 3),
-            "importance_score": round(min(1.0, max(0.0, float(best.get("importance_score", 0.0)))), 3),
+            "relevance_score": round(min(1.0, max(0.0, best_relevance)), 3),
+            "importance_score": round(min(1.0, max(0.0, float(best_scene.get("importance_score", 0.0)))), 3),
             "status": status,
             "purpose": clip.get("purpose", ""),
             "reason": (
-                "semantic purpose/style relevance with importance as secondary context"
+                "semantic purpose/style relevance with editorial scoring as a gated tie-breaker"
                 if semantic_supported and status == "supported"
                 else "source scene is traceable but semantic labels are sparse; marked weak and requires review"
                 if status == "weak"
                 else "no meaningful semantic or visual evidence matched any analyzed source scene"
             ),
+            "editorial_judgement": best_judgement,
+            "candidate_rankings": alternative_candidates,
         })
     return results
 
