@@ -1,6 +1,8 @@
 """Dashboard compatibility routes plus queue, cancellation, retention, and secret management."""
+import hashlib
 import json
 import os
+from datetime import datetime, timezone
 import signal
 import shutil
 import subprocess
@@ -393,8 +395,8 @@ def register_dashboard_compat(app):
                 row = conn.execute("SELECT value FROM settings WHERE key=?", (f"preset:{name}",)).fetchone()
                 previous = read_record(row["value"]) if row else read_record("{}")
                 version = int(previous.get("version", 0)) + 1
-                saved_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-                digest = __import__("hashlib").sha256(serialized_config.encode("utf-8")).hexdigest()
+                saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+                digest = hashlib.sha256(serialized_config.encode("utf-8")).hexdigest()
                 history = list(previous.get("history") or [])
                 # Legacy presets become version 1 on their next save.
                 if row and not history and previous.get("config"):
@@ -402,10 +404,15 @@ def register_dashboard_compat(app):
                     history.append({
                         "version": max(1, int(previous.get("version", 0))),
                         "saved_at": saved_at,
-                        "sha256": __import__("hashlib").sha256(old_json.encode("utf-8")).hexdigest(),
+                        "sha256": hashlib.sha256(old_json.encode("utf-8")).hexdigest(),
                         "config": previous["config"],
                         "legacy": True,
                     })
+                # Legacy revisions already occupy an ID; continue with the next ID.
+                version = max(
+                    version,
+                    max((int(item.get("version", 0)) for item in history), default=0) + 1,
+                )
                 history.append({
                     "version": version,
                     "saved_at": saved_at,
@@ -491,12 +498,12 @@ def register_dashboard_compat(app):
                 return jsonify({"error": "Preset revision not found"}), 404
             config = target["config"]
             latest = max(int(record.get("version", 0)), 0) + 1
-            saved_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
             encoded = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
             history.append({
                 "version": latest,
                 "saved_at": saved_at,
-                "sha256": __import__("hashlib").sha256(encoded.encode("utf-8")).hexdigest(),
+                "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
                 "config": config,
                 "restored_from": version,
             })
@@ -547,7 +554,19 @@ def register_dashboard_compat(app):
             state = save_review(package, payload)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
-        return jsonify({"ok": True, "review": state}), 200
+        from urllib.parse import quote
+        response = dict(state)
+        video_file = str(state.get("video_file") or "")
+        if video_file:
+            video_path = (package / video_file).resolve()
+            root = package.resolve()
+            if video_path.is_file() and video_path.is_relative_to(root):
+                response["video_url"] = (
+                    f"/api/package/{quote(package.name, safe='')}/file/"
+                    f"{quote(video_file, safe='/')}"
+                )
+        response["review_url"] = f"/editorial-review/{quote(package.name, safe='')}"
+        return jsonify({"ok": True, "review": response}), 200
 
     @app.route("/api/package/<name>/review/restore/<int:version>", methods=["POST"])
     def compat_package_review_restore(name, version):
@@ -563,7 +582,19 @@ def register_dashboard_compat(app):
             state = restore_review(package, version)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
-        return jsonify({"ok": True, "review": state}), 200
+        from urllib.parse import quote
+        response = dict(state)
+        video_file = str(state.get("video_file") or "")
+        if video_file:
+            video_path = (package / video_file).resolve()
+            root = package.resolve()
+            if video_path.is_file() and video_path.is_relative_to(root):
+                response["video_url"] = (
+                    f"/api/package/{quote(package.name, safe='')}/file/"
+                    f"{quote(video_file, safe='/')}"
+                )
+        response["review_url"] = f"/editorial-review/{quote(package.name, safe='')}"
+        return jsonify({"ok": True, "review": response}), 200
 
     @app.route("/api/package/<name>/script", methods=["GET", "POST"])
     def compat_script(name):
