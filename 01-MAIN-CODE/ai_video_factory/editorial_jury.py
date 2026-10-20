@@ -134,9 +134,29 @@ def score_clip_candidate(
         "source_support": 0.14,
     }
     if purpose_key == "hook":
-        weights.update({"hook": 0.27, "narrative_fit": 0.18, "source_support": 0.15})
+        weights.update({
+            "hook": 0.27,
+            "context_independence": 0.12,
+            "narrative_fit": 0.18,
+            "pacing": 0.11,
+            "information_density": 0.10,
+            "visual_energy": 0.08,
+            "source_support": 0.14,
+        })
     elif purpose_key in {"payoff", "climax", "punchline", "final impact"}:
-        weights.update({"context_independence": 0.15, "narrative_fit": 0.27, "source_support": 0.14})
+        weights.update({
+            "hook": 0.14,
+            "context_independence": 0.15,
+            "narrative_fit": 0.27,
+            "pacing": 0.12,
+            "information_density": 0.12,
+            "visual_energy": 0.06,
+            "source_support": 0.14,
+        })
+    # Purpose-specific weights must remain a convex combination. Without this
+    # normalization the overall score could exceed 100 and saturate at the cap.
+    weight_sum = sum(weights.values())
+    weights = {name: value / weight_sum for name, value in weights.items()}
     overall = sum({
         "hook": hook_strength,
         "context_independence": context_independence,
@@ -175,6 +195,7 @@ def score_clip_candidate(
     return {
         "overall": _score(overall),
         "dimensions": dimensions,
+        "weights": {name: round(weight, 4) for name, weight in weights.items()},
         "reasons": reasons,
         "purpose": purpose_key,
         "duration_seconds": round(duration, 3),
