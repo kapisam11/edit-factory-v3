@@ -100,7 +100,7 @@ def test_render_reviewed_video_uses_isolated_workspace_and_preserves_original(tm
     original_video.write_bytes(b"original-final-video-sentinel")
     (package / "captions.srt").write_text(SRT, encoding="utf-8")
     seed = load_review(package)
-    save_review(package, {**seed, "captions_srt": SRT.replace("Opening line", "Corrected opening")})
+    save_review(package, {**seed, "captions_srt": SRT.replace("A strong opening", "Corrected opening")})
 
     calls = {}
 
@@ -159,3 +159,34 @@ def test_render_reviewed_video_refuses_changed_source(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="source has changed"):
         render_reviewed_video(package)
     assert not (package / "reviewed" / "renders").exists()
+
+
+def test_load_review_converts_ass_and_prefers_upload_caption_srt_over_script_srt(tmp_path: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "script.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nScript fallback\n",
+        encoding="utf-8",
+    )
+    (package / "upload" / "youtube_shorts").mkdir(parents=True)
+    (package / "upload" / "youtube_shorts" / "captions.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nPrecisely timed caption\n",
+        encoding="utf-8",
+    )
+    loaded = load_review(package)
+    assert "Precisely timed caption" in loaded["captions_srt"]
+    assert loaded["source_caption_file"] == "upload/youtube_shorts/captions.srt"
+
+    ass_package = tmp_path / "ass-pkg"
+    ass_package.mkdir()
+    (ass_package / "captions.ass").write_text(
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:00.00,0:00:01.25,Default,,0,0,0,,First line\\Nsecond line, with comma\n",
+        encoding="utf-8",
+    )
+    converted = load_review(ass_package)
+    assert converted["captions_srt"] == (
+        "1\n00:00:00,000 --> 00:00:01,250\nFirst line\nsecond line, with comma\n"
+    )
+    assert converted["source_caption_file"] == "captions.ass"
