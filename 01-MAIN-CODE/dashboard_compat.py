@@ -524,6 +524,58 @@ def register_dashboard_compat(app):
             return "Package not found", 404
         return web_app_v3.render_template("editorial_review.html", package_name=package.name)
 
+    @app.route("/api/package/<name>/rating", methods=["POST"])
+    def compat_package_rating(name):
+        import web_app_v3
+        from ai_video_factory.video_learning import add_manual_rating
+
+        package = web_app_v3._resolve_package(name)
+        if not _package_access_allowed(web_app_v3, package):
+            return jsonify({"error": "Package not found"}), 404
+        if _request_role() not in {"admin", "editor"}:
+            return jsonify({"error": "Editor role required"}), 403
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Rating body must be a JSON object"}), 400
+        rating = payload.get("rating")
+        if isinstance(rating, bool) or not isinstance(rating, int) or not 1 <= rating <= 5:
+            return jsonify({"error": "rating must be an integer from 1 to 5"}), 400
+        note = payload.get("note", "")
+        if not isinstance(note, str) or len(note) > 1000:
+            return jsonify({"error": "note must be text with at most 1000 characters"}), 400
+
+        state_dir = Path(os.environ.get("AIVF_STATE_DIR", "state")).expanduser()
+        history_path = Path(
+            os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+            or str(state_dir / "learning_history.json")
+        ).expanduser()
+        try:
+            saved = add_manual_rating(
+                history_path,
+                package_dir=str(package.resolve()),
+                rating=rating,
+                note=note,
+            )
+        except FileNotFoundError:
+            return jsonify({
+                "error": "No learning-history file or matching package record exists yet. "
+                "Only rate packages that have a saved learning-history record, or configure "
+                "AIVF_LEARNING_HISTORY_PATH to the existing history file."
+            }), 409
+        except KeyError:
+            return jsonify({
+                "error": "This package is not yet matched to an existing learning-history record."
+            }), 409
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return jsonify({"error": f"Could not save channel feedback: {type(exc).__name__}: {exc}"}), 400
+        return jsonify({
+            "ok": True,
+            "package": package.name,
+            "rating": int(saved.get("user_rating", rating)),
+            "feedback_at": saved.get("user_feedback_at"),
+            "message": "Creator feedback saved to the configured local learning history.",
+        }), 200
+
     @app.route("/api/package/<name>/review", methods=["GET", "POST"])
     def compat_package_review(name):
         import web_app_v3
