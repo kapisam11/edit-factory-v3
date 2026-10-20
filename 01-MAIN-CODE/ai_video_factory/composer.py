@@ -224,14 +224,53 @@ def compose_short_from_video(
         segment_index = index if is_v3 else index % len(segments)
         src_clip = clip_paths[src_index]
         dst = os.path.join(temp_dir, f"segment_{index:02d}.mp4")
-        vf = build_cinematic_filter(index, label, duration, filter_effectiveness or None, target_size=target_size)
         seg_start, seg_end = segments[segment_index]
         to = snap_to_beat(seg_start, seg_end, duration, beats)
         clip_dur = _get_duration_safe(src_clip)
         if clip_dur > 0:
             to = min(max(to, seg_start + min(duration, clip_dur)), seg_start + clip_dur)
         actual_dur = max(0.01, duration if is_v3 else (to - seg_start))
-        render_segment(src_clip, seg_start, actual_dur, vf, dst)
+
+        # Face-aware reframing is an optional local enhancement. If OpenCV or
+        # its cascade is unavailable, keep rendering with the existing crop.
+        focus_track = None
+        reframe_mode = os.environ.get("AIVF_SMART_REFRAME", "auto").strip().lower()
+        if reframe_mode not in {"0", "off", "false", "no", "disabled"}:
+            try:
+                from .advanced_intelligence import build_face_focus_track
+                focus_track = build_face_focus_track(
+                    src_clip,
+                    start_time=0.0,
+                    duration=actual_dur,
+                    sample_seconds=0.8,
+                    max_samples=90,
+                    smoothing=0.35,
+                )
+                if not focus_track or not any(float(sample.get("confidence", 0.0)) > 0 for sample in focus_track):
+                    focus_track = None
+            except Exception as exc:
+                logger.warning(
+                    "Face-aware reframing unavailable for segment %s; retaining the normal crop: %s",
+                    index,
+                    exc,
+                )
+                focus_track = None
+                # A shared flag avoids one noisy warning per segment when an optional
+                # dependency is missing; independent render jobs can retry next time.
+                if isinstance(filter_effectiveness, dict):
+                    filter_effectiveness["_smart_reframe_unavailable"] = True
+        if isinstance(filter_effectiveness, dict) and filter_effectiveness.get("_smart_reframe_unavailable"):
+            focus_track = None
+
+        vf = build_cinematic_filter(
+            index,
+            label,
+            actual_dur,
+            filter_effectiveness or None,
+            target_size=target_size,
+            focus_track=focus_track,
+        )
+        render_segment(src_clip, 0.0, actual_dur, vf, dst)
         return index, dst
 
     try:
