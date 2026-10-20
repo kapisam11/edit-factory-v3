@@ -296,8 +296,6 @@ def build_face_focus_track(
     Requires optional OpenCV. The caller should use centered cropping as a
     best-effort fallback when no track can be produced.
     """
-    require("vision")
-    import cv2  # type: ignore
     import math
 
     try:
@@ -313,11 +311,22 @@ def build_face_focus_track(
     if not math.isfinite(alpha) or not 0.0 < alpha <= 1.0:
         raise ValueError("smoothing must be in (0, 1]")
     interval = min(5.0, max(0.25, interval))
+    if duration is not None:
+        try:
+            requested_duration_arg = float(duration)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("duration must be numeric") from exc
+        if not math.isfinite(requested_duration_arg) or requested_duration_arg <= 0:
+            raise ValueError("duration must be finite and positive")
+    else:
+        requested_duration_arg = None
     try:
         limit = max(2, min(200, int(max_samples)))
     except (TypeError, ValueError) as exc:
         raise ValueError("max_samples must be an integer") from exc
 
+    require("vision")
+    import cv2  # type: ignore
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         cap.release()
@@ -326,12 +335,10 @@ def build_face_focus_track(
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         frame_count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
         file_duration = frame_count / fps if fps > 0 and frame_count > 0 else 0.0
-        if duration is None:
+        if requested_duration_arg is None:
             requested_duration = max(0.0, file_duration - start)
         else:
-            requested_duration = float(duration)
-            if not math.isfinite(requested_duration) or requested_duration <= 0:
-                raise ValueError("duration must be finite and positive")
+            requested_duration = requested_duration_arg
             if file_duration > 0:
                 requested_duration = min(requested_duration, max(0.0, file_duration - start))
         if requested_duration <= 0:
