@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import importlib
+import json
+from pathlib import Path
+
+
+SRT = (
+    "1\n00:00:00,000 --> 00:00:01,000\nOpening line\n\n"
+    "2\n00:00:01,000 --> 00:00:02,000\nPayoff line\n"
+)
+
+
+def _load_dashboard(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIVF_ENV", "test")
+    monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("AIVF_UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setenv("AIVF_OUTPUT_DIR", str(tmp_path / "output"))
+    monkeypatch.setenv("FLASK_SECRET_KEY", "test-editorial-review-secret")
+    import web_app_v3
+    importlib.reload(web_app_v3)
+    web_app_v3.app.secret_key = "editorial-review-test-secret"
+    import dashboard_compat
+    dashboard_compat.register_dashboard_compat(web_app_v3.app)
+    return web_app_v3
+
+
+def test_editorial_review_route_exposes_preview_and_preserves_it_after_save(monkeypatch, tmp_path: Path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    package = Path(appmod.OUTPUT_FOLDER) / "review-route-fixture"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "final.v3.mp4").write_bytes(b"not-a-real-video-route-fixture")
+    (package / "captions.srt").write_text(SRT, encoding="utf-8")
+
+    client = appmod.app.test_client()
+    page = client.get("/editorial-review/review-route-fixture")
+    assert page.status_code == 200
+    assert b"Editorial Review Workbench" in page.data
+
+    first = client.get("/api/package/review-route-fixture/review")
+    assert first.status_code == 200
+    assert first.json["video_url"]
+    assert first.json["captions_srt"] == SRT
+
+    saved = client.post(
+        "/api/package/review-route-fixture/review",
+        json={"title": "Corrected title", "description": "Corrected description", "captions_srt": SRT.replace("Opening line", "Better opening")},
+    )
+    assert saved.status_code == 200
+    review = saved.json["review"]
+    assert review["video_url"]
+    assert review["version"] == 1
+    assert review["render_status"] == "requires_rerender"
+    assert (package / "final.v3.mp4").read_bytes() == b"not-a-real-video-route-fixture"
+
+    restored = client.post("/api/package/review-route-fixture/review/restore/1")
+    assert restored.status_code == 200
+    assert restored.json["review"]["version"] == 2
+    assert restored.json["review"]["video_url"]
+
+
+def test_preset_history_versions_and_legacy_migration(monkeypatch, tmp_path: Path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    client = appmod.app.test_client()
+
+    created = client.post("/api/presets", json={"name": "test-preset", "config": {"target_seconds": 30}})
+    assert created.status_code == 201
+    assert created.json["version"] == 1
+
+    updated = client.post("/api/presets", json={"name": "test-preset", "config": {"target_seconds": 45}})
+    assert updated.status_code == 201
+    assert updated.json["version"] == 2
+
+    history = client.get("/api/presets/test-preset/history")
+    assert history.status_code == 200
+    assert [item["version"] for item in history.json["history"]] == [1, 2]
+
+    restored = client.post("/api/presets/test-preset/restore/1")
+    assert restored.status_code == 200
+    assert restored.json["version"] == 3
+    presets = client.get("/api/presets")
+    assert presets.status_code == 200
+    assert presets.json["test-preset"]["target_seconds"] == 30
+
+    with appmod.get_db() as conn:
+        conn.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)",
+            ("preset:legacy-preset", json.dumps({"target_seconds": 20})),
+        )
+    migrated = client.post("/api/presets", json={"name": "legacy-preset", "config": {"target_seconds": 25}})
+    assert migrated.status_code == 201
+    assert migrated.json["version"] == 2
+    legacy_history = client.get("/api/presets/legacy-preset/history")
+    assert [item["version"] for item in legacy_history.json["history"]] == [1, 2]
