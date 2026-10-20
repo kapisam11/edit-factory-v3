@@ -103,6 +103,44 @@ def validate_srt(value: str) -> str:
     return "\n\n".join(normalized) + "\n"
 
 
+def _ass_to_srt(value: str) -> str:
+    """Convert common ASS dialogue cues to SRT without losing comma-containing text."""
+    rows: list[tuple[str, str, str]] = []
+
+    def clean_time(value: str) -> str:
+        match = re.fullmatch(r"\s*(\d+):([0-5]\d):([0-5]\d)[.](\d{1,3})\s*", value)
+        if not match:
+            raise ValueError(f"invalid ASS timestamp: {value!r}")
+        hours, minutes, seconds, fraction = match.groups()
+        milliseconds = int(fraction.ljust(3, "0")[:3])
+        return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d},{milliseconds:03d}"
+
+    for line in value.splitlines():
+        if not line.startswith("Dialogue:"):
+            continue
+        fields = line.split(",", 9)
+        if len(fields) < 10:
+            raise ValueError("Invalid ASS dialogue row: expected ten fields")
+        try:
+            start = clean_time(fields[1])
+            end = clean_time(fields[2])
+        except ValueError as exc:
+            raise ValueError("Invalid ASS dialogue timestamp") from exc
+        text = re.sub(r"\{[^}]*\}", "", fields[9]).replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ").strip()
+        if not text:
+            raise ValueError("ASS dialogue cue has empty text")
+        if _seconds(end) <= _seconds(start):
+            raise ValueError("ASS dialogue cue end must be after its start")
+        rows.append((start, end, text))
+    rows.sort(key=lambda row: _seconds(row[0]))
+    return validate_srt(
+        "\n\n".join(
+            f"{index}\n{start} --> {end}\n{text}"
+            for index, (start, end, text) in enumerate(rows, start=1)
+        ) + ("\n" if rows else "")
+    )
+
+
 def _find_artifact(package: Path, names: tuple[str, ...]) -> Path | None:
     excluded = {"reviewed", "review-revisions", ".review-revisions"}
     root = package.resolve()
@@ -125,7 +163,9 @@ def _find_artifact(package: Path, names: tuple[str, ...]) -> Path | None:
         rel = path.relative_to(package).as_posix().lower()
         exact = 0 if "/" not in rel else 1
         preference = names.index(path.name.lower())
-        return (exact, preference, rel)
+        # Prefer authoritative caption formats over a root script-only SRT;
+        # within the same format prefer a package-root copy.
+        return (preference, exact, rel)
     return sorted(candidates, key=priority)[0]
 
 
@@ -166,7 +206,7 @@ def load_review(package: Path) -> dict[str, Any]:
     state = _load_state(package)
     if state is not None:
         return state
-    captions = _find_artifact(package, ("captions.srt", "subtitle.srt"))
+    captions = _find_artifact(package, ("captions.srt", "subtitle.srt", "captions.ass", "script.srt"))
     title = _find_artifact(package, ("title.txt",))
     description = _find_artifact(package, ("description.txt",))
     package_root = package.resolve()
@@ -196,7 +236,11 @@ def load_review(package: Path) -> dict[str, Any]:
         "updated_at": "",
         "title": _safe_read(title).strip(),
         "description": _safe_read(description).strip(),
-        "captions_srt": _safe_read(captions),
+        "captions_srt": (
+            _ass_to_srt(_safe_read(captions))
+            if captions is not None and captions.suffix.lower() == ".ass"
+            else _safe_read(captions)
+        ),
         "source_caption_file": captions.relative_to(package).as_posix() if captions else "",
         "video_file": relative_video,
         "render_status": "unchanged",
