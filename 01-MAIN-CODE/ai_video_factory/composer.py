@@ -153,6 +153,7 @@ def compose_short_from_video(
     model_key: Optional[str] = None,
     skip_qc: bool = False,
     strict_voiceover: bool = False,
+    reuse_existing_voiceover: bool = False,
 ) -> str:
     _ensure_dir(package_dir)
     if out_file is None:
@@ -329,7 +330,12 @@ def compose_short_from_video(
         and os.environ.get("AIVF_ENV", "development").strip().lower() == "test"
         and os.environ.get("AIVF_TEST_DISABLE_EXTERNAL_TTS", "0").strip() == "1"
     )
-    if test_tts_disabled:
+    if reuse_existing_voiceover:
+        if not os.path.isfile(vo_path) or os.path.getsize(vo_path) <= 0:
+            raise RuntimeError("Requested voiceover reuse, but package voice.mp3 is missing or empty.")
+        has_vo = True
+        logger.info("Reusing the validated package voiceover; external TTS was not called.")
+    elif test_tts_disabled:
         logger.info("Skipping external TTS in test environment; source audio remains in the render.")
     else:
         try:
