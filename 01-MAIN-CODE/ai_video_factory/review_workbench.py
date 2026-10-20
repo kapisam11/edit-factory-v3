@@ -11,7 +11,9 @@ import hmac
 import json
 import os
 import re
+import shutil
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -279,6 +281,145 @@ def save_review(package: Path, edits: Mapping[str, Any], *, restored_from: int |
     return state
 
 
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def render_reviewed_video(package: Path) -> dict[str, Any]:
+    """Re-render a reviewed V3 package into a new output without altering its source.
+
+    Requires a valid V3 plan/timeline, an unchanged source matching
+    source_manifest.json, and the original package voice.mp3. A private scratch
+    workspace ensures the regular final MP4, plan, captions, and voiceover are
+    never mutated by the reviewed render.
+    """
+    root = package.resolve()
+    if not root.is_dir():
+        raise ValueError("Package directory does not exist")
+    state = load_review(root)
+    if not str(state.get("captions_srt") or "").strip():
+        raise ValueError("Add or correct at least one subtitle cue before rendering")
+    for filename in ("plan.json", "timeline.json", "source_manifest.json", "voice.mp3"):
+        path = root / filename
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Reviewed rendering requires the original {filename} artifact")
+    plan_path = root / "plan.json"
+    timeline_path = root / "timeline.json"
+    manifest_path = root / "source_manifest.json"
+    for path in (plan_path, timeline_path, manifest_path):
+        try:
+            if path.stat().st_size > 10 * 1024 * 1024:
+                raise ValueError(f"Required artifact is too large to review-render: {path.name}")
+        except OSError as exc:
+            raise ValueError(f"Unable to inspect required artifact {path.name}") from exc
+
+    try:
+        plan_payload = json.loads(plan_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("The saved V3 plan or source manifest is unreadable") from exc
+    directives = plan_payload.get("v3_directives") if isinstance(plan_payload, dict) else None
+    edit_plan = plan_payload.get("edit_plan") if isinstance(plan_payload, dict) else None
+    if not isinstance(directives, dict) or not directives.get("blueprint_contract"):
+        raise ValueError("Reviewed re-render currently requires a saved V3 blueprint contract")
+    if not isinstance(edit_plan, list) or not edit_plan:
+        raise ValueError("The saved V3 edit plan is missing or empty")
+    if not isinstance(manifest, dict):
+        raise ValueError("The saved source manifest is invalid")
+    source_value = str(manifest.get("source_path") or "").strip()
+    expected_sha = str(manifest.get("source_sha256") or "").strip().lower()
+    if not source_value or not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+        raise ValueError("The source manifest does not contain a valid original source hash")
+    source = Path(source_value).expanduser()
+    if source.is_symlink():
+        raise ValueError("The original source is a symbolic link; reviewed rendering was refused")
+    try:
+        source = source.resolve(strict=True)
+        if not source.is_file():
+            raise ValueError("The original source is not a regular file")
+        observed_sha = _sha256_file(source)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("The original source file is no longer available") from exc
+    if not hmac.compare_digest(expected_sha, observed_sha):
+        raise ValueError("The original source has changed since this package was rendered; re-render refused")
+
+    voiceover = root / "voice.mp3"
+    if voiceover.stat().st_size <= 0:
+        raise ValueError("The original package voiceover is empty; reviewed re-render refused")
+    caption_sidecar = _review_dir(root) / "captions.srt"
+    if not caption_sidecar.is_file() or caption_sidecar.is_symlink():
+        raise ValueError("Reviewed caption sidecar is missing")
+    try:
+        captions = validate_srt(caption_sidecar.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError(f"Reviewed captions failed validation: {exc}") from exc
+    if not captions:
+        raise ValueError("Reviewed captions are empty")
+
+    renders_dir = _review_dir(root) / "renders"
+    renders_dir.mkdir(parents=True, exist_ok=True)
+    workspace = Path(tempfile.mkdtemp(prefix=".render-work-", dir=str(renders_dir)))
+    try:
+        shutil.copy2(plan_path, workspace / "plan.json")
+        shutil.copy2(timeline_path, workspace / "timeline.json")
+        shutil.copy2(voiceover, workspace / "voice.mp3")
+        effectiveness = root / "filter_effectiveness.json"
+        if effectiveness.is_file() and not effectiveness.is_symlink() and effectiveness.stat().st_size <= 2 * 1024 * 1024:
+            shutil.copy2(effectiveness, workspace / "filter_effectiveness.json")
+        _atomic_text(workspace / "script.srt", captions)
+        # There is intentionally no captions.ass in this isolated workspace:
+        # the reviewed SRT is the sole caption source for this re-render.
+
+        from .composer import compose_short_from_video
+        from .render_engine import validate_media_output
+
+        output = workspace / "final.reviewed.mp4"
+        rendered = compose_short_from_video(
+            str(source),
+            str(workspace),
+            out_file=str(output),
+            review=False,
+            auto_fix=False,
+            model_key=None,
+            skip_qc=True,
+            strict_voiceover=True,
+            reuse_existing_voiceover=True,
+        )
+        rendered_path = Path(rendered).resolve(strict=True)
+        if rendered_path != output.resolve() or not rendered_path.is_file():
+            raise RuntimeError("Reviewed renderer returned an unexpected output path")
+        validate_media_output(str(rendered_path), require_video=True, require_audio=True)
+        if rendered_path.stat().st_size <= 0:
+            raise RuntimeError("Reviewed render is empty")
+        version = int(state.get("version", 0))
+        stamp = uuid.uuid4().hex[:8]
+        filename = f"final.reviewed-v{version}-{stamp}.mp4"
+        destination = renders_dir / filename
+        os.replace(rendered_path, destination)
+        relative = destination.relative_to(root).as_posix()
+        rendered_sha = _sha256_file(destination)
+        updated = dict(state)
+        updated.update({
+            "render_status": "rendered",
+            "rendered_for_version": version,
+            "rendered_at": _now(),
+            "rendered_video_file": relative,
+            "rendered_video_sha256": rendered_sha,
+        })
+        # The integrity digest intentionally covers editable review content only;
+        # render bookkeeping cannot invalidate the saved review's own hash.
+        _atomic_json(_state_path(root), updated)
+        return updated
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
 def restore_review(package: Path, version: int) -> dict[str, Any]:
     """Restore an older revision as a new revision; history remains append-only."""
     if isinstance(version, bool) or int(version) < 1:
@@ -308,4 +449,4 @@ def restore_review(package: Path, version: int) -> dict[str, Any]:
     return save_review(package, previous, restored_from=int(version))
 
 
-__all__ = ["load_review", "restore_review", "save_review", "validate_srt"]
+__all__ = ["load_review", "render_reviewed_video", "restore_review", "save_review", "validate_srt"]
