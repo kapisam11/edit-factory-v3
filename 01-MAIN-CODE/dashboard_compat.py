@@ -497,9 +497,14 @@ def register_dashboard_compat(app):
             if target is None or not isinstance(target.get("config"), dict):
                 return jsonify({"error": "Preset revision not found"}), 404
             config = target["config"]
+            if not target.get("legacy"):
+                source_encoding = json.dumps(config, ensure_ascii=False, allow_nan=False)
+                source_digest = hashlib.sha256(source_encoding.encode("utf-8")).hexdigest()
+                if source_digest != str(target.get("sha256") or ""):
+                    return jsonify({"error": "Preset revision failed its integrity check"}), 409
             latest = max(int(record.get("version", 0)), 0) + 1
             saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-            encoded = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            encoded = json.dumps(config, ensure_ascii=False, allow_nan=False)
             history.append({
                 "version": latest,
                 "saved_at": saved_at,
