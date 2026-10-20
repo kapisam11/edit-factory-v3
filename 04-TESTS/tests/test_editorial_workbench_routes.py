@@ -185,3 +185,29 @@ def test_review_render_endpoint_returns_separate_rendered_video_url(monkeypatch,
     )
     assert response.json["review"]["video_url"].endswith("/final.v3.mp4")
     assert (package / "final.v3.mp4").read_bytes() == b"original-video"
+
+
+def test_preset_restore_rejects_tampered_revision_hash(monkeypatch, tmp_path: Path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    client = appmod.app.test_client()
+    created = client.post(
+        "/api/presets",
+        json={"name": "tamper-test", "config": {"target_seconds": 30}},
+    )
+    assert created.status_code == 201
+
+    with appmod.get_db() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key=?",
+            ("preset:tamper-test",),
+        ).fetchone()
+        record = json.loads(row["value"])
+        record["history"][0]["config"]["target_seconds"] = 999
+        conn.execute(
+            "UPDATE settings SET value=? WHERE key=?",
+            (json.dumps(record), "preset:tamper-test"),
+        )
+
+    restored = client.post("/api/presets/tamper-test/restore/1")
+    assert restored.status_code == 409
+    assert "integrity check" in restored.json["error"]
