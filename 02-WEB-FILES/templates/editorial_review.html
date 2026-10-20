@@ -21,6 +21,9 @@
         .editorial-report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
         .editorial-clip-card { border: 1px solid var(--border-color, #cbd5e1); border-radius: 8px; padding: 12px; min-width: 0; }
         .editorial-clip-card h3 { margin-top: 0; margin-bottom: 8px; }
+        .rating-row { display: grid; grid-template-columns: minmax(0, .45fr) minmax(180px, 1fr); gap: 8px; align-items: end; }
+        .rating-row select { padding: 9px; border: 1px solid var(--border-color, #cbd5e1); border-radius: 8px; font: inherit; }
+        @media (max-width: 540px) { .rating-row { grid-template-columns: 1fr; } }
         .editorial-dimensions { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; margin: 8px 0; }
         .editorial-reasons { padding-left: 20px; margin: 8px 0; }
         .editorial-candidate { border-top: 1px solid var(--border-color, #cbd5e1); padding-top: 7px; margin-top: 7px; }
@@ -84,6 +87,29 @@
                 </div>
                 <div class="review-status log-status" id="reviewStatus" role="status" aria-live="polite"></div>
                 <p class="review-muted" id="reviewVersion"></p>
+                <hr>
+                <h3>Teach Edit Factory your style</h3>
+                <p class="review-muted">Rate this finished video and add a brief reason. Ratings are saved to the existing local learning history; later recommendations can use them once enough measured examples exist.</p>
+                <div class="rating-row">
+                    <div class="review-field">
+                        <label for="creatorRating">Your rating (1–5)</label>
+                        <select id="creatorRating">
+                            <option value="5">5 — Excellent</option>
+                            <option value="4">4 — Good</option>
+                            <option value="3" selected>3 — Average</option>
+                            <option value="2">2 — Weak</option>
+                            <option value="1">1 — Poor</option>
+                        </select>
+                    </div>
+                    <div class="review-field">
+                        <label for="creatorRatingNote">What worked or failed?</label>
+                        <input id="creatorRatingNote" maxlength="1000" placeholder="e.g. hook was weak, captions were great">
+                    </div>
+                </div>
+                <div class="review-actions">
+                    <button type="button" class="btn-sm" id="saveCreatorRating">Save creator feedback</button>
+                </div>
+                <p class="review-muted" id="creatorRatingState" role="status" aria-live="polite"></p>
             </section>
 
             <section class="panel">
@@ -177,6 +203,44 @@
         if (className) node.className = className;
         if (text !== undefined && text !== null) node.textContent = String(text);
         return node;
+    }
+
+    async function loadCreatorRating() {
+        const state = document.getElementById("creatorRatingState");
+        try {
+            const response = await fetch("/api/package/" + encodeURIComponent(packageName) + "/rating", { cache: "no-store" });
+            const data = await readJson(response);
+            if (!response.ok || data.error) throw new Error(data.error || "Could not load creator feedback");
+            if (data.rating !== null && data.rating !== undefined && Number.isInteger(Number(data.rating)) && Number(data.rating) >= 1 && Number(data.rating) <= 5) {
+                document.getElementById("creatorRating").value = String(data.rating);
+            }
+            document.getElementById("creatorRatingNote").value = data.note || "";
+            state.textContent = data.available
+                ? "Saved rating: " + String(data.rating || "not rated") + (data.feedback_at ? " · " + data.feedback_at : "")
+                : "No matching learning-history record yet; the first rating will explain if it cannot be saved.";
+        } catch (error) {
+            state.textContent = error.message || String(error);
+        }
+    }
+
+    async function saveCreatorRating() {
+        const state = document.getElementById("creatorRatingState");
+        state.textContent = "Saving creator feedback…";
+        try {
+            const response = await fetch("/api/package/" + encodeURIComponent(packageName) + "/rating", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    rating: Number(document.getElementById("creatorRating").value),
+                    note: document.getElementById("creatorRatingNote").value
+                })
+            });
+            const data = await readJson(response);
+            if (!response.ok || data.error) throw new Error(data.error || "Could not save creator feedback");
+            state.textContent = "Saved " + data.rating + "/5 to local learning history. The model uses real ratings and analytics only when there is enough evidence.";
+        } catch (error) {
+            state.textContent = error.message || String(error);
+        }
     }
 
     async function loadEditorialReport() {
@@ -467,8 +531,10 @@
     document.getElementById("downloadMetadata").addEventListener("click", downloadMetadata);
     document.getElementById("applyCueEdits").addEventListener("click", applyCueEdits);
     document.getElementById("showCaptionTrack").addEventListener("change", refreshCaptionTrack);
+    document.getElementById("saveCreatorRating").addEventListener("click", saveCreatorRating);
     loadReview();
     loadEditorialReport();
+    loadCreatorRating();
 })();
 </script>
 </body>
