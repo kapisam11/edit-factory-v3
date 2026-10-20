@@ -52,3 +52,24 @@ def test_review_rejects_oversized_or_invalid_payloads(tmp_path: Path) -> None:
         validate_srt("x" * 500_001)
     with pytest.raises(ValueError, match="title must be text"):
         save_review(package, {"title": 123, "description": "", "captions_srt": ""})
+
+ 
+def test_review_and_revision_integrity_checks_reject_tampered_sidecars(tmp_path: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    first = save_review(package, {"title": "Version one", "description": "", "captions_srt": SRT})
+    save_review(package, {**first, "title": "Version two"})
+
+    revision = package / "reviewed" / "revisions" / "rev-000001.json"
+    revision_data = json.loads(revision.read_text(encoding="utf-8"))
+    revision_data["title"] = "Tampered title"
+    revision.write_text(json.dumps(revision_data), encoding="utf-8")
+    with pytest.raises(ValueError, match="integrity check"):
+        restore_review(package, 1)
+
+    state_path = package / "reviewed" / "review-overrides.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["title"] = "Tampered latest title"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(ValueError, match="integrity check"):
+        load_review(package)
