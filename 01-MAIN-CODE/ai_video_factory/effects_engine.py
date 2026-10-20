@@ -53,6 +53,11 @@ def build_cinematic_filter(
             previous_t = t
         if not valid:
             return f"({input_size}-{crop_size})/2"
+        # Bound filter-graph size: long videos can have many tracked samples,
+        # but a dozen interpolation anchors are enough for smooth short-form crops.
+        if len(valid) > 12:
+            selected_indices = sorted({round(i * (len(valid) - 1) / 11) for i in range(12)})
+            valid = [valid[i] for i in selected_indices]
         positions = [(t, f"({center:.6f}*{input_size}-{crop_size}/2)") for t, center in valid]
         expression = positions[-1][1]
         for idx in range(len(positions) - 2, -1, -1):
