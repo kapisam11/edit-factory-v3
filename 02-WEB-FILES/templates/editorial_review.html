@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Factory V3 — Editorial Review</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/enhancements.css">
+    <style>
+        .review-shell { max-width: 1440px; margin: 0 auto; padding: 24px; }
+        .review-grid { display: grid; grid-template-columns: minmax(320px, 0.9fr) minmax(360px, 1.1fr); gap: 18px; align-items: start; }
+        .review-field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+        .review-field input, .review-field textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--border-color, #cbd5e1); border-radius: 8px; background: var(--input-bg, #fff); color: var(--text-color, #172033); font: inherit; }
+        .review-field textarea { min-height: 120px; resize: vertical; }
+        #captionsSrt { min-height: 360px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.45; }
+        .review-video { width: 100%; max-height: 68vh; background: #080808; border-radius: 10px; }
+        .review-note { border-left: 3px solid #b7791f; background: rgba(183,121,31,.08); padding: 10px 12px; border-radius: 5px; line-height: 1.5; }
+        .review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .review-history { display: flex; flex-wrap: wrap; gap: 7px; }
+        .review-muted { opacity: .76; font-size: .92em; }
+        .review-status { min-height: 1.5em; margin-top: 10px; }
+        @media (max-width: 900px) { .review-grid { grid-template-columns: minmax(0, 1fr); } .review-shell { padding: 12px; } }
+    </style>
+</head>
+<body>
+    <main class="review-shell">
+        <header class="panel">
+            <h1>Editorial Review Workbench</h1>
+            <p class="review-muted">Package: <strong id="packageName"></strong></p>
+            <p>Correct subtitle wording and timing, update upload metadata, preview your reviewed caption track, and restore earlier edits. Original package files are kept intact.</p>
+            <a href="/" class="btn-sm">Back to dashboard</a>
+        </header>
+
+        <div class="review-note" role="note">
+            <strong>Important:</strong> saved edits create separate reviewed sidecar files and a revision history. They do not alter the original MP4 or remove captions already burned into its picture. Use the reviewed SRT as a sidecar or export the project to an editor/re-render workflow to change the actual video.
+        </div>
+
+        <div class="review-grid" style="margin-top: 18px;">
+            <section class="panel">
+                <h2>Preview</h2>
+                <video id="reviewVideo" class="review-video" controls playsinline preload="metadata"></video>
+                <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+                    <input type="checkbox" id="showCaptionTrack" checked>
+                    Preview reviewed SRT as a subtitle track
+                </label>
+                <p class="review-muted">If the source MP4 already has burned-in captions, disable the preview track to avoid seeing both.</p>
+                <div class="review-field">
+                    <label for="reviewTitle">Upload title</label>
+                    <input id="reviewTitle" maxlength="500" autocomplete="off">
+                </div>
+                <div class="review-field">
+                    <label for="reviewDescription">Upload description</label>
+                    <textarea id="reviewDescription" maxlength="50000"></textarea>
+                </div>
+                <div class="review-actions">
+                    <button type="button" class="btn-sm" id="saveReview">Save corrections</button>
+                    <button type="button" class="btn-sm" id="previewCaptions">Refresh caption preview</button>
+                    <button type="button" class="btn-sm" id="downloadCaptions">Download reviewed SRT</button>
+                </div>
+                <div class="review-status log-status" id="reviewStatus" role="status" aria-live="polite"></div>
+                <p class="review-muted" id="reviewVersion"></p>
+            </section>
+
+            <section class="panel">
+                <h2>Subtitle text and timing</h2>
+                <p class="review-muted">Edit standard SubRip (.srt) cues below. The save operation checks timestamp syntax, ascending cue starts, cue duration, empty text, and size limits.</p>
+                <div class="review-field">
+                    <label for="captionsSrt">Captions (.srt)</label>
+                    <textarea id="captionsSrt" spellcheck="false" autocapitalize="off"></textarea>
+                </div>
+                <h3>Revision history</h3>
+                <div id="reviewHistory" class="review-history"></div>
+                <p class="review-muted">Restoring an earlier revision creates a new revision, so later work is not silently erased.</p>
+            </section>
+        </div>
+    </main>
+<script>
+(() => {
+    "use strict";
+    const packageName = {{ package_name|tojson }};
+    const endpoint = "/api/package/" + encodeURIComponent(packageName) + "/review";
+    const video = document.getElementById("reviewVideo");
+    const status = document.getElementById("reviewStatus");
+    let loadedReview = null;
+    let trackUrl = null;
+
+    document.getElementById("packageName").textContent = packageName;
+
+    function setStatus(message, kind) {
+        status.textContent = message || "";
+        status.className = "review-status log-status " + (kind || "");
+    }
+
+    async function readJson(response) {
+        const text = await response.text();
+        if (!text) return {};
+        try { return JSON.parse(text); }
+        catch (_) { return { error: text.slice(0, 500) }; }
+    }
+
+    function srtToVtt(srt) {
+        const blocks = String(srt || "").replace(/^\uFEFF/, "").replace(/\r/g, "").trim().split(/\n\s*\n/).filter(Boolean);
+        const cues = [];
+        for (const block of blocks) {
+            const lines = block.split("\n");
+            if (lines.length && /^\d+$/.test(lines[0].trim())) lines.shift();
+            if (!lines.length || !lines[0].includes("-->")) continue;
+            const times = lines[0].split("-->");
+            if (times.length !== 2) continue;
+            const start = times[0].trim().replace(",", ".");
+            const end = times[1].trim().replace(",", ".");
+            cues.push(start + " --> " + end + "\n" + lines.slice(1).join("\n"));
+        }
+        return "WEBVTT\n\n" + cues.join("\n\n") + (cues.length ? "\n" : "");
+    }
+
+    function refreshCaptionTrack() {
+        const oldTrack = video.querySelector("track[data-review-track='true']");
+        if (oldTrack) oldTrack.remove();
+        if (trackUrl) URL.revokeObjectURL(trackUrl);
+        trackUrl = null;
+        if (!document.getElementById("showCaptionTrack").checked) return;
+        const vtt = srtToVtt(document.getElementById("captionsSrt").value);
+        const blob = new Blob([vtt], { type: "text/vtt;charset=utf-8" });
+        trackUrl = URL.createObjectURL(blob);
+        const track = document.createElement("track");
+        track.kind = "subtitles";
+        track.label = "Reviewed captions";
+        track.srclang = "en";
+        track.default = true;
+        track.dataset.reviewTrack = "true";
+        track.src = trackUrl;
+        video.appendChild(track);
+        track.addEventListener("load", () => {
+            if (track.track) track.track.mode = document.getElementById("showCaptionTrack").checked ? "showing" : "disabled";
+        }, { once: true });
+        if (video.readyState >= 1) {
+            try { if (track.track) track.track.mode = "showing"; } catch (_) {}
+        }
+    }
+
+    function renderHistory(history) {
+        const container = document.getElementById("reviewHistory");
+        container.replaceChildren();
+        if (!Array.isArray(history) || !history.length) {
+            const empty = document.createElement("p");
+            empty.className = "review-muted";
+            empty.textContent = "No saved revisions yet.";
+            container.appendChild(empty);
+            return;
+        }
+        for (const revision of [...history].reverse()) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "btn-sm";
+            const suffix = revision.restored_from ? " (restored from v" + revision.restored_from + ")" : "";
+            button.textContent = "Restore v" + revision.version + suffix;
+            button.title = (revision.updated_at || "") + " · SHA-256 " + (revision.sha256 || "");
+            button.addEventListener("click", () => restoreRevision(Number(revision.version)));
+            container.appendChild(button);
+        }
+    }
+
+    function assignState(data) {
+        loadedReview = data;
+        document.getElementById("reviewTitle").value = data.title || "";
+        document.getElementById("reviewDescription").value = data.description || "";
+        document.getElementById("captionsSrt").value = data.captions_srt || "";
+        document.getElementById("reviewVersion").textContent =
+            "Current review revision: v" + Number(data.version || 0) +
+            " · Output status: " + String(data.render_status || "unchanged");
+        if (data.video_url && video.getAttribute("src") !== data.video_url) {
+            video.src = data.video_url;
+        } else if (!data.video_url) {
+            video.removeAttribute("src");
+        }
+        renderHistory(data.history || []);
+        refreshCaptionTrack();
+    }
+
+    async function loadReview() {
+        setStatus("Loading package review…");
+        try {
+            const response = await fetch(endpoint, { cache: "no-store" });
+            const data = await readJson(response);
+            if (!response.ok || data.error) throw new Error(data.error || "Failed to load review data");
+            assignState(data);
+            setStatus(data.video_url ? "Review loaded. Original video is unchanged." : "Review loaded. No MP4 preview was found in this package.", data.video_url ? "done" : "");
+        } catch (error) {
+            setStatus(error.message || String(error), "error");
+        }
+    }
+
+    async function saveReview() {
+        const payload = {
+            title: document.getElementById("reviewTitle").value,
+            description: document.getElementById("reviewDescription").value,
+            captions_srt: document.getElementById("captionsSrt").value
+        };
+        setStatus("Saving reviewed sidecar files…");
+        try {
+            const response = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const data = await readJson(response);
+            if (!response.ok || data.error) throw new Error(data.error || "Failed to save review");
+            assignState(data.review);
+            setStatus("Saved v" + data.review.version + ". Original MP4 remains unchanged; use the reviewed artifacts for your next render/upload workflow.", "done");
+        } catch (error) {
+            setStatus(error.message || String(error), "error");
+        }
+    }
+
+    async function restoreRevision(version) {
+        if (!window.confirm("Restore revision v" + version + "? This will create a new revision and keep the current one in history.")) return;
+        setStatus("Restoring revision…");
+        try {
+            const response = await fetch(endpoint + "/restore/" + version, { method: "POST" });
+            const data = await readJson(response);
+            if (!response.ok || data.error) throw new Error(data.error || "Failed to restore revision");
+            assignState(data.review);
+            setStatus("Restored revision v" + version + " as new revision v" + data.review.version + ".", "done");
+        } catch (error) {
+            setStatus(error.message || String(error), "error");
+        }
+    }
+
+    function downloadSrt() {
+        const blob = new Blob([document.getElementById("captionsSrt").value], { type: "application/x-subrip;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = packageName.replace(/[^A-Za-z0-9._-]+/g, "_") + ".reviewed.srt";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    document.getElementById("saveReview").addEventListener("click", saveReview);
+    document.getElementById("previewCaptions").addEventListener("click", () => {
+        refreshCaptionTrack();
+        setStatus("Subtitle preview refreshed. Save corrections to keep a versioned copy.", "");
+    });
+    document.getElementById("downloadCaptions").addEventListener("click", downloadSrt);
+    document.getElementById("showCaptionTrack").addEventListener("change", refreshCaptionTrack);
+    loadReview();
+})();
+</script>
+</body>
+</html>
