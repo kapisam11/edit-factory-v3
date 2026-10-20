@@ -175,7 +175,10 @@ def _safe_read(path: Path | None) -> str:
 
 def _review_dir(package: Path) -> Path:
     root = package.resolve()
-    review = (root / "reviewed").resolve()
+    candidate = root / "reviewed"
+    if candidate.is_symlink():
+        raise ValueError("Review directory must not be a symbolic link")
+    review = candidate.resolve()
     if review.parent != root:
         raise ValueError("Invalid review directory")
     return review
@@ -328,7 +331,6 @@ def save_review(package: Path, edits: Mapping[str, Any], *, restored_from: int |
     })
     history = history[-50:]
     state = {**edits_payload, **render_metadata, "history": history, "sha256": digest}
-    _atomic_json(_state_path(package), state)
     _atomic_text(review_dir / "captions.srt", captions)
     _atomic_text(review_dir / "title.txt", title.strip() + ("\n" if title.strip() else ""))
     _atomic_text(review_dir / "description.txt", description.strip() + ("\n" if description.strip() else ""))
@@ -347,6 +349,10 @@ def save_review(package: Path, edits: Mapping[str, Any], *, restored_from: int |
             "sha256": digest,
         },
     )
+
+    # Publish the new review state last: if any sidecar write fails (for
+    # example, disk-full), readers continue to see the previous valid state.
+    _atomic_json(_state_path(package), state)
 
     keep_versions = {int(item.get("version", 0)) for item in history}
     for path in revisions_dir.glob("rev-*.json"):
@@ -435,13 +441,24 @@ def render_reviewed_video(package: Path) -> dict[str, Any]:
         raise ValueError("Reviewed caption sidecar is missing")
     try:
         captions = validate_srt(caption_sidecar.read_text(encoding="utf-8"))
+        state_captions = validate_srt(str(state.get("captions_srt") or ""))
     except (OSError, UnicodeError, ValueError) as exc:
         raise ValueError(f"Reviewed captions failed validation: {exc}") from exc
     if not captions:
         raise ValueError("Reviewed captions are empty")
+    if captions != state_captions:
+        raise ValueError("Reviewed caption sidecar does not match saved review state; save corrections again before rendering")
 
-    renders_dir = _review_dir(root) / "renders"
+    review_dir = _review_dir(root)
+    renders_dir = review_dir / "renders"
+    if renders_dir.is_symlink():
+        raise ValueError("Reviewed renders directory must not be a symbolic link")
     renders_dir.mkdir(parents=True, exist_ok=True)
+    review_root = review_dir.resolve(strict=True)
+    renders_root = renders_dir.resolve(strict=True)
+    if not renders_root.is_relative_to(review_root):
+        raise ValueError("Reviewed renders directory must remain inside the review directory")
+    renders_dir = renders_root
     workspace = Path(tempfile.mkdtemp(prefix=".render-work-", dir=str(renders_dir)))
     try:
         shutil.copy2(plan_path, workspace / "plan.json")
