@@ -599,6 +599,27 @@ def register_dashboard_compat(app):
             "message": "Creator feedback saved to the configured local learning history.",
         }), 200
 
+    def _editorial_review_response(package, state):
+        from urllib.parse import quote
+        response = dict(state)
+        package_root = package.resolve()
+        package_name = quote(package.name, safe="")
+        for field, response_key in (
+            ("video_file", "video_url"),
+            ("rendered_video_file", "reviewed_video_url"),
+        ):
+            relative = str(state.get(field) or "")
+            if not relative:
+                continue
+            candidate = (package_root / relative).resolve()
+            if candidate.is_file() and candidate.is_relative_to(package_root):
+                response[response_key] = (
+                    f"/api/package/{package_name}/file/"
+                    f"{quote(relative, safe='/')}"
+                )
+        response["review_url"] = f"/editorial-review/{package_name}"
+        return response
+
     @app.route("/api/package/<name>/review", methods=["GET", "POST"])
     def compat_package_review(name):
         import web_app_v3
@@ -614,19 +635,7 @@ def register_dashboard_compat(app):
                 state = load_review(package)
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 409
-            from urllib.parse import quote
-            response = dict(state)
-            video_file = str(state.get("video_file") or "")
-            if video_file:
-                video_path = (package / video_file).resolve()
-                root = package.resolve()
-                if video_path.is_file() and video_path.is_relative_to(root):
-                    response["video_url"] = (
-                        f"/api/package/{quote(package.name, safe='')}/file/"
-                        f"{quote(video_file, safe='/')}"
-                    )
-            response["review_url"] = f"/editorial-review/{quote(package.name, safe='')}"
-            return jsonify(response)
+            return jsonify(_editorial_review_response(package, state))
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return jsonify({"error": "Review body must be a JSON object"}), 400
@@ -634,19 +643,7 @@ def register_dashboard_compat(app):
             state = save_review(package, payload)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
-        from urllib.parse import quote
-        response = dict(state)
-        video_file = str(state.get("video_file") or "")
-        if video_file:
-            video_path = (package / video_file).resolve()
-            root = package.resolve()
-            if video_path.is_file() and video_path.is_relative_to(root):
-                response["video_url"] = (
-                    f"/api/package/{quote(package.name, safe='')}/file/"
-                    f"{quote(video_file, safe='/')}"
-                )
-        response["review_url"] = f"/editorial-review/{quote(package.name, safe='')}"
-        return jsonify({"ok": True, "review": response}), 200
+        return jsonify({"ok": True, "review": _editorial_review_response(package, state)}), 200
 
     @app.route("/api/package/<name>/review/restore/<int:version>", methods=["POST"])
     def compat_package_review_restore(name, version):
@@ -662,19 +659,29 @@ def register_dashboard_compat(app):
             state = restore_review(package, version)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
-        from urllib.parse import quote
-        response = dict(state)
-        video_file = str(state.get("video_file") or "")
-        if video_file:
-            video_path = (package / video_file).resolve()
-            root = package.resolve()
-            if video_path.is_file() and video_path.is_relative_to(root):
-                response["video_url"] = (
-                    f"/api/package/{quote(package.name, safe='')}/file/"
-                    f"{quote(video_file, safe='/')}"
-                )
-        response["review_url"] = f"/editorial-review/{quote(package.name, safe='')}"
-        return jsonify({"ok": True, "review": response}), 200
+        return jsonify({"ok": True, "review": _editorial_review_response(package, state)}), 200
+
+    @app.route("/api/package/<name>/review/render", methods=["POST"])
+    def compat_package_review_render(name):
+        import web_app_v3
+        from ai_video_factory.review_workbench import render_reviewed_video
+
+        package = web_app_v3._resolve_package(name)
+        if not _package_access_allowed(web_app_v3, package):
+            return jsonify({"error": "Package not found"}), 404
+        if _request_role() not in {"admin", "editor"}:
+            return jsonify({"error": "Editor role required"}), 403
+        try:
+            state = render_reviewed_video(package)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except Exception as exc:
+            # Don't expose a traceback or command arguments in an API response.
+            return jsonify({
+                "error": "Reviewed render failed. The original video was left unchanged.",
+                "detail": f"{type(exc).__name__}: {str(exc)[:500]}",
+            }), 422
+        return jsonify({"ok": True, "review": _editorial_review_response(package, state)}), 200
 
     @app.route("/api/package/<name>/script", methods=["GET", "POST"])
     def compat_script(name):
