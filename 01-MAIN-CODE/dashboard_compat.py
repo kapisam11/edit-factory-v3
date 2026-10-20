@@ -676,10 +676,15 @@ def register_dashboard_compat(app):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 409
         except Exception as exc:
-            # Don't expose a traceback or command arguments in an API response.
+            # Keep file paths, FFmpeg arguments, and provider details out of the
+            # client response; the full exception remains in server diagnostics.
+            import logging
+            logging.getLogger(__name__).exception(
+                "Reviewed render failed for package %s", package.name
+            )
             return jsonify({
                 "error": "Reviewed render failed. The original video was left unchanged.",
-                "detail": f"{type(exc).__name__}: {str(exc)[:500]}",
+                "detail": type(exc).__name__,
             }), 422
         return jsonify({"ok": True, "review": _editorial_review_response(package, state)}), 200
 
