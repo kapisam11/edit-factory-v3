@@ -100,10 +100,11 @@
                 <div class="rating-row">
                     <div class="review-field">
                         <label for="creatorRating">Your rating (1–5)</label>
-                        <select id="creatorRating">
+                        <select id="creatorRating" required>
+                            <option value="" selected disabled>Choose a rating…</option>
                             <option value="5">5 — Excellent</option>
                             <option value="4">4 — Good</option>
-                            <option value="3" selected>3 — Average</option>
+                            <option value="3">3 — Average</option>
                             <option value="2">2 — Weak</option>
                             <option value="1">1 — Poor</option>
                         </select>
@@ -232,6 +233,11 @@
 
     async function saveCreatorRating() {
         const state = document.getElementById("creatorRatingState");
+        const ratingValue = document.getElementById("creatorRating").value;
+        if (!/^[1-5]$/.test(ratingValue)) {
+            state.textContent = "Choose an explicit rating from 1 to 5 before saving feedback.";
+            return;
+        }
         state.textContent = "Saving creator feedback…";
         try {
             const response = await fetch("/api/package/" + encodeURIComponent(packageName) + "/rating", {
