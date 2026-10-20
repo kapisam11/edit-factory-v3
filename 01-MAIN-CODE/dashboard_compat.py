@@ -473,7 +473,7 @@ def register_dashboard_compat(app):
             "name": name,
             "version": int(record.get("version", 0)) if isinstance(record, dict) else 0,
             "history": [
-                {key: item.get(key) for key in ("version", "saved_at", "sha256", "legacy")}
+                {key: item.get(key) for key in ("version", "saved_at", "sha256", "legacy", "restored_from")}
                 for item in history if isinstance(item, dict)
             ],
         })
