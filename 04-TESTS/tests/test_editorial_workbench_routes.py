@@ -148,3 +148,40 @@ def test_editorial_review_rating_updates_existing_local_learning_history(monkeyp
     assert persisted[0]["user_rating"] == 5
     assert persisted[0]["user_feedback"] == "Excellent hook and captions"
     assert persisted[0]["user_feedback_at"]
+
+
+def test_review_render_endpoint_returns_separate_rendered_video_url(monkeypatch, tmp_path: Path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    package = Path(appmod.OUTPUT_FOLDER) / "rendered-review-package"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "final.v3.mp4").write_bytes(b"original-video")
+    (package / "captions.srt").write_text(SRT, encoding="utf-8")
+    from ai_video_factory.review_workbench import load_review, save_review
+    seed = load_review(package)
+    state = save_review(package, {**seed, "captions_srt": SRT.replace("Opening line", "Corrected opening")})
+
+    def fake_render(target):
+        renders = Path(target) / "reviewed" / "renders"
+        renders.mkdir(parents=True, exist_ok=True)
+        output = renders / "final.reviewed-v1-test.mp4"
+        output.write_bytes(b"corrected-video")
+        return {
+            **state,
+            "render_status": "rendered",
+            "rendered_for_version": state["version"],
+            "rendered_video_file": "reviewed/renders/final.reviewed-v1-test.mp4",
+            "rendered_video_sha256": "test-sha",
+        }
+
+    import ai_video_factory.review_workbench as workbench
+    monkeypatch.setattr(workbench, "render_reviewed_video", fake_render)
+
+    client = appmod.app.test_client()
+    response = client.post("/api/package/rendered-review-package/review/render")
+
+    assert response.status_code == 200
+    assert response.json["review"]["reviewed_video_url"].endswith(
+        "/reviewed/renders/final.reviewed-v1-test.mp4"
+    )
+    assert response.json["review"]["video_url"].endswith("/final.v3.mp4")
+    assert (package / "final.v3.mp4").read_bytes() == b"original-video"
