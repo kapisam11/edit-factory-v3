@@ -66,6 +66,12 @@
             <section class="panel">
                 <h2>Preview</h2>
                 <video id="reviewVideo" class="review-video" controls playsinline preload="metadata"></video>
+                <section id="reviewedOutput" hidden style="margin-top: 14px;">
+                    <h3>Rendered corrections</h3>
+                    <p class="review-muted">A separate MP4 rendered from the original source and saved V3 edit plan. The original finished MP4 is unchanged.</p>
+                    <video id="reviewedVideo" class="review-video" controls playsinline preload="metadata"></video>
+                    <p><a id="reviewedDownload" href="#" download>Download corrected MP4</a></p>
+                </section>
                 <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
                     <input type="checkbox" id="showCaptionTrack" checked>
                     Preview reviewed SRT as a subtitle track
@@ -81,6 +87,7 @@
                 </div>
                 <div class="review-actions">
                     <button type="button" class="btn-sm" id="saveReview">Save corrections</button>
+                    <button type="button" class="btn-sm" id="renderReviewed">Render corrected MP4</button>
                     <button type="button" class="btn-sm" id="previewCaptions">Refresh caption preview</button>
                     <button type="button" class="btn-sm" id="downloadCaptions">Download reviewed SRT</button>
                     <button type="button" class="btn-sm" id="downloadMetadata">Download reviewed metadata</button>
@@ -455,6 +462,17 @@
         } else if (!data.video_url) {
             video.removeAttribute("src");
         }
+        const reviewedOutput = document.getElementById("reviewedOutput");
+        const reviewedVideo = document.getElementById("reviewedVideo");
+        if (data.reviewed_video_url) {
+            if (reviewedVideo.getAttribute("src") !== data.reviewed_video_url) reviewedVideo.src = data.reviewed_video_url;
+            document.getElementById("reviewedDownload").href = data.reviewed_video_url;
+            reviewedOutput.hidden = false;
+        } else {
+            reviewedVideo.removeAttribute("src");
+            document.getElementById("reviewedDownload").removeAttribute("href");
+            reviewedOutput.hidden = true;
+        }
         renderHistory(data.history || []);
         renderCueEditor(data.captions_srt || "");
         refreshCaptionTrack();
@@ -489,9 +507,36 @@
             const data = await readJson(response);
             if (!response.ok || data.error) throw new Error(data.error || "Failed to save review");
             assignState(data.review);
-            setStatus("Saved v" + data.review.version + ". Original MP4 remains unchanged; use the reviewed artifacts for your next render/upload workflow.", "done");
+            setStatus("Saved v" + data.review.version + ". Original MP4 remains unchanged; use Render corrected MP4 to create a separate output when the V3 source assets are available.", "done");
+            return true;
         } catch (error) {
             setStatus(error.message || String(error), "error");
+            return false;
+        }
+    }
+
+    async function renderReviewedVideo() {
+        const button = document.getElementById("renderReviewed");
+        button.disabled = true;
+        try {
+            const saved = await saveReview();
+            if (!saved) return;
+            setStatus("Rendering a separate corrected MP4 from the original source and saved V3 timeline. This can take a while; the original video will not be replaced.", "");
+            const response = await fetch(endpoint + "/render", { method: "POST" });
+            const data = await readJson(response);
+            if (!response.ok || data.error) {
+                const detail = data.detail ? " " + data.detail : "";
+                throw new Error((data.error || "Reviewed render failed.") + detail);
+            }
+            assignState(data.review);
+            const reviewedVideo = document.getElementById("reviewedVideo");
+            document.getElementById("reviewedOutput").hidden = false;
+            reviewedVideo.load();
+            setStatus("Corrected MP4 rendered and validated. The original final MP4 is untouched.", "done");
+        } catch (error) {
+            setStatus(error.message || String(error), "error");
+        } finally {
+            button.disabled = false;
         }
     }
 
@@ -522,6 +567,7 @@
     }
 
     document.getElementById("saveReview").addEventListener("click", saveReview);
+    document.getElementById("renderReviewed").addEventListener("click", renderReviewedVideo);
     document.getElementById("previewCaptions").addEventListener("click", () => {
         renderCueEditor(document.getElementById("captionsSrt").value);
         refreshCaptionTrack();
