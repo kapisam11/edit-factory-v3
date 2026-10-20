@@ -154,6 +154,7 @@ def compose_short_from_video(
     skip_qc: bool = False,
     strict_voiceover: bool = False,
     reuse_existing_voiceover: bool = False,
+    reuse_existing_subtitles: bool = False,
 ) -> str:
     _ensure_dir(package_dir)
     if out_file is None:
@@ -312,7 +313,13 @@ def compose_short_from_video(
     seq_files = _apply_templates(seq_files, package_dir)
 
     subtitle_path = os.path.join(package_dir, "captions.ass")
-    if not os.path.exists(subtitle_path):
+    if reuse_existing_subtitles:
+        # Reviewed subtitles are explicit user edits. Never regenerate or
+        # overwrite them from the original script during a reviewed re-render.
+        subtitle_path = os.path.join(package_dir, "script.srt")
+        if not os.path.isfile(subtitle_path) or os.path.getsize(subtitle_path) <= 0:
+            raise RuntimeError("Requested reviewed subtitle reuse, but script.srt is missing or empty.")
+    elif not os.path.exists(subtitle_path):
         subtitle_path = os.path.join(package_dir, "script.srt")
         try:
             script_to_srt(script, subtitle_path)
