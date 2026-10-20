@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, Any, List
 
@@ -215,6 +216,12 @@ def compose_short_from_video(
     ]
     seq_files: list[str] = []
     render_failures: list[tuple[int, Exception]] = []
+    reframe_mode = os.environ.get("AIVF_SMART_REFRAME", "auto").strip().lower()
+    smart_reframe_state = {
+        "enabled": reframe_mode not in {"0", "off", "false", "no", "disabled"},
+        "warned": False,
+    }
+    smart_reframe_lock = threading.Lock()
 
     def render_one(index: int) -> tuple[int, str]:
         seg = edit_plan[index]
@@ -234,8 +241,7 @@ def compose_short_from_video(
         # Face-aware reframing is an optional local enhancement. If OpenCV or
         # its cascade is unavailable, keep rendering with the existing crop.
         focus_track = None
-        reframe_mode = os.environ.get("AIVF_SMART_REFRAME", "auto").strip().lower()
-        if reframe_mode not in {"0", "off", "false", "no", "disabled"}:
+        if smart_reframe_state["enabled"]:
             try:
                 from .advanced_intelligence import build_face_focus_track
                 focus_track = build_face_focus_track(
@@ -249,18 +255,15 @@ def compose_short_from_video(
                 if not focus_track or not any(float(sample.get("confidence", 0.0)) > 0 for sample in focus_track):
                     focus_track = None
             except Exception as exc:
-                logger.warning(
-                    "Face-aware reframing unavailable for segment %s; retaining the normal crop: %s",
-                    index,
-                    exc,
-                )
+                with smart_reframe_lock:
+                    smart_reframe_state["enabled"] = False
+                    if not smart_reframe_state["warned"]:
+                        logger.warning(
+                            "Face-aware reframing unavailable; retaining standard crops for this render: %s",
+                            exc,
+                        )
+                        smart_reframe_state["warned"] = True
                 focus_track = None
-                # A shared flag avoids one noisy warning per segment when an optional
-                # dependency is missing; independent render jobs can retry next time.
-                if isinstance(filter_effectiveness, dict):
-                    filter_effectiveness["_smart_reframe_unavailable"] = True
-        if isinstance(filter_effectiveness, dict) and filter_effectiveness.get("_smart_reframe_unavailable"):
-            focus_track = None
 
         vf = build_cinematic_filter(
             index,
