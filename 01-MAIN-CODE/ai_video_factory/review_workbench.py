@@ -281,11 +281,14 @@ def save_review(package: Path, edits: Mapping[str, Any], *, restored_from: int |
     if not captions_changed and existing_render and expected_render_sha:
         try:
             root = package.resolve()
+            renders_entry = root / "reviewed" / "renders"
             candidate = (root / existing_render).resolve(strict=True)
-            expected_parent = (root / "reviewed" / "renders").resolve()
+            expected_parent = renders_entry.resolve()
             if (
-                candidate.is_file()
+                not renders_entry.is_symlink()
+                and candidate.is_file()
                 and candidate.is_relative_to(expected_parent)
+                and candidate.is_relative_to(root / "reviewed")
                 and not (root / existing_render).is_symlink()
                 and hmac.compare_digest(_sha256_file(candidate), expected_render_sha)
             ):
