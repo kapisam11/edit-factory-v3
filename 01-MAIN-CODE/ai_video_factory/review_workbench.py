@@ -250,6 +250,19 @@ def save_review(package: Path, edits: Mapping[str, Any], *, restored_from: int |
     _atomic_text(review_dir / "captions.srt", captions)
     _atomic_text(review_dir / "title.txt", title.strip() + ("\n" if title.strip() else ""))
     _atomic_text(review_dir / "description.txt", description.strip() + ("\n" if description.strip() else ""))
+    _atomic_json(
+        review_dir / "metadata.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "version": version,
+            "updated_at": updated_at,
+            "title": title.strip(),
+            "description": description.strip(),
+            "caption_cues": len([block for block in captions.split("\n\n") if block.strip()]),
+            "render_status": edits_payload["render_status"],
+            "sha256": digest,
+        },
+    )
 
     keep_versions = {int(item.get("version", 0)) for item in history}
     for path in revisions_dir.glob("rev-*.json"):
