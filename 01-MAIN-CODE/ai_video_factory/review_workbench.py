@@ -434,6 +434,7 @@ def render_reviewed_video(package: Path) -> dict[str, Any]:
             skip_qc=True,
             strict_voiceover=True,
             reuse_existing_voiceover=True,
+            reuse_existing_subtitles=True,
         )
         rendered_path = Path(rendered).resolve(strict=True)
         if rendered_path != output.resolve() or not rendered_path.is_file():
