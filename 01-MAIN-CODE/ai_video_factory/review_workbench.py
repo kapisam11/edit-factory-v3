@@ -271,6 +271,38 @@ def save_review(package: Path, edits: Mapping[str, Any], *, restored_from: int |
     updated_at = _now()
     review_dir = _review_dir(package)
     revisions_dir = review_dir / "revisions"
+    captions_changed = captions != current.get("captions_srt", "")
+    render_metadata: dict[str, Any] = {}
+    existing_render = str(current.get("rendered_video_file") or "")
+    expected_render_sha = str(current.get("rendered_video_sha256") or "")
+    if not captions_changed and existing_render and expected_render_sha:
+        try:
+            root = package.resolve()
+            candidate = (root / existing_render).resolve(strict=True)
+            expected_parent = (root / "reviewed" / "renders").resolve()
+            if (
+                candidate.is_file()
+                and candidate.is_relative_to(expected_parent)
+                and not (root / existing_render).is_symlink()
+                and hmac.compare_digest(_sha256_file(candidate), expected_render_sha)
+            ):
+                render_metadata = {
+                    "rendered_for_version": version,
+                    "rendered_at": str(current.get("rendered_at") or updated_at),
+                    "rendered_video_file": existing_render,
+                    "rendered_video_sha256": expected_render_sha,
+                }
+        except (OSError, RuntimeError, ValueError):
+            # Do not surface a missing, altered, or escaped output as valid.
+            render_metadata = {}
+
+    if captions_changed:
+        render_status = "requires_rerender"
+    elif render_metadata:
+        render_status = "rendered"
+    else:
+        render_status = "metadata_only_or_no_video_change"
+
     edits_payload = {
         "schema_version": SCHEMA_VERSION,
         "version": version,
@@ -280,7 +312,7 @@ def save_review(package: Path, edits: Mapping[str, Any], *, restored_from: int |
         "captions_srt": captions,
         "source_caption_file": str(current.get("source_caption_file") or ""),
         "video_file": str(current.get("video_file") or ""),
-        "render_status": "requires_rerender" if captions != current.get("captions_srt", "") else "metadata_only_or_no_video_change",
+        "render_status": render_status,
         "restored_from": restored_from,
     }
     digest = _digest(edits_payload)
@@ -295,7 +327,7 @@ def save_review(package: Path, edits: Mapping[str, Any], *, restored_from: int |
         "caption_cues": len([block for block in captions.split("\n\n") if block.strip()]),
     })
     history = history[-50:]
-    state = {**edits_payload, "history": history, "sha256": digest}
+    state = {**edits_payload, **render_metadata, "history": history, "sha256": digest}
     _atomic_json(_state_path(package), state)
     _atomic_text(review_dir / "captions.srt", captions)
     _atomic_text(review_dir / "title.txt", title.strip() + ("\n" if title.strip() else ""))
@@ -310,6 +342,8 @@ def save_review(package: Path, edits: Mapping[str, Any], *, restored_from: int |
             "description": description.strip(),
             "caption_cues": len([block for block in captions.split("\n\n") if block.strip()]),
             "render_status": edits_payload["render_status"],
+            "rendered_video_file": render_metadata.get("rendered_video_file"),
+            "rendered_video_sha256": render_metadata.get("rendered_video_sha256"),
             "sha256": digest,
         },
     )
