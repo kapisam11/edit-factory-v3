@@ -321,6 +321,7 @@
 
                             <div class="form-actions">
                                 <button type="button" class="btn-secondary" onclick="savePresetPrompt()">Save Preset</button>
+                                <button type="button" class="btn-secondary" onclick="showPresetHistory()">Preset History</button>
                                 <button type="submit" class="btn-primary" id="runBtn">
                                     <span class="btn-icon">▶</span> Start Production
                                 </button>
@@ -836,6 +837,7 @@
                                 ${pkg.v3_readiness ? `<span class="badge">${escapeHtml(pkg.v3_readiness)}</span>` : ''}
                             </div>
                             <p class="package-script">${escapeHtml(pkg.script_preview || '')}${pkg.script_preview ? '…' : ''}</p>
+                            <button class="btn-sm" type="button" onclick="event.stopPropagation(); window.location.href='/editorial-review/${safeName}'">Editorial Review</button>
                         </div>
                     </div>`;
             }).join('');
@@ -1002,6 +1004,43 @@
                 setPanelMessage('Preset saved.', 'done');
             } catch (e) {
                 setPanelMessage(e.message, 'error');
+            }
+        }
+
+        async function showPresetHistory() {
+            const name = document.getElementById('presetSelect').value;
+            if (!name) {
+                setPanelMessage('Select a saved preset first.', 'error');
+                return;
+            }
+            try {
+                const res = await fetch('/api/presets/' + encodeURIComponent(name) + '/history', { cache: 'no-store' });
+                const data = await safeJson(res);
+                if (!res.ok || data.error) throw new Error(data.error || 'Failed to load preset history');
+                const history = Array.isArray(data.history) ? data.history : [];
+                if (!history.length) {
+                    setPanelMessage('No revision history is available for this preset yet. Save it again to create a versioned history.', '');
+                    return;
+                }
+                const choices = history.map((item) =>
+                    'v' + item.version + ' — ' + (item.saved_at || 'unknown date') + (item.restored_from ? ' (restored from v' + item.restored_from + ')' : '')
+                ).join('\n');
+                const answer = prompt('Preset: ' + name + '\nChoose a revision to restore:\n' + choices + '\n\nEnter the version number. Restoring creates a new revision.');
+                if (answer === null || !answer.trim()) return;
+                const version = Number(answer);
+                if (!Number.isInteger(version) || version < 1 || !history.some((item) => Number(item.version) === version)) {
+                    setPanelMessage('That revision number is not in the listed history.', 'error');
+                    return;
+                }
+                const restore = await fetch('/api/presets/' + encodeURIComponent(name) + '/restore/' + version, { method: 'POST' });
+                const result = await safeJson(restore);
+                if (!restore.ok || result.error) throw new Error(result.error || 'Preset restore failed; check that the dashboard user has admin permission.');
+                await loadPresets();
+                document.getElementById('presetSelect').value = name;
+                applyPreset();
+                setPanelMessage('Restored preset ' + name + ' as version ' + result.version + '.', 'done');
+            } catch (error) {
+                setPanelMessage(error.message || String(error), 'error');
             }
         }
 

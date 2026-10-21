@@ -26,7 +26,7 @@ This document records the current evidence state of Edit Factory v3. It intentio
 - V3 blueprint/QC and production JSON/text artifacts use atomic temp-file replacement in the hardened paths.
 - Subtitle drawtext text escapes FFmpeg filter metacharacters and subtitle probing fails closed instead of inventing a duration.
 - Real render integration tests, adversarial V3 contract tests, and a real dashboard-driven V3 E2E render exist. The maintained V3 coverage gate is 80%.
-- Python support is 3.10+ and the locked CI matrix exercises Python 3.10–3.12.
+- Current runtime support is Python 3.11+; the earlier 3.10 baseline was raised with the Pillow 13.0.0 security update. Current PR CI covers Python 3.11–3.14.
 - A committed `uv.lock` is present and both CI and the production Docker image install from it with `uv sync --frozen`.
 - Model-provider failures use bounded retries for transient HTTP/transport failures and degrade to deterministic planning when the provider remains unavailable.
 - Docker runs the production WSGI service as the dedicated non-root `aivf` user.
@@ -100,7 +100,7 @@ These are deployment evidence gates, not unresolved repository defects:
 
 ## Historical notes
 
-The earlier branch advertised Python 3.9 support, but the frozen dependency environment does not install successfully on Python 3.9. The package metadata, CI matrix, and operational documentation now consistently declare the verified Python 3.10–3.12 support floor.
+The earlier branch advertised Python 3.9 support, but the frozen dependency environment does not install successfully on Python 3.9. At the time of that earlier audit, package metadata and CI declared a Python 3.10–3.12 support floor. That historical baseline was superseded by the October 2026 Pillow 13.0.0 security update; the current floor is Python 3.11+.
 
 ## Release rule
 

@@ -28,6 +28,27 @@ def test_v3_filter_is_valid_for_all_platform_sizes():
         assert f"crop=w={size[0]}:h={size[1]}" in graph
 
 
+def test_v3_filter_uses_bounded_interpolated_face_focus_track():
+    focus_track = [
+        {"time_seconds": 0.0, "center_x": 0.2, "center_y": 0.4},
+        {"time_seconds": 0.5, "center_x": 0.8, "center_y": 0.6},
+        {"time_seconds": 1.0, "center_x": 0.5, "center_y": 0.5},
+    ]
+    graph = build_cinematic_filter(
+        0,
+        "Speaker reframe",
+        1.0,
+        target_size=(360, 640),
+        focus_track=focus_track,
+    )
+
+    assert "crop=w=360:h=640" in graph
+    assert "if(lt(t,0.500)" in graph
+    assert "0.200000*iw" in graph
+    assert "0.800000*iw" in graph
+    assert graph.count("if(lt(t,") == 4
+
+
 def test_v3_filter_rejects_invalid_inputs():
     with pytest.raises(ValueError):
         build_cinematic_filter(0, "Hook", 0.0)
@@ -67,6 +88,22 @@ def test_v3_motion_filter_executes_in_ffmpeg(tmp_path):
     graph = build_cinematic_filter(1, "Climax [tracking]", 1.0, target_size=(360, 640))
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-vf", graph, "-t", "0.5", "-f", "null", "-"],
+        check=True,
+    )
+
+    focus_graph = build_cinematic_filter(
+        1,
+        "Climax [tracking]",
+        1.0,
+        target_size=(360, 640),
+        focus_track=[
+            {"time_seconds": 0.0, "center_x": 0.3, "center_y": 0.4},
+            {"time_seconds": 0.5, "center_x": 0.7, "center_y": 0.6},
+            {"time_seconds": 1.0, "center_x": 0.5, "center_y": 0.5},
+        ],
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-vf", focus_graph, "-t", "0.5", "-f", "null", "-"],
         check=True,
     )
 

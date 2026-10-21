@@ -5,7 +5,7 @@ This document records the state of the hostile-review remediation branch. It is 
 - V3 hardening branch: `hardening/v3-true-10-10`
 - The original V3 hardening PR was merged as commit `3d211fd74cfdce36fa0808fc646674b6073f2688`.
 - Current remediation continues on the hardening branch after that merge.
-- Python support is 3.10+ and the locked CI matrix exercises Python 3.10–3.12.
+- Current runtime support is Python 3.11+ because the patched Pillow 13.0.0 security baseline does not support Python 3.10; the CI matrix exercises Python 3.11–3.14.
 - A committed `uv.lock` is present and CI installs it with `uv sync --frozen` for reproducible dependency resolution.
 - FFmpeg/FFprobe subprocesses use argv-style execution and bounded timeouts in the hardened media modules, with explicit executable validation.
 - V3 no longer monkey-patches the production pipeline's module-global renderer callback; V3 disables legacy auto-fix through an explicit function argument.

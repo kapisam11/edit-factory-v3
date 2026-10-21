@@ -4,7 +4,7 @@
 
 Before merging a production/hardening branch, all of the following automated checks must be green:
 
-- Python 3.10–3.14 CI test matrix
+- Python 3.11–3.14 CI test matrix (Pillow 13 requires Python 3.11 or newer)
 - repository-wide Ruff checks for production Python
 - `python 01-MAIN-CODE/cli.py --help`, `python 01-MAIN-CODE/cli_v3.py --help`, `aivf --help`, and `aivf-v3 --help`
 - dependency audit against the committed `uv.lock`

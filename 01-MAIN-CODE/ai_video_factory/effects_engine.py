@@ -1,5 +1,6 @@
 """Cinematic video filter chain builder with effectiveness-aware selection."""
-from typing import Dict, Any, Optional
+import math
+from typing import Dict, Any, Mapping, Optional, Sequence
 
 
 def build_cinematic_filter(
@@ -8,6 +9,7 @@ def build_cinematic_filter(
     duration: float,
     filter_effectiveness: Optional[Dict[str, Any]] = None,
     target_size: tuple[int, int] = (1080, 1920),
+    focus_track: Optional[Sequence[Mapping[str, float]]] = None,
 ) -> str:
     if filter_effectiveness is None:
         filter_effectiveness = {}
@@ -30,9 +32,49 @@ def build_cinematic_filter(
             return float(effectiveness) >= default_threshold
         return True
 
+    def focus_expression(axis: str) -> str:
+        """Compile trusted numeric focus samples to a bounded FFmpeg crop expression."""
+        coord = "center_x" if axis == "x" else "center_y"
+        crop_size = "ow" if axis == "x" else "oh"
+        input_size = "iw" if axis == "x" else "ih"
+        valid: list[tuple[float, float]] = []
+        previous_t = -1.0
+        for sample in focus_track or ():
+            try:
+                t = float(sample.get("time_seconds", 0.0))
+                center = float(sample.get(coord, 0.5))
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(t) or not math.isfinite(center):
+                continue
+            if t < 0 or t <= previous_t:
+                continue
+            valid.append((t, max(0.0, min(1.0, center))))
+            previous_t = t
+        if not valid:
+            return f"({input_size}-{crop_size})/2"
+        # Bound filter-graph size: long videos can have many tracked samples,
+        # but a dozen interpolation anchors are enough for smooth short-form crops.
+        if len(valid) > 12:
+            selected_indices = sorted({round(i * (len(valid) - 1) / 11) for i in range(12)})
+            valid = [valid[i] for i in selected_indices]
+        positions = [(t, f"({center:.6f}*{input_size}-{crop_size}/2)") for t, center in valid]
+        expression = positions[-1][1]
+        for idx in range(len(positions) - 2, -1, -1):
+            start_t, start_expr = positions[idx]
+            end_t, end_expr = positions[idx + 1]
+            delta = max(0.001, end_t - start_t)
+            interp = f"({start_expr}+({end_expr}-({start_expr}))*(t-{start_t:.3f})/{delta:.3f})"
+            expression = f"if(lt(t,{end_t:.3f}),{interp},{expression})"
+        return f"max(0,min({input_size}-{crop_size},{expression}))"
+
     has_motion = any(token in label_lower for token in ("camera move", "tracking", "reframe", "slow push"))
     has_shake = "subtle shake" in label_lower and should_apply("subtle_shake", 0.80)
-    if has_motion:
+    if focus_track and len(focus_track) > 0:
+        x_expr = focus_expression("x")
+        y_expr = focus_expression("y")
+        vf += f",crop=w={target_w}:h={target_h}:x='{x_expr}':y='{y_expr}'"
+    elif has_motion:
         amplitude_x = max(6, target_w // 70)
         amplitude_y = max(6, target_h // 140)
         period = max(float(duration), 0.25)

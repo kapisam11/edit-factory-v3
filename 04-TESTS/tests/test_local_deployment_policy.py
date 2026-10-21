@@ -134,7 +134,7 @@ def test_external_drive_backup_performs_archive_verification_and_restore_drill()
 def test_install_guide_picks_python_312_as_windows_production_baseline() -> None:
     guide = (REPOSITORY_ROOT / "00-INFO" / "01-INSTALL.md").read_text(encoding="utf-8")
     assert "Python 3.12" in guide
-    assert "3.10–3.14" in guide
+    assert "3.11–3.14" in guide
 
 
 def test_hardware_runbook_keeps_concurrency_one_until_benchmarked() -> None:

@@ -1,6 +1,8 @@
 """Dashboard compatibility routes plus queue, cancellation, retention, and secret management."""
+import hashlib
 import json
 import os
+from datetime import datetime, timezone
 import signal
 import shutil
 import subprocess
@@ -350,18 +352,355 @@ def register_dashboard_compat(app):
     def compat_presets():
         if request.method in {"POST", "DELETE"} and _request_role() != "admin":
             return jsonify({"error": "Admin role required"}), 403
+
+        def read_record(raw_value):
+            try:
+                raw = json.loads(raw_value)
+            except (TypeError, json.JSONDecodeError):
+                return {"schema_version": 0, "version": 0, "config": {}, "history": []}
+            if (
+                isinstance(raw, dict)
+                and raw.get("schema_version") == 1
+                and isinstance(raw.get("config"), dict)
+                and isinstance(raw.get("history"), list)
+            ):
+                return raw
+            return {
+                "schema_version": 0,
+                "version": 0,
+                "config": raw if isinstance(raw, dict) else {},
+                "history": [],
+            }
+
         if request.method == "POST":
             data = request.get_json(silent=True) or {}
             name = str(data.get("name", "")).strip()
-            config = data.get("config") or {}
-            if not name or len(name) > 80 or not isinstance(config, dict):
-                return jsonify({"error": "Invalid preset"}), 400
+            config = data.get("config")
+            if (
+                not name
+                or len(name) > 80
+                or name in {".", ".."}
+                or any(char in name for char in ("/", "\\", "\x00"))
+                or not isinstance(config, dict)
+            ):
+                return jsonify({"error": "Invalid preset name or config"}), 400
+            try:
+                serialized_config = json.dumps(config, ensure_ascii=False, allow_nan=False)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Preset config must contain valid JSON values"}), 400
+            if len(serialized_config) > 100_000:
+                return jsonify({"error": "Preset config is too large"}), 413
+
             with web_app_v3.get_db() as conn:
-                conn.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (f"preset:{name}", json.dumps(config)))
-            return jsonify({"ok": True}), 201
+                row = conn.execute("SELECT value FROM settings WHERE key=?", (f"preset:{name}",)).fetchone()
+                previous = read_record(row["value"]) if row else read_record("{}")
+                version = int(previous.get("version", 0)) + 1
+                saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+                digest = hashlib.sha256(serialized_config.encode("utf-8")).hexdigest()
+                history = list(previous.get("history") or [])
+                # Legacy presets become version 1 on their next save.
+                if row and not history and previous.get("config"):
+                    old_json = json.dumps(previous["config"], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    history.append({
+                        "version": max(1, int(previous.get("version", 0))),
+                        "saved_at": saved_at,
+                        "sha256": hashlib.sha256(old_json.encode("utf-8")).hexdigest(),
+                        "config": previous["config"],
+                        "legacy": True,
+                    })
+                # Legacy revisions already occupy an ID; continue with the next ID.
+                version = max(
+                    version,
+                    max((int(item.get("version", 0)) for item in history), default=0) + 1,
+                )
+                history.append({
+                    "version": version,
+                    "saved_at": saved_at,
+                    "sha256": digest,
+                    "config": config,
+                })
+                history = history[-20:]
+                record = {
+                    "schema_version": 1,
+                    "version": version,
+                    "config": config,
+                    "history": history,
+                }
+                conn.execute(
+                    "INSERT INTO settings(key,value) VALUES(?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (f"preset:{name}", json.dumps(record, ensure_ascii=False, allow_nan=False)),
+                )
+            return jsonify({"ok": True, "version": version, "history_count": len(history)}), 201
+
+        if request.method == "DELETE":
+            data = request.get_json(silent=True) or {}
+            name = str(request.args.get("name") or data.get("name") or "").strip()
+            if not name:
+                return jsonify({"error": "Specify the preset name to delete"}), 400
+            with web_app_v3.get_db() as conn:
+                removed = conn.execute("DELETE FROM settings WHERE key=?", (f"preset:{name}",)).rowcount
+            return jsonify({"ok": bool(removed), "deleted": name if removed else None}), 200
+
         with web_app_v3.get_db() as conn:
             rows = conn.execute("SELECT key,value FROM settings WHERE key LIKE 'preset:%' ORDER BY key").fetchall()
-        return jsonify({row["key"][7:]: json.loads(row["value"]) for row in rows})
+        output = {}
+        for row in rows:
+            name = row["key"][7:]
+            record = read_record(row["value"])
+            config = dict(record.get("config") or {})
+            if record.get("schema_version") == 1:
+                config["_preset_meta"] = {
+                    "schema_version": 1,
+                    "version": int(record.get("version", 0)),
+                    "history_count": len(record.get("history") or []),
+                }
+            output[name] = config
+        return jsonify(output)
+
+    @app.route("/api/presets/<name>/history", methods=["GET"])
+    def compat_preset_history(name):
+        with web_app_v3.get_db() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key=?", (f"preset:{name}",)).fetchone()
+        if row is None:
+            return jsonify({"error": "Preset not found"}), 404
+        try:
+            record = json.loads(row["value"])
+        except json.JSONDecodeError:
+            return jsonify({"error": "Preset data is damaged"}), 409
+        history = record.get("history", []) if isinstance(record, dict) else []
+        return jsonify({
+            "name": name,
+            "version": int(record.get("version", 0)) if isinstance(record, dict) else 0,
+            "history": [
+                {key: item.get(key) for key in ("version", "saved_at", "sha256", "legacy", "restored_from")}
+                for item in history if isinstance(item, dict)
+            ],
+        })
+
+    @app.route("/api/presets/<name>/restore/<int:version>", methods=["POST"])
+    def compat_preset_restore(name, version):
+        if _request_role() != "admin":
+            return jsonify({"error": "Admin role required"}), 403
+        with web_app_v3.get_db() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key=?", (f"preset:{name}",)).fetchone()
+            if row is None:
+                return jsonify({"error": "Preset not found"}), 404
+            try:
+                record = json.loads(row["value"])
+            except json.JSONDecodeError:
+                return jsonify({"error": "Preset data is damaged"}), 409
+            if not isinstance(record, dict):
+                return jsonify({"error": "Preset data is invalid"}), 409
+            history = record.get("history", [])
+            target = next((item for item in history if isinstance(item, dict) and item.get("version") == version), None)
+            if target is None or not isinstance(target.get("config"), dict):
+                return jsonify({"error": "Preset revision not found"}), 404
+            config = target["config"]
+            if not target.get("legacy"):
+                source_encoding = json.dumps(config, ensure_ascii=False, allow_nan=False)
+                source_digest = hashlib.sha256(source_encoding.encode("utf-8")).hexdigest()
+                if source_digest != str(target.get("sha256") or ""):
+                    return jsonify({"error": "Preset revision failed its integrity check"}), 409
+            latest = max(int(record.get("version", 0)), 0) + 1
+            saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            encoded = json.dumps(config, ensure_ascii=False, allow_nan=False)
+            history.append({
+                "version": latest,
+                "saved_at": saved_at,
+                "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+                "config": config,
+                "restored_from": version,
+            })
+            record.update({"schema_version": 1, "version": latest, "config": config, "history": history[-20:]})
+            conn.execute("UPDATE settings SET value=? WHERE key=?", (json.dumps(record, ensure_ascii=False, allow_nan=False), f"preset:{name}"))
+        return jsonify({"ok": True, "version": latest, "restored_from": version}), 200
+
+    @app.route("/editorial-review/<name>")
+    def editorial_review_page(name):
+        import web_app_v3
+        package = web_app_v3._resolve_package(name)
+        if not _package_access_allowed(web_app_v3, package):
+            return "Package not found", 404
+        return web_app_v3.render_template("editorial_review.html", package_name=package.name)
+
+    @app.route("/api/package/<name>/rating", methods=["GET", "POST"])
+    def compat_package_rating(name):
+        import web_app_v3
+        from ai_video_factory.video_learning import add_manual_rating
+
+        package = web_app_v3._resolve_package(name)
+        if not _package_access_allowed(web_app_v3, package):
+            return jsonify({"error": "Package not found"}), 404
+        if _request_role() not in {"admin", "editor"}:
+            return jsonify({"error": "Editor role required"}), 403
+        state_dir = Path(os.environ.get("AIVF_STATE_DIR", "state")).expanduser()
+        history_path = Path(
+            os.environ.get("AIVF_LEARNING_HISTORY_PATH", "").strip()
+            or str(state_dir / "learning_history.json")
+        ).expanduser()
+        if request.method == "GET":
+            try:
+                payload = json.loads(history_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return jsonify({"available": False, "rating": None, "note": ""}), 200
+            except (OSError, json.JSONDecodeError) as exc:
+                return jsonify({"error": f"Learning history is unreadable: {type(exc).__name__}"}), 409
+            if not isinstance(payload, list):
+                return jsonify({"error": "Learning history must be a JSON list"}), 409
+            wanted = os.path.normcase(os.path.abspath(str(package.resolve())))
+            for item in reversed(payload):
+                if not isinstance(item, dict):
+                    continue
+                item_dir = str(item.get("package_dir") or "")
+                if item_dir and os.path.normcase(os.path.abspath(item_dir)) == wanted:
+                    return jsonify({
+                        "available": True,
+                        "rating": item.get("user_rating"),
+                        "note": str(item.get("user_feedback") or ""),
+                        "feedback_at": item.get("user_feedback_at"),
+                    }), 200
+            return jsonify({"available": False, "rating": None, "note": ""}), 200
+
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Rating body must be a JSON object"}), 400
+        rating = payload.get("rating")
+        if isinstance(rating, bool) or not isinstance(rating, int) or not 1 <= rating <= 5:
+            return jsonify({"error": "rating must be an integer from 1 to 5"}), 400
+        note = payload.get("note", "")
+        if not isinstance(note, str) or len(note) > 1000:
+            return jsonify({"error": "note must be text with at most 1000 characters"}), 400
+
+        try:
+            saved = add_manual_rating(
+                history_path,
+                package_dir=str(package.resolve()),
+                rating=rating,
+                note=note,
+            )
+        except FileNotFoundError:
+            return jsonify({
+                "error": "No learning-history file or matching package record exists yet. "
+                "Only rate packages that have a saved learning-history record, or configure "
+                "AIVF_LEARNING_HISTORY_PATH to the existing history file."
+            }), 409
+        except KeyError:
+            return jsonify({
+                "error": "This package is not yet matched to an existing learning-history record."
+            }), 409
+        except (OSError, ValueError, json.JSONDecodeError):
+            import logging
+            logging.getLogger(__name__).exception(
+                "Could not save channel feedback for package %s", package.name
+            )
+            return jsonify({
+                "error": "Could not save creator feedback. Check that the learning-history file exists and contains a matching package record."
+            }), 400
+        return jsonify({
+            "ok": True,
+            "package": package.name,
+            "rating": int(saved.get("user_rating", rating)),
+            "feedback_at": saved.get("user_feedback_at"),
+            "message": "Creator feedback saved to the configured local learning history.",
+        }), 200
+
+    def _editorial_review_response(package, state):
+        from urllib.parse import quote
+        response = dict(state)
+        package_root = package.resolve()
+        package_name = quote(package.name, safe="")
+        for field, response_key in (
+            ("video_file", "video_url"),
+            ("rendered_video_file", "reviewed_video_url"),
+        ):
+            relative = str(state.get(field) or "")
+            if not relative:
+                continue
+            candidate = (package_root / relative).resolve()
+            if candidate.is_file() and candidate.is_relative_to(package_root):
+                response[response_key] = (
+                    f"/api/package/{package_name}/file/"
+                    f"{quote(relative, safe='/')}"
+                )
+        response["review_url"] = f"/editorial-review/{package_name}"
+        return response
+
+    @app.route("/api/package/<name>/review", methods=["GET", "POST"])
+    def compat_package_review(name):
+        import web_app_v3
+        from ai_video_factory.review_workbench import load_review, save_review
+
+        package = web_app_v3._resolve_package(name)
+        if not _package_access_allowed(web_app_v3, package):
+            return jsonify({"error": "Package not found"}), 404
+        if request.method == "POST" and _request_role() not in {"admin", "editor"}:
+            return jsonify({"error": "Editor role required"}), 403
+        if request.method == "GET":
+            try:
+                state = load_review(package)
+            except ValueError:
+                return jsonify({
+                    "error": "Saved review state could not be loaded; it may be invalid or have failed its integrity check."
+                }), 409
+            return jsonify(_editorial_review_response(package, state))
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Review body must be a JSON object"}), 400
+        try:
+            state = save_review(package, payload)
+        except ValueError:
+            return jsonify({
+                "error": "Review could not be saved. Check the title, description, and subtitle timestamp/text limits."
+            }), 400
+        return jsonify({"ok": True, "review": _editorial_review_response(package, state)}), 200
+
+    @app.route("/api/package/<name>/review/restore/<int:version>", methods=["POST"])
+    def compat_package_review_restore(name, version):
+        import web_app_v3
+        from ai_video_factory.review_workbench import restore_review
+
+        package = web_app_v3._resolve_package(name)
+        if not _package_access_allowed(web_app_v3, package):
+            return jsonify({"error": "Package not found"}), 404
+        if _request_role() not in {"admin", "editor"}:
+            return jsonify({"error": "Editor role required"}), 403
+        try:
+            state = restore_review(package, version)
+        except ValueError:
+            return jsonify({
+                "error": "The requested review revision could not be restored. Check that the revision exists and has valid integrity data."
+            }), 400
+        return jsonify({"ok": True, "review": _editorial_review_response(package, state)}), 200
+
+    @app.route("/api/package/<name>/review/render", methods=["POST"])
+    def compat_package_review_render(name):
+        import web_app_v3
+        from ai_video_factory.review_workbench import render_reviewed_video
+
+        package = web_app_v3._resolve_package(name)
+        if not _package_access_allowed(web_app_v3, package):
+            return jsonify({"error": "Package not found"}), 404
+        if _request_role() not in {"admin", "editor"}:
+            return jsonify({"error": "Editor role required"}), 403
+        try:
+            state = render_reviewed_video(package)
+        except ValueError:
+            return jsonify({
+                "error": "Reviewed rendering cannot proceed because required source assets, integrity checks, or subtitle data are not valid."
+            }), 409
+        except Exception as exc:
+            # Keep file paths, FFmpeg arguments, and provider details out of the
+            # client response; the full exception remains in server diagnostics.
+            import logging
+            logging.getLogger(__name__).exception(
+                "Reviewed render failed for package %s", package.name
+            )
+            return jsonify({
+                "error": "Reviewed render failed. The original video was left unchanged.",
+                "detail": type(exc).__name__,
+            }), 422
+        return jsonify({"ok": True, "review": _editorial_review_response(package, state)}), 200
 
     @app.route("/api/package/<name>/script", methods=["GET", "POST"])
     def compat_script(name):

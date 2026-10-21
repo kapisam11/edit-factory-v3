@@ -281,6 +281,125 @@ def save_json(path: str, payload: Any) -> str:
     return path
 
 
+
+def build_face_focus_track(
+    video_path: str,
+    *,
+    start_time: float = 0.0,
+    duration: Optional[float] = None,
+    sample_seconds: float = 0.8,
+    max_samples: int = 90,
+    smoothing: float = 0.35,
+) -> List[Dict[str, float]]:
+    """Sample face centers into a smoothed normalized crop track.
+
+    Requires optional OpenCV. The caller should use centered cropping as a
+    best-effort fallback when no track can be produced.
+    """
+    import math
+
+    try:
+        start = float(start_time)
+        interval = float(sample_seconds)
+        alpha = float(smoothing)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("start_time, sample_seconds, and smoothing must be numeric") from exc
+    if not math.isfinite(start) or start < 0:
+        raise ValueError("start_time must be finite and non-negative")
+    if not math.isfinite(interval) or interval <= 0:
+        raise ValueError("sample_seconds must be finite and positive")
+    if not math.isfinite(alpha) or not 0.0 < alpha <= 1.0:
+        raise ValueError("smoothing must be in (0, 1]")
+    interval = min(5.0, max(0.25, interval))
+    if duration is not None:
+        try:
+            requested_duration_arg = float(duration)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("duration must be numeric") from exc
+        if not math.isfinite(requested_duration_arg) or requested_duration_arg <= 0:
+            raise ValueError("duration must be finite and positive")
+    else:
+        requested_duration_arg = None
+    try:
+        limit = max(2, min(200, int(max_samples)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_samples must be an integer") from exc
+
+    require("vision")
+    import cv2  # type: ignore
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Unable to open video for face-aware reframing: {video_path}")
+    try:
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        frame_count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+        file_duration = frame_count / fps if fps > 0 and frame_count > 0 else 0.0
+        if requested_duration_arg is None:
+            requested_duration = max(0.0, file_duration - start)
+        else:
+            requested_duration = requested_duration_arg
+            if file_duration > 0:
+                requested_duration = min(requested_duration, max(0.0, file_duration - start))
+        if requested_duration <= 0:
+            return []
+
+        cascade = cv2.CascadeClassifier(os.path.join(
+            cv2.data.haarcascades, "haarcascade_frontalface_default.xml"
+        ))
+        if cascade.empty():
+            raise RuntimeError("OpenCV frontal-face cascade could not be loaded")
+        sample_count = min(limit, max(2, int(math.ceil(requested_duration / interval)) + 1))
+        step = requested_duration / (sample_count - 1)
+        timestamps = [round(index * step, 3) for index in range(sample_count)]
+
+        output: List[Dict[str, float]] = []
+        smoothed_x = smoothed_y = 0.5
+        detected_before = False
+        for relative_time in timestamps:
+            cap.set(cv2.CAP_PROP_POS_MSEC, (start + relative_time) * 1000.0)
+            ok, frame = cap.read()
+            confidence = 0.0
+            faces: Any = []
+            if ok and frame is not None:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                height, width = frame.shape[:2]
+                faces = cascade.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=4,
+                    minSize=(max(20, width // 30), max(20, height // 30)),
+                )
+                if len(faces):
+                    candidates = []
+                    for x, y, w, h in faces:
+                        area = max(1.0, float(w) * float(h))
+                        cx = (float(x) + float(w) / 2.0) / max(1.0, float(width))
+                        cy = (float(y) + float(h) / 2.0) / max(1.0, float(height))
+                        center_bias = 1.0 - min(1.0, abs(cx - 0.5) * 0.6 + abs(cy - 0.5) * 0.2)
+                        candidates.append((area * max(0.1, center_bias), cx, cy, area))
+                    total_weight = sum(item[0] for item in candidates) or 1.0
+                    target_x = sum(item[1] * item[0] for item in candidates) / total_weight
+                    target_y = sum(item[2] * item[0] for item in candidates) / total_weight
+                    if not detected_before:
+                        smoothed_x, smoothed_y = target_x, target_y
+                    else:
+                        smoothed_x = (1.0 - alpha) * smoothed_x + alpha * target_x
+                        smoothed_y = (1.0 - alpha) * smoothed_y + alpha * target_y
+                    detected_before = True
+                    largest_area = max(item[3] for item in candidates)
+                    confidence = max(0.0, min(1.0, largest_area / max(1.0, float(width * height)) * 12.0))
+            output.append({
+                "time_seconds": float(relative_time),
+                "center_x": max(0.0, min(1.0, float(smoothed_x))),
+                "center_y": max(0.0, min(1.0, float(smoothed_y))),
+                "confidence": round(float(confidence), 3),
+                "face_count": float(len(faces)),
+            })
+        return output
+    finally:
+        cap.release()
+
+
+
 def detect_video_objects(video_path: str, *, sample_seconds: float = 2.5) -> List[Dict[str, Any]]:
     import cv2  # type: ignore
     cap = cv2.VideoCapture(video_path)

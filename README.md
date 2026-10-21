@@ -44,6 +44,8 @@ The repository also retains the previously implemented production features: scen
 
 ## Quick start
 
+**Runtime requirement:** Python 3.11 or newer. Python 3.10 support was dropped with the security update to Pillow 13.0.0, which does not support Python 3.10. The lockfile pins the patched Pillow and certifi versions.
+
 From the repository root:
 
 ```bash
@@ -231,6 +233,27 @@ gunicorn -c 06-CONFIG-AND-DEPLOYMENT/gunicorn.conf.py app.wsgi:app
 ```
 
 Production dashboard access requires `AIVF_DASHBOARD_TOKEN` and a strong `FLASK_SECRET_KEY`.
+
+### Editorial review, clip scoring, and saved preset versions
+
+The dashboard adds an Editorial Review link to completed packages. The review workbench previews the original MP4 beside an editable SubRip caption track, allows corrections to subtitle wording/timing and upload title/description, validates cue timestamps and text limits, exports reviewed SRT files, and lets you restore earlier edits. Reviewed sidecars and revision snapshots are kept under each package's reviewed directory.
+
+**Important:** saving caption changes never overwrites a previously validated MP4. For packages with the original source still available, an intact source hash, saved V3 plan/timeline, and original voiceover, click **Render corrected MP4** to render a separate output with the reviewed SRT. It refuses if the source has changed or required render artifacts are missing. The regular final MP4 remains untouched. Packages without those V3 artifacts can still export the reviewed SRT, but must be rendered separately in an editor or another workflow.
+
+V3 source-scene evidence now includes an explainable editorial jury: hook strength, context independence, narrative fit, pacing, information density, visual energy, and semantic support. Top scene candidates and their reasons are retained with clip evidence. These deterministic heuristics are not predicted views or promises of virality; source-evidence matching remains the gate, so a high general score cannot make an unrelated scene count as evidence.
+
+Saved production presets keep the last 20 revisions. Use Preset History next to Save Preset to inspect and restore a version. Restoring creates a new revision instead of removing later changes; the restore action requires the dashboard admin role. The review workbench also has a structured cue editor and metadata export, plus a 1–5 creator rating and note. Ratings are written to the existing `AIVF_LEARNING_HISTORY_PATH` (default `state/learning_history.json`) only when the package already has a matching learning-history row; it will return a clear message rather than fabricate a training example. Existing YouTube/TikTok/Instagram analytics import and the local preference model continue to provide measured performance feedback.
+
+### Face-aware reframing
+
+The compositor can use OpenCV face detection to sample a clip, smooth face-center movement, and guide the vertical crop. It is best-effort, not a guarantee that every person or object stays in frame. Missing OpenCV, cascade data, readable frames, or detected faces falls back to the existing crop rather than failing the render. Reviewed re-renders use the same saved V3 edit plan and voiceover in a separate temporary workspace, then validate video/audio streams before promoting a new file into `reviewed/renders/`.
+
+Install the optional vision dependency with:
+
+    uv sync --frozen --python 3.12 --extra web --extra dev --extra vision
+
+Face-aware reframing runs in auto mode when the vision capability is available. To disable it, set AIVF_SMART_REFRAME=0 in the environment used to launch Edit Factory. The crop track uses bounded interpolation anchors so FFmpeg filter expressions stay manageable. Existing silence-aware segment detection, beat analysis, subtitle checks, publishing recovery, and channel-specific learning are reused rather than duplicated.
+
 
 ## Engineering principles
 

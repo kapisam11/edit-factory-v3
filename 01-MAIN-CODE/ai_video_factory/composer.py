@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, Any, List
 
@@ -152,6 +153,8 @@ def compose_short_from_video(
     model_key: Optional[str] = None,
     skip_qc: bool = False,
     strict_voiceover: bool = False,
+    reuse_existing_voiceover: bool = False,
+    reuse_existing_subtitles: bool = False,
 ) -> str:
     _ensure_dir(package_dir)
     if out_file is None:
@@ -215,6 +218,12 @@ def compose_short_from_video(
     ]
     seq_files: list[str] = []
     render_failures: list[tuple[int, Exception]] = []
+    reframe_mode = os.environ.get("AIVF_SMART_REFRAME", "auto").strip().lower()
+    smart_reframe_state = {
+        "enabled": reframe_mode not in {"0", "off", "false", "no", "disabled"},
+        "warned": False,
+    }
+    smart_reframe_lock = threading.Lock()
 
     def render_one(index: int) -> tuple[int, str]:
         seg = edit_plan[index]
@@ -224,14 +233,49 @@ def compose_short_from_video(
         segment_index = index if is_v3 else index % len(segments)
         src_clip = clip_paths[src_index]
         dst = os.path.join(temp_dir, f"segment_{index:02d}.mp4")
-        vf = build_cinematic_filter(index, label, duration, filter_effectiveness or None, target_size=target_size)
         seg_start, seg_end = segments[segment_index]
         to = snap_to_beat(seg_start, seg_end, duration, beats)
         clip_dur = _get_duration_safe(src_clip)
         if clip_dur > 0:
             to = min(max(to, seg_start + min(duration, clip_dur)), seg_start + clip_dur)
         actual_dur = max(0.01, duration if is_v3 else (to - seg_start))
-        render_segment(src_clip, seg_start, actual_dur, vf, dst)
+
+        # Face-aware reframing is an optional local enhancement. If OpenCV or
+        # its cascade is unavailable, keep rendering with the existing crop.
+        focus_track = None
+        if smart_reframe_state["enabled"]:
+            try:
+                from .advanced_intelligence import build_face_focus_track
+                focus_track = build_face_focus_track(
+                    src_clip,
+                    start_time=0.0,
+                    duration=actual_dur,
+                    sample_seconds=0.8,
+                    max_samples=90,
+                    smoothing=0.35,
+                )
+                if not focus_track or not any(float(sample.get("confidence", 0.0)) > 0 for sample in focus_track):
+                    focus_track = None
+            except Exception as exc:
+                with smart_reframe_lock:
+                    smart_reframe_state["enabled"] = False
+                    if not smart_reframe_state["warned"]:
+                        logger.warning(
+                            "Face-aware reframing unavailable; retaining standard crops for this render: %s",
+                            exc,
+                        )
+                        smart_reframe_state["warned"] = True
+                focus_track = None
+
+        vf = build_cinematic_filter(
+            index,
+            label,
+            actual_dur,
+            filter_effectiveness or None,
+            target_size=target_size,
+            focus_track=focus_track,
+        )
+        render_segment(src_clip, 0.0, actual_dur, vf, dst)
         return index, dst
 
     try:
@@ -269,7 +313,13 @@ def compose_short_from_video(
     seq_files = _apply_templates(seq_files, package_dir)
 
     subtitle_path = os.path.join(package_dir, "captions.ass")
-    if not os.path.exists(subtitle_path):
+    if reuse_existing_subtitles:
+        # Reviewed subtitles are explicit user edits. Never regenerate or
+        # overwrite them from the original script during a reviewed re-render.
+        subtitle_path = os.path.join(package_dir, "script.srt")
+        if not os.path.isfile(subtitle_path) or os.path.getsize(subtitle_path) <= 0:
+            raise RuntimeError("Requested reviewed subtitle reuse, but script.srt is missing or empty.")
+    elif not os.path.exists(subtitle_path):
         subtitle_path = os.path.join(package_dir, "script.srt")
         try:
             script_to_srt(script, subtitle_path)
@@ -287,7 +337,12 @@ def compose_short_from_video(
         and os.environ.get("AIVF_ENV", "development").strip().lower() == "test"
         and os.environ.get("AIVF_TEST_DISABLE_EXTERNAL_TTS", "0").strip() == "1"
     )
-    if test_tts_disabled:
+    if reuse_existing_voiceover:
+        if not os.path.isfile(vo_path) or os.path.getsize(vo_path) <= 0:
+            raise RuntimeError("Requested voiceover reuse, but package voice.mp3 is missing or empty.")
+        has_vo = True
+        logger.info("Reusing the validated package voiceover; external TTS was not called.")
+    elif test_tts_disabled:
         logger.info("Skipping external TTS in test environment; source audio remains in the render.")
     else:
         try:
