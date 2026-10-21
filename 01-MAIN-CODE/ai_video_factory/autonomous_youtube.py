@@ -885,6 +885,37 @@ class AutonomousStore:
             self._event(conn, job_id, "scheduled", {"scheduled_at": target})
         return target
 
+    def reschedule(self, job_id: str, publish_at: str) -> str:
+        """Reschedule an already-approved queued upload without weakening publish gates."""
+        target = _normalize_scheduled_at(publish_at)
+        if not target:
+            raise ValueError("publish_at is required")
+        if _parse_time(target) <= datetime.now(timezone.utc):
+            raise ValueError("publish_at must be in the future")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT state,approval,publish_requested,ai_generated,realistic_alteration,disclosure_reviewed "
+                "FROM autonomous_jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+            if not row:
+                conn.rollback()
+                raise KeyError(job_id)
+            if row["state"] != "SCHEDULED" or row["approval"] != "approved" or int(row["publish_requested"] or 0) != 1:
+                conn.rollback()
+                raise ValueError("only approved, scheduled publishing jobs can be rescheduled")
+            if (int(row["ai_generated"] or 0) or int(row["realistic_alteration"] or 0)) and not int(row["disclosure_reviewed"] or 0):
+                conn.rollback()
+                raise ValueError("AI/altered-content disclosure review is required before rescheduling")
+            conn.execute(
+                "UPDATE autonomous_jobs SET scheduled_at=?,next_attempt_at=NULL,updated_at=? WHERE id=?",
+                (target, _utc_now(), job_id),
+            )
+            self._event(conn, job_id, "rescheduled", {"scheduled_at": target})
+            conn.commit()
+        return target
+
     def claim_publish(
         self,
         now: Optional[str] = None,
