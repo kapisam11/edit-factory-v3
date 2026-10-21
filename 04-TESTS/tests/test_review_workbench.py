@@ -91,7 +91,7 @@ def test_render_reviewed_video_uses_isolated_workspace_and_preserves_original(tm
         encoding="utf-8",
     )
     (package / "plan.json").write_text(
-        json.dumps({"v3_directives": {"blueprint_contract": "3.0.0"}, "edit_plan": [[2.0, "hook"]], "script": "hello"}),
+        json.dumps({"v3_directives": {"blueprint_contract": "3.0.0", "platform_profile": {"width": 360, "height": 640}}, "edit_plan": [[2.0, "hook"]], "script": "hello"}),
         encoding="utf-8",
     )
     (package / "timeline.json").write_text("{}", encoding="utf-8")
@@ -116,7 +116,7 @@ def test_render_reviewed_video_uses_isolated_workspace_and_preserves_original(tm
         return kwargs["out_file"]
 
     monkeypatch.setattr(composer, "compose_short_from_video", fake_compose)
-    monkeypatch.setattr(render_engine, "validate_media_output", lambda *_a, **_kw: {"format": {"duration": "2.0"}})
+    monkeypatch.setattr(render_engine, "validate_media_output", lambda *_a, **_kw: {"format": {"duration": "2.0"}, "streams": [{"codec_type": "video", "width": 360, "height": 640}, {"codec_type": "audio"}]})
 
     result = render_reviewed_video(package)
 
