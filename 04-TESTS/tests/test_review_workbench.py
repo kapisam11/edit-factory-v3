@@ -318,3 +318,27 @@ def test_caption_edit_invalidates_corrected_render_link(tmp_path: Path) -> None:
     assert next_review["render_status"] == "requires_rerender"
     assert "rendered_video_file" not in next_review
     assert reviewed_video.is_file()
+
+
+def test_load_review_converts_ass_dialogue_to_srt_without_touching_original(tmp_path: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    ass = (
+        "[Script Info]\nTitle: example\n\n[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:00.00,0:00:01.20,Default,,0,0,0,,A corrected opening, with a comma\n"
+        "Dialogue: 0,0:00:01.20,0:00:02.40,Default,,0,0,0,,The final payoff\n"
+    )
+    source = package / "captions.ass"
+    source.write_text(ass, encoding="utf-8")
+
+    review = load_review(package)
+
+    assert review["source_caption_file"] == "captions.ass"
+    assert "A corrected opening, with a comma" in review["captions_srt"]
+    assert "00:00:00,000 --> 00:00:01,200" in review["captions_srt"]
+    assert "00:00:01,200 --> 00:00:02,400" in review["captions_srt"]
+    state = save_review(package, {**review, "captions_srt": review["captions_srt"]})
+    assert (package / "reviewed" / "captions.srt").is_file()
+    assert source.read_text(encoding="utf-8") == ass
+    assert state["version"] == 1
