@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — dependency security baseline
+
+### Security and compatibility
+- Update the locked `aiohttp` dependency to 3.14.5, `certifi` to 2026.10.19, and Pillow to 13.0.0 to clear the detected dependency advisories.
+- Raise the supported Python floor to 3.11 because Pillow 13.0.0 does not support Python 3.10; align package metadata, frozen lockfile, CI matrix, installation guidance, and release checklist.
+
 ## Unreleased — originality and game-aware learning
 
 ### Editorial and publishing
