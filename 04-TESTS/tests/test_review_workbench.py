@@ -214,7 +214,7 @@ def test_compositor_does_not_overwrite_reviewed_srt(tmp_path: Path, monkeypatch)
         json.dumps({
             "script": "Original plan script that must not replace reviewed captions.",
             "edit_plan": [[1.0, "hook"]],
-            "v3_directives": {"blueprint_contract": "3.0.0", "platform_profile": {"width": 360, "height": 640}},
+            "v3_directives": {"blueprint_contract": "3.0.0", "disable_templates": True, "platform_profile": {"width": 360, "height": 640}},
         }),
         encoding="utf-8",
     )
