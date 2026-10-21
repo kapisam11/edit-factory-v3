@@ -2,7 +2,7 @@
 
 ## Local development
 
-Install from the repository-root `pyproject.toml` with the extras required for the features you use. The package metadata supports Python 3.10 and newer, while the Windows `START-ALL.ps1` launcher and pinned production Docker image use Python 3.12. FFmpeg and optional model/OCR assets are runtime dependencies; generated media, uploads, knowledge data, SQLite state, and local tool bundles are not source artifacts.
+Install from the repository-root `pyproject.toml` with the extras required for the features you use. The package metadata supports Python 3.11 and newer because the security-patched Pillow 13.0.0 release does not support Python 3.10. The Windows `START-ALL.ps1` launcher and pinned production Docker image use Python 3.12. FFmpeg and optional model/OCR assets are runtime dependencies; generated media, uploads, knowledge data, SQLite state, and local tool bundles are not source artifacts.
 
 The repository contains a committed `uv.lock`. The Windows launcher and CI use `uv sync --frozen` (the launcher selects Python 3.12), and the production Docker image installs from that same lock. Optional features remain separate extras; install only the extras needed by the workflow.
 
