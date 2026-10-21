@@ -4,7 +4,7 @@ Thanks for contributing to Edit Factory v3.
 kapasam2000
 ## Development setup
 
-Use Python 3.10 or newer. From the repository root:
+Use Python 3.11 or newer. Pillow 13.0.0 is part of the security baseline and does not support Python 3.10. From the repository root:
 
 ```bash
 python -m venv .venv
