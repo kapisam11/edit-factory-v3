@@ -4,7 +4,7 @@ This is the recommended installation path for a new checkout.
 
 ## What you need
 
-- **Python 3.12** for the production Windows workflow. The source supports Python 3.10+ and CI checks Python 3.10–3.14, but the production Docker image and Windows acceptance target are based on Python 3.12.
+- **Python 3.12** for the production Windows workflow. The supported runtime is Python 3.11+ because the security-patched Pillow 13.0.0 release does not support Python 3.10. CI checks Python 3.11–3.14; the production Docker image and Windows acceptance target are based on Python 3.12.
 - FFmpeg and FFprobe available on your PATH for local CLI renders.
 - Git, if you are cloning the project.
 - `uv`, so the committed `uv.lock` is used for a reproducible install.
