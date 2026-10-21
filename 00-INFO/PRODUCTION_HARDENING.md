@@ -25,7 +25,7 @@ This branch is the final verification pass for the dashboard and local single-ho
 - Production Gunicorn uses one `gthread` worker with four threads so the long-lived dashboard SSE endpoint cannot block all other HTTP requests.
 - Docker contains the complete production WSGI dependency boundary and does not rely on the old `worker.py` name.
 - Persistent SQLite state is stored under `/app/state`.
-- CI validates Python 3.10–3.12, Windows-sensitive modules, dependency audit, CLI smoke tests, and Docker image creation/imports.
+- CI validates Python 3.11–3.14, Windows-sensitive modules, dependency audit, CLI smoke tests, and Docker image creation/imports.
 - Runtime/generated directories are ignored going forward.
 - Current-tree runtime FFmpeg/tool artifacts have been removed; historical Git objects remain a separately coordinated migration.
 
