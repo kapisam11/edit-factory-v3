@@ -589,8 +589,14 @@ def register_dashboard_compat(app):
             return jsonify({
                 "error": "This package is not yet matched to an existing learning-history record."
             }), 409
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            return jsonify({"error": f"Could not save channel feedback: {type(exc).__name__}: {exc}"}), 400
+        except (OSError, ValueError, json.JSONDecodeError):
+            import logging
+            logging.getLogger(__name__).exception(
+                "Could not save channel feedback for package %s", package.name
+            )
+            return jsonify({
+                "error": "Could not save creator feedback. Check that the learning-history file exists and contains a matching package record."
+            }), 400
         return jsonify({
             "ok": True,
             "package": package.name,
@@ -633,16 +639,20 @@ def register_dashboard_compat(app):
         if request.method == "GET":
             try:
                 state = load_review(package)
-            except ValueError as exc:
-                return jsonify({"error": str(exc)}), 409
+            except ValueError:
+                return jsonify({
+                    "error": "Saved review state could not be loaded; it may be invalid or have failed its integrity check."
+                }), 409
             return jsonify(_editorial_review_response(package, state))
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             return jsonify({"error": "Review body must be a JSON object"}), 400
         try:
             state = save_review(package, payload)
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
+        except ValueError:
+            return jsonify({
+                "error": "Review could not be saved. Check the title, description, and subtitle timestamp/text limits."
+            }), 400
         return jsonify({"ok": True, "review": _editorial_review_response(package, state)}), 200
 
     @app.route("/api/package/<name>/review/restore/<int:version>", methods=["POST"])
@@ -657,8 +667,10 @@ def register_dashboard_compat(app):
             return jsonify({"error": "Editor role required"}), 403
         try:
             state = restore_review(package, version)
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
+        except ValueError:
+            return jsonify({
+                "error": "The requested review revision could not be restored. Check that the revision exists and has valid integrity data."
+            }), 400
         return jsonify({"ok": True, "review": _editorial_review_response(package, state)}), 200
 
     @app.route("/api/package/<name>/review/render", methods=["POST"])
@@ -673,8 +685,10 @@ def register_dashboard_compat(app):
             return jsonify({"error": "Editor role required"}), 403
         try:
             state = render_reviewed_video(package)
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 409
+        except ValueError:
+            return jsonify({
+                "error": "Reviewed rendering cannot proceed because required source assets, integrity checks, or subtitle data are not valid."
+            }), 409
         except Exception as exc:
             # Keep file paths, FFmpeg arguments, and provider details out of the
             # client response; the full exception remains in server diagnostics.
