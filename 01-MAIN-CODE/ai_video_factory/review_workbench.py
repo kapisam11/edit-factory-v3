@@ -417,6 +417,15 @@ def render_reviewed_video(package: Path) -> dict[str, Any]:
         raise ValueError("Reviewed re-render currently requires a saved V3 blueprint contract")
     if not isinstance(edit_plan, list) or not edit_plan:
         raise ValueError("The saved V3 edit plan is missing or empty")
+    profile = directives.get("platform_profile")
+    profile = profile if isinstance(profile, dict) else {}
+    try:
+        expected_width = int(profile.get("width", 1080))
+        expected_height = int(profile.get("height", 1920))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("The saved V3 output profile has invalid dimensions") from exc
+    if expected_width <= 0 or expected_height <= 0:
+        raise ValueError("The saved V3 output profile must use positive dimensions")
     if not isinstance(manifest, dict):
         raise ValueError("The saved source manifest is invalid")
     source_value = str(manifest.get("source_path") or "").strip()
@@ -493,7 +502,27 @@ def render_reviewed_video(package: Path) -> dict[str, Any]:
         rendered_path = Path(rendered).resolve(strict=True)
         if rendered_path != output.resolve() or not rendered_path.is_file():
             raise RuntimeError("Reviewed renderer returned an unexpected output path")
-        validate_media_output(str(rendered_path), require_video=True, require_audio=True)
+        media_probe = validate_media_output(
+            str(rendered_path), require_video=True, require_audio=True
+        )
+        video_stream = next(
+            (
+                stream for stream in media_probe.get("streams", [])
+                if isinstance(stream, dict) and stream.get("codec_type") == "video"
+            ),
+            None,
+        )
+        if video_stream is None:
+            raise RuntimeError("Reviewed render has no validated video stream")
+        try:
+            actual_width = int(video_stream.get("width", 0))
+            actual_height = int(video_stream.get("height", 0))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError("Reviewed render has invalid output dimensions") from exc
+        if (actual_width, actual_height) != (expected_width, expected_height):
+            raise RuntimeError(
+                "Reviewed render dimensions do not match the selected V3 output profile"
+            )
         if rendered_path.stat().st_size <= 0:
             raise RuntimeError("Reviewed render is empty")
         version = int(state.get("version", 0))
