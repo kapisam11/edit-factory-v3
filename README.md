@@ -44,6 +44,8 @@ The repository also retains the previously implemented production features: scen
 
 ## Quick start
 
+**Runtime requirement:** Python 3.11 or newer. Python 3.10 support was dropped with the security update to Pillow 13.0.0, which does not support Python 3.10. The lockfile pins the patched Pillow and certifi versions.
+
 From the repository root:
 
 ```bash
