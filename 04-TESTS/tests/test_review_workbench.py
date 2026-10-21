@@ -133,6 +133,23 @@ def test_render_reviewed_video_uses_isolated_workspace_and_preserves_original(tm
     assert result["rendered_for_version"] == result["version"]
     assert load_review(package)["rendered_video_file"] == result["rendered_video_file"]
 
+    # A structurally valid MP4 with the wrong dimensions must not be promoted.
+    monkeypatch.setattr(
+        render_engine,
+        "validate_media_output",
+        lambda *_a, **_kw: {
+            "format": {"duration": "2.0"},
+            "streams": [
+                {"codec_type": "video", "width": 1920, "height": 1080},
+                {"codec_type": "audio"},
+            ],
+        },
+    )
+    with pytest.raises(RuntimeError, match="dimensions do not match"):
+        render_reviewed_video(package)
+    assert original_video.read_bytes() == b"original-final-video-sentinel"
+    assert len(list((package / "reviewed" / "renders").glob("final.reviewed-v*.mp4"))) == 1
+
 
 def test_render_reviewed_video_refuses_changed_source(tmp_path: Path) -> None:
     import hashlib
