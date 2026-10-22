@@ -137,8 +137,12 @@ def select_clip_candidates(
         raise BatchClipError("Source duration must be at least 8 seconds.")
     if target < 8.0 or target > 180.0:
         raise BatchClipError("clip_seconds must be between 8 and 180 seconds.")
-    if not 1 <= int(count) <= 10:
-        raise BatchClipError("count must be between 1 and 10.")
+    try:
+        requested_count = int(count)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise BatchClipError("count must be an integer between 1 and 10.") from exc
+    if requested_count != count or not 1 <= requested_count <= 10:
+        raise BatchClipError("count must be an integer between 1 and 10.")
     if gap < 0.0 or gap > 600.0:
         raise BatchClipError("min_gap_seconds must be between 0 and 600 seconds.")
 
@@ -221,7 +225,7 @@ def select_clip_candidates(
                 scene_ids=scene_ids,
             )
         )
-        if len(selected) >= int(count):
+        if len(selected) >= requested_count:
             break
     return selected
 
@@ -359,8 +363,8 @@ def run_batch_clip_factory(
         manifest["source"]["sha256"] = source_hash
         media_info = extract_media_metadata(source)
         source_duration = _finite_number((media_info.get("format") or {}).get("duration"), 0.0)
-        if source_duration <= 0:
-            raise BatchClipError("FFprobe did not return a valid positive source duration.")
+        if source_duration < 8.0:
+            raise BatchClipError("Source duration must be at least 8 seconds.")
         manifest["source"]["duration_seconds"] = round(source_duration, 3)
         _atomic_write_json(manifest_path, manifest)
 
