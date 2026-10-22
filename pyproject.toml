@@ -27,6 +27,7 @@ aivf-hardware-smoke = "ai_video_factory.hardware_smoke:main"
 aivf-compat = "ai_video_factory.compatibility_cli:main"
 aivf-content = "app.content_factory_cli:main"
 aivf-v3 = "ai_video_factory.v3_cli:main"
+aivf-batch-clips = "ai_video_factory.batch_clip_cli:main"
 
 [project.optional-dependencies]
 web = ["flask>=2.3.0", "gunicorn>=22.0.0; platform_system != 'Windows'"]
@@ -98,6 +99,8 @@ files = [
   "01-MAIN-CODE/ai_video_factory/folder_publisher.py",
   "01-MAIN-CODE/ai_video_factory/human_style_guard.py",
   "01-MAIN-CODE/ai_video_factory/production_readiness.py",
+  "01-MAIN-CODE/ai_video_factory/batch_clip_factory.py",
+  "01-MAIN-CODE/ai_video_factory/batch_clip_cli.py",
   "01-MAIN-CODE/ai_video_factory/observability_metrics.py",
   "01-MAIN-CODE/ai_video_factory/production_assurance.py",
   "01-MAIN-CODE/ai_video_factory/resource_metrics.py",
