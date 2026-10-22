@@ -17,6 +17,15 @@ The repository also retains the previously implemented production features: scen
 
 **Publishing scope:** The repository has two separate existing-video workflows. `aivf-folder-publisher` is the opt-in, private-by-default YouTube-only folder watcher, with stable-file detection, FFprobe validation, a durable SQLite queue, immutable snapshots, and retry idempotency. `aivf-publish` is the opt-in per-platform/account queue and includes YouTube, Instagram Reels, and TikTok Direct Post adapters, durable per-destination state, bounded retry/reconciliation, and publication history. These adapters are implemented and covered by mocked tests; that does not prove your particular accounts are eligible or that your apps have approved permissions. Complete a controlled upload and verify the final remote post on every enabled account before unattended use. The topic-generation autonomous daemon remains separate. See [00-INFO/UPLOAD-PACKAGE.md](00-INFO/UPLOAD-PACKAGE.md).
 
+## Guides
+
+- [Architecture and V3 contract](docs/architecture.md)
+- [Windows setup and production checklist](docs/windows.md)
+- [Developer guide and repository map](docs/development.md)
+- [Security policy](SECURITY.md)
+- [Deployment and publishing operations](06-CONFIG-AND-DEPLOYMENT/README.md)
+- [Engineering and operations notes](00-INFO/11-ENGINEERING-AND-OPERATIONS.md)
+
 ## Quick start
 
 **Runtime requirement:** Python 3.11 or newer. Python 3.10 support was dropped with the security update to Pillow 13.0.0, which does not support Python 3.10. The lockfile pins the patched Pillow and certifi versions.
