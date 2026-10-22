@@ -158,6 +158,9 @@ def _reasons(signals: Mapping[str, float]) -> tuple[str, ...]:
         reverse=True,
     )
     selected = [label for value, label in contributions if value >= 0.045][:3]
+    topic_reason = labels["topic"][1]
+    if signals.get("topic", 0.0) >= 0.40 and topic_reason not in selected:
+        selected = [*selected[:2], topic_reason]
     return tuple(selected or ["Highest available combined scene signal"])
 
 
