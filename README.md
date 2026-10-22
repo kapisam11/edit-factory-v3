@@ -160,3 +160,27 @@ The license does not grant redistribution, mirroring, re-hosting, resale, packag
 The detailed guide contains the **Windows small-group production requirements** and **Final Windows production checklist**, including disk limits, crash recovery, backup/restore, rights review, and publishing gates: [Windows setup and production checklist](docs/windows.md).
 
 `START-ALL.bat` is the development/supervised-local launcher. Production startup is separate; see [deployment and publishing operations](06-CONFIG-AND-DEPLOYMENT/README.md).
+
+
+## Windows small-group production requirements
+
+This repository targets supervised local use on a trusted Windows PC. The full [Windows setup and production checklist](docs/windows.md) includes setup and resource limits.
+
+### Pre-paid-work checklist
+
+- Complete a **real media smoke test** using representative footage, audio, and captions.
+- Run a **backup/restore verification drill** and verify recovered state and output.
+- Test **API failure and retry behavior**, including timeouts, rate limits, and temporary outages.
+- Require **rights approval before publish** and human review for each deliverable.
+- Keep **disk space headroom** above the configured minimum before long renders or uploads.
+
+### Final Windows production checklist
+
+Before paid work or unattended publishing, complete the [full checklist on Windows](docs/windows.md), including a real render/QC review, low-disk and rejected-upload checks, worker crash/restart recovery, a backup/restore verification drill, API failure and retry behavior, and controlled account acceptance tests.
+
+- Folder publisher limits: `AIVF_FOLDER_MAX_FILE_BYTES`, `AIVF_FOLDER_MAX_STAGED_BYTES`, and `AIVF_FOLDER_MIN_FREE_DISK_BYTES`.
+- **Crash/restart test:** verify interrupted jobs recover safely and never report false success.
+- **Missing or malformed rights evidence** must block publishing pending human review.
+- Complete a **private or unlisted account acceptance test** for each enabled platform before enabling public or unattended publishing.
+
+`START-ALL.bat` **is the development/supervised-local launcher**. Production uses `START-PRODUCTION.bat` / `START-PRODUCTION.ps1`; first startup requires `START-PRODUCTION.ps1 -Migrate`. The production launcher **does not build source** and requires an immutable image digest and explicitly configured secrets. See [deployment operations](06-CONFIG-AND-DEPLOYMENT/README.md).
