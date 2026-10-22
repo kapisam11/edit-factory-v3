@@ -2,7 +2,7 @@
 
 ## Windows one-click start
 
-On Windows, double-click **[START-ALL.bat](../START-ALL.bat)** in the repository root. It is the main local launcher and stays next to this README.
+On Windows, double-click **[START-ALL.bat](../START-ALL.bat)** in the repository root. It is the main local launcher in the repository root, next to the root README.
 
 It will:
 1. Check that Docker Desktop is installed and running.
