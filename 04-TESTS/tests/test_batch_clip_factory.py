@@ -206,6 +206,23 @@ def test_batch_factory_keeps_candidates_isolated_and_preserves_source(
     assert "simulated candidate render failure" in failed["error"]
 
 
+def test_batch_factory_rejects_unsupported_transcript_before_creating_output(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("plain text is not time-aligned", encoding="utf-8")
+    output = tmp_path / "new-output"
+
+    with pytest.raises(batch.BatchClipError, match="timestamped .srt and .vtt"):
+        batch.run_batch_clip_factory(
+            source, "test topic", output, transcript_path=transcript
+        )
+
+    assert not output.exists()
+
+
 def test_batch_factory_refuses_nonempty_output_directory(
     tmp_path: Path,
 ) -> None:
