@@ -32,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-key", default=None, help="Optional configured model selector")
     parser.add_argument("--music", default=None, help="Optional music file used for each output")
     parser.add_argument("--enable-ocr", action="store_true", help="Include optional OCR in scene analysis")
+    parser.add_argument(
+        "--transcript",
+        default=None,
+        help="Optional timestamped .srt/.vtt subtitle file for topic-aware moment selection",
+    )
     parser.add_argument("--no-object-detection", action="store_true", help="Disable optional object-detection stage")
     parser.add_argument("--enable-diarization", action="store_true", help="Enable optional speaker diarization")
     parser.add_argument("--diarization-token", default=None, help="Token for a configured diarization provider")
@@ -56,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
             model_key=args.model_key,
             music_path=args.music,
             enable_ocr=args.enable_ocr,
+            transcript_path=args.transcript,
             enable_object_detection=not args.no_object_detection,
             enable_diarization=args.enable_diarization,
             diarization_token=args.diarization_token,
