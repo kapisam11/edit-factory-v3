@@ -71,7 +71,22 @@ Existing CLIs remain available:
 aivf --help
 aivf-content --help
 aivf-v3 --help
+aivf-batch-clips --help
 ```
+
+### Batch Clip Mode
+
+Use Batch Clip Mode when you have one long source video and want several independent Shorts to review. It analyzes the source once, ranks likely moments using deterministic scene-importance, motion, audio, face, and available text evidence, then chooses non-overlapping source windows. Each window is extracted to its own workspace and run through the normal V3 planner, renderer, and quality checks.
+
+On Windows, run this from the repository root in PowerShell (choose a new output directory for each run):
+
+```powershell
+aivf-batch-clips "D:\\Videos\\source.mp4" "The best moments from this match" --output-dir "output\\match-batch-01" --count 5 --seconds 25 --platform youtube_shorts
+```
+
+The defaults are five candidates of about 25 seconds; request 1–10 candidates and 8–180 seconds per candidate. The source must be at least 8 seconds long. The output directory must be new or empty, and existing results are never overwritten. Open `output\\match-batch-01\\batch_manifest.json` to see source timestamps, explainable heuristic scores, each candidate's status, and relative paths to successful `final.v3.mp4` files. Each clip has its own package, so a render failure is recorded for that candidate and does not stop other candidates. The command returns exit code 2 for a partial batch and 1 if the batch produces no successful clip.
+
+Scores are ranking heuristics, not predicted views. This mode does not bypass source-rights review, V3 quality checks, human publishing approval, or platform safeguards; it does not publish anything automatically. The existing single-clip production workflow is unchanged.
 
 Run the production preflight diagnostics CLI:
 
