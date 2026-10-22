@@ -153,3 +153,10 @@ The official repository is:
 **https://github.com/kapisam11/edit-factory-v3**
 
 The license does not grant redistribution, mirroring, re-hosting, resale, package publishing, or charging for copies. The software is provided without warranty, and users are responsible for their own configuration, generated content, third-party services, and compliance obligations.
+
+
+## Windows production requirements
+
+The detailed guide contains the **Windows small-group production requirements** and **Final Windows production checklist**, including disk limits, crash recovery, backup/restore, rights review, and publishing gates: [Windows setup and production checklist](docs/windows.md).
+
+`START-ALL.bat` is the development/supervised-local launcher. Production startup is separate; see [deployment and publishing operations](06-CONFIG-AND-DEPLOYMENT/README.md).
