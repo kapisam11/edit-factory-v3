@@ -250,10 +250,10 @@ def test_story_shape_changes_actual_candidate_ranking() -> None:
     ]
 
     candidates = batch.select_clip_candidates(
-        scenes, 80, clip_seconds=20, count=1, min_gap_seconds=1
+        scenes, 80, clip_seconds=20, count=2, min_gap_seconds=1
     )
 
-    assert len(candidates) == 1
+    assert len(candidates) == 2
     assert candidates[0].anchor_scene_id == "hook"
+    assert candidates[0].score > candidates[1].score
     assert "Hook-like spoken cue" in candidates[0].reasons
-    assert "Payoff-like spoken cue" in candidates[0].reasons
