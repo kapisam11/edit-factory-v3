@@ -7,12 +7,10 @@ does not prevent the remaining candidates from being attempted.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
 import re
-import shutil
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -310,6 +308,22 @@ def run_batch_clip_factory(
     clean_topic = str(topic or "").strip()
     if not clean_topic or len(clean_topic) > 500:
         raise BatchClipError("topic must be non-empty and no longer than 500 characters.")
+    try:
+        requested_count = int(count)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise BatchClipError("count must be an integer between 1 and 10.") from exc
+    if requested_count != count or not 1 <= requested_count <= 10:
+        raise BatchClipError("count must be an integer between 1 and 10.")
+    requested_seconds = _finite_number(clip_seconds, -1.0)
+    requested_gap = _finite_number(min_gap_seconds, -1.0)
+    if not 8.0 <= requested_seconds <= 180.0:
+        raise BatchClipError("clip_seconds must be between 8 and 180 seconds.")
+    if not 0.0 <= requested_gap <= 600.0:
+        raise BatchClipError("min_gap_seconds must be between 0 and 600 seconds.")
+    if str(platform) not in {"youtube_shorts", "tiktok", "instagram_reels", "square", "youtube"}:
+        raise BatchClipError("platform is not supported by V3.")
+    if not str(audience or "").strip() or len(str(audience)) > 500:
+        raise BatchClipError("audience must be non-empty and no longer than 500 characters.")
     target = Path(output_dir).expanduser().resolve()
     if target == source or target.is_relative_to(source):
         raise BatchClipError("output_dir must be a directory separate from the input video.")
@@ -330,9 +344,9 @@ def run_batch_clip_factory(
         "finished_at": None,
         "source": {"name": source.name, "sha256": None, "duration_seconds": None},
         "options": {
-            "requested_count": int(count),
-            "clip_seconds": float(clip_seconds),
-            "min_gap_seconds": float(min_gap_seconds),
+            "requested_count": requested_count,
+            "clip_seconds": requested_seconds,
+            "min_gap_seconds": requested_gap,
             "platform": str(platform),
             "topic": clean_topic,
         },
@@ -361,8 +375,8 @@ def run_batch_clip_factory(
             scenes,
             source_duration,
             clip_seconds=clip_seconds,
-            count=count,
-            min_gap_seconds=min_gap_seconds,
+            count=requested_count,
+            min_gap_seconds=requested_gap,
         )
         manifest["candidates"] = [
             {
