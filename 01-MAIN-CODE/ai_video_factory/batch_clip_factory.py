@@ -70,6 +70,27 @@ def _clamp01(value: Any) -> float:
     return max(0.0, min(1.0, _finite_number(value)))
 
 
+_HOOK_CUES = (
+    "wait", "what happened", "why did", "how did", "the truth", "the secret",
+    "watch this", "look what", "but then", "until suddenly", "nobody expected",
+    "you won't believe", "you would never", "here is why", "here's why",
+)
+_PAYOFF_CUES = (
+    "turns out", "it turned out", "finally", "the result", "in the end",
+    "that's why", "that is why", "which meant", "so that", "the answer",
+    "revealed", "realized", "managed to", "ended up", "because of that",
+    "and then it", "the reason was", "against all odds",
+)
+_CONTEXT_CUES = ("because", "although", "however", "therefore", "instead", "which meant", "so that")
+
+
+def _cue_score(text: str, cues: Sequence[str]) -> float:
+    """Return a bounded, explainable lexical cue score; never claim semantic certainty."""
+    normalized = re.sub(r"[^a-z0-9' ]+", " ", text.lower())
+    hits = sum(1 for cue in cues if cue in normalized)
+    return min(1.0, hits / 2.0)
+
+
 def _scene_signals(scene: Any) -> dict[str, float]:
     transcript = str(_value(scene, "transcript", "") or "").strip()
     description = str(_value(scene, "description", "") or "").strip()
@@ -80,30 +101,78 @@ def _scene_signals(scene: Any) -> dict[str, float]:
     evidence = min(1.0, evidence_words / 15.0)
     if objects or visible_text:
         evidence = min(1.0, evidence + 0.25)
+    # Hook/payoff cues are intentionally based on spoken text, not arbitrary
+    # visual descriptions, to avoid treating generic scene labels as story beats.
+    hook = _cue_score(transcript, _HOOK_CUES)
+    payoff = _cue_score(transcript, _PAYOFF_CUES)
+    context = min(1.0, len(transcript.split()) / 18.0)
+    if any(cue in transcript.lower() for cue in _CONTEXT_CUES):
+        context = min(1.0, context + 0.2)
     signals = {
         "importance": _clamp01(_value(scene, "importance_score", 0.0)),
         "motion": _clamp01(_value(scene, "motion_score", 0.0)),
         "audio": _clamp01(_value(scene, "audio_energy", 0.0)),
         "faces": min(1.0, face_count / 2.0),
         "evidence": evidence,
+        "hook": hook,
+        "payoff": payoff,
+        "context": context,
     }
+    # Keep all weights explicit and summing to 1.0 so the score remains a
+    # transparent ranking heuristic rather than a fabricated prediction.
     signals["score"] = (
-        0.42 * signals["importance"]
-        + 0.22 * signals["motion"]
-        + 0.18 * signals["audio"]
-        + 0.10 * signals["faces"]
-        + 0.08 * signals["evidence"]
+        0.34 * signals["importance"]
+        + 0.17 * signals["motion"]
+        + 0.14 * signals["audio"]
+        + 0.08 * signals["faces"]
+        + 0.09 * signals["evidence"]
+        + 0.08 * signals["hook"]
+        + 0.06 * signals["payoff"]
+        + 0.04 * signals["context"]
     )
     return signals
 
 
+def _window_story_signals(
+    usable: Sequence[tuple[Any, float, float, dict[str, float]]],
+    start: float,
+    end: float,
+) -> dict[str, float]:
+    """Score story shape using text evidence near the beginning and end of a window."""
+    duration = max(0.001, end - start)
+    early_end = start + duration * 0.38
+    late_start = start + duration * 0.62
+    early_hooks: list[float] = []
+    late_payoffs: list[float] = []
+    contexts: list[float] = []
+    for scene, scene_start, scene_end, signals in usable:
+        if min(end, scene_end) <= max(start, scene_start):
+            continue
+        transcript = str(_value(scene, "transcript", "") or "").strip()
+        if not transcript:
+            continue
+        if scene_start < early_end:
+            early_hooks.append(signals["hook"])
+        if scene_end > late_start:
+            late_payoffs.append(signals["payoff"])
+        contexts.append(signals["context"])
+    return {
+        "hook": max(early_hooks, default=0.0),
+        "payoff": max(late_payoffs, default=0.0),
+        "context": sum(contexts) / len(contexts) if contexts else 0.0,
+    }
+
+
 def _reasons(signals: Mapping[str, float]) -> tuple[str, ...]:
     labels = {
-        "importance": (0.42, "High scene-importance signal"),
-        "motion": (0.22, "Strong visual motion"),
-        "audio": (0.18, "Elevated audio activity"),
-        "faces": (0.10, "Faces are present"),
-        "evidence": (0.08, "Transcript or visual evidence is available"),
+        "importance": (0.34, "High scene-importance signal"),
+        "motion": (0.17, "Strong visual motion"),
+        "audio": (0.14, "Elevated audio activity"),
+        "faces": (0.08, "Faces are present"),
+        "evidence": (0.09, "Transcript or visual evidence is available"),
+        "hook": (0.08, "Hook-like spoken cue"),
+        "payoff": (0.06, "Payoff-like spoken cue"),
+        "context": (0.04, "Supporting spoken context"),
     }
     contributions = sorted(
         (
@@ -184,11 +253,26 @@ def select_clip_candidates(
             if scene_id and scene_id not in overlapping_ids:
                 overlapping_ids.append(scene_id)
         average = weighted_score / weighted_total if weighted_total else anchor_signals["score"]
-        # The anchor keeps short high-value moments meaningful while the
-        # surrounding window score still rewards clips with broader substance.
-        combined = 0.70 * anchor_signals["score"] + 0.30 * average
+        story = _window_story_signals(usable, window_start, window_end)
+        # Prefer moments with a hook near the opening and a payoff near the
+        # ending, while retaining the original scene-quality signals. These
+        # are lexical heuristics only; they do not predict views or virality.
+        combined = (
+            0.55 * anchor_signals["score"]
+            + 0.20 * average
+            + 0.10 * story["hook"]
+            + 0.10 * story["payoff"]
+            + 0.05 * story["context"]
+        )
+        ranked_signals = anchor_signals | {
+            "score": combined,
+            "_average": average,
+            "hook": max(anchor_signals["hook"], story["hook"]),
+            "payoff": max(anchor_signals["payoff"], story["payoff"]),
+            "context": max(anchor_signals["context"], story["context"]),
+        }
         raw_candidates.append(
-            (window_start, window_end, combined, anchor, anchor_signals | {"score": combined, "_average": average})
+            (window_start, window_end, combined, anchor, ranked_signals)
         )
 
     raw_candidates.sort(
