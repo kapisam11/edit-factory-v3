@@ -99,6 +99,8 @@ files = [
   "01-MAIN-CODE/ai_video_factory/folder_publisher.py",
   "01-MAIN-CODE/ai_video_factory/human_style_guard.py",
   "01-MAIN-CODE/ai_video_factory/production_readiness.py",
+  "01-MAIN-CODE/ai_video_factory/batch_clip_factory.py",
+  "01-MAIN-CODE/ai_video_factory/batch_clip_cli.py",
   "01-MAIN-CODE/ai_video_factory/observability_metrics.py",
   "01-MAIN-CODE/ai_video_factory/production_assurance.py",
   "01-MAIN-CODE/ai_video_factory/resource_metrics.py",
