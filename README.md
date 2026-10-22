@@ -76,7 +76,7 @@ aivf-batch-clips --help
 
 ### Batch Clip Mode
 
-Use Batch Clip Mode when you have one long source video and want several independent Shorts to review. It analyzes the source once, ranks likely moments using deterministic scene-importance, motion, audio, face, and available text evidence, then chooses non-overlapping source windows. Each window is extracted to its own workspace and run through the normal V3 planner, renderer, and quality checks.
+Use Batch Clip Mode when you have one long source video and want several independent Shorts to review. It analyzes the source once, ranks likely moments using deterministic scene-importance, motion, audio, face, and available text evidence. When transcript text is available, it also gives explainable heuristic credit to hook-like cues near the beginning, payoff-like cues near the end, and supporting spoken context. These lexical cues are not semantic understanding or predicted views; when transcripts are absent, the mode falls back to audiovisual signals. Each window is extracted to its own workspace and run through the normal V3 planner, renderer, and quality checks.
 
 On Windows, run this from the repository root in PowerShell (choose a new output directory for each run):
 

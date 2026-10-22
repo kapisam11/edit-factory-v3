@@ -191,3 +191,44 @@ def test_extract_segment_creates_valid_media_without_touching_source(tmp_path: P
     assert sha256_file(source) == source_hash
     assert not list(tmp_path.glob("*.partial.mp4"))
 
+
+
+def test_story_cues_help_rank_hook_and_payoff_moments() -> None:
+    quiet = _scene(
+        "quiet", 0, 5, importance=0.8, motion=0.7, audio=0.7,
+        transcript="A person walks across the room and sits down.",
+    )
+    hook = _scene(
+        "hook", 10, 15, importance=0.55, motion=0.4, audio=0.4,
+        transcript="Wait, why did nobody expect this?",
+    )
+    payoff = _scene(
+        "payoff", 20, 25, importance=0.55, motion=0.4, audio=0.4,
+        transcript="It turns out the hidden key was the answer, and that's why it worked.",
+    )
+
+    quiet_signals = batch._scene_signals(quiet)
+    hook_signals = batch._scene_signals(hook)
+    payoff_signals = batch._scene_signals(payoff)
+
+    assert hook_signals["hook"] > quiet_signals["hook"]
+    assert payoff_signals["payoff"] > quiet_signals["payoff"]
+    assert hook_signals["score"] > 0
+    assert payoff_signals["score"] > 0
+
+
+def test_window_story_signals_require_spoken_text() -> None:
+    scenes = [
+        _scene("opening", 0, 5, transcript="Wait, why did this happen?"),
+        _scene("middle", 5, 10, transcript="They searched the room for a long time."),
+        _scene("ending", 10, 15, transcript="It turns out the answer was right there."),
+        _scene("visual-only", 15, 20, transcript=""),
+    ]
+    usable = [(scene, scene.start, scene.end, batch._scene_signals(scene)) for scene in scenes]
+
+    story = batch._window_story_signals(usable, 0, 15)
+    no_text_story = batch._window_story_signals(usable, 15, 20)
+
+    assert story["hook"] > 0
+    assert story["payoff"] > 0
+    assert no_text_story == {"hook": 0.0, "payoff": 0.0, "context": 0.0}
