@@ -68,6 +68,8 @@ def test_topic_relevance_changes_ranking_when_text_evidence_exists() -> None:
         _scene("cheering", 2.0, 7.0, importance=0.8, motion=0.8, audio=0.8, transcript="crowd cheering loudly"),
         _scene("goal", 32.0, 37.0, importance=0.8, motion=0.8, audio=0.8, transcript="football goal scored"),
     ]
+    for scene in scenes:
+        scene.description = ""  # Check subtitle/transcript evidence, not the test fixture's generated description.
 
     candidates = batch.select_clip_candidates(
         scenes, 60.0, clip_seconds=10.0, count=2, topic="football goal highlights"
@@ -82,12 +84,19 @@ def test_select_clip_candidates_remains_visual_when_text_evidence_is_absent() ->
         _scene("quiet", 0.0, 5.0, importance=0.3, motion=0.3, audio=0.2),
         _scene("action", 25.0, 30.0, importance=0.9, motion=0.9, audio=0.8),
     ]
+    for scene in scenes:
+        scene.description = ""
 
-    candidates = batch.select_clip_candidates(
-        scenes, 50.0, clip_seconds=10.0, count=2, topic="a topic not represented in scene text"
+    with_topic = batch.select_clip_candidates(
+        scenes, 50.0, clip_seconds=10.0, count=2,
+        topic="a topic not represented in scene text",
+    )
+    without_topic = batch.select_clip_candidates(
+        scenes, 50.0, clip_seconds=10.0, count=2, topic=""
     )
 
-    assert candidates[0].anchor_scene_id == "action"
+    assert with_topic[0].anchor_scene_id == "action"
+    assert with_topic[0].score == pytest.approx(without_topic[0].score)
 
 
 def test_select_clip_candidates_ranks_moments_and_avoids_overlap() -> None:
