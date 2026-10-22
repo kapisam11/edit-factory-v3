@@ -444,10 +444,11 @@ def run_batch_clip_factory(
                     diarization_token=diarization_token,
                 )
                 final_video = Path(result.final_video).resolve() if result.final_video else None
-                try:
-                    final_video.relative_to(candidate_dir.resolve())
-                except (ValueError, AttributeError):
-                    final_video = None
+                if final_video is not None:
+                    try:
+                        final_video.relative_to(candidate_dir.resolve())
+                    except ValueError:
+                        final_video = None
                 if not result.ok or final_video is None or not final_video.is_file():
                     item["status"] = "failed"
                     item["error"] = "; ".join(result.errors[:5])[:700] or "V3 pipeline did not return a valid final video inside the candidate package."
