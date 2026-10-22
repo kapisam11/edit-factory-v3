@@ -7,11 +7,12 @@ does not prevent the remaining candidates from being attempted.
 """
 from __future__ import annotations
 
+import html
 import json
 import math
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -70,13 +71,48 @@ def _clamp01(value: Any) -> float:
     return max(0.0, min(1.0, _finite_number(value)))
 
 
-def _scene_signals(scene: Any) -> dict[str, float]:
-    transcript = str(_value(scene, "transcript", "") or "").strip()
-    description = str(_value(scene, "description", "") or "").strip()
-    objects = _value(scene, "objects", []) or []
-    visible_text = _value(scene, "text", []) or []
+_TOPIC_STOP_WORDS = {
+    "a", "about", "an", "and", "are", "as", "at", "be", "best", "by", "clip",
+    "clips", "do", "for", "from", "how", "i", "in", "is", "it", "its", "make",
+    "making", "me", "moment", "moments", "of", "on", "or", "short", "shorts",
+    "some", "the", "this", "that", "to", "video", "what", "when", "where", "which",
+    "who", "why", "with",
+}
+
+
+def _topic_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9']+", str(value).lower())
+        if len(token) >= 2 and token not in _TOPIC_STOP_WORDS
+    }
+
+
+def _joined_text(value: Any) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(str(item) for item in value if item is not None)
+    return str(value or "")
+
+
+def _scene_signals(scene: Any, topic: str = "") -> dict[str, float]:
+    transcript = _joined_text(_value(scene, "transcript", "")).strip()
+    description = _joined_text(_value(scene, "description", "")).strip()
+    # Scene-analysis fallback descriptions contain only timestamps and must not
+    # be mistaken for source-content evidence or topic matches.
+    if description.lower().startswith("source footage from "):
+        description = ""
+    objects = _joined_text(_value(scene, "objects", [])).strip()
+    visible_text = _joined_text(_value(scene, "text", [])).strip()
+    content_text = " ".join(part for part in (transcript, description, objects, visible_text) if part)
+    content_tokens = _topic_tokens(content_text)
+    topic_tokens = _topic_tokens(topic)
+    topic_relevance = (
+        len(topic_tokens & content_tokens) / len(topic_tokens)
+        if topic_tokens and content_tokens
+        else 0.0
+    )
     face_count = max(0, int(_finite_number(_value(scene, "face_count", 0))))
-    evidence_words = len((transcript + " " + description).split())
+    evidence_words = len(content_text.split())
     evidence = min(1.0, evidence_words / 15.0)
     if objects or visible_text:
         evidence = min(1.0, evidence + 0.25)
@@ -86,13 +122,21 @@ def _scene_signals(scene: Any) -> dict[str, float]:
         "audio": _clamp01(_value(scene, "audio_energy", 0.0)),
         "faces": min(1.0, face_count / 2.0),
         "evidence": evidence,
+        "topic": topic_relevance,
     }
-    signals["score"] = (
+    base_score = (
         0.42 * signals["importance"]
         + 0.22 * signals["motion"]
         + 0.18 * signals["audio"]
         + 0.10 * signals["faces"]
         + 0.08 * signals["evidence"]
+    )
+    # Topic relevance is used only when real scene text exists. Without a
+    # transcript or OCR/description evidence, never invent a semantic penalty.
+    signals["score"] = (
+        0.82 * base_score + 0.18 * topic_relevance
+        if topic_tokens and content_tokens
+        else base_score
     )
     return signals
 
@@ -104,6 +148,7 @@ def _reasons(signals: Mapping[str, float]) -> tuple[str, ...]:
         "audio": (0.18, "Elevated audio activity"),
         "faces": (0.10, "Faces are present"),
         "evidence": (0.08, "Transcript or visual evidence is available"),
+        "topic": (0.15, "Matches words from the requested topic"),
     }
     contributions = sorted(
         (
@@ -123,6 +168,7 @@ def select_clip_candidates(
     clip_seconds: float = 25.0,
     count: int = 5,
     min_gap_seconds: float = 1.0,
+    topic: str = "",
 ) -> list[ClipCandidate]:
     """Rank windows and greedily select the best non-overlapping candidates.
 
@@ -157,7 +203,7 @@ def select_clip_candidates(
         end = max(start, min(duration, end))
         if end <= start:
             continue
-        usable.append((scene, start, end, _scene_signals(scene)))
+        usable.append((scene, start, end, _scene_signals(scene, topic)))
     if not usable:
         raise BatchClipError("Scene analysis returned no usable time intervals.")
 
@@ -228,6 +274,86 @@ def select_clip_candidates(
         if len(selected) >= requested_count:
             break
     return selected
+
+
+def _parse_subtitle_timestamp(value: str) -> float:
+    """Convert an SRT/VTT timestamp into seconds."""
+    raw = str(value).strip().replace(",", ".")
+    parts = raw.split(":")
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return int(minutes) * 60.0 + float(seconds)
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        return int(hours) * 3600.0 + int(minutes) * 60.0 + float(seconds)
+    raise ValueError("Unsupported subtitle timestamp")
+
+
+def _parse_timed_subtitles(path: Path) -> list[tuple[float, float, str]]:
+    """Read timestamped SRT/VTT captions without requiring a new dependency."""
+    try:
+        raw_text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        raise BatchClipError(f"Could not read transcript file: {exc}") from exc
+    timestamp_re = re.compile(
+        r"(?m)^\\s*(?P<start>\\d{1,2}:\\d{2}(?::\\d{2})?[,.]\\d{1,3})"
+        r"\\s*-->\\s*(?P<end>\\d{1,2}:\\d{2}(?::\\d{2})?[,.]\\d{1,3})"
+        r"(?:[ \\t][^\\r\\n]*)?\\s*$"
+    )
+    matches = list(timestamp_re.finditer(raw_text))
+    cues: list[tuple[float, float, str]] = []
+    for index, match in enumerate(matches):
+        try:
+            start = _parse_subtitle_timestamp(match.group("start"))
+            end = _parse_subtitle_timestamp(match.group("end"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(raw_text)
+        body = raw_text[match.end():next_start]
+        body = re.sub(r"<[^>]*>", " ", body)
+        body = re.sub(r"\\{\\\\an\\d+\\}", " ", body)
+        lines = [
+            html.unescape(line).strip()
+            for line in body.splitlines()
+            if line.strip() and not re.fullmatch(r"\\s*\\d+\\s*", line)
+        ]
+        text_value = re.sub(r"\\s+", " ", " ".join(lines)).strip()
+        if not text_value or start < 0 or end <= start:
+            continue
+        cues.append((start, end, text_value[:1000]))
+    return cues
+
+
+def _attach_subtitle_transcripts(
+    scenes: Sequence[Any],
+    cues: Sequence[tuple[float, float, str]],
+) -> list[Any]:
+    """Associate caption cues with source scenes by temporal overlap."""
+    enriched: list[Any] = []
+    for scene in scenes:
+        try:
+            scene_start = _finite_number(_value(scene, "start", 0.0))
+            scene_end = _finite_number(_value(scene, "end", 0.0))
+            existing = _joined_text(_value(scene, "transcript", "")).strip()
+            matching = [
+                text_value
+                for cue_start, cue_end, text_value in cues
+                if min(scene_end, cue_end) > max(scene_start, cue_start)
+            ]
+            combined = re.sub(r"\\s+", " ", " ".join(part for part in [existing, *matching] if part)).strip()
+            if isinstance(scene, Mapping):
+                clone = dict(scene)
+                clone["transcript"] = combined
+            else:
+                try:
+                    clone = replace(scene, transcript=combined)
+                except TypeError:
+                    clone = scene
+                    setattr(clone, "transcript", combined)
+            enriched.append(clone)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise BatchClipError(f"Could not attach transcript evidence to source scenes: {exc}") from exc
+    return enriched
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -304,6 +430,7 @@ def run_batch_clip_factory(
     enable_object_detection: bool = True,
     enable_diarization: bool = False,
     diarization_token: str | None = None,
+    transcript_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Produce a bounded batch of independently validated Short packages."""
     source = Path(input_video).expanduser().resolve()
@@ -328,6 +455,19 @@ def run_batch_clip_factory(
         raise BatchClipError("platform is not supported by V3.")
     if not str(audience or "").strip() or len(str(audience)) > 500:
         raise BatchClipError("audience must be non-empty and no longer than 500 characters.")
+    transcript_file: Path | None = None
+    transcript_cues: list[tuple[float, float, str]] = []
+    if transcript_path is not None:
+        transcript_file = Path(transcript_path).expanduser().resolve()
+        if not transcript_file.is_file() or transcript_file.stat().st_size <= 0:
+            raise BatchClipError("transcript_path must point to a non-empty local .srt or .vtt file.")
+        if transcript_file.stat().st_size > 10_000_000:
+            raise BatchClipError("transcript file must be no larger than 10 MB.")
+        if transcript_file.suffix.lower() not in {".srt", ".vtt"}:
+            raise BatchClipError("transcript_path supports timestamped .srt and .vtt subtitle files.")
+        transcript_cues = _parse_timed_subtitles(transcript_file)
+        if not transcript_cues:
+            raise BatchClipError("The transcript file contains no valid timestamped subtitle cues.")
     target = Path(output_dir).expanduser().resolve()
     if target == source or target.is_relative_to(source):
         raise BatchClipError("output_dir must be a directory separate from the input video.")
@@ -353,6 +493,7 @@ def run_batch_clip_factory(
             "min_gap_seconds": requested_gap,
             "platform": str(platform),
             "topic": clean_topic,
+            "transcript_sidecar": transcript_file.name if transcript_file else None,
         },
         "candidates": [],
         "summary": {"successful": 0, "failed": 0, "skipped": 0},
@@ -381,12 +522,15 @@ def run_batch_clip_factory(
             min_scenes=0,
             enable_ocr=enable_ocr,
         )
+        if transcript_cues:
+            scenes = _attach_subtitle_transcripts(scenes, transcript_cues)
         candidates = select_clip_candidates(
             scenes,
             source_duration,
             clip_seconds=clip_seconds,
             count=requested_count,
             min_gap_seconds=requested_gap,
+            topic=clean_topic,
         )
         manifest["candidates"] = [
             {
