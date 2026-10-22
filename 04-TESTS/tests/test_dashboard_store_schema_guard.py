@@ -15,7 +15,7 @@ def test_production_event_recording_does_not_create_schema(
     conn = sqlite3.connect(":memory:")
 
     with pytest.raises(sqlite3.OperationalError, match="no such table: job_events"):
-        DashboardStore._record_event(conn, "job-1", "job_queued")
+        DashboardStore._record_event(conn, "job-1", "created")
 
     table = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='job_events'"
@@ -31,8 +31,8 @@ def test_explicit_runtime_migration_override_keeps_legacy_bootstrap(
     monkeypatch.setenv("AIVF_ALLOW_RUNTIME_MIGRATIONS", "1")
     conn = sqlite3.connect(":memory:")
 
-    DashboardStore._record_event(conn, "job-1", "job_queued")
+    DashboardStore._record_event(conn, "job-1", "created")
 
     row = conn.execute("SELECT job_id, event FROM job_events").fetchone()
-    assert row == ("job-1", "job_queued")
+    assert row == ("job-1", "created")
     conn.close()
