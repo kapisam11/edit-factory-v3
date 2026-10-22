@@ -33,6 +33,63 @@ def _scene(
     )
 
 
+def test_parse_timed_subtitles_supports_srt_and_vtt(tmp_path: Path) -> None:
+    srt = tmp_path / "captions.srt"
+    srt.write_text(
+        "1\\n00:00:01,000 --> 00:00:03,200\\n<i>Huge goal!</i>\\n\\n"
+        "2\\n00:00:04,000 --> 00:00:05,500\\nThe final result\\n",
+        encoding="utf-8",
+    )
+    parsed_srt = batch._parse_timed_subtitles(srt)
+    assert parsed_srt == [(1.0, 3.2, "Huge goal!"), (4.0, 5.5, "The final result")]
+
+    vtt = tmp_path / "captions.vtt"
+    vtt.write_text(
+        "WEBVTT\\n\\n00:02.000 --> 00:03.500 align:start\\nWinning shot\\n",
+        encoding="utf-8",
+    )
+    assert batch._parse_timed_subtitles(vtt) == [(2.0, 3.5, "Winning shot")]
+
+
+def test_subtitles_attach_only_to_overlapping_source_scenes() -> None:
+    scenes = [_scene("opening", 0.0, 3.0), _scene("later", 3.0, 6.0)]
+    enriched = batch._attach_subtitle_transcripts(
+        scenes,
+        [(1.0, 2.5, "the keeper saves it"), (4.0, 5.0, "a brilliant goal")],
+    )
+
+    assert enriched[0].transcript == "the keeper saves it"
+    assert enriched[1].transcript == "a brilliant goal"
+    assert scenes[0].transcript == ""  # Enrichment does not mutate the original scene objects.
+
+
+def test_topic_relevance_changes_ranking_when_text_evidence_exists() -> None:
+    scenes = [
+        _scene("cheering", 2.0, 7.0, importance=0.8, motion=0.8, audio=0.8, transcript="crowd cheering loudly"),
+        _scene("goal", 32.0, 37.0, importance=0.8, motion=0.8, audio=0.8, transcript="football goal scored"),
+    ]
+
+    candidates = batch.select_clip_candidates(
+        scenes, 60.0, clip_seconds=10.0, count=2, topic="football goal highlights"
+    )
+
+    assert candidates[0].anchor_scene_id == "goal"
+    assert "Matches words from the requested topic" in candidates[0].reasons
+
+
+def test_select_clip_candidates_remains_visual_when_text_evidence_is_absent() -> None:
+    scenes = [
+        _scene("quiet", 0.0, 5.0, importance=0.3, motion=0.3, audio=0.2),
+        _scene("action", 25.0, 30.0, importance=0.9, motion=0.9, audio=0.8),
+    ]
+
+    candidates = batch.select_clip_candidates(
+        scenes, 50.0, clip_seconds=10.0, count=2, topic="a topic not represented in scene text"
+    )
+
+    assert candidates[0].anchor_scene_id == "action"
+
+
 def test_select_clip_candidates_ranks_moments_and_avoids_overlap() -> None:
     scenes = [
         _scene("opening", 0, 5, importance=0.2, transcript="quiet intro"),
