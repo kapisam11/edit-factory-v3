@@ -296,9 +296,9 @@ def _parse_timed_subtitles(path: Path) -> list[tuple[float, float, str]]:
     except (OSError, UnicodeError) as exc:
         raise BatchClipError(f"Could not read transcript file: {exc}") from exc
     timestamp_re = re.compile(
-        r"(?m)^\\s*(?P<start>\\d{1,2}:\\d{2}(?::\\d{2})?[,.]\\d{1,3})"
-        r"\\s*-->\\s*(?P<end>\\d{1,2}:\\d{2}(?::\\d{2})?[,.]\\d{1,3})"
-        r"(?:[ \\t][^\\r\\n]*)?\\s*$"
+        r"(?m)^\s*(?P<start>\d{1,2}:\d{2}(?::\d{2})?[,.]\d{1,3})"
+        r"\s*-->\s*(?P<end>\d{1,2}:\d{2}(?::\d{2})?[,.]\d{1,3})"
+        r"(?:[ \t][^\r\n]*)?\s*$"
     )
     matches = list(timestamp_re.finditer(raw_text))
     cues: list[tuple[float, float, str]] = []
@@ -311,13 +311,13 @@ def _parse_timed_subtitles(path: Path) -> list[tuple[float, float, str]]:
         next_start = matches[index + 1].start() if index + 1 < len(matches) else len(raw_text)
         body = raw_text[match.end():next_start]
         body = re.sub(r"<[^>]*>", " ", body)
-        body = re.sub(r"\\{\\\\an\\d+\\}", " ", body)
+        body = re.sub(r"\{\\an\d+\}", " ", body)
         lines = [
             html.unescape(line).strip()
             for line in body.splitlines()
-            if line.strip() and not re.fullmatch(r"\\s*\\d+\\s*", line)
+            if line.strip() and not re.fullmatch(r"\s*\d+\s*", line)
         ]
-        text_value = re.sub(r"\\s+", " ", " ".join(lines)).strip()
+        text_value = re.sub(r"\s+", " ", " ".join(lines)).strip()
         if not text_value or start < 0 or end <= start:
             continue
         cues.append((start, end, text_value[:1000]))
@@ -340,7 +340,9 @@ def _attach_subtitle_transcripts(
                 for cue_start, cue_end, text_value in cues
                 if min(scene_end, cue_end) > max(scene_start, cue_start)
             ]
-            combined = re.sub(r"\\s+", " ", " ".join(part for part in [existing, *matching] if part)).strip()
+            combined = re.sub(
+                r"\s+", " ", " ".join(part for part in [existing, *matching] if part)
+            ).strip()
             if isinstance(scene, Mapping):
                 clone = dict(scene)
                 clone["transcript"] = combined
@@ -352,7 +354,9 @@ def _attach_subtitle_transcripts(
                     setattr(clone, "transcript", combined)
             enriched.append(clone)
         except (AttributeError, TypeError, ValueError) as exc:
-            raise BatchClipError(f"Could not attach transcript evidence to source scenes: {exc}") from exc
+            raise BatchClipError(
+                f"Could not attach transcript evidence to source scenes: {exc}"
+            ) from exc
     return enriched
 
 
