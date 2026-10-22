@@ -274,9 +274,12 @@ class DashboardStore:
         to_status: str | None = None,
         details: str = "",
     ) -> None:
-        # Unit/integration callers can construct the legacy jobs schema without
-        # running ensure_indexes(). Make event persistence self-contained.
-        conn.execute("""
+        # Keep the legacy test/development convenience, but never create schema
+        # from a production request path. Production setup must run aivf-db-migrate.
+        environment = os.environ.get("AIVF_ENV", "development").strip().lower()
+        allow_runtime = os.environ.get("AIVF_ALLOW_RUNTIME_MIGRATIONS", "0").strip() == "1"
+        if environment != "production" or allow_runtime:
+            conn.execute("""
             CREATE TABLE IF NOT EXISTS job_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id TEXT NOT NULL,
