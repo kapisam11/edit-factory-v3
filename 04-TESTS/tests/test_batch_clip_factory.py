@@ -96,7 +96,10 @@ def test_batch_factory_keeps_candidates_isolated_and_preserves_source(
     monkeypatch.setattr(
         batch,
         "extract_media_metadata",
-        lambda _path: {"format": {"duration": "40.0"}},
+        lambda _path: {
+            "format": {"duration": "40.0"},
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}],
+        },
     )
     monkeypatch.setattr(batch, "analyze_video", lambda *args, **kwargs: scenes)
 
