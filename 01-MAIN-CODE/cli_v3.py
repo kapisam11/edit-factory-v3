@@ -25,6 +25,28 @@ logger = logging.getLogger("edit_factory_v3.cli")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
+
+
+def _warn_if_cli_secrets(args: argparse.Namespace) -> None:
+    """Warn without echoing values when credentials are supplied on argv."""
+    if any(getattr(args, name, None) for name in ("groq_key", "model_key", "elevenlabs_key")):
+        logger.warning(
+            "API keys passed as command-line arguments may be exposed in shell history "
+            "or process listings; prefer environment variables or saved application configuration."
+        )
+
+
+def _enforce_strict_optional_failures(
+    strict: bool, failures: list[tuple[str, str]]
+) -> None:
+    """Make requested optional post-processing failures fatal in strict mode."""
+    if not strict or not failures:
+        return
+    for stage, message in failures:
+        logger.error("Strict mode: optional stage '%s' failed: %s", stage, message)
+    raise SystemExit(2)
+
+
 def _safe_dict(value):
     return value if isinstance(value, dict) else {}
 
@@ -58,6 +80,7 @@ def main():
     parser.add_argument("--model-key", default=None, help="Model API key")
     parser.add_argument("--target-seconds", type=float, default=45.0, help="Target video length")
     parser.add_argument("--skip-qc", action="store_true", help="Skip quality control")
+    parser.add_argument("--strict", action="store_true", help="Exit non-zero if a requested optional post-processing stage fails")
     parser.add_argument("--interactive", action="store_true", help="Interactive review")
     parser.add_argument("--review", action="store_true", help="Run automated review")
     parser.add_argument("--auto-fix", action="store_true", help="Auto-fix issues")
@@ -65,6 +88,8 @@ def main():
     parser.add_argument("--learn", action="store_true", help="Enable feedback tracking loop")
     parser.add_argument("--engagement-score", type=float, default=None, help="Provide engagement score (0.0-1.0) to update the learning tracker")
     args = parser.parse_args()
+    _warn_if_cli_secrets(args)
+    optional_failures: list[tuple[str, str]] = []
 
     if not args.topic or len(args.topic.strip()) < 2:
         parser.error("Topic must be at least 2 characters.")
@@ -153,6 +178,7 @@ def main():
             logger.info("Subtitled video: %s", sub_out)
         except Exception as exc:
             logger.warning("Subtitle burn-in failed: %s", exc)
+            optional_failures.append(("subtitle_burn", str(exc)))
 
     if args.export_nle and ctx.package_dir:
         try:
@@ -162,6 +188,7 @@ def main():
                 logger.info("NLE exports: %s", export_all_nle_formats(ctx.package_dir, clips, ctx.plan))
         except Exception as exc:
             logger.warning("NLE export failed: %s", exc)
+            optional_failures.append(("nle_export", str(exc)))
 
     if not args.skip_qc and ctx.package_dir:
         try:
@@ -171,6 +198,7 @@ def main():
                 logger.warning("Warnings: %s", len(qc["warnings"]))
         except Exception as exc:
             logger.warning("Enhanced QC failed: %s", exc)
+            optional_failures.append(("enhanced_qc", str(exc)))
 
     if args.learn and ctx.package_dir:
         try:
@@ -199,7 +227,9 @@ def main():
             logger.info("Feedback tracker report: %s records, %s filters tracked", report["total_feedback_records"], len(report["filters_tracked"]))
         except Exception as exc:
             logger.warning("Learning update failed: %s", exc)
+            optional_failures.append(("learning_update", str(exc)))
 
+    _enforce_strict_optional_failures(args.strict, optional_failures)
     logger.info("Done.")
 
 
