@@ -36,8 +36,8 @@ def _scene(
 def test_parse_timed_subtitles_supports_srt_and_vtt(tmp_path: Path) -> None:
     srt = tmp_path / "captions.srt"
     srt.write_text(
-        "1\\n00:00:01,000 --> 00:00:03,200\\n<i>Huge goal!</i>\\n\\n"
-        "2\\n00:00:04,000 --> 00:00:05,500\\nThe final result\\n",
+        "1\n00:00:01,000 --> 00:00:03,200\n<i>Huge goal!</i>\n\n"
+        "2\n00:00:04,000 --> 00:00:05,500\nThe final result\n",
         encoding="utf-8",
     )
     parsed_srt = batch._parse_timed_subtitles(srt)
@@ -45,7 +45,7 @@ def test_parse_timed_subtitles_supports_srt_and_vtt(tmp_path: Path) -> None:
 
     vtt = tmp_path / "captions.vtt"
     vtt.write_text(
-        "WEBVTT\\n\\n00:02.000 --> 00:03.500 align:start\\nWinning shot\\n",
+        "WEBVTT\n\n00:02.000 --> 00:03.500 align:start\nWinning shot\n",
         encoding="utf-8",
     )
     assert batch._parse_timed_subtitles(vtt) == [(2.0, 3.5, "Winning shot")]
