@@ -232,3 +232,28 @@ def test_window_story_signals_require_spoken_text() -> None:
     assert story["hook"] > 0
     assert story["payoff"] > 0
     assert no_text_story == {"hook": 0.0, "payoff": 0.0, "context": 0.0}
+
+def test_story_shape_changes_actual_candidate_ranking() -> None:
+    scenes = [
+        _scene(
+            "hook", 2, 5, importance=0.7, motion=0.5, audio=0.5,
+            transcript="Wait, why did nobody expect this?",
+        ),
+        _scene(
+            "payoff", 15, 18, importance=0.7, motion=0.5, audio=0.5,
+            transcript="It turns out the answer was right there, and that's why it worked.",
+        ),
+        _scene(
+            "neutral", 40, 43, importance=0.7, motion=0.5, audio=0.5,
+            transcript="A person walks through the room and explains what they are doing.",
+        ),
+    ]
+
+    candidates = batch.select_clip_candidates(
+        scenes, 80, clip_seconds=20, count=2, min_gap_seconds=1
+    )
+
+    assert len(candidates) == 2
+    assert candidates[0].anchor_scene_id == "hook"
+    assert candidates[0].score > candidates[1].score
+    assert "Hook-like spoken cue" in candidates[0].reasons
