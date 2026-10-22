@@ -2,7 +2,7 @@
 
 ## Windows one-click start
 
-On Windows, double-click **[START-ALL.bat](START-ALL.bat)** in the repository root. It is the main local launcher and stays next to this README.
+On Windows, double-click **[START-ALL.bat](../START-ALL.bat)** in the repository root. It is the main local launcher and stays next to this README.
 
 It will:
 1. Check that Docker Desktop is installed and running.
@@ -16,13 +16,13 @@ It will:
 
 The local Compose profile publishes the dashboard only on `127.0.0.1` by default and limits admission to one concurrent job by default. On the intended 32 GB Windows PC, the development container currently defaults to a 4-CPU limit and 8 GB memory; keep those conservative settings and concurrency of one until a representative 60-second render has been measured. Set `AIVF_DASHBOARD_PORT` in `06-CONFIG-AND-DEPLOYMENT/.env` to choose another host port; the launcher follows the same setting. The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` only for later faster starts, not the initial verification, or use Docker Compose to stop the stack. These defaults protect a single-PC setup; they do not configure unattended multi-platform uploads.
 
-The PowerShell implementation is **[START-ALL.ps1](START-ALL.ps1)**.
+The PowerShell implementation is **[START-ALL.ps1](../START-ALL.ps1)**.
 
 ### Production startup is a separate, deliberate path
 
 `START-ALL.bat` is the development/supervised-local launcher. It builds `docker-compose.dev.yml`, generates local development secrets, and is **not** the production launch path.
 
-For the immutable production image, use **[START-PRODUCTION.bat](START-PRODUCTION.bat)** or [START-PRODUCTION.ps1](START-PRODUCTION.ps1). Configure `AIVF_IMAGE` as a full `image@sha256:<64-hex-digest>` and set real `FLASK_SECRET_KEY` and `AIVF_DASHBOARD_TOKEN` values in `06-CONFIG-AND-DEPLOYMENT/.env`. First startup requires the explicit `START-PRODUCTION.ps1 -Migrate` command; ordinary restarts use `START-PRODUCTION.ps1` and verify the schema without modifying it. The production launcher does not build source, prints no secrets, and refuses an unbacked image version change. See [the deployment guide](06-CONFIG-AND-DEPLOYMENT/README.md) for backup and release-upgrade limitations.
+For the immutable production image, use **[START-PRODUCTION.bat](../START-PRODUCTION.bat)** or [START-PRODUCTION.ps1](../START-PRODUCTION.ps1). Configure `AIVF_IMAGE` as a full `image@sha256:<64-hex-digest>` and set real `FLASK_SECRET_KEY` and `AIVF_DASHBOARD_TOKEN` values in `06-CONFIG-AND-DEPLOYMENT/.env`. First startup requires the explicit `START-PRODUCTION.ps1 -Migrate` command; ordinary restarts use `START-PRODUCTION.ps1` and verify the schema without modifying it. The production launcher does not build source, prints no secrets, and refuses an unbacked image version change. See [the deployment guide](../06-CONFIG-AND-DEPLOYMENT/README.md) for backup and release-upgrade limitations.
 
 ### Windows small-group production requirements (practical local scope)
 
