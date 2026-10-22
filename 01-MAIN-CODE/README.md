@@ -20,3 +20,10 @@ This folder contains the real Edit Factory v3 Python application and command-lin
 All supported runtime modules and user-facing entry points use V3 naming. Historical version identifiers are not part of the current runtime contract.
 
 The web implementation itself lives in `02-WEB-FILES/app/`. The launchers here keep the Python entry points importable while the repository stays organized for humans.
+
+## CLI safety and strict post-processing
+
+`cli_v3.py` accepts `--strict` to make failures in requested optional post-processing stages (subtitle burn-in, NLE export, enhanced QC, and learning updates) return a non-zero exit code. Without `--strict`, these failures remain warnings for backward compatibility; the primary pipeline's own errors remain fatal.
+
+Prefer environment variables or the application's saved configuration for API credentials. The legacy `--groq-key`, `--model-key`, and `--elevenlabs-key` arguments remain available for compatibility, but now trigger a warning because command-line values may be visible in shell history or process listings. The warning never prints the supplied key.
+
