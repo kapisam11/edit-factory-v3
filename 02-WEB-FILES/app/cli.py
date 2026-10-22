@@ -23,6 +23,15 @@ from ai_video_factory.upload_package import OUTPUT_PROFILES, finalize_upload_pac
 logger = logging.getLogger("aivf.cli")
 
 
+def _warn_if_cli_secrets(args: argparse.Namespace) -> None:
+    """Warn without logging credential values passed on argv."""
+    if any(getattr(args, name, None) for name in ("groq_key", "model_key", "elevenlabs_key")):
+        logger.warning(
+            "API keys passed as command-line arguments may be exposed in shell history "
+            "or process listings; prefer environment variables or saved application configuration."
+        )
+
+
 def _stage_skips_for_pipeline(config: AIVFConfig, pipeline_name: str) -> List[str]:
     selected = config.get_pipeline(pipeline_name)
     all_names = [
@@ -365,6 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    _warn_if_cli_secrets(args)
     if args.batch_workers < 1:
         parser.error("--batch-workers must be at least 1")
     if not args.topic and not args.batch:
