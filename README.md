@@ -84,6 +84,14 @@ On Windows, run this from the repository root in PowerShell (choose a new output
 aivf-batch-clips "D:\Videos\source.mp4" "The best moments from this match" --output-dir "output\match-batch-01" --count 5 --seconds 25 --platform youtube_shorts
 ```
 
+When you have a matching subtitle/transcript sidecar, supply it with `--transcript`:
+
+```powershell
+aivf-batch-clips "D:\Videos\source.mp4" "Football goals and saves" --transcript "D:\Videos\source.srt" --output-dir "output\match-batch-02" --count 5 --seconds 25
+```
+
+Timestamped `.srt` and `.vtt` files are aligned to analyzed source scenes. When actual transcript, OCR or descriptive text exists, the requested topic contributes to moment ranking; those matching words are also passed into each candidate's V3 planning context. Without a supplied transcript, speech is **not** automatically transcribed: selection falls back to the available visual/audio signals and optional OCR. The transcript is optional and adds no required package dependency.
+
 The defaults are five candidates of about 25 seconds; request 1–10 candidates and 8–180 seconds per candidate. The source must be at least 8 seconds long. The output directory must be new or empty, and existing results are never overwritten. Open `output\match-batch-01\batch_manifest.json` to see source timestamps, explainable heuristic scores, each candidate's status, and relative paths to successful `final.v3.mp4` files. Each clip has its own package, so a render failure is recorded for that candidate and does not stop other candidates. The command returns exit code 2 for a partial batch and 1 if the batch produces no successful clip.
 
 Scores are ranking heuristics, not predicted views. This mode does not bypass source-rights review, V3 quality checks, human publishing approval, or platform safeguards; it does not publish anything automatically. The existing single-clip production workflow is unchanged.
