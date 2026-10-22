@@ -362,6 +362,12 @@ def run_batch_clip_factory(
         source_hash = sha256_file(source)
         manifest["source"]["sha256"] = source_hash
         media_info = extract_media_metadata(source)
+        streams = media_info.get("streams") or []
+        if not any(
+            isinstance(stream, Mapping) and stream.get("codec_type") == "video"
+            for stream in streams
+        ):
+            raise BatchClipError("Source media must contain a video stream.")
         source_duration = _finite_number((media_info.get("format") or {}).get("duration"), 0.0)
         if source_duration < 8.0:
             raise BatchClipError("Source duration must be at least 8 seconds.")
