@@ -162,3 +162,32 @@ def test_batch_factory_refuses_nonempty_output_directory(
         batch.run_batch_clip_factory(source, "test topic", output)
 
     assert (output / "keep.txt").read_text(encoding="utf-8") == "do not touch"
+
+@pytest.mark.integration
+def test_extract_segment_creates_valid_media_without_touching_source(tmp_path: Path) -> None:
+    from ai_video_factory.production_guardrails import sha256_file
+    from ai_video_factory.render_engine import run_ffmpeg, validate_media_output
+
+    source = tmp_path / "source.mp4"
+    destination = tmp_path / "segment.mp4"
+    run_ffmpeg(
+        [
+            "ffmpeg", "-hide_banner", "-nostdin", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+            "-t", "12",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(source),
+        ],
+        timeout=90,
+    )
+    source_hash = sha256_file(source)
+
+    report = batch._extract_segment(source, destination, start=2.0, duration=8.0)
+
+    assert destination.is_file()
+    assert report["format"]["duration"]
+    assert 7.5 <= float(report["format"]["duration"]) <= 8.5
+    assert sha256_file(source) == source_hash
+    assert not list(tmp_path.glob("*.partial.mp4"))
+
