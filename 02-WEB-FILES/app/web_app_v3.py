@@ -1105,11 +1105,11 @@ def _record_admin_unlock_failure(client_ip: str) -> None:
 def _redact_diagnostic_text(value: Any) -> str:
     text_value = str(value or "")[:800]
     text_value = re.sub(
-        r"(?i)(api[_ -]?key|access[_ -]?token|authorization|secret)(\\s*[:=]\\s*)([^\\s,;]+)",
-        r"\\1\\2[REDACTED]",
+        r"(?i)(api[_ -]?key|access[_ -]?token|authorization|secret)(\s*[:=]\s*)([^\s,;]+)",
+        r"\1\2[REDACTED]",
         text_value,
     )
-    return re.sub(r"(?i)bearer\\s+[^\\s,;]+", "Bearer [REDACTED]", text_value)
+    return re.sub(r"(?i)bearer\s+[^\s,;]+", "Bearer [REDACTED]", text_value)
 
 
 @app.get("/admin")
