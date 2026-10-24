@@ -50,7 +50,9 @@ def test_header_controls_use_existing_dashboard_actions() -> None:
     assert "fetch('/api/run'" in html
     assert "fetch('/api/jobs'" in html
     assert "fetch('/api/queue/status'" in html
-    assert "fetch('/api/publishing/status'" in html
+    assert "fetch('/api/publishing/status'" in external_script
+    assert "window.refreshDashboardPublishingStatus = refreshPublishingStatus" in external_script
+    assert "classList.toggle('active', candidate === link)" in inline_script
 
 
 def test_dashboard_navigation_signout_does_not_expose_mutating_actions() -> None:
