@@ -20,6 +20,11 @@ def test_dashboard_static_assets_resolve() -> None:
     for asset in assets:
         assert (WEB_ROOT / "static" / asset).is_file(), f"Missing dashboard asset: {asset}"
 
+    # The production wheel must install the same stylesheet; source-tree-only
+    # assets would make the installed dashboard fall back to the old design.
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "02-WEB-FILES/static/css/dashboard-professional.css" in pyproject
+
 
 def test_dashboard_navigation_targets_real_sections() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
