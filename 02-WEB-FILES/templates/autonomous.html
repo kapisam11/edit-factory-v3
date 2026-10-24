@@ -6,16 +6,19 @@
   <title>Edit Factory V3 — Autonomous YouTube</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <link rel="stylesheet" href="/static/css/enhancements.css">
+  <link rel="stylesheet" href="/static/css/dashboard-professional.css">
 </head>
 <body>
   <div class="container">
-    <header>
-      <h1>EDIT FACTORY V3</h1>
-      <p class="subtitle">Autonomous YouTube Control — queue, schedule, approve, pause, and stop the publishing loop.</p>
-      <nav class="dashboard-page-links" aria-label="Dashboard navigation">
-        <a href="/">← Main dashboard</a>
-      </nav>
-    </header>
+    {% set active_page = 'publishing' %}
+  {% include "dashboard_header.html" %}
+  <section class="page-heading autonomous-page-heading">
+    <div>
+      <p class="eyebrow">PUBLISHING OPERATIONS</p>
+      <h2>Autonomous publishing</h2>
+      <p class="page-description">Queue, schedule, approve, pause, and stop publishing workflows from a dedicated control page.</p>
+    </div>
+  </section>
 
     <div class="main-layout">
       <aside class="sidebar">
