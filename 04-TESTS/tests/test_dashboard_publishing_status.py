@@ -109,12 +109,19 @@ def test_dashboard_exposes_live_publishing_health_and_destination_results(monkey
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert 'id="publishingPanel"' in html
-    assert 'id="publishingStatus"' in html
-    assert 'id="publishingDestinations"' in html
+    assert 'id="platformPublishingSummary"' in html
+    assert 'id="platformPublishingMeta"' in html
+    assert 'id="platformPublishingDestinations"' in html
+    assert 'id="platformPublishingErrors"' in html
     assert "refreshPublishingStatus" in html
-    assert "/api/publishing/status" in html
-    assert "Last confirmed publication" in html
-    assert "Token" in html or "token" in html
+
+    # The dashboard uses the same connected status renderer for the visible
+    # panel and its Refresh button; the UI does not maintain a second card.
+    source_root = Path(__file__).resolve().parents[2]
+    script = (source_root / "02-WEB-FILES" / "static" / "js" / "dashboard_enhancements.js").read_text(encoding="utf-8")
+    assert "fetch('/api/publishing/status'" in script
+    assert "Last confirmed publication" in script
+    assert "token" in script.lower()
 
 
 def test_dashboard_marks_publications_after_deadline_as_missed(monkeypatch, tmp_path):
