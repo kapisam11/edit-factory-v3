@@ -6,8 +6,6 @@ import json
 import time
 from pathlib import Path
 
-import pytest
-
 
 def _make_client(monkeypatch, tmp_path: Path, *, role: str = "admin"):
     monkeypatch.setenv("AIVF_ENV", "test")
