@@ -81,11 +81,33 @@ def test_dashboard_requires_authentication(monkeypatch):
 
 def test_dashboard_requires_authentication_for_non_root(monkeypatch):
     app = _load(monkeypatch)
+
     @app.get("/private")
     def private():
         return "private"
+
     response = app.test_client().get("/private")
     assert response.status_code == 401
+
+
+def test_direct_navigation_and_api_paths_do_not_bypass_login(monkeypatch):
+    app = _load(monkeypatch)
+    client = app.test_client()
+
+    # Viewing the sign-in page must not create an authenticated session.
+    assert client.get("/login").status_code == 200
+    root = client.get("/")
+    assert root.status_code == 302
+    assert "/login" in root.headers["Location"]
+
+    # Removing /login or typing a control-panel/API URL directly is not a bypass.
+    for path in ("/api/jobs", "/api/queue/status", "/autonomous"):
+        assert client.get(path).status_code == 401, path
+
+    # Only a valid token POST establishes the session.
+    _login(client)
+    assert client.get("/").status_code == 200
+    assert client.get("/api/jobs").status_code != 401
 
 
 def test_login_page_renders(monkeypatch):

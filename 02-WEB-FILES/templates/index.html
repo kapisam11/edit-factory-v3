@@ -6,14 +6,38 @@
     <title>Edit Factory V3 — Production Dashboard</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="stylesheet" href="/static/css/enhancements.css">
+    <link rel="stylesheet" href="/static/css/dashboard-professional.css">
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>EDIT FACTORY V3</h1>
-            <p class="subtitle">Emotion-first video production, quality control, recoverable jobs, and publishing operations</p>
-
+        <header class="app-header">
+            <div class="brand-lockup">
+                <div class="brand-mark" aria-hidden="true"><span>EF</span></div>
+                <div class="brand-copy">
+                    <p class="eyebrow">CREATOR WORKSPACE</p>
+                    <h1>EDIT FACTORY <span class="brand-version">V3</span></h1>
+                    <p class="subtitle">From raw footage to finished, review-ready short-form video.</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <div class="account-summary">
+                    <span class="account-label">Signed in as</span>
+                    <strong>{{ aivf_user_id|e }}</strong>
+                    <span class="role-chip">{{ aivf_role|e }}</span>
+                </div>
+                <button class="btn-secondary header-settings" type="button" onclick="openSettings()">Settings</button>
+                <form action="/logout" method="post" class="logout-form">
+                    <button class="btn-secondary header-signout" type="submit">Sign out</button>
+                </form>
+            </div>
         </header>
+        <nav class="dashboard-nav" aria-label="Dashboard sections">
+            <a href="#new-production" class="nav-link active">Create</a>
+            <a href="#job-queue" class="nav-link">Job queue</a>
+            <a href="#live-output" class="nav-link">Live output</a>
+            <a href="#generated-packages" class="nav-link">Your packages</a>
+            <a href="#publishingPanel" class="nav-link">Publishing status</a>
+        </nav>
 
         <details class="release-overview panel" aria-labelledby="releaseOverviewTitle">
             <summary class="release-overview-summary">
@@ -87,20 +111,21 @@
 
         <div class="main-layout">
             <aside class="sidebar">
-                <div class="panel">
+                <div class="panel" id="job-queue">
                     <h2>Job Queue</h2>
                     <div id="queueStatus" class="queue-badge">Loading…</div>
                     <div id="queueList" class="queue-list"></div>
                 </div>
-                <div class="panel" id="publishingPanel">
+                <div class="panel platform-publishing-panel" id="publishingPanel">
                     <div class="panel-header">
-                        <h2>Autonomous Publishing</h2>
+                        <h2>Publishing &amp; Delivery</h2>
                         <button class="btn-sm" type="button" onclick="refreshPublishingStatus()">Refresh</button>
                     </div>
-                    <div id="publishingStatus" class="queue-badge">Loading publishing status…</div>
-                    <div id="publishingSummary" class="queue-list"></div>
-                    <div id="publishingDestinations" class="queue-list"></div>
-                    <div id="publishingErrors" class="log-status error" aria-live="polite"></div>
+                    <div id="platformPublishingSummary" class="queue-badge" role="status" aria-live="polite">Loading publishing status…</div>
+                    <div id="platformPublishingMeta" class="publishing-meta"></div>
+                    <div id="platformPublishingDestinations" class="publishing-destinations"></div>
+                    <h3>Recent errors</h3>
+                    <div id="platformPublishingErrors" class="publishing-errors" aria-live="polite"></div>
                 </div>
                 <div class="panel">
                     <h2>Quick Actions</h2>
@@ -112,7 +137,7 @@
 
             <div class="center-content">
                 <div class="grid">
-                    <div class="panel controls">
+                    <div class="panel controls" id="new-production">
                         <div class="panel-header">
                             <h2>New Production</h2>
                             <select id="presetSelect" class="preset-select" onchange="applyPreset()">
@@ -333,7 +358,7 @@
                         <div id="panelMessage" class="log-status" aria-live="polite"></div>
                     </div>
 
-                    <div class="panel logs-panel">
+                    <div class="panel logs-panel" id="live-output">
                         <h2>Live Output</h2>
                         <div class="progress-steps" id="progressSteps">
                             <div class="step" data-step="Research">Research</div>
@@ -350,7 +375,7 @@
                     </div>
                 </div>
 
-                <div class="panel packages-panel">
+                <div class="panel packages-panel" id="generated-packages">
                     <div class="panel-header">
                         <h2>Generated Packages</h2>
                         <button class="btn-sm" onclick="loadPackages()">Refresh</button>
@@ -481,6 +506,11 @@
         let settings = {};
 
         document.addEventListener('DOMContentLoaded', () => {
+            const navLinks = Array.from(document.querySelectorAll('.dashboard-nav .nav-link'));
+            navLinks.forEach((link) => link.addEventListener('click', () => {
+                navLinks.forEach((candidate) => candidate.classList.toggle('active', candidate === link));
+            }));
+
             const contentProfile = document.getElementById('content_profile');
             const gameName = document.getElementById('game_name');
             const syncGamingRequirements = () => {
@@ -494,9 +524,7 @@
             loadPresets();
             loadPackages();
             refreshQueue();
-            refreshPublishingStatus();
             setInterval(refreshQueue, 3000);
-            setInterval(refreshPublishingStatus, 15000);
             setInterval(loadPackages, 10000);
             setupDropzone();
         });
@@ -715,93 +743,11 @@
             return '<a target="_blank" rel="noopener noreferrer" href="' + escapeHtml(value) + '">' + escapeHtml(value) + '</a>';
         }
 
-        async function refreshPublishingStatus() {
-            const badge = document.getElementById('publishingStatus');
-            const summary = document.getElementById('publishingSummary');
-            const destinationsEl = document.getElementById('publishingDestinations');
-            const errorsEl = document.getElementById('publishingErrors');
-            if (!badge || !summary || !destinationsEl || !errorsEl) return;
-            try {
-                const response = await fetch('/api/publishing/status', { cache: 'no-store' });
-                const data = await safeJson(response);
-                if (!response.ok) throw new Error(data.error || 'Publishing status unavailable (' + response.status + ')');
-
-                const heartbeat = data.heartbeat || {};
-                const enabled = Boolean(data.publish_enabled);
-                const staleAfter = 90;
-                const heartbeatAge = heartbeat.updated_at_epoch
-                    ? Math.max(0, Math.round(Date.now() / 1000 - Number(heartbeat.updated_at_epoch)))
-                    : null;
-                const workerStale = heartbeatAge === null || heartbeatAge > staleAfter;
-                const statusLabel = data.status === 'not_configured'
-                    ? 'Not configured'
-                    : (data.deadline && data.deadline.missed_today
-                        ? 'Daily deadline missed'
-                        : (workerStale ? 'Worker heartbeat stale' : (heartbeat.status || 'Worker connected')));
-                badge.textContent = statusLabel + ' · ' + (enabled ? 'REAL PUBLISHING ENABLED' : 'DRY RUN / UPLOADS DISABLED');
-                badge.className = 'queue-badge ' + ((enabled && !workerStale && data.status === 'ok' && !(data.deadline || {}).missed_today) ? 'running' : 'pending');
-
-                const counts = data.counts_by_state || {};
-                const disk = data.disk_free_bytes === null || data.disk_free_bytes === undefined
-                    ? 'Unknown'
-                    : (Number(data.disk_free_bytes) / (1024 ** 3)).toFixed(2) + ' GiB';
-                const nextDeadline = data.deadline && data.deadline.next_epoch
-                    ? formatPublishingTime(data.deadline.next_epoch)
-                    : 'Not configured';
-                const lastSuccess = formatPublishingTime(data.last_success_epoch);
-                const queueAge = data.queue_age_seconds === null || data.queue_age_seconds === undefined
-                    ? '—'
-                    : (Number(data.queue_age_seconds) < 3600
-                        ? Math.round(Number(data.queue_age_seconds) / 60) + ' min'
-                        : (Number(data.queue_age_seconds) / 3600).toFixed(1) + ' h');
-                const countLine = Object.keys(counts).length
-                    ? Object.keys(counts).sort().map((state) => escapeHtml(state) + ': ' + Number(counts[state])).join(' · ')
-                    : 'No destination jobs yet';
-                summary.innerHTML = `
-                    <div class="queue-item"><div class="queue-topic">Last confirmed publication</div><div class="queue-meta">${escapeHtml(lastSuccess)}</div></div>
-                    <div class="queue-item"><div class="queue-topic">Next daily deadline</div><div class="queue-meta">${escapeHtml(nextDeadline)}${data.deadline && data.deadline.required ? ' · required' : ' · informational'}</div></div>
-                    <div class="queue-item"><div class="queue-topic">Free disk / oldest pending job</div><div class="queue-meta">${escapeHtml(disk)} · ${escapeHtml(queueAge)}</div></div>
-                    <div class="queue-item"><div class="queue-topic">Destination queue</div><div class="queue-meta">${countLine}</div></div>
-                    <div class="queue-item"><div class="queue-topic">Worker heartbeat</div><div class="queue-meta">${heartbeatAge === null ? 'Not received' : escapeHtml(heartbeatAge + ' seconds ago')} · ${escapeHtml(heartbeat.status || 'unknown')}</div></div>
-                `;
-
-                const destinations = Array.isArray(data.destinations) ? data.destinations : [];
-                destinationsEl.innerHTML = destinations.length ? destinations.slice(0, 12).map((item) => {
-                    const state = String(item.state || 'unknown');
-                    const title = String(item.platform || 'platform') + ':' + String(item.account_id || 'default');
-                    const url = safeRemoteLink(item.remote_url);
-                    const operation = item.remote_operation_id ? '<div class="queue-meta">Remote operation: ' + escapeHtml(item.remote_operation_id) + '</div>' : '';
-                    const post = item.remote_post_id ? '<div class="queue-meta">Post ID: ' + escapeHtml(item.remote_post_id) + '</div>' : '';
-                    const attempts = 'Attempts ' + Number(item.attempts || 0) + '/' + Number(item.max_attempts || 0);
-                    const retry = item.next_attempt_at ? ' · next retry ' + formatPublishingTime(item.next_attempt_at) : '';
-                    const err = item.last_error ? '<div class="log-status error">' + escapeHtml(item.error_code || 'Error') + ': ' + escapeHtml(item.last_error) + '</div>' : '';
-                    return '<div class="queue-item"><div class="queue-topic">' + escapeHtml(title) + '</div>' +
-                        '<div class="queue-meta"><span class="queue-status ' + escapeHtml(state) + '">' + escapeHtml(state) + '</span> · ' + escapeHtml(attempts + retry) + '</div>' +
-                        post + operation + (url ? '<div class="queue-meta">' + url + '</div>' : '') + err + '</div>';
-                }).join('') : '<div class="empty-state">No destination jobs have been queued. Use aivf-publish scan to prepare approved videos.</div>';
-
-                const tokenExpiries = Array.isArray(data.token_expiries) ? data.token_expiries : [];
-                const recentErrors = Array.isArray(data.recent_errors) ? data.recent_errors : [];
-                const expiringSoon = tokenExpiries.filter((item) => Number(item.seconds_until_expiry) >= 0 && Number(item.seconds_until_expiry) < 7 * 86400);
-                const expired = tokenExpiries.filter((item) => Number(item.seconds_until_expiry) < 0);
-                const errorText = [];
-                if (expired.length) errorText.push(expired.length + ' platform token(s) expired.');
-                if (expiringSoon.length) errorText.push(expiringSoon.length + ' platform token(s) expire within seven days.');
-                if (recentErrors.length) {
-                    errorText.push(...recentErrors.slice(0, 3).map((item) =>
-                        String(item.platform || '') + ':' + String(item.account_id || '') + ' — ' +
-                        String(item.error_code || item.state || 'failure') + ': ' + String(item.message || 'No error details')
-                    ));
-                }
-                errorsEl.textContent = errorText.join(' ');
-                errorsEl.hidden = errorText.length === 0;
-            } catch (error) {
-                badge.textContent = 'Publishing status unavailable';
-                badge.className = 'queue-badge pending';
-                summary.textContent = 'The publisher may not be configured yet, or the dashboard could not read its state.';
-                destinationsEl.textContent = '';
-                errorsEl.textContent = '';
-                errorsEl.hidden = true;
+        // The publisher status renderer lives in dashboard_enhancements.js.
+        // Keep this stable global name because the panel's Refresh button uses it.
+        function refreshPublishingStatus() {
+            if (typeof window.refreshDashboardPublishingStatus === 'function') {
+                return window.refreshDashboardPublishingStatus();
             }
         }
 

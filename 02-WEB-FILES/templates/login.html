@@ -3,19 +3,93 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>Edit Factory V3 — Sign in</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 420px; margin: 10vh auto; padding: 24px; }
-    input, button { width: 100%; padding: 12px; margin-top: 10px; box-sizing: border-box; }
-    button { cursor: pointer; }
+    :root {
+      color-scheme: dark;
+      --bg: #0a0d12;
+      --panel: #121a26;
+      --border: #2a374a;
+      --muted: #a7b4c6;
+      --text: #f2f5f9;
+      --accent: #ff654f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: 32px 18px;
+      display: grid;
+      place-items: center;
+      color: var(--text);
+      background:
+        radial-gradient(ellipse at 16% 0%, rgba(61, 91, 137, .22), transparent 42rem),
+        radial-gradient(ellipse at 100% 100%, rgba(255, 101, 79, .1), transparent 35rem),
+        var(--bg);
+      font: 15px/1.6 "Segoe UI", system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .shell { width: min(100%, 960px); display: grid; grid-template-columns: 1fr 1fr; overflow: hidden; border: 1px solid var(--border); border-radius: 22px; background: rgba(18, 26, 38, .94); box-shadow: 0 35px 100px rgba(0,0,0,.38); }
+    .story { position: relative; display: flex; flex-direction: column; justify-content: space-between; min-height: 490px; padding: 44px; overflow: hidden; background: linear-gradient(145deg, rgba(255,101,79,.13), rgba(34,49,70,.54)); border-right: 1px solid var(--border); }
+    .story::after { content: ""; position: absolute; width: 290px; height: 290px; right: -110px; bottom: -115px; border: 1px solid rgba(255,128,110,.25); border-radius: 50%; box-shadow: 0 0 0 28px rgba(255,128,110,.035), 0 0 0 58px rgba(255,128,110,.025); pointer-events: none; }
+    .brand { display: flex; align-items: center; gap: 13px; }
+    .mark { width: 48px; height: 48px; display: grid; place-items: center; border: 1px solid rgba(255,128,110,.55); border-radius: 14px; color: #ffad9f; background: rgba(255,101,79,.12); font-weight: 900; letter-spacing: -.08em; }
+    .brand-label { margin: 0; font-size: .66rem; color: #ff9a8b; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    .brand h1 { margin: 3px 0 0; font-size: 1rem; letter-spacing: -.02em; }
+    .story h2 { max-width: 11ch; margin: 52px 0 14px; font-size: clamp(2.1rem, 4.5vw, 3.25rem); letter-spacing: -.065em; line-height: 1.03; }
+    .story-copy { max-width: 34ch; margin: 0; color: var(--muted); }
+    .story-foot { position: relative; z-index: 1; margin-top: 42px; color: #7d8ba0; font-size: .76rem; }
+    .form-panel { display: flex; flex-direction: column; justify-content: center; padding: 44px; }
+    .form-panel .eyebrow { margin: 0 0 9px; color: #ff9a8b; font-size: .68rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    .form-panel h2 { margin: 0; font-size: 1.8rem; letter-spacing: -.045em; line-height: 1.2; }
+    .form-panel .intro { margin: 10px 0 28px; color: var(--muted); font-size: .9rem; }
+    label { display: block; margin-bottom: 8px; color: #d4dce7; font-size: .8rem; font-weight: 650; }
+    input { width: 100%; min-height: 48px; padding: 12px 14px; border: 1px solid #39485d; border-radius: 10px; color: var(--text); background: #0c121b; font: inherit; }
+    input::placeholder { color: #6d7a8e; }
+    input:focus-visible { outline: 2px solid #ff9a8b; outline-offset: 2px; border-color: var(--accent); }
+    button { width: 100%; min-height: 48px; margin-top: 15px; padding: 12px 16px; border: 0; border-radius: 10px; background: linear-gradient(135deg, #ff765f, #ef513d); color: white; font: inherit; font-weight: 750; cursor: pointer; box-shadow: 0 8px 24px rgba(255,101,79,.16); }
+    button:hover { filter: brightness(1.07); }
+    button:focus-visible { outline: 2px solid #ffc0b7; outline-offset: 3px; }
+    .security-note { display: flex; align-items: flex-start; gap: 9px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); color: #8795a9; font-size: .75rem; }
+    .security-icon { color: #5fd8a7; font-size: 1rem; }
+    @media (max-width: 700px) {
+      body { padding: 18px 12px; }
+      .shell { max-width: 480px; grid-template-columns: 1fr; border-radius: 17px; }
+      .story { min-height: auto; padding: 25px; border-right: 0; border-bottom: 1px solid var(--border); }
+      .story h2 { max-width: 15ch; margin: 30px 0 10px; font-size: 2.25rem; }
+      .story-foot { margin-top: 27px; }
+      .form-panel { padding: 28px 25px; }
+    }
   </style>
 </head>
 <body>
-  <h1>Edit Factory V3</h1>
-  <p>Sign in to the production dashboard. Use your dashboard token to continue.</p>
-  <form method="post">
-    <input name="token" type="password" autocomplete="current-password" placeholder="Dashboard token" required>
-    <button type="submit">Sign in</button>
-  </form>
+  <main class="shell">
+    <section class="story" aria-label="Edit Factory">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">EF</div>
+        <div>
+          <p class="brand-label">Creator workspace</p>
+          <h1>Edit Factory <span style="color:#ff9a8b">V3</span></h1>
+        </div>
+      </div>
+      <div>
+        <h2>Make every second count.</h2>
+        <p class="story-copy">Turn existing footage into short-form videos with an intentional hook, focused pacing, captions and review-ready output.</p>
+      </div>
+      <p class="story-foot">Private dashboard · Local workspace</p>
+    </section>
+    <section class="form-panel" aria-labelledby="signInTitle">
+      <p class="eyebrow">Welcome back</p>
+      <h2 id="signInTitle">Sign in to your studio</h2>
+      <p class="intro">Enter the dashboard access token shown by the Windows launcher to continue.</p>
+      <form method="post" action="/login" autocomplete="on">
+        <label for="dashboardToken">Dashboard access token</label>
+        <input id="dashboardToken" name="token" type="password" autocomplete="current-password" placeholder="Paste your access token" required autofocus>
+        <button type="submit">Open dashboard <span aria-hidden="true">→</span></button>
+      </form>
+      <div class="security-note"><span class="security-icon" aria-hidden="true">●</span><span>Access is protected by a server-side session. Keep your token private and sign out when finished on a shared device.</span></div>
+    </section>
+  </main>
 </body>
 </html>
