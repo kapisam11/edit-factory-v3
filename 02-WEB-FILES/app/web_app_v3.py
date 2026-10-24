@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory, session, url_for
+from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory, session
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
@@ -1046,6 +1046,7 @@ def job_detail_page(job_id: str):
         key: job.get(key)
         for key in ("id", "topic", "status", "step", "error", "created_at", "updated_at", "retry_count")
     }
+    safe_job["error"] = _redact_diagnostic_text(safe_job.get("error"))
     return render_template("job_detail.html", job=safe_job, active_page="jobs")
 
 
