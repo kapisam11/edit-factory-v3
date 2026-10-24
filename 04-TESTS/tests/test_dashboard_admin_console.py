@@ -114,11 +114,18 @@ def test_admin_console_unlock_expires(monkeypatch, tmp_path):
 def test_diagnostic_error_redaction_removes_common_credential_shapes(monkeypatch, tmp_path):
     _client, app_module = _make_client(monkeypatch, tmp_path, role="admin")
     text = app_module._redact_diagnostic_text(
-        "model_api_key=supersecret Bearer token-value Authorization: hidden"
+        "model_api_key=supersecret Bearer token-value Authorization: hidden "
+        "diarization_token=diarization-value password=pass-value cookie=session-value"
     )
-    assert "supersecret" not in text
-    assert "token-value" not in text
-    assert "hidden" not in text
+    for secret in (
+        "supersecret",
+        "token-value",
+        "hidden",
+        "diarization-value",
+        "pass-value",
+        "session-value",
+    ):
+        assert secret not in text
     assert "[REDACTED]" in text
 
 
