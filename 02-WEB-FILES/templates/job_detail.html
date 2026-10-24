@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Edit Factory V3 — Job details</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/enhancements.css">
+    <link rel="stylesheet" href="/static/css/dashboard-professional.css">
+</head>
+<body>
+<div class="container">
+    {% include "dashboard_header.html" %}
+    <main class="page-stack">
+        <section class="page-heading">
+            <div>
+                <p class="eyebrow">JOB DETAILS</p>
+                <h2>{{ job.topic|default("Production", true)|e }}</h2>
+                <p class="page-description">Job <code>{{ job.id|e }}</code> · Created {{ job.created_at|default("unknown", true)|e }}</p>
+            </div>
+            <div class="page-heading-actions">
+                <a class="btn-secondary" href="/jobs">← All jobs</a>
+                <button class="btn-secondary" type="button" id="refreshJobDetail">Refresh status</button>
+            </div>
+        </section>
+        <section class="detail-grid">
+            <article class="panel">
+                <h2>Current state</h2>
+                <div class="detail-status-row"><span class="detail-label">Status</span><span id="detailStatus" class="status-pill">{{ job.status|default("unknown", true)|e }}</span></div>
+                <div class="detail-status-row"><span class="detail-label">Stage</span><strong id="detailStep">{{ job.step|default("unknown", true)|e }}</strong></div>
+                <div class="detail-status-row"><span class="detail-label">Last updated</span><strong id="detailUpdated">{{ job.updated_at|default("unknown", true)|e }}</strong></div>
+                <div class="detail-status-row"><span class="detail-label">Retry count</span><strong>{{ job.retry_count|default(0, true) }}</strong></div>
+                <div id="detailError" class="error-detail{% if not job.error %} is-hidden{% endif %}">{{ job.error|default("", true)|e }}</div>
+                <p class="muted-note">This page shows operational metadata only; job parameters and API credentials are not rendered.</p>
+            </article>
+            <article class="panel">
+                <div class="panel-header page-panel-heading"><div><h2>Live job log</h2><p class="panel-subtitle">New messages appear while the job is running.</p></div><span id="logConnection" class="status-pill">Connecting…</span></div>
+                <div id="jobLog" class="admin-log-list" role="log" aria-live="polite"><p class="empty-table">Connecting to the log stream…</p></div>
+            </article>
+        </section>
+        <p id="jobDetailMessage" class="log-status" role="status" aria-live="polite"></p>
+    </main>
+</div>
+<script>window.AIVF_JOB_ID = {{ job.id|tojson }};</script>
+<script src="/static/js/job_detail_page.js"></script>
+</body>
+</html>
