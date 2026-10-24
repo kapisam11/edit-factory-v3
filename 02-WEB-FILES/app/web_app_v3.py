@@ -1176,7 +1176,11 @@ def admin_panel_diagnostics():
 
     try:
         from dashboard_store import DashboardStore
-        audit_events = DashboardStore(DB_PATH).audit_events_since(last_id=0, limit=25)
+        raw_events = DashboardStore(DB_PATH).audit_events_since(last_id=0, limit=25)
+        audit_events = [{
+            key: event.get(key)
+            for key in ("id", "created_at", "principal", "action", "resource", "resource_id", "result")
+        } for event in raw_events if isinstance(event, dict)]
     except Exception:
         audit_events = []
 
