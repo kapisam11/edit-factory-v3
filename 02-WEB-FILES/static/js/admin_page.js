@@ -77,9 +77,11 @@
             const failureList = Array.isArray(data.recent_failures) ? data.recent_failures : [];
             document.getElementById('adminFailureCount').textContent = failureList.length + ' records';
             if (!failureList.length) {
-                failures.appendChild(make('tr','', ''));
-                failures.firstChild.appendChild(make('td','empty-table','No failed or interrupted jobs in the recent failure window.'));
-                failures.firstChild.firstChild.colSpan = 4;
+                const tr = make('tr');
+                const td = make('td','empty-table','No failed or interrupted jobs in the recent failure window.');
+                td.colSpan = 4;
+                tr.appendChild(td);
+                failures.appendChild(tr);
             } else {
                 failureList.forEach(item => {
                     const tr = make('tr');
