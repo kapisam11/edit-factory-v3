@@ -20,6 +20,14 @@
     }
 
     function ensurePublishingPanel() {
+        // Reuse the panel defined in the main dashboard template. Creating a
+        // second publisher card here duplicated status and gave the UI two
+        // competing refresh/polling paths.
+        const existingPanel = document.getElementById('publishingPanel');
+        if (existingPanel) {
+            existingPanel.classList.add('platform-publishing-panel');
+            return;
+        }
         if (document.getElementById('platformPublishingPanel')) return;
         const sidebar = document.querySelector('.sidebar');
         if (!sidebar) return;
@@ -160,6 +168,8 @@
             meta.textContent = 'Check dashboard authentication and the publisher state database.';
         }
     }
+
+    window.refreshDashboardPublishingStatus = refreshPublishingStatus;
 
     function ensurePreviewPanel() {
         if (document.getElementById('livePreviewPanel')) return;
