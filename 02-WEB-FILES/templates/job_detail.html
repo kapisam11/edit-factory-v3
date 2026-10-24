@@ -41,7 +41,7 @@
         <p id="jobDetailMessage" class="log-status" role="status" aria-live="polite"></p>
     </main>
 </div>
-<script>window.AIVF_JOB_ID = {{ job.id|tojson }};</script>
+<script nonce="{{ g.aivf_csp_nonce }}">window.AIVF_JOB_ID = {{ job.id|tojson }};</script>
 <script src="/static/js/job_detail_page.js"></script>
 </body>
 </html>
