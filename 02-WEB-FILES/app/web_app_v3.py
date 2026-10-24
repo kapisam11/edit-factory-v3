@@ -1177,7 +1177,15 @@ def admin_panel_diagnostics():
 
     try:
         from dashboard_store import DashboardStore
-        raw_events = DashboardStore(DB_PATH).audit_events_since(last_id=0, limit=25)
+        with sqlite3.connect(DB_PATH, timeout=2) as audit_connection:
+            table_exists = audit_connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_events'"
+            ).fetchone()
+            latest_audit_id = int(audit_connection.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM audit_events"
+            ).fetchone()[0]) if table_exists else 0
+        first_audit_id = max(0, latest_audit_id - 25)
+        raw_events = DashboardStore(DB_PATH).audit_events_since(last_id=first_audit_id, limit=25) if table_exists else []
         audit_events = [{
             key: event.get(key)
             for key in ("id", "created_at", "principal", "action", "resource", "resource_id", "result")
