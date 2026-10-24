@@ -118,3 +118,18 @@ After upgrading, verify the browser control panel itself:
 8. Restart the server and verify active jobs become `interrupted`.
 
 A successful Python import, Docker build, or unit test run alone is not proof that the control panel works correctly on the target deployment.
+
+
+## Advanced operations console
+
+The owner/admin-only advanced console is an operational troubleshooting view, not a publishing or deletion backdoor. From any authenticated dashboard page, an admin can open the unlock dialog by clicking the small **V3** brand badge five times quickly, then enter the configured extra unlock code. Access expires after 15 minutes; normal dashboard authentication and the admin-role check still apply.
+
+The console includes:
+- Runtime health checks for SQLite integrity, FFmpeg/FFprobe, process uptime and memory.
+- Storage and workload summaries, HTTP request totals, 5xx responses and recent p95 request latency when metrics are available.
+- An operations feed combining persisted job output, job lifecycle events and administrative audit records. The feed refreshes every five seconds while live mode is enabled.
+- Search, severity and source filters, pause/resume, CSV export and copy-visible actions. These only change the view or exported copy; they never delete or modify stored records.
+- A recent failed-job table, administrative audit trail and a downloadable redacted diagnostics snapshot.
+
+The log endpoint returns a bounded set of existing database records. It does not create tables on a request, and its response omits audit metadata, raw request headers and credential fields. Error text is redacted before being displayed. The feed is not a replacement for operating-system/container logs or a durable centralized logging service.
+

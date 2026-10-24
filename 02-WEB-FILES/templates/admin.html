@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Edit Factory V3 — Advanced Console</title>
+    <title>Edit Factory V3 — Advanced Operations</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="stylesheet" href="/static/css/enhancements.css">
     <link rel="stylesheet" href="/static/css/dashboard-professional.css">
@@ -11,43 +11,90 @@
 <body>
 <div class="container">
     {% include "dashboard_header.html" %}
-    <main class="page-stack">
-        <section class="admin-hero">
-            <div>
-                <p class="eyebrow">RESTRICTED · OWNER / ADMIN ONLY</p>
-                <h2>Advanced operations console</h2>
-                <p>Read-only diagnostics for system health, resource limits, failed jobs, and recent administrative actions. Secret values are deliberately excluded.</p>
+    <main class="page-stack admin-console">
+        <section class="admin-hero admin-hero-premium">
+            <div class="admin-hero-copy">
+                <div class="admin-title-line"><span class="admin-shield-mark" aria-hidden="true">EF</span><p class="eyebrow">RESTRICTED WORKSPACE · OWNER / ADMIN</p></div>
+                <h2>Operations command center</h2>
+                <p>Live operational activity, service telemetry, storage health, job failures and administrative audit history in one place.</p>
+                <div class="admin-hero-meta">
+                    <span class="admin-live-indicator"><span class="live-dot"></span> Live monitoring</span>
+                    <span class="admin-safe-indicator"><span aria-hidden="true">◆</span> Read-only diagnostics</span>
+                </div>
             </div>
             <div class="admin-hero-actions">
-                <button class="btn-secondary" type="button" id="refreshDiagnostics">Refresh diagnostics</button>
-                <button class="btn-primary" type="button" id="downloadDiagnostics">Download snapshot</button>
+                <button class="btn-secondary" type="button" id="refreshDiagnostics"><span aria-hidden="true">↻</span> Refresh health</button>
+                <button class="btn-secondary" type="button" id="downloadDiagnostics"><span aria-hidden="true">↓</span> Export report</button>
             </div>
         </section>
-        <section class="metrics-grid admin-metrics" aria-label="Health summary">
-            <article class="metric-card"><span>Overall status</span><strong id="adminOverallStatus">—</strong><small id="adminGeneratedAt">Waiting for diagnostics</small></article>
-            <article class="metric-card"><span>Database integrity</span><strong id="adminDbStatus">—</strong><small id="adminDbJobs">Jobs recorded: —</small></article>
-            <article class="metric-card"><span>Free storage</span><strong id="adminDiskFree">—</strong><small id="adminDiskTotal">— total</small></article>
-            <article class="metric-card"><span>Active jobs</span><strong id="adminActiveJobs">—</strong><small id="adminQueueSummary">—</small></article>
+
+        <section class="metrics-grid admin-metrics" aria-label="Service telemetry">
+            <article class="metric-card admin-metric-card"><span>Overall status</span><strong id="adminOverallStatus">—</strong><small id="adminGeneratedAt">Waiting for diagnostics</small></article>
+            <article class="metric-card admin-metric-card"><span>Database integrity</span><strong id="adminDbStatus">—</strong><small id="adminDbJobs">Jobs recorded: —</small></article>
+            <article class="metric-card admin-metric-card"><span>Free storage</span><strong id="adminDiskFree">—</strong><small id="adminDiskTotal">— total</small></article>
+            <article class="metric-card admin-metric-card"><span>Active jobs</span><strong id="adminActiveJobs">—</strong><small id="adminQueueSummary">—</small></article>
+            <article class="metric-card admin-metric-card"><span>Service uptime</span><strong id="adminUptime">—</strong><small>Current dashboard process</small></article>
+            <article class="metric-card admin-metric-card"><span>HTTP requests</span><strong id="adminHttpRequests">—</strong><small>Recorded since metrics tracking began</small></article>
+            <article class="metric-card admin-metric-card"><span>HTTP 5xx responses</span><strong id="adminHttpErrors">—</strong><small>Server-side responses</small></article>
+            <article class="metric-card admin-metric-card"><span>p95 response time</span><strong id="adminRequestP95">—</strong><small>Milliseconds · recent samples</small></article>
         </section>
+
         <section class="admin-diagnostics-grid">
-            <article class="panel">
-                <div class="panel-header page-panel-heading"><div><h2>Runtime checks</h2><p class="panel-subtitle">Local runtime and media executables.</p></div><span class="status-pill" id="adminRuntimePill">Checking</span></div>
+            <article class="panel admin-panel-premium">
+                <div class="panel-header page-panel-heading"><div><span class="admin-section-kicker">SYSTEM</span><h2>Runtime health</h2><p class="panel-subtitle">Runtime, media tools, process memory and database checks.</p></div><span class="status-pill" id="adminRuntimePill">Checking</span></div>
                 <div id="adminRuntimeChecks" class="diagnostic-check-list"><p class="empty-table">Loading checks…</p></div>
             </article>
-            <article class="panel">
-                <div class="panel-header page-panel-heading"><div><h2>Job state breakdown</h2><p class="panel-subtitle">Counts from the persistent jobs database.</p></div></div>
+            <article class="panel admin-panel-premium">
+                <div class="panel-header page-panel-heading"><div><span class="admin-section-kicker">WORKLOAD</span><h2>Job state breakdown</h2><p class="panel-subtitle">Counts from the persistent jobs database.</p></div></div>
                 <div id="adminJobCounts" class="state-count-grid"></div>
+                <div class="admin-workload-footer"><span>Output packages</span><strong id="adminPackageCount">—</strong></div>
             </article>
         </section>
-        <section class="panel">
-            <div class="panel-header page-panel-heading"><div><h2>Recent failed jobs</h2><p class="panel-subtitle">Error detail is redacted before it is sent to this page.</p></div><span id="adminFailureCount" class="status-pill">—</span></div>
+
+        <section class="panel admin-panel-premium admin-operations-log">
+            <div class="panel-header page-panel-heading admin-log-heading">
+                <div><span class="admin-section-kicker">LIVE ACTIVITY</span><h2>Operations log</h2><p class="panel-subtitle">Combined job output, job lifecycle events and audit activity. Updates every five seconds while live mode is enabled.</p></div>
+                <div class="admin-log-status-stack"><span class="status-pill status-good" id="adminLogConnection"><span class="live-dot"></span> Live</span><span class="admin-last-updated" id="adminLogUpdated">Waiting for first poll</span></div>
+            </div>
+            <div class="admin-log-toolbar">
+                <div class="admin-log-summary">
+                    <div><span>Loaded events</span><strong id="adminLogEvents">—</strong></div>
+                    <div><span>Errors</span><strong id="adminLogErrors" class="admin-count-error">—</strong></div>
+                    <div><span>Warnings</span><strong id="adminLogWarnings" class="admin-count-warning">—</strong></div>
+                    <div><span>New since last refresh</span><strong id="adminLogNew">0</strong></div>
+                </div>
+                <div class="admin-log-actions">
+                    <button class="btn-secondary btn-sm" type="button" id="toggleLogLive" aria-pressed="false">Pause live</button>
+                    <button class="btn-secondary btn-sm" type="button" id="refreshLogs">Refresh log</button>
+                    <button class="btn-secondary btn-sm" type="button" id="exportLogsCsv">Export CSV</button>
+                    <button class="btn-secondary btn-sm" type="button" id="copyVisibleLogs">Copy visible</button>
+                </div>
+            </div>
+            <div class="admin-log-filter-bar">
+                <label class="admin-log-search" for="adminLogSearch"><span>Search log</span><input id="adminLogSearch" type="search" placeholder="Search message, job, actor or event…" autocomplete="off"></label>
+                <label for="adminLogSource"><span>Source</span><select id="adminLogSource"><option value="all">All sources</option><option value="job-log">Job output</option><option value="lifecycle">Job lifecycle</option><option value="audit">Audit activity</option></select></label>
+                <label for="adminLogLevel"><span>Severity</span><select id="adminLogLevel"><option value="all">All levels</option><option value="ERROR">Errors</option><option value="WARNING">Warnings</option><option value="INFO">Info</option></select></label>
+                <button class="btn-secondary btn-sm admin-clear-filters" type="button" id="clearLogFilters">Reset filters</button>
+            </div>
+            <div id="adminLogFeed" class="ops-log-feed" role="log" aria-live="off" aria-label="Live operations events"><div class="ops-log-empty">Waiting for persisted job and audit events…</div></div>
+            <div class="admin-log-footer"><span id="adminLogVisible">0 visible events</span><span>Filters only affect this view; the source records are not modified or deleted.</span></div>
+            <p id="adminLogMessage" class="log-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="panel admin-panel-premium">
+            <div class="panel-header page-panel-heading"><div><span class="admin-section-kicker">RECOVERY</span><h2>Recent failed jobs</h2><p class="panel-subtitle">Error detail is redacted before it is sent to this page.</p></div><span id="adminFailureCount" class="status-pill">—</span></div>
             <div class="table-scroll"><table class="data-table"><thead><tr><th>Job</th><th>Status / stage</th><th>Last update</th><th>Safe error summary</th></tr></thead><tbody id="adminFailures"><tr><td colspan="4" class="empty-table">Loading…</td></tr></tbody></table></div>
         </section>
-        <section class="panel">
-            <div class="panel-header page-panel-heading"><div><h2>Recent audit events</h2><p class="panel-subtitle">Configuration and administrative actions recorded by the dashboard.</p></div><span id="adminAuditCount" class="status-pill">—</span></div>
+
+        <section class="panel admin-panel-premium">
+            <div class="panel-header page-panel-heading"><div><span class="admin-section-kicker">SECURITY</span><h2>Administrative audit trail</h2><p class="panel-subtitle">Recent configuration and administrative actions. Metadata and credentials are not displayed.</p></div><span id="adminAuditCount" class="status-pill">—</span></div>
             <div class="table-scroll"><table class="data-table"><thead><tr><th>Time</th><th>Action</th><th>Actor</th><th>Resource</th><th>Result</th></tr></thead><tbody id="adminAudit"><tr><td colspan="5" class="empty-table">Loading…</td></tr></tbody></table></div>
         </section>
-        <div class="notice-panel admin-safety-note"><strong>Read-only by design</strong><span>This console does not publish videos, clear approvals, delete packages, or change runtime secrets. Use the regular authenticated workflows for those actions.</span></div>
+
+        <section class="admin-security-footnote">
+            <div class="admin-security-icon" aria-hidden="true">✓</div>
+            <div><strong>Guarded by design</strong><p>This console is read-only. It does not publish videos, bypass approvals, delete packages, reveal runtime API keys, or expose raw request headers. Export files contain diagnostic snapshots and redacted activity only.</p></div>
+        </section>
         <p id="adminDiagnosticsMessage" class="log-status" role="status" aria-live="polite"></p>
     </main>
 </div>

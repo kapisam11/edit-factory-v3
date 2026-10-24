@@ -71,6 +71,7 @@ app.config.update(
 )
 
 logger = logging.getLogger("web_app_v3")
+PROCESS_STARTED_AT = time.monotonic()
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 SECRET_PARAM_KEYS = {"groq_key", "model_key", "elevenlabs_key", "diarization_token"}
@@ -1106,7 +1107,7 @@ def _record_admin_unlock_failure(client_ip: str) -> None:
 def _redact_diagnostic_text(value: Any) -> str:
     text_value = str(value or "")[:800]
     text_value = re.sub(
-        r"(?i)(api[_ -]?key|access[_ -]?token|authorization|secret)(\s*[:=]\s*)([^\s,;]+)",
+        r"(?i)([a-z0-9_-]*(?:api[_ -]?key|token|password|credential|authorization|secret|cookie)[a-z0-9_-]*)(\s*[:=]\s*)([^\s,;]+)",
         r"\1\2[REDACTED]",
         text_value,
     )
@@ -1202,11 +1203,47 @@ def admin_panel_diagnostics():
         "updated_at": str(row["updated_at"] or ""),
     } for row in failed_rows]
 
+    try:
+        from ai_video_factory.observability_metrics import GLOBAL_METRICS
+        metric_snapshot = GLOBAL_METRICS.snapshot()
+        request_total = sum(
+            int(value) for name, value in metric_snapshot.counters.items()
+            if name.startswith("http_requests_total:")
+        )
+        server_errors_total = sum(
+            int(value) for name, value in metric_snapshot.counters.items()
+            if name.startswith("http_response_total:")
+            and name.rsplit(":", 1)[-1].isdigit()
+            and int(name.rsplit(":", 1)[-1]) >= 500
+        )
+        request_latency = GLOBAL_METRICS.histogram_snapshot("http_request")
+        request_p95_ms = float(request_latency.get("p95", 0.0))
+    except Exception:
+        request_total = 0
+        server_errors_total = 0
+        request_p95_ms = 0.0
+
+    try:
+        import psutil
+        process_memory_mb = round(psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024), 1)
+    except Exception:
+        process_memory_mb = None
+
     return jsonify({
         "status": "ok" if database_ok else "degraded",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "environment": os.environ.get("AIVF_ENV", "development").strip().lower(),
-        "runtime": {"python": sys.version.split()[0], "platform": sys.platform},
+        "runtime": {
+            "python": sys.version.split()[0],
+            "platform": sys.platform,
+            "uptime_seconds": max(0, round(time.monotonic() - PROCESS_STARTED_AT)),
+            "memory_rss_mb": process_memory_mb,
+        },
+        "telemetry": {
+            "http_requests_total": request_total,
+            "http_5xx_total": server_errors_total,
+            "request_p95_ms": round(max(0.0, request_p95_ms), 2),
+        },
         "media": {"ffmpeg": shutil.which("ffmpeg") is not None, "ffprobe": shutil.which("ffprobe") is not None},
         "storage": {
             "free_mb": round(disk.free / (1024 * 1024), 1),
@@ -1224,6 +1261,154 @@ def admin_panel_diagnostics():
         "recent_failures": recent_failures,
         "audit_events": audit_events,
         "security_note": "Diagnostic snapshot excludes API-key values and dashboard credentials.",
+    })
+
+
+@app.get("/api/admin/logs")
+def admin_panel_logs():
+    """Return a bounded, redacted activity feed from persisted job and audit records."""
+    _require_admin_panel_role()
+    if not _admin_panel_is_unlocked():
+        session.pop(_ADMIN_UNLOCK_SESSION_KEY, None)
+        return jsonify({"error": "Admin panel is locked"}), 403
+
+    try:
+        requested_limit = int(request.args.get("limit", "300"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be an integer"}), 400
+    limit = max(50, min(500, requested_limit))
+    query_limit = min(500, limit)
+
+    def table_exists(connection, name: str) -> bool:
+        return connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (name,),
+        ).fetchone() is not None
+
+    def event_time(value: Any) -> float:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.timestamp()
+        except (TypeError, ValueError, OverflowError, OSError):
+            return 0.0
+
+    log_entries: list[dict[str, Any]] = []
+    try:
+        with get_db() as connection:
+            has_jobs = table_exists(connection, "jobs")
+            if table_exists(connection, "job_logs"):
+                topic_select = "j.topic" if has_jobs else "NULL AS topic"
+                topic_join = "LEFT JOIN jobs j ON j.id = jl.job_id" if has_jobs else ""
+                rows = connection.execute(
+                    "SELECT jl.id,jl.job_id,jl.created_at,jl.level,jl.message,"
+                    f"{topic_select} FROM job_logs jl {topic_join} "
+                    "ORDER BY jl.id DESC LIMIT ?",
+                    (query_limit,),
+                ).fetchall()
+                for row in rows:
+                    log_entries.append({
+                        "id": f"job-log:{int(row['id'])}",
+                        "timestamp": str(row["created_at"] or ""),
+                        "level": str(row["level"] or "INFO").upper(),
+                        "source": "job-log",
+                        "job_id": str(row["job_id"] or ""),
+                        "topic": str(row["topic"] or "")[:160],
+                        "actor": "",
+                        "action": "",
+                        "result": "",
+                        "message": _redact_diagnostic_text(row["message"]),
+                    })
+
+            if table_exists(connection, "job_events"):
+                topic_select = "j.topic" if has_jobs else "NULL AS topic"
+                topic_join = "LEFT JOIN jobs j ON j.id = je.job_id" if has_jobs else ""
+                rows = connection.execute(
+                    "SELECT je.id,je.job_id,je.created_at,je.event,je.from_status,"
+                    "je.to_status,je.details,"
+                    f"{topic_select} FROM job_events je {topic_join} "
+                    "ORDER BY je.id DESC LIMIT ?",
+                    (query_limit,),
+                ).fetchall()
+                for row in rows:
+                    event_name = str(row["event"] or "job event")
+                    summary = ""
+                    try:
+                        parsed = json.loads(str(row["details"] or "{}"))
+                        if isinstance(parsed, dict):
+                            safe_parts = [
+                                str(parsed[key]) for key in ("message", "reason", "error_code")
+                                if parsed.get(key) not in (None, "")
+                            ]
+                            summary = " · ".join(safe_parts)
+                        elif isinstance(parsed, str):
+                            summary = parsed
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        summary = str(row["details"] or "")
+                    transition = ""
+                    if row["from_status"] or row["to_status"]:
+                        transition = f"{row['from_status'] or '∅'} → {row['to_status'] or '∅'}"
+                    message = " · ".join(part for part in (event_name, transition, summary) if part)
+                    upper_event = event_name.upper()
+                    level = "ERROR" if any(word in upper_event for word in ("FAIL", "ERROR", "INTERRUPT")) else "INFO"
+                    log_entries.append({
+                        "id": f"job-event:{int(row['id'])}",
+                        "timestamp": str(row["created_at"] or ""),
+                        "level": level,
+                        "source": "lifecycle",
+                        "job_id": str(row["job_id"] or ""),
+                        "topic": str(row["topic"] or "")[:160],
+                        "actor": "",
+                        "action": event_name,
+                        "result": str(row["to_status"] or ""),
+                        "message": _redact_diagnostic_text(message),
+                    })
+
+            if table_exists(connection, "audit_events"):
+                rows = connection.execute(
+                    "SELECT id,created_at,principal,action,resource,resource_id,result "
+                    "FROM audit_events ORDER BY id DESC LIMIT ?",
+                    (query_limit,),
+                ).fetchall()
+                for row in rows:
+                    action = _redact_diagnostic_text(row["action"])
+                    resource = _redact_diagnostic_text(row["resource"])
+                    resource_id = _redact_diagnostic_text(row["resource_id"])
+                    result = _redact_diagnostic_text(row["result"])
+                    target = f"{resource} / {resource_id}" if resource_id else resource
+                    log_entries.append({
+                        "id": f"audit:{int(row['id'])}",
+                        "timestamp": str(row["created_at"] or ""),
+                        "level": "ERROR" if result.lower() in {"failure", "failed", "denied", "error"} else "INFO",
+                        "source": "audit",
+                        "job_id": "",
+                        "topic": "",
+                        "actor": _redact_diagnostic_text(row["principal"]),
+                        "action": action,
+                        "result": result,
+                        "message": _redact_diagnostic_text(f"{action} · {target} · {result}"),
+                    })
+    except sqlite3.Error as exc:
+        logger.warning("Admin activity feed could not read persisted event tables (%s)", type(exc).__name__)
+        return jsonify({"error": "Activity log is temporarily unavailable"}), 503
+
+    log_entries.sort(key=lambda item: (event_time(item["timestamp"]), item["id"]), reverse=True)
+    log_entries = log_entries[:query_limit]
+    counts = {
+        "total": len(log_entries),
+        "errors": sum(1 for item in log_entries if item["level"] == "ERROR"),
+        "warnings": sum(1 for item in log_entries if item["level"] in {"WARN", "WARNING"}),
+        "sources": {
+            source: sum(1 for item in log_entries if item["source"] == source)
+            for source in ("job-log", "lifecycle", "audit")
+        },
+    }
+    return jsonify({
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "logs": log_entries,
+        "counts": counts,
+        "retention_note": "This view combines existing persisted job output, lifecycle events, and audit records. Filtering never deletes records.",
     })
 
 
