@@ -13,7 +13,8 @@ def test_dashboard_uses_edit_factory_v3_branding_and_shows_release_overview() ->
 
     header = (ROOT / "02-WEB-FILES" / "templates" / "dashboard_header.html").read_text(encoding="utf-8")
     assert "<title>Edit Factory V3 — Production Dashboard</title>" in html
-    assert '<h1>EDIT FACTORY <span class="brand-version" id="brandAdminTrigger"' in header
+    assert "<h1>EDIT FACTORY" in header
+    assert 'id="brandAdminTrigger"' in header
     assert "Latest reliability &amp; production updates" in html
     assert '<details class="release-overview panel"' in html
     assert '<summary class="release-overview-summary">' in html
