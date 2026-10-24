@@ -11,8 +11,9 @@ GUIDE = ROOT / "00-INFO" / "04-USING-THE-DASHBOARD.md"
 def test_dashboard_uses_edit_factory_v3_branding_and_shows_release_overview() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
 
+    header = (ROOT / "02-WEB-FILES" / "templates" / "dashboard_header.html").read_text(encoding="utf-8")
     assert "<title>Edit Factory V3 — Production Dashboard</title>" in html
-    assert '<h1>EDIT FACTORY <span class="brand-version">V3</span></h1>' in html
+    assert '<h1>EDIT FACTORY <span class="brand-version" id="brandAdminTrigger"' in header
     assert "Latest reliability &amp; production updates" in html
     assert '<details class="release-overview panel"' in html
     assert '<summary class="release-overview-summary">' in html
@@ -68,9 +69,11 @@ def test_login_and_autonomous_pages_share_product_branding() -> None:
 
     assert "<title>Edit Factory V3 — Sign in</title>" in login
     assert "<h1>Edit Factory <span style=\"color:#ff9a8b\">V3</span></h1>" in login
+    header = (ROOT / "02-WEB-FILES" / "templates" / "dashboard_header.html").read_text(encoding="utf-8")
     assert "<title>Edit Factory V3 — Autonomous YouTube</title>" in autonomous
-    assert "<h1>EDIT FACTORY V3</h1>" in autonomous
-    assert '<a href="/">← Main dashboard</a>' in autonomous
+    assert '{% include "dashboard_header.html" %}' in autonomous
+    assert "{% set active_page = 'publishing' %}" in autonomous
+    assert 'href="/autonomous"' in header
 
 
 def test_dashboard_exposes_autonomous_controls_from_quick_actions() -> None:
