@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Edit Factory V3 — Jobs</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/enhancements.css">
+    <link rel="stylesheet" href="/static/css/dashboard-professional.css">
+</head>
+<body>
+<div class="container">
+    {% include "dashboard_header.html" %}
+    <main class="page-stack">
+        <section class="page-heading">
+            <div>
+                <p class="eyebrow">WORKFLOW OPERATIONS</p>
+                <h2>Your job queue</h2>
+                <p class="page-description">Inspect running work, find failed jobs, and open the job timeline without leaving this page.</p>
+            </div>
+            <div class="page-heading-actions">
+                <button class="btn-secondary" type="button" id="refreshJobs">Refresh</button>
+                <a class="btn-primary page-primary-link" href="/">＋ New production</a>
+            </div>
+        </section>
+        <section class="metrics-grid" aria-label="Job summary">
+            <article class="metric-card"><span>Total jobs shown</span><strong id="metricTotal">—</strong><small>Most recent records</small></article>
+            <article class="metric-card"><span>Running</span><strong id="metricRunning">—</strong><small>Active processing</small></article>
+            <article class="metric-card"><span>Queued</span><strong id="metricQueued">—</strong><small>Waiting for a worker</small></article>
+            <article class="metric-card"><span>Needs attention</span><strong id="metricFailed">—</strong><small>Failed or interrupted</small></article>
+        </section>
+        <section class="panel">
+            <div class="panel-header page-panel-heading">
+                <div><h2>Production history</h2><p class="panel-subtitle">Filter by topic or status. Select a job to see its status and live log.</p></div>
+                <span class="status-pill" id="jobsUpdated">Connecting…</span>
+            </div>
+            <div class="filter-bar">
+                <label class="filter-search" for="jobSearch">Search jobs<input id="jobSearch" type="search" placeholder="Search topic or job ID"></label>
+                <label class="filter-status" for="jobStatusFilter">Status<select id="jobStatusFilter"><option value="all">All statuses</option><option value="queued">Queued</option><option value="running">Running</option><option value="done">Completed</option><option value="error">Failed</option><option value="interrupted">Interrupted</option><option value="cancelled">Cancelled</option></select></label>
+            </div>
+            <div class="table-scroll">
+                <table class="data-table">
+                    <thead><tr><th>Production</th><th>Status</th><th>Current step</th><th>Updated</th><th></th></tr></thead>
+                    <tbody id="jobsTable"><tr><td colspan="5" class="empty-table">Loading jobs…</td></tr></tbody>
+                </table>
+            </div>
+            <p id="jobsMessage" class="log-status" role="status" aria-live="polite"></p>
+        </section>
+    </main>
+</div>
+<script src="/static/js/jobs_page.js"></script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+<!-- Shared, real page navigation. All links resolve to dedicated Flask routes. -->
+<header class="app-header">
+    <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true"><span>EF</span></div>
+        <div class="brand-copy">
+            <p class="eyebrow">CREATOR WORKSPACE</p>
+            <h1>EDIT FACTORY {% if aivf_role == 'admin' %}<span class="brand-version" id="brandAdminTrigger" role="button" tabindex="0" aria-label="Studio version" title="Studio version">V3</span>{% else %}<span class="brand-version">V3</span>{% endif %}</h1>
+            <p class="subtitle">From raw footage to finished, review-ready short-form video.</p>
+        </div>
+    </div>
+    <div class="header-actions">
+        <div class="account-summary">
+            <span class="account-label">Signed in as</span>
+            <strong>{{ aivf_user_id|e }}</strong>
+            <span class="role-chip">{{ aivf_role|e }}</span>
+        </div>
+        <a class="btn-secondary header-settings" href="/settings">Settings</a>
+        <form action="/logout" method="post" class="logout-form">
+            <button class="btn-secondary header-signout" type="submit">Sign out</button>
+        </form>
+    </div>
+</header>
+<nav class="dashboard-nav" aria-label="Main navigation">
+    <a href="/" class="nav-link{{ ' active' if active_page == 'studio' else '' }}">Studio</a>
+    <a href="/jobs" class="nav-link{{ ' active' if active_page == 'jobs' else '' }}">Jobs</a>
+    <a href="/library" class="nav-link{{ ' active' if active_page == 'library' else '' }}">Library</a>
+    <a href="/settings" class="nav-link{{ ' active' if active_page == 'settings' else '' }}">Settings</a>
+    {% if aivf_role == 'admin' %}
+    <a href="/autonomous" class="nav-link{{ ' active' if active_page == 'publishing' else '' }}">Publishing</a>
+    {% endif %}
+</nav>
+
+<div id="adminUnlockModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="adminUnlockTitle" aria-hidden="true">
+    <div class="modal-content admin-unlock-card">
+        <button type="button" class="admin-modal-close" id="adminUnlockClose" aria-label="Close dialog">×</button>
+        <p class="eyebrow">Restricted workspace</p>
+        <h2 id="adminUnlockTitle">Unlock advanced tools</h2>
+        <p class="settings-intro">This extra lock is checked on the server and is available only to authenticated admin accounts.</p>
+        <form id="adminUnlockForm">
+            <label for="adminUnlockCode">Access code</label>
+            <input id="adminUnlockCode" name="code" type="password" inputmode="numeric" autocomplete="off" maxlength="64" required>
+            <button class="btn-primary w-full" type="submit" id="adminUnlockSubmit">Unlock console</button>
+            <p id="adminUnlockMessage" class="log-status" role="status" aria-live="polite"></p>
+        </form>
+    </div>
+</div>
+<script src="/static/js/dashboard_navigation.js"></script>

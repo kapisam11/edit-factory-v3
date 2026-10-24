@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Edit Factory V3 — Library</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/enhancements.css">
+    <link rel="stylesheet" href="/static/css/dashboard-professional.css">
+</head>
+<body>
+<div class="container">
+    {% include "dashboard_header.html" %}
+    <main class="page-stack">
+        <section class="page-heading">
+            <div>
+                <p class="eyebrow">YOUR CONTENT ASSETS</p>
+                <h2>Production library</h2>
+                <p class="page-description">Review generated packages, check whether a video was produced, and open the editorial review workbench.</p>
+            </div>
+            <div class="page-heading-actions">
+                <button class="btn-secondary" type="button" id="refreshLibrary">Refresh library</button>
+                <a class="btn-primary page-primary-link" href="/">＋ Create a video</a>
+            </div>
+        </section>
+        <section class="metrics-grid library-metrics">
+            <article class="metric-card"><span>Packages</span><strong id="libraryTotal">—</strong><small>Visible to your account</small></article>
+            <article class="metric-card"><span>Rendered videos</span><strong id="libraryVideos">—</strong><small>Video file found</small></article>
+            <article class="metric-card"><span>Needs review</span><strong id="libraryReview">—</strong><small>Not marked ready</small></article>
+        </section>
+        <section class="panel">
+            <div class="panel-header page-panel-heading">
+                <div><h2>All packages</h2><p class="panel-subtitle">Packages are loaded from the authenticated package API—not demo data.</p></div>
+                <span class="status-pill" id="libraryUpdated">Connecting…</span>
+            </div>
+            <div class="filter-bar">
+                <label class="filter-search" for="librarySearch">Find a package<input id="librarySearch" type="search" placeholder="Search package name or script"></label>
+                <label class="filter-status" for="libraryTypeFilter">Asset type<select id="libraryTypeFilter"><option value="all">All packages</option><option value="video">Has rendered video</option><option value="package">Package only</option><option value="review">Needs review</option></select></label>
+            </div>
+            <div id="libraryGrid" class="library-grid"><div class="empty-state">Loading your packages…</div></div>
+            <p id="libraryMessage" class="log-status" role="status" aria-live="polite"></p>
+        </section>
+    </main>
+</div>
+<script src="/static/js/library_page.js"></script>
+</body>
+</html>

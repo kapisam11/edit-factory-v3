@@ -287,6 +287,8 @@ def register_dashboard_compat(app):
     web_app_v3._start_job = locked_start_job
 
     def hardened_settings():
+        if request.method == "POST" and _request_role() != "admin":
+            return jsonify({"error": "Admin role required to change settings"}), 403
         if request.method == "POST":
             data = request.get_json(silent=True) or {}
             for key in SECRET_KEYS:

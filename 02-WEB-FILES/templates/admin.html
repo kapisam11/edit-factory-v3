@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Edit Factory V3 — Advanced Console</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/enhancements.css">
+    <link rel="stylesheet" href="/static/css/dashboard-professional.css">
+</head>
+<body>
+<div class="container">
+    {% include "dashboard_header.html" %}
+    <main class="page-stack">
+        <section class="admin-hero">
+            <div>
+                <p class="eyebrow">RESTRICTED · OWNER / ADMIN ONLY</p>
+                <h2>Advanced operations console</h2>
+                <p>Read-only diagnostics for system health, resource limits, failed jobs, and recent administrative actions. Secret values are deliberately excluded.</p>
+            </div>
+            <div class="admin-hero-actions">
+                <button class="btn-secondary" type="button" id="refreshDiagnostics">Refresh diagnostics</button>
+                <button class="btn-primary" type="button" id="downloadDiagnostics">Download snapshot</button>
+            </div>
+        </section>
+        <section class="metrics-grid admin-metrics" aria-label="Health summary">
+            <article class="metric-card"><span>Overall status</span><strong id="adminOverallStatus">—</strong><small id="adminGeneratedAt">Waiting for diagnostics</small></article>
+            <article class="metric-card"><span>Database integrity</span><strong id="adminDbStatus">—</strong><small id="adminDbJobs">Jobs recorded: —</small></article>
+            <article class="metric-card"><span>Free storage</span><strong id="adminDiskFree">—</strong><small id="adminDiskTotal">— total</small></article>
+            <article class="metric-card"><span>Active jobs</span><strong id="adminActiveJobs">—</strong><small id="adminQueueSummary">—</small></article>
+        </section>
+        <section class="admin-diagnostics-grid">
+            <article class="panel">
+                <div class="panel-header page-panel-heading"><div><h2>Runtime checks</h2><p class="panel-subtitle">Local runtime and media executables.</p></div><span class="status-pill" id="adminRuntimePill">Checking</span></div>
+                <div id="adminRuntimeChecks" class="diagnostic-check-list"><p class="empty-table">Loading checks…</p></div>
+            </article>
+            <article class="panel">
+                <div class="panel-header page-panel-heading"><div><h2>Job state breakdown</h2><p class="panel-subtitle">Counts from the persistent jobs database.</p></div></div>
+                <div id="adminJobCounts" class="state-count-grid"></div>
+            </article>
+        </section>
+        <section class="panel">
+            <div class="panel-header page-panel-heading"><div><h2>Recent failed jobs</h2><p class="panel-subtitle">Error detail is redacted before it is sent to this page.</p></div><span id="adminFailureCount" class="status-pill">—</span></div>
+            <div class="table-scroll"><table class="data-table"><thead><tr><th>Job</th><th>Status / stage</th><th>Last update</th><th>Safe error summary</th></tr></thead><tbody id="adminFailures"><tr><td colspan="4" class="empty-table">Loading…</td></tr></tbody></table></div>
+        </section>
+        <section class="panel">
+            <div class="panel-header page-panel-heading"><div><h2>Recent audit events</h2><p class="panel-subtitle">Configuration and administrative actions recorded by the dashboard.</p></div><span id="adminAuditCount" class="status-pill">—</span></div>
+            <div class="table-scroll"><table class="data-table"><thead><tr><th>Time</th><th>Action</th><th>Actor</th><th>Resource</th><th>Result</th></tr></thead><tbody id="adminAudit"><tr><td colspan="5" class="empty-table">Loading…</td></tr></tbody></table></div>
+        </section>
+        <div class="notice-panel admin-safety-note"><strong>Read-only by design</strong><span>This console does not publish videos, clear approvals, delete packages, or change runtime secrets. Use the regular authenticated workflows for those actions.</span></div>
+        <p id="adminDiagnosticsMessage" class="log-status" role="status" aria-live="polite"></p>
+    </main>
+</div>
+<script src="/static/js/admin_page.js"></script>
+</body>
+</html>

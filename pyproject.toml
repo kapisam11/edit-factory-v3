@@ -49,9 +49,9 @@ packages = ["ai_video_factory", "ai_video_factory.v3", "app", "tools"]
 py-modules = ["cli", "dashboard_auth", "dashboard_cache", "dashboard_compat", "dashboard_optimizations", "dashboard_shutdown", "dashboard_store", "dashboard_worker", "resource_governor", "wsgi"]
 
 [tool.setuptools.data-files]
-"share/ai-video-factory/templates" = ["02-WEB-FILES/templates/index.html", "02-WEB-FILES/templates/login.html", "02-WEB-FILES/templates/autonomous.html", "02-WEB-FILES/templates/editorial_review.html", "02-WEB-FILES/templates/minecraft_betrayal.json"]
+"share/ai-video-factory/templates" = ["02-WEB-FILES/templates/index.html", "02-WEB-FILES/templates/login.html", "02-WEB-FILES/templates/autonomous.html", "02-WEB-FILES/templates/editorial_review.html", "02-WEB-FILES/templates/minecraft_betrayal.json", "02-WEB-FILES/templates/dashboard_header.html", "02-WEB-FILES/templates/jobs.html", "02-WEB-FILES/templates/job_detail.html", "02-WEB-FILES/templates/library.html", "02-WEB-FILES/templates/settings.html", "02-WEB-FILES/templates/admin.html"]
 "share/ai-video-factory/static/css" = ["02-WEB-FILES/static/css/style.css", "02-WEB-FILES/static/css/enhancements.css", "02-WEB-FILES/static/css/dashboard-professional.css"]
-"share/ai-video-factory/static/js" = ["02-WEB-FILES/static/js/dashboard_enhancements.js"]
+"share/ai-video-factory/static/js" = ["02-WEB-FILES/static/js/dashboard_enhancements.js", "02-WEB-FILES/static/js/dashboard_navigation.js", "02-WEB-FILES/static/js/jobs_page.js", "02-WEB-FILES/static/js/job_detail_page.js", "02-WEB-FILES/static/js/library_page.js", "02-WEB-FILES/static/js/settings_page.js", "02-WEB-FILES/static/js/admin_page.js"]
 
 [tool.pytest.ini_options]
 markers = ["integration: tests that execute external media/runtime components such as FFmpeg"]
