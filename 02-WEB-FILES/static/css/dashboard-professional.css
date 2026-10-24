@@ -457,8 +457,9 @@ body {
 .admin-unlock-card .btn-primary { margin-top: 12px; }
 .admin-modal-close { position: absolute; top: 14px; right: 14px; border: 0; padding: 4px 9px; border-radius: 8px; color: var(--text-muted); background: transparent; font-size: 1.3rem; cursor: pointer; }
 .admin-modal-close:hover { color: var(--text-primary); background: var(--bg-hover); }
-#adminUnlockTrigger { cursor: default; user-select: none; }
-#adminUnlockTrigger:focus-visible { outline: 2px solid #ff9b8e; outline-offset: 3px; }
+/* Keep the trigger visually indistinguishable from the ordinary V3 badge. */
+#brandAdminTrigger { cursor: default; user-select: none; }
+#brandAdminTrigger:focus-visible { outline: 2px solid #ff9b8e; outline-offset: 3px; }
 @media (max-width: 1000px) {
     .metrics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
     .detail-grid, .settings-grid, .admin-diagnostics-grid { grid-template-columns: minmax(0,1fr); }
