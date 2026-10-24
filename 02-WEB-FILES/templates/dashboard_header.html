@@ -25,7 +25,9 @@
     <a href="/jobs" class="nav-link{{ ' active' if active_page == 'jobs' else '' }}">Jobs</a>
     <a href="/library" class="nav-link{{ ' active' if active_page == 'library' else '' }}">Library</a>
     <a href="/settings" class="nav-link{{ ' active' if active_page == 'settings' else '' }}">Settings</a>
+    {% if aivf_role == 'admin' %}
     <a href="/autonomous" class="nav-link{{ ' active' if active_page == 'publishing' else '' }}">Publishing</a>
+    {% endif %}
 </nav>
 
 <div id="adminUnlockModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="adminUnlockTitle" aria-hidden="true">
