@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory, session, url_for
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
@@ -1026,7 +1026,192 @@ def too_large(_error):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", active_page="studio")
+
+
+@app.get("/jobs")
+def jobs_page():
+    return render_template("jobs.html", active_page="jobs")
+
+
+@app.get("/jobs/<job_id>")
+def job_detail_page(job_id: str):
+    lookup = globals().get("authorized_db_get_job", db_get_job)
+    job = lookup(job_id)
+    if not job:
+        abort(404)
+    # Give the template only operational metadata; never serialize job params
+    # or runtime credentials into a rendered HTML page.
+    safe_job = {
+        key: job.get(key)
+        for key in ("id", "topic", "status", "step", "error", "created_at", "updated_at", "retry_count")
+    }
+    return render_template("job_detail.html", job=safe_job, active_page="jobs")
+
+
+@app.get("/library")
+def library_page():
+    return render_template("library.html", active_page="library")
+
+
+@app.get("/settings")
+def settings_page():
+    role = str(session.get("aivf_role") or "viewer").strip().lower()
+    return render_template("settings.html", active_page="settings", can_manage_settings=role == "admin")
+
+
+_ADMIN_UNLOCK_SESSION_KEY = "aivf_admin_panel_unlock_until"
+_ADMIN_UNLOCK_SECONDS = 15 * 60
+_ADMIN_UNLOCK_FAILURE_LIMIT = 5
+_ADMIN_UNLOCK_WINDOW_SECONDS = 5 * 60
+_admin_unlock_attempts: dict[str, list[float]] = {}
+_admin_unlock_attempts_lock = threading.Lock()
+
+
+def _require_admin_panel_role() -> None:
+    role_gate = app.extensions.get("aivf_require_role")
+    if not callable(role_gate):
+        abort(503)
+    role_gate("admin")
+
+
+def _admin_panel_is_unlocked() -> bool:
+    try:
+        return float(session.get(_ADMIN_UNLOCK_SESSION_KEY, 0)) > time.time()
+    except (TypeError, ValueError):
+        return False
+
+
+def _admin_unlock_is_rate_limited(client_ip: str) -> bool:
+    now = time.monotonic()
+    with _admin_unlock_attempts_lock:
+        recent = [stamp for stamp in _admin_unlock_attempts.get(client_ip, []) if now - stamp < _ADMIN_UNLOCK_WINDOW_SECONDS]
+        _admin_unlock_attempts[client_ip] = recent
+        return len(recent) >= _ADMIN_UNLOCK_FAILURE_LIMIT
+
+
+def _record_admin_unlock_failure(client_ip: str) -> None:
+    now = time.monotonic()
+    with _admin_unlock_attempts_lock:
+        recent = [stamp for stamp in _admin_unlock_attempts.get(client_ip, []) if now - stamp < _ADMIN_UNLOCK_WINDOW_SECONDS]
+        recent.append(now)
+        _admin_unlock_attempts[client_ip] = recent
+        if len(_admin_unlock_attempts) > 1024:
+            for key in list(_admin_unlock_attempts):
+                if not _admin_unlock_attempts[key] or now - _admin_unlock_attempts[key][-1] >= _ADMIN_UNLOCK_WINDOW_SECONDS:
+                    _admin_unlock_attempts.pop(key, None)
+
+
+def _redact_diagnostic_text(value: Any) -> str:
+    text_value = str(value or "")[:800]
+    text_value = re.sub(
+        r"(?i)(api[_ -]?key|access[_ -]?token|authorization|secret)(\\s*[:=]\\s*)([^\\s,;]+)",
+        r"\\1\\2[REDACTED]",
+        text_value,
+    )
+    return re.sub(r"(?i)bearer\\s+[^\\s,;]+", "Bearer [REDACTED]", text_value)
+
+
+@app.get("/admin")
+def admin_panel_page():
+    _require_admin_panel_role()
+    if not _admin_panel_is_unlocked():
+        session.pop(_ADMIN_UNLOCK_SESSION_KEY, None)
+        return Response(status=404)
+    return render_template("admin.html", active_page="admin")
+
+
+@app.post("/api/admin/unlock")
+def admin_panel_unlock():
+    _require_admin_panel_role()
+    client_ip = request.remote_addr or "unknown"
+    if _admin_unlock_is_rate_limited(client_ip):
+        return jsonify({"error": "Too many unlock attempts. Wait five minutes and try again."}), 429
+    payload = request.get_json(silent=True)
+    supplied_code = str(payload.get("code") or "") if isinstance(payload, dict) else ""
+    expected_code = os.environ.get("AIVF_ADMIN_PANEL_CODE", "2026").strip()
+    if not expected_code or not secrets.compare_digest(supplied_code, expected_code):
+        _record_admin_unlock_failure(client_ip)
+        return jsonify({"error": "Invalid unlock code"}), 401
+    with _admin_unlock_attempts_lock:
+        _admin_unlock_attempts.pop(client_ip, None)
+    session[_ADMIN_UNLOCK_SESSION_KEY] = time.time() + _ADMIN_UNLOCK_SECONDS
+    return jsonify({"ok": True, "expires_in_seconds": _ADMIN_UNLOCK_SECONDS})
+
+
+@app.get("/api/admin/diagnostics")
+def admin_panel_diagnostics():
+    _require_admin_panel_role()
+    if not _admin_panel_is_unlocked():
+        session.pop(_ADMIN_UNLOCK_SESSION_KEY, None)
+        return jsonify({"error": "Admin panel is locked"}), 403
+
+    disk = shutil.disk_usage(UPLOAD_FOLDER)
+    try:
+        with get_db() as connection:
+            database_check = str(connection.execute("PRAGMA quick_check").fetchone()[0])
+            total_jobs = int(connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
+            counts = {
+                str(row["status"]): int(row["count"])
+                for row in connection.execute("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status").fetchall()
+            }
+            failed_rows = connection.execute(
+                "SELECT id, topic, status, step, error, updated_at FROM jobs "
+                "WHERE status IN ('error','interrupted') ORDER BY updated_at DESC LIMIT 12"
+            ).fetchall()
+        database_ok = database_check.lower() == "ok"
+        database_error = None
+    except (sqlite3.Error, OSError) as exc:
+        database_ok = False
+        database_check = "unavailable"
+        total_jobs = 0
+        counts = {}
+        failed_rows = []
+        database_error = type(exc).__name__
+
+    try:
+        output_packages = sum(1 for path in OUTPUT_FOLDER.iterdir() if path.is_dir() and not path.is_symlink())
+    except OSError:
+        output_packages = None
+
+    try:
+        from dashboard_store import DashboardStore
+        audit_events = DashboardStore(DB_PATH).audit_events_since(last_id=0, limit=25)
+    except Exception:
+        audit_events = []
+
+    recent_failures = [{
+        "id": str(row["id"]),
+        "topic": str(row["topic"] or "")[:240],
+        "status": str(row["status"]),
+        "step": str(row["step"] or ""),
+        "error": _redact_diagnostic_text(row["error"]),
+        "updated_at": str(row["updated_at"] or ""),
+    } for row in failed_rows]
+
+    return jsonify({
+        "status": "ok" if database_ok else "degraded",
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "environment": os.environ.get("AIVF_ENV", "development").strip().lower(),
+        "runtime": {"python": sys.version.split()[0], "platform": sys.platform},
+        "media": {"ffmpeg": shutil.which("ffmpeg") is not None, "ffprobe": shutil.which("ffprobe") is not None},
+        "storage": {
+            "free_mb": round(disk.free / (1024 * 1024), 1),
+            "total_mb": round(disk.total / (1024 * 1024), 1),
+            "output_packages": output_packages,
+        },
+        "database": {
+            "status": "ok" if database_ok else "unavailable",
+            "integrity_check": database_check,
+            "jobs_total": total_jobs,
+            "error_type": database_error,
+            "size_bytes": DB_PATH.stat().st_size if DB_PATH.is_file() else 0,
+        },
+        "queue": {"counts_by_status": counts, "active_processes": _running_count()},
+        "recent_failures": recent_failures,
+        "audit_events": audit_events,
+        "security_note": "Diagnostic snapshot excludes API-key values and dashboard credentials.",
+    })
 
 
 @app.route("/api/settings", methods=["GET", "POST"])
