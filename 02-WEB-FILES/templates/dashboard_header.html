@@ -4,7 +4,7 @@
         <div class="brand-mark" aria-hidden="true"><span>EF</span></div>
         <div class="brand-copy">
             <p class="eyebrow">CREATOR WORKSPACE</p>
-            <h1>EDIT FACTORY <span class="brand-version" id="brandAdminTrigger" role="button" tabindex="0" aria-label="Studio version" title="Studio version">V3</span></h1>
+            <h1>EDIT FACTORY {% if aivf_role == 'admin' %}<span class="brand-version" id="brandAdminTrigger" role="button" tabindex="0" aria-label="Studio version" title="Studio version">V3</span>{% else %}<span class="brand-version">V3</span>{% endif %}</h1>
             <p class="subtitle">From raw footage to finished, review-ready short-form video.</p>
         </div>
     </div>
