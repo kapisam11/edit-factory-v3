@@ -38,6 +38,8 @@ def test_top_navigation_opens_dedicated_pages_not_in_page_anchors() -> None:
 
     assert targets == ["/", "/jobs", "/library", "/settings", "/autonomous"]
     assert not any(target.startswith("#") for target in targets)
+    assert 'href="/autonomous"' in header
+    assert "{% if aivf_role == 'admin' %}" in header
     assert 'id="brandAdminTrigger"' in header
     assert 'id="adminUnlockForm"' in header
     assert 'src="/static/js/dashboard_navigation.js"' in header
@@ -62,6 +64,7 @@ def test_header_actions_and_dashboard_controls_use_existing_backend() -> None:
     assert "fetch('/api/queue/status'" in html
     assert "fetch('/api/publishing/status'" in external_script
     assert "window.refreshDashboardPublishingStatus = refreshPublishingStatus" in external_script
+    assert "classList.toggle('active', candidate === link)" not in inline_script
 
 
 def test_new_pages_use_real_backends_and_admin_route_is_server_protected() -> None:
