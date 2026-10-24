@@ -10,34 +10,7 @@
 </head>
 <body>
     <div class="container">
-        <header class="app-header">
-            <div class="brand-lockup">
-                <div class="brand-mark" aria-hidden="true"><span>EF</span></div>
-                <div class="brand-copy">
-                    <p class="eyebrow">CREATOR WORKSPACE</p>
-                    <h1>EDIT FACTORY <span class="brand-version">V3</span></h1>
-                    <p class="subtitle">From raw footage to finished, review-ready short-form video.</p>
-                </div>
-            </div>
-            <div class="header-actions">
-                <div class="account-summary">
-                    <span class="account-label">Signed in as</span>
-                    <strong>{{ aivf_user_id|e }}</strong>
-                    <span class="role-chip">{{ aivf_role|e }}</span>
-                </div>
-                <button class="btn-secondary header-settings" type="button" onclick="openSettings()">Settings</button>
-                <form action="/logout" method="post" class="logout-form">
-                    <button class="btn-secondary header-signout" type="submit">Sign out</button>
-                </form>
-            </div>
-        </header>
-        <nav class="dashboard-nav" aria-label="Dashboard sections">
-            <a href="#new-production" class="nav-link active">Create</a>
-            <a href="#job-queue" class="nav-link">Job queue</a>
-            <a href="#live-output" class="nav-link">Live output</a>
-            <a href="#generated-packages" class="nav-link">Your packages</a>
-            <a href="#publishingPanel" class="nav-link">Publishing status</a>
-        </nav>
+        {% include "dashboard_header.html" %}
 
         <details class="release-overview panel" aria-labelledby="releaseOverviewTitle">
             <summary class="release-overview-summary">
@@ -130,7 +103,7 @@
                 <div class="panel">
                     <h2>Quick Actions</h2>
                     <button class="btn-sm w-full" onclick="loadPackages()">Refresh Packages</button>
-                    <button class="btn-sm w-full" onclick="openSettings()">Control Settings</button>
+                    <a class="btn-sm w-full dashboard-quick-link" href="/settings">Control Settings</a>
                     <a class="btn-sm w-full dashboard-quick-link" href="/autonomous">Autonomous Controls</a>
                 </div>
             </aside>
