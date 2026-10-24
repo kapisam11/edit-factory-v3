@@ -130,3 +130,84 @@ def test_dashboard_pages_render_for_authenticated_users(monkeypatch, tmp_path):
     html = client.get("/jobs").get_data(as_text=True)
     assert 'id="jobsTable"' in html
     assert 'href="/library"' in html
+
+
+
+def test_admin_operations_log_combines_sources_and_redacts_secrets(monkeypatch, tmp_path):
+    client, app_module = _make_client(monkeypatch, tmp_path, role="admin")
+    assert client.get("/api/admin/logs").status_code == 403
+
+    unlock = client.post(
+        "/api/admin/unlock",
+        json={"code": "2026"},
+        headers={"Origin": "http://localhost"},
+    )
+    assert unlock.status_code == 200
+
+    app_module.db_insert_job("ops-log-job", "Render diagnostics demo", {})
+    app_module.db_append_log(
+        "ops-log-job",
+        "ERROR",
+        "Render failed because model_api_key=do-not-leak-this-value",
+    )
+    with app_module.get_db() as connection:
+        connection.execute(
+            "INSERT INTO job_events(job_id,event,details) VALUES (?,?,?)",
+            ("ops-log-job", "job_interrupted", '{"message":"Worker stopped unexpectedly"}'),
+        )
+
+    from dashboard_store import DashboardStore
+    DashboardStore(app_module.DB_PATH).record_audit_event(
+        principal="user:admin-test",
+        action="SETTINGS_CHANGED",
+        resource="settings",
+        resource_id="default_target_seconds",
+        result="success",
+        metadata={"test": "admin activity feed"},
+    )
+
+    response = client.get("/api/admin/logs?limit=120")
+    assert response.status_code == 200
+    payload = response.get_json()
+    logs = payload["logs"]
+    assert payload["counts"]["total"] == len(logs)
+    assert any(entry["source"] == "job-log" and entry["job_id"] == "ops-log-job" for entry in logs)
+    assert any(entry["source"] == "lifecycle" and entry["action"] == "job_interrupted" for entry in logs)
+    assert any(entry["source"] == "audit" and entry["action"] == "SETTINGS_CHANGED" for entry in logs)
+    serialized = json.dumps(payload)
+    assert "do-not-leak-this-value" not in serialized
+    assert "[REDACTED]" in serialized
+
+
+def test_admin_operations_log_rejects_unauthorized_roles_and_bad_limits(monkeypatch, tmp_path):
+    viewer, _app_module = _make_client(monkeypatch, tmp_path, role="viewer")
+    assert viewer.get("/api/admin/logs").status_code == 403
+
+    admin, _app_module = _make_client(monkeypatch, tmp_path, role="admin")
+    unlocked = admin.post(
+        "/api/admin/unlock",
+        json={"code": "2026"},
+        headers={"Origin": "http://localhost"},
+    )
+    assert unlocked.status_code == 200
+    assert admin.get("/api/admin/logs?limit=not-a-number").status_code == 400
+
+
+def test_admin_diagnostics_include_telemetry_without_secrets(monkeypatch, tmp_path):
+    client, _app_module = _make_client(monkeypatch, tmp_path, role="admin")
+    unlock = client.post(
+        "/api/admin/unlock",
+        json={"code": "2026"},
+        headers={"Origin": "http://localhost"},
+    )
+    assert unlock.status_code == 200
+
+    response = client.get("/api/admin/diagnostics")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert isinstance(payload["runtime"]["uptime_seconds"], int)
+    assert "memory_rss_mb" in payload["runtime"]
+    assert "http_requests_total" in payload["telemetry"]
+    assert "http_5xx_total" in payload["telemetry"]
+    assert "request_p95_ms" in payload["telemetry"]
+    assert "dashboard-test-token" not in json.dumps(payload)
