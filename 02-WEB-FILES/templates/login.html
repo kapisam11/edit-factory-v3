@@ -82,7 +82,7 @@
     <section class="form-panel" aria-labelledby="signInTitle">
       <p class="eyebrow">Welcome back</p>
       <h2 id="signInTitle">Sign in to your studio</h2>
-      <p class="intro">Enter the dashboard access token shown by the Windows launcher to continue.</p>
+      <p class="intro">Enter the dashboard access token stored in the private `06-CONFIG-AND-DEPLOYMENT/.env` file. The launcher deliberately does not print secrets.</p>
       <form method="post" action="/login" autocomplete="on">
         <label for="dashboardToken">Dashboard access token</label>
         <input id="dashboardToken" name="token" type="password" autocomplete="current-password" placeholder="Paste your access token" required autofocus>
