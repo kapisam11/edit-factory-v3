@@ -274,3 +274,20 @@ def test_windows_launcher_never_prints_secrets_and_validates_compose_quietly() -
     assert "Write-Host $token" not in launcher
     assert "Private admin-console unlock code (save it somewhere safe): $adminPanelCode" not in launcher
     assert "Named dashboard accounts are configured; shared dashboard token login is disabled." in launcher
+
+
+
+def test_windows_startup_uses_fullscreen_splash_and_keeps_failure_console_open() -> None:
+    launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
+    batch = (REPOSITORY_ROOT / "START-ALL.bat").read_text(encoding="utf-8")
+    splash = (REPOSITORY_ROOT / "02-WEB-FILES" / "static" / "startup-splash.html").read_text(encoding="utf-8")
+    welcome = (REPOSITORY_ROOT / "02-WEB-FILES" / "templates" / "welcome.html").read_text(encoding="utf-8")
+
+    assert "Start-StartupSplash" in launcher
+    assert '"--app=$splashUri", "--start-fullscreen"' in launcher
+    assert 'Start-Process "$BaseUrl/login"' not in launcher
+    assert 'pause' in batch
+    assert 'if not "%EXIT_CODE%"=="0" (' in batch
+    assert '__AIVF_BASE_URL__' in splash
+    assert 'fetch(baseUrl + "/api/health"' in splash
+    assert 'href="/login"' in welcome
