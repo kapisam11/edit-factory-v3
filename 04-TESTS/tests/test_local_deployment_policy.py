@@ -54,7 +54,7 @@ def test_windows_launcher_fails_closed_without_uv_unless_checks_are_explicitly_s
     assert "Run START-ALL.bat -RunChecks" in launcher
     assert "ps --services --status running" in launcher
     assert "Only stop the web service when Compose reports it as running" in launcher
-    assert launcher.index("Checking for a previous dashboard instance") < launcher.index("\\nStart-StartupSplash\\n")
+    assert launcher.index("Checking for a previous dashboard instance") < launcher.index("Start-StartupSplash", launcher.index("Checking for a previous dashboard instance"))
     assert "Get-Content -LiteralPath $welcomeSource -Encoding UTF8 -Raw" in launcher
     assert "Get-Content -LiteralPath $splashSource -Encoding UTF8 -Raw" in launcher
     assert "uv is not installed, so the full Python check suite was skipped." not in launcher
