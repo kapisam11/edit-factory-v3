@@ -152,11 +152,11 @@ function Start-StartupSplash {
 
     $splashPath = Join-Path $env:TEMP ("EditFactoryStartup-" + [guid]::NewGuid().ToString("N") + ".html")
     $welcomePath = Join-Path $env:TEMP ("EditFactoryWelcome-" + [guid]::NewGuid().ToString("N") + ".html")
-    $welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Raw).Replace('href="/login"', ('href="' + $baseUrl + '/login"'))
+    $welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Encoding UTF8 -Raw).Replace('href="/login"', ('href="' + $baseUrl + '/login"'))
     Set-Content -LiteralPath $welcomePath -Value $welcomeHtml -Encoding UTF8
     $welcomeUri = ([System.Uri]::new($welcomePath)).AbsoluteUri
 
-    $splashHtml = (Get-Content -LiteralPath $splashSource -Raw).Replace("__AIVF_BASE_URL__", $baseUrl).Replace("__AIVF_WELCOME_URI__", $welcomeUri)
+    $splashHtml = (Get-Content -LiteralPath $splashSource -Encoding UTF8 -Raw).Replace("__AIVF_BASE_URL__", $baseUrl).Replace("__AIVF_WELCOME_URI__", $welcomeUri)
     Set-Content -LiteralPath $splashPath -Value $splashHtml -Encoding UTF8
     $splashUri = ([System.Uri]::new($splashPath)).AbsoluteUri
 
@@ -179,10 +179,11 @@ function Start-StartupSplash {
         $browser = $candidates | Select-Object -First 1
     }
     if ($browser) {
-        $profileDir = Join-Path $env:LOCALAPPDATA "EditFactoryV3\StartupKioskProfile"
+        $profileDir = Join-Path $env:TEMP ("EditFactoryV3-Kiosk-" + [guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
         $browserArguments = @(
             "--kiosk",
+            "--start-fullscreen",
             "--app=$splashUri",
             ('--user-data-dir="{0}"' -f $profileDir),
             "--no-first-run",
