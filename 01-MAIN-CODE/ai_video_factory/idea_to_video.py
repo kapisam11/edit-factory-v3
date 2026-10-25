@@ -59,7 +59,10 @@ def _eligible_visual(item: Mapping[str, Any]) -> bool:
     license_text = str(item.get("license") or "").lower()
     if not license_text:
         return False
-    if any(term in license_text for term in ("noncommercial", "non-commercial", "no derivatives", "no-derivatives", "cc by-sa", "cc-by-sa", "cc by-nc", "cc-by-nc")):
+    if any(term in license_text for term in (
+        "noncommercial", "non-commercial", "no derivatives", "no-derivatives",
+        "cc by-sa", "cc-by-sa", "cc by-nc", "cc-by-nc", "cc by-nd", "cc-by-nd",
+    )):
         return False
     if str(item.get("rights_basis")).lower() == "cc_license" and "cc by" not in license_text:
         return False
