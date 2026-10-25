@@ -47,6 +47,8 @@
   <script>
     const baseUrl = "__AIVF_BASE_URL__";
     const welcomeUri = "__AIVF_WELCOME_URI__";
+    const splashStartedAt = performance.now();
+    const minimumSplashMs = 4200;
     const statusLabel = document.getElementById("status");
     const messages = ["Waking up the creative engine…","Loading your production workspace…","Checking local services…","Almost ready…"];
     let attempt = 0;
@@ -57,6 +59,11 @@
           // A local file cannot read the response body because it has an opaque origin.
           // no-cors still lets us detect that the loopback server is accepting requests.
           await fetch(baseUrl + "/api/health", { mode: "no-cors", cache: "no-store" });
+          // Keep the animated introduction visible on fast restarts too.
+          const remaining = minimumSplashMs - (performance.now() - splashStartedAt);
+          if (remaining > 0) {
+            await new Promise(resolve => setTimeout(resolve, remaining));
+          }
           // The local welcome page works with both current source and pinned production images.
           window.location.replace(welcomeUri);
           return;
