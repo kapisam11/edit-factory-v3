@@ -162,6 +162,31 @@ def _build_slide(
     frame.convert("RGB").save(destination, format="PNG", optimize=True)
 
 
+def _srt_timestamp(seconds: float) -> str:
+    millis = max(0, int(round(seconds * 1000)))
+    hours, remainder = divmod(millis, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    secs, remainder = divmod(remainder, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{remainder:03d}"
+
+
+def _write_scene_captions(package: Path, scene_rows: list[dict[str, Any]]) -> Path:
+    path = package / "captions.srt"
+    rows: list[str] = []
+    cursor = 0.0
+    for number, scene in enumerate(scene_rows, start=1):
+        length = max(0.1, float(scene.get("duration_seconds") or 0.0))
+        start = cursor
+        end = cursor + length
+        rows.append(
+            f"{number}\n{_srt_timestamp(start)} --> {_srt_timestamp(end)}\n"
+            f"{_plain_text(scene.get('caption') or '', 900)}\n"
+        )
+        cursor = end
+    path.write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8")
+    return path
+
+
 def _duration(path: Path) -> float | None:
     try:
         result = run_ffprobe([
@@ -551,6 +576,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
         json.dumps(rights_manifest, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    captions_path = _write_scene_captions(package, scene_rows)
     (package / "storyboard.json").write_text(
         json.dumps({
             "schema_version": 1,
@@ -563,6 +589,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
             "final_video": final_video.name,
             "voiceover": str(voiceover) if has_voiceover else None,
             "voiceover_status": "included" if has_voiceover else "unavailable_captioned_video_with_silent_audio",
+            "captions_srt": captions_path.name,
             "music_status": "included_from_eligible_Commons_audio" if music else "no_eligible_Commons_music_found",
             "music_asset": {
                 "url": music.get("url"),
@@ -594,6 +621,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
         "final_video": str(final_video),
         "asset_count": len(assets),
         "scene_count": len(scene_rows),
+        "captions_srt": str(captions_path),
         "voiceover_included": has_voiceover,
         "music_included": bool(music),
         "publish_ready": False,
