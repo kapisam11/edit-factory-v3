@@ -169,6 +169,50 @@ if ($Migrate) {
     }
 }
 
+function Start-StartupSplash {
+    if ($NoBrowser) {
+        return
+    }
+
+    $splashSource = Join-Path $Root "02-WEB-FILES\static\startup-splash.html"
+    if (-not (Test-Path -LiteralPath $splashSource -PathType Leaf)) {
+        Write-Host "Startup splash is missing; continuing with the dashboard startup." -ForegroundColor Yellow
+        return
+    }
+
+    $splashPath = Join-Path $env:TEMP ("EditFactoryStartup-" + [guid]::NewGuid().ToString("N") + ".html")
+    $splashHtml = (Get-Content -LiteralPath $splashSource -Raw).Replace("__AIVF_BASE_URL__", $baseUrl)
+    Set-Content -LiteralPath $splashPath -Value $splashHtml -Encoding UTF8
+    $splashUri = ([System.Uri]::new($splashPath)).AbsoluteUri
+
+    $browser = $null
+    foreach ($candidate in @("msedge.exe", "chrome.exe")) {
+        $command = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($command) {
+            $browser = $command.Source
+            break
+        }
+    }
+    if (-not $browser) {
+        $candidates = @(
+            (Join-Path $env:ProgramFiles "Microsoft\Edge\Application\msedge.exe"),
+            (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Microsoft\Edge\Application\msedge.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe")
+        )
+        $browser = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    }
+    if ($browser) {
+        Start-Process -FilePath $browser -ArgumentList @("--app=$splashUri", "--start-fullscreen")
+        Write-Host "Fullscreen startup screen opened in browser app mode." -ForegroundColor Green
+    } else {
+        Start-Process $splashUri
+        Write-Host "Chrome/Edge not found; the default browser may show its browser bars." -ForegroundColor Yellow
+    }
+}
+
+Start-StartupSplash
+
 Write-Host ""
 Write-Host "Starting the production services..."
 Invoke-Compose @("up", "-d", "--no-build", "--remove-orphans")
@@ -199,5 +243,5 @@ Write-Host "Dashboard token is stored in the configured .env file; it is deliber
 Write-Host "Autonomous publishing is not started by default. The automation profile is separate and remains opt-in."
 
 if (-not $NoBrowser) {
-    Start-Process "$baseUrl/login"
+    Write-Host "Startup screen will transition to the welcome page when the dashboard is healthy."
 }

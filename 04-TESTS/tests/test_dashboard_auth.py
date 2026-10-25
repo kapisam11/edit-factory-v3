@@ -265,3 +265,18 @@ def test_dashboard_emits_nonce_based_csp(monkeypatch):
     assert "script-src 'self' 'nonce-" in policy
     assert "script-src-attr 'unsafe-inline'" in policy
     assert "'unsafe-inline'" not in policy.split("script-src ", 1)[1].split(";", 1)[0]
+
+
+
+def test_welcome_page_is_public_but_does_not_authenticate(monkeypatch):
+    app = _load(monkeypatch)
+    client = app.test_client()
+
+    response = client.get("/welcome")
+    assert response.status_code == 200
+    assert b"What is Edit Factory" in response.data
+    assert b'href="/login"' in response.data
+
+    root = client.get("/")
+    assert root.status_code == 302
+    assert "/login" in root.headers["Location"]
