@@ -261,12 +261,18 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Ok "Container status checked."
 
-$token = Get-EnvValue "AIVF_DASHBOARD_TOKEN"
-if ($token) {
+$usersConfig = Get-EnvValue "AIVF_DASHBOARD_USERS"
+if (-not [string]::IsNullOrWhiteSpace($usersConfig)) {
     Write-Host ""
-    Write-Host "Dashboard login token:" -ForegroundColor Yellow
-    Write-Host $token -ForegroundColor White
-    Write-Host "Keep this token private. It is only shown here because this is a local launcher." -ForegroundColor DarkGray
+    Write-Host "Named dashboard accounts are configured; shared dashboard token login is disabled." -ForegroundColor Cyan
+} else {
+    $token = Get-EnvValue "AIVF_DASHBOARD_TOKEN"
+    if ($token) {
+        Write-Host ""
+        Write-Host "Dashboard login token:" -ForegroundColor Yellow
+        Write-Host $token -ForegroundColor White
+        Write-Host "Keep this token private. It is only shown here because this is a local launcher." -ForegroundColor DarkGray
+    }
 }
 
 if (-not $NoBrowser) {
