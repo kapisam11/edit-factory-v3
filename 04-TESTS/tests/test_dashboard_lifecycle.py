@@ -533,15 +533,15 @@ def test_create_job_idempotency_reuses_existing_job_and_rejects_payload_conflict
     client = appmod.app.test_client()
     headers = {"Idempotency-Key": "same-browser-request"}
 
-    first = client.post("/api/jobs", data={"topic": "repeatable topic"}, headers=headers)
+    first = client.post("/api/jobs", data={"topic": "repeatable topic", "production_mode": "idea_to_video"}, headers=headers)
     assert first.status_code == 202
 
-    second = client.post("/api/jobs", data={"topic": "repeatable topic"}, headers=headers)
+    second = client.post("/api/jobs", data={"topic": "repeatable topic", "production_mode": "idea_to_video"}, headers=headers)
     assert second.status_code == 200
     assert second.get_json()["idempotent_replay"] is True
     assert second.get_json()["job_id"] == first.get_json()["job_id"]
 
-    conflict = client.post("/api/jobs", data={"topic": "different topic"}, headers=headers)
+    conflict = client.post("/api/jobs", data={"topic": "different topic", "production_mode": "idea_to_video"}, headers=headers)
     assert conflict.status_code == 409
     assert "different request" in conflict.get_json()["error"]
 
