@@ -20,6 +20,7 @@ def test_job_params_never_persist_secret_keys(monkeypatch, tmp_path):
 
     response = client.post("/api/jobs", json={
         "topic": "safe topic",
+        "production_mode": "idea_to_video",
         "model_key": "secret-model-key",
         "groq_key": "secret-groq-key",
     })
