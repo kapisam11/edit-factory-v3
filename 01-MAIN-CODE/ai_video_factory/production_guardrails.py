@@ -144,16 +144,21 @@ def terminate_process_tree(process: subprocess.Popen[Any], *, grace_seconds: flo
                 timeout_seconds=max(1.0, float(grace_seconds) + 1.0),
             )
         else:
-            os.killpg(process.pid, signal.SIGTERM)
+            # These POSIX-only symbols are resolved dynamically so mypy can
+            # also analyze this module when the launcher runs natively on Windows.
+            killpg = getattr(os, "killpg")
+            sigterm = getattr(signal, "SIGTERM")
+            sigkill = getattr(signal, "SIGKILL")
+            killpg(process.pid, sigterm)
             deadline = time.monotonic() + max(0.1, float(grace_seconds))
             while time.monotonic() < deadline:
                 try:
-                    os.killpg(process.pid, 0)
+                    killpg(process.pid, 0)
                 except OSError:
                     break
                 time.sleep(0.05)
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                killpg(process.pid, sigkill)
             except OSError:
                 pass
     except (OSError, subprocess.SubprocessError):
