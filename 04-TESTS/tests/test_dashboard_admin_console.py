@@ -249,6 +249,7 @@ def test_multi_user_mode_disables_shared_token_and_preserves_role_checks(monkeyp
     users = json.dumps({
         "owner": {"token": "owner-user-token-distinct", "role": "admin"},
         "friend": {"token": "friend-user-token-distinct", "role": "viewer"},
+        "unclassified": {"token": "unclassified-user-token"},
     })
     owner, app_module = _make_client(
         monkeypatch,
@@ -282,6 +283,21 @@ def test_multi_user_mode_disables_shared_token_and_preserves_role_checks(monkeyp
         headers={"Origin": "http://localhost"},
     ).status_code == 403
     assert friend.get("/api/admin/diagnostics").status_code == 403
+
+    # An omitted role is least-privilege in multi-user mode, not admin by default.
+    unclassified = app_module.app.test_client()
+    assert unclassified.post(
+        "/login",
+        data={"token": "unclassified-user-token"},
+        headers={"Origin": "http://localhost"},
+    ).status_code == 302
+    with unclassified.session_transaction() as state:
+        assert state["aivf_role"] == "viewer"
+    assert unclassified.post(
+        "/api/admin/unlock",
+        json={"code": "unit-test-admin-code-6bf041"},
+        headers={"Origin": "http://localhost"},
+    ).status_code == 403
 
 
 def test_invalid_multi_user_configuration_fails_closed(monkeypatch, tmp_path):
