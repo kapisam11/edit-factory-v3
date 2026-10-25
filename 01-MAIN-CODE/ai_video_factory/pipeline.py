@@ -140,6 +140,7 @@ class PipelineContext:
     warnings: List[str] = field(default_factory=list)
     stage_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     learning_history_path: Optional[str] = None
+    prepare_upload_packages: bool = True
 
     def __post_init__(self) -> None:
         self.production_mode = str(self.production_mode or "clip_existing").strip().lower()
@@ -585,6 +586,20 @@ class IdeaVideoStage(PipelineStage):
                     f"Source: {asset.get('url') or ''}"
                 ).strip("; "),
             })
+
+        if not ctx.prepare_upload_packages:
+            ctx.research["idea_to_video"] = {
+                "status": "complete",
+                "asset_count": result["asset_count"],
+                "scene_count": result["scene_count"],
+                "voiceover_included": result["voiceover_included"],
+                "music_included": result.get("music_included", False),
+                "source_credits": source_credits,
+                "platform_upload_packages": "prepared_by_complete_factory",
+                "publish_ready": False,
+                "approval_required": True,
+            }
+            return ctx
 
         from .complete_factory import render_all_platforms
         from .upload_package import finalize_upload_package
