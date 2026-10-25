@@ -137,38 +137,6 @@ Write-Host "Validating production Compose configuration..."
 Invoke-Compose @("config", "--quiet")
 
 Write-Host ""
-Write-Host "Pulling the pinned production image..."
-Invoke-Compose @("pull")
-
-if ($Migrate) {
-    # Detect first boot without treating ordinary Docker/Compose errors as an
-    # absent database. Exit 42 is the deliberate 'DB does not exist' signal.
-    & docker compose --env-file $EnvFile -f $ComposeFile run --rm --no-deps -T web sh -c "if test -f /app/state/jobs.db; then exit 0; else exit 42; fi"
-    $dbCheckCode = $LASTEXITCODE
-    if ($dbCheckCode -eq 0) {
-        $stamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
-        $backupPath = "/app/state/backups/pre-migration-$stamp.tar.gz"
-        $backupMarker = "${backupPath}.verified"
-        $backupCommand = "mkdir -p /tmp/aivf-empty /app/state/backups && aivf-backup backup --db /app/state/jobs.db --backup $backupPath --knowledge /tmp/aivf-empty --output /tmp/aivf-empty --uploads /tmp/aivf-empty --state /tmp/aivf-empty && aivf-backup verify --backup $backupPath --marker $backupMarker"
-        Write-Host "Existing database detected; creating and verifying a local pre-migration database backup..."
-        Invoke-Compose @("run", "--rm", "--no-deps", "-T", "web", "sh", "-c", $backupCommand)
-        Write-Host "Verified pre-migration backup: $backupPath"
-    } elseif ($dbCheckCode -ne 42) {
-        throw "Could not determine whether the production database exists (exit code $dbCheckCode). Migration was not run."
-    }
-
-    Write-Host "Running the explicit production database migration..."
-    Invoke-Compose @("run", "--rm", "--no-deps", "-T", "web", "aivf-db-migrate", "/app/state/jobs.db")
-} else {
-    Write-Host "Verifying the existing database schema without modifying it..."
-    $verifyCode = "from ai_video_factory.db_migrations import verify_database_schema; verify_database_schema('/app/state/jobs.db')"
-    try {
-        Invoke-Compose @("run", "--rm", "--no-deps", "-T", "web", "python", "-c", $verifyCode)
-    } catch {
-        throw "Production database schema verification failed. For first start or a schema-changing release, rerun explicitly with -Migrate after reviewing the backup and migration procedure. Details: $($_.Exception.Message)"
-    }
-}
-
 function Start-StartupSplash {
     if ($NoBrowser) {
         return
@@ -230,6 +198,40 @@ function Start-StartupSplash {
 }
 
 Start-StartupSplash
+
+Write-Host "Pulling the pinned production image..."
+Invoke-Compose @("pull")
+
+if ($Migrate) {
+    # Detect first boot without treating ordinary Docker/Compose errors as an
+    # absent database. Exit 42 is the deliberate 'DB does not exist' signal.
+    & docker compose --env-file $EnvFile -f $ComposeFile run --rm --no-deps -T web sh -c "if test -f /app/state/jobs.db; then exit 0; else exit 42; fi"
+    $dbCheckCode = $LASTEXITCODE
+    if ($dbCheckCode -eq 0) {
+        $stamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+        $backupPath = "/app/state/backups/pre-migration-$stamp.tar.gz"
+        $backupMarker = "${backupPath}.verified"
+        $backupCommand = "mkdir -p /tmp/aivf-empty /app/state/backups && aivf-backup backup --db /app/state/jobs.db --backup $backupPath --knowledge /tmp/aivf-empty --output /tmp/aivf-empty --uploads /tmp/aivf-empty --state /tmp/aivf-empty && aivf-backup verify --backup $backupPath --marker $backupMarker"
+        Write-Host "Existing database detected; creating and verifying a local pre-migration database backup..."
+        Invoke-Compose @("run", "--rm", "--no-deps", "-T", "web", "sh", "-c", $backupCommand)
+        Write-Host "Verified pre-migration backup: $backupPath"
+    } elseif ($dbCheckCode -ne 42) {
+        throw "Could not determine whether the production database exists (exit code $dbCheckCode). Migration was not run."
+    }
+
+    Write-Host "Running the explicit production database migration..."
+    Invoke-Compose @("run", "--rm", "--no-deps", "-T", "web", "aivf-db-migrate", "/app/state/jobs.db")
+} else {
+    Write-Host "Verifying the existing database schema without modifying it..."
+    $verifyCode = "from ai_video_factory.db_migrations import verify_database_schema; verify_database_schema('/app/state/jobs.db')"
+    try {
+        Invoke-Compose @("run", "--rm", "--no-deps", "-T", "web", "python", "-c", $verifyCode)
+    } catch {
+        throw "Production database schema verification failed. For first start or a schema-changing release, rerun explicitly with -Migrate after reviewing the backup and migration procedure. Details: $($_.Exception.Message)"
+    }
+}
+
+
 
 Write-Host ""
 Write-Host "Starting the production services..."
