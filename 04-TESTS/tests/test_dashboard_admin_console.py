@@ -11,7 +11,7 @@ def _make_client(monkeypatch, tmp_path: Path, *, role: str = "admin"):
     monkeypatch.setenv("AIVF_ENV", "test")
     monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "dashboard-test-token")
     monkeypatch.setenv("AIVF_DASHBOARD_ROLE", role)
-    monkeypatch.setenv("AIVF_ADMIN_PANEL_CODE", "2026")
+    monkeypatch.setenv("AIVF_ADMIN_PANEL_CODE", "unit-test-admin-code-6bf041")
     monkeypatch.setenv("AIVF_COOKIE_SECURE", "0")
     monkeypatch.setenv("FLASK_SECRET_KEY", "test-session-secret-that-is-long-enough-123456")
     monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
@@ -55,7 +55,7 @@ def test_admin_console_stays_hidden_until_server_unlock(monkeypatch, tmp_path):
 
     unlocked = client.post(
         "/api/admin/unlock",
-        json={"code": "2026"},
+        json={"code": "unit-test-admin-code-6bf041"},
         headers={"Origin": "http://localhost"},
     )
     assert unlocked.status_code == 200
@@ -78,7 +78,7 @@ def test_admin_unlock_fails_closed_when_private_code_is_unset(monkeypatch, tmp_p
 
     response = client.post(
         "/api/admin/unlock",
-        json={"code": "2026"},
+        json={"code": "unit-test-admin-code-6bf041"},
         headers={"Origin": "http://localhost"},
     )
     assert response.status_code == 503
@@ -91,7 +91,7 @@ def test_admin_unlock_code_does_not_grant_viewer_role_admin_access(monkeypatch, 
 
     response = client.post(
         "/api/admin/unlock",
-        json={"code": "2026"},
+        json={"code": "unit-test-admin-code-6bf041"},
         headers={"Origin": "http://localhost"},
     )
     assert response.status_code == 403
@@ -114,7 +114,7 @@ def test_admin_console_unlock_expires(monkeypatch, tmp_path):
     client, app_module = _make_client(monkeypatch, tmp_path, role="admin")
     unlock = client.post(
         "/api/admin/unlock",
-        json={"code": "2026"},
+        json={"code": "unit-test-admin-code-6bf041"},
         headers={"Origin": "http://localhost"},
     )
     assert unlock.status_code == 200
@@ -160,7 +160,7 @@ def test_admin_operations_log_combines_sources_and_redacts_secrets(monkeypatch, 
 
     unlock = client.post(
         "/api/admin/unlock",
-        json={"code": "2026"},
+        json={"code": "unit-test-admin-code-6bf041"},
         headers={"Origin": "http://localhost"},
     )
     assert unlock.status_code == 200
@@ -207,7 +207,7 @@ def test_admin_operations_log_rejects_unauthorized_roles_and_bad_limits(monkeypa
     admin, _app_module = _make_client(monkeypatch, tmp_path, role="admin")
     unlocked = admin.post(
         "/api/admin/unlock",
-        json={"code": "2026"},
+        json={"code": "unit-test-admin-code-6bf041"},
         headers={"Origin": "http://localhost"},
     )
     assert unlocked.status_code == 200
@@ -218,7 +218,7 @@ def test_admin_diagnostics_include_telemetry_without_secrets(monkeypatch, tmp_pa
     client, _app_module = _make_client(monkeypatch, tmp_path, role="admin")
     unlock = client.post(
         "/api/admin/unlock",
-        json={"code": "2026"},
+        json={"code": "unit-test-admin-code-6bf041"},
         headers={"Origin": "http://localhost"},
     )
     assert unlock.status_code == 200
