@@ -209,6 +209,52 @@ Invoke-Native "docker" @(
 )
 Write-Ok "Docker Compose configuration is valid; secret values were not printed."
 
+function Start-StartupSplash {
+    if ($NoBrowser) {
+        return
+    }
+
+    $splashSource = Join-Path $Root "02-WEB-FILES\static\startup-splash.html"
+    if (-not (Test-Path -LiteralPath $splashSource -PathType Leaf)) {
+        Write-Warn "Startup splash file is missing; the dashboard will still open after health checks."
+        return
+    }
+
+    $splashPath = Join-Path $env:TEMP ("EditFactoryStartup-" + [guid]::NewGuid().ToString("N") + ".html")
+    $splashHtml = Get-Content -LiteralPath $splashSource -Raw
+    $splashHtml = $splashHtml.Replace("__AIVF_BASE_URL__", $BaseUrl)
+    Set-Content -LiteralPath $splashPath -Value $splashHtml -Encoding UTF8
+    $splashUri = ([System.Uri]::new($splashPath)).AbsoluteUri
+
+    $browser = $null
+    foreach ($candidate in @("msedge.exe", "chrome.exe")) {
+        $command = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($command) {
+            $browser = $command.Source
+            break
+        }
+    }
+    if (-not $browser) {
+        $candidates = @(
+            (Join-Path $env:ProgramFiles "Microsoft\Edge\Application\msedge.exe"),
+            (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Microsoft\Edge\Application\msedge.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe")
+        )
+        $browser = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    }
+
+    if ($browser) {
+        Start-Process -FilePath $browser -ArgumentList @("--app=$splashUri", "--start-fullscreen")
+        Write-Ok "Fullscreen startup screen opened in browser app mode."
+    } else {
+        Start-Process $splashUri
+        Write-Warn "Chrome/Edge was not found; opened the startup screen in the default browser (browser chrome may remain visible)."
+    }
+}
+
+Start-StartupSplash
+
 Write-Step "Starting the local development dashboard stack"
 
 $composeUpArgs = @(
@@ -270,9 +316,7 @@ if (-not [string]::IsNullOrWhiteSpace($usersConfig)) {
 }
 
 if (-not $NoBrowser) {
-    Write-Step "Opening the dashboard"
-    Start-Process "$BaseUrl/login"
-    Write-Ok "Browser opened: $BaseUrl/login"
+    Write-Ok "Startup screen will transition to the welcome page now that the dashboard is healthy."
 }
 
 $stopCommand = "docker compose --env-file `"$EnvFile`" -f `"$ComposeFile`" down"
