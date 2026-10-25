@@ -34,7 +34,12 @@ class WorkspaceLock(AbstractContextManager["WorkspaceLock"]):
                 locking(handle.fileno(), mode, 1)
             else:
                 import fcntl
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # getattr keeps Windows-hosted type checking clean: these APIs
+                # only exist on POSIX and this branch only executes there.
+                flock = getattr(fcntl, "flock")
+                lock_ex = getattr(fcntl, "LOCK_EX")
+                lock_nb = getattr(fcntl, "LOCK_NB")
+                flock(handle.fileno(), lock_ex | lock_nb)
         except (OSError, BlockingIOError) as exc:
             handle.close()
             raise WorkspaceBusyError(f"workspace is already locked: {self.workspace}") from exc
@@ -65,7 +70,9 @@ class WorkspaceLock(AbstractContextManager["WorkspaceLock"]):
                 locking(handle.fileno(), mode, 1)
             else:
                 import fcntl
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                flock = getattr(fcntl, "flock")
+                lock_un = getattr(fcntl, "LOCK_UN")
+                flock(handle.fileno(), lock_un)
         finally:
             handle.close()
             self._handle = None
