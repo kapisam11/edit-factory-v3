@@ -342,6 +342,9 @@ def _licensed_music_candidates(limit: int = 8) -> list[dict[str, Any]]:
                 "evidence_url": license_url or url,
                 "artist": _plain_text((metadata.get("Artist") or {}).get("value") or "", 300),
                 "rights_basis": "cc_license" if cc_by else "public_domain",
+                "rights_status": "cleared",
+                "declared_by": "wikimedia-commons-metadata",
+                "declared_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat().replace("+00:00", "Z"),
             })
     except (requests.RequestException, ValueError, TypeError, KeyError):
         return results
@@ -540,6 +543,9 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
                 "title": _plain_text(asset.get("title") or "", 300),
                 "artist": _plain_text(asset.get("artist") or "", 300),
                 "license": _plain_text(asset.get("license") or "", 120),
+                "rights_status": str(asset.get("rights_status") or "cleared"),
+                "declared_by": str(asset.get("declared_by") or "wikimedia-commons-metadata"),
+                "declared_at": str(asset.get("declared_at") or ""),
                 "license_url": str(asset.get("license_url") or ""),
                 "evidence_url": str(asset.get("evidence_url") or asset.get("url") or ""),
                 "rights_basis": str(asset.get("rights_basis") or ""),
@@ -557,6 +563,9 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
                 "title": _plain_text(music.get("title") or "", 300),
                 "artist": _plain_text(music.get("artist") or "", 300),
                 "license": _plain_text(music.get("license") or "", 120),
+                "rights_status": str(music.get("rights_status") or "cleared"),
+                "declared_by": str(music.get("declared_by") or "wikimedia-commons-metadata"),
+                "declared_at": str(music.get("declared_at") or ""),
                 "license_url": str(music.get("license_url") or ""),
                 "evidence_url": str(music.get("evidence_url") or music.get("url") or ""),
                 "rights_basis": str(music.get("rights_basis") or ""),
