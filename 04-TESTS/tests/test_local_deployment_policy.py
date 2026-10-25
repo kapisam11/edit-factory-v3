@@ -40,7 +40,7 @@ def test_dev_memory_admission_is_below_default_container_limit() -> None:
 def test_windows_launcher_fails_closed_without_uv_unless_checks_are_explicitly_skipped() -> None:
     launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
     uv_guard = (
-        "if (-not $SkipChecks -and -not "
+        "if ($RunChecks -and -not $SkipChecks -and -not "
         "(Get-Command uv -ErrorAction SilentlyContinue))"
     )
     compose_start = 'Invoke-Native "docker" $composeUpArgs'
@@ -49,6 +49,14 @@ def test_windows_launcher_fails_closed_without_uv_unless_checks_are_explicitly_s
     assert launcher.index(uv_guard) < launcher.index(compose_start)
     assert "uv is required to run startup checks" in launcher
     assert "or use -SkipChecks to explicitly skip code checks" in launcher
+    assert "[switch]$RunChecks" in launcher
+    assert "if (-not $RunChecks -or $SkipChecks)" in launcher
+    assert "Run START-ALL.bat -RunChecks" in launcher
+    assert "ps --services --status running" in launcher
+    assert "Only stop the web service when Compose reports it as running" in launcher
+    assert launcher.index("Checking for a previous dashboard instance") < launcher.index("Start-StartupSplash", launcher.index("Checking for a previous dashboard instance"))
+    assert "Get-Content -LiteralPath $welcomeSource -Encoding UTF8 -Raw" in launcher
+    assert "Get-Content -LiteralPath $splashSource -Encoding UTF8 -Raw" in launcher
     assert "uv is not installed, so the full Python check suite was skipped." not in launcher
 
 
@@ -285,23 +293,29 @@ def test_windows_startup_uses_fullscreen_splash_and_keeps_failure_console_open()
 
     assert "Start-StartupSplash" in launcher
     assert '"--kiosk"' in launcher
+    assert '"--start-fullscreen"' in launcher
     assert '"--app=$splashUri"' in launcher
-    assert "'--user-data-dir=\"{0}\"'" in launcher
+    assert "EditFactoryV3-Kiosk-" in launcher
+    assert 'Get-Content -LiteralPath $welcomeSource -Encoding UTF8 -Raw' in launcher
+    assert 'Get-Content -LiteralPath $splashSource -Encoding UTF8 -Raw' in launcher
     assert 'Start-Process "$BaseUrl/login"' not in launcher
     assert 'pause' in batch
     assert 'if not "%EXIT_CODE%"=="0" (' in batch
     assert '__AIVF_BASE_URL__' in splash
     assert '__AIVF_WELCOME_URI__' in splash
+    assert 'minimumSplashMs = 4200' in splash
     assert 'fetch(baseUrl + "/api/health"' in splash
     assert 'window.location.replace(welcomeUri)' in splash
-    assert "$welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Raw)" in launcher
+    assert "$welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Encoding UTF8 -Raw)" in launcher
     assert 'href="/login"' in welcome
 
     production_launcher = (REPOSITORY_ROOT / "START-PRODUCTION.ps1").read_text(encoding="utf-8")
     production_batch = (REPOSITORY_ROOT / "START-PRODUCTION.bat").read_text(encoding="utf-8")
     assert "Start-StartupSplash" in production_launcher
     assert '"--kiosk"' in production_launcher
+    assert '"--start-fullscreen"' in production_launcher
     assert '"--app=$splashUri"' in production_launcher
-    assert "'--user-data-dir=\"{0}\"'" in production_launcher
+    assert "EditFactoryV3-Kiosk-" in production_launcher
+    assert 'Get-Content -LiteralPath $welcomeSource -Encoding UTF8 -Raw' in production_launcher
     assert 'Start-Process "$baseUrl/login"' not in production_launcher
     assert 'if not "%EXIT_CODE%"=="0" (' in production_batch

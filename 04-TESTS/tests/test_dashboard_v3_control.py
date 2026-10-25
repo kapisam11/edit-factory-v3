@@ -296,3 +296,46 @@ def test_idempotency_ignores_volatile_rights_timestamp(monkeypatch, tmp_path):
         },
     }
     assert appmod._request_fingerprint(base, first) == appmod._request_fingerprint(later, first)
+
+
+def test_dashboard_rejects_clip_existing_without_source_video(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    response = appmod.app.test_client().post(
+        "/api/jobs",
+        data={
+            "topic": "A clip with no source",
+            "workflow": "default",
+            "production_mode": "clip_existing",
+            "target_seconds": "30",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "requires a source video" in response.get_json()["error"].lower()
+    assert "create a video from an idea" in response.get_json()["error"].lower()
+
+
+def test_dashboard_accepts_source_free_idea_to_video_job(monkeypatch, tmp_path):
+    appmod = _load_dashboard(monkeypatch, tmp_path)
+    captured = {}
+
+    def start_job(job_id, params, secrets):
+        captured.update(job_id=job_id, params=dict(params), secrets=dict(secrets))
+        return True
+
+    monkeypatch.setattr(appmod, "_start_job", start_job)
+    response = appmod.app.test_client().post(
+        "/api/jobs",
+        data={
+            "topic": "Why bees communicate through movement",
+            "workflow": "v3",
+            "production_mode": "idea_to_video",
+            "target_seconds": "30",
+        },
+    )
+
+    assert response.status_code == 202
+    assert captured["params"]["production_mode"] == "idea_to_video"
+    assert captured["params"]["workflow"] == "default"
+    assert captured["params"]["topic"] == "Why bees communicate through movement"
+    assert "raw_video" not in captured["params"] or not captured["params"]["raw_video"]

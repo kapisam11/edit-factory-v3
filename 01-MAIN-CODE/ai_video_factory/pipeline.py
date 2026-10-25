@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import time
 import tempfile
+from pathlib import Path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -114,6 +115,7 @@ class PipelineManifest:
 class PipelineContext:
     topic: str
     package_dir: Optional[str] = None
+    production_mode: str = "clip_existing"
     raw_video: Optional[str] = None
     target_seconds: float = 45.0
     skip_qc: bool = False
@@ -138,8 +140,12 @@ class PipelineContext:
     warnings: List[str] = field(default_factory=list)
     stage_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     learning_history_path: Optional[str] = None
+    prepare_upload_packages: bool = True
 
     def __post_init__(self) -> None:
+        self.production_mode = str(self.production_mode or "clip_existing").strip().lower()
+        if self.production_mode not in {"clip_existing", "idea_to_video"}:
+            raise ValueError("production_mode must be clip_existing or idea_to_video")
         self.target_seconds = validate_target_seconds(self.target_seconds)
         self.thumbnail_variant = int(self.thumbnail_variant)
         if self.thumbnail_variant not in {1, 2, 3}:
@@ -465,7 +471,10 @@ class AutoEditStage(PipelineStage):
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if not ctx.raw_video:
-            ctx.warnings.append("No raw video provided; auto-edit stage intentionally skipped")
+            if ctx.production_mode == "idea_to_video":
+                ctx.warnings.append("No source footage was supplied; rendering the topic-based storyboard next.")
+            else:
+                ctx.warnings.append("No raw video provided; auto-edit stage intentionally skipped")
             return ctx
         if not ctx.package_dir:
             raise RuntimeError("Auto-edit requires package_dir")
@@ -513,6 +522,12 @@ class MusicStage(PipelineStage):
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if not ctx.package_dir:
             return ctx
+        if ctx.production_mode == "idea_to_video":
+            ctx.warnings.append(
+                "Music was not added to the topic-generated video because the current music provider "
+                "does not attach independently verified commercial-use license evidence."
+            )
+            return ctx
         from .capability_registry import build_default_registry
         path = os.path.join(ctx.package_dir, "music_track.mp3")
         creative = ctx.plan.get("creative_directives")
@@ -523,6 +538,194 @@ class MusicStage(PipelineStage):
             ctx.music_track = result.data
         else:
             ctx.warnings.append(f"Music fetch failed: {result.error}")
+        return ctx
+
+
+class IdeaVideoStage(PipelineStage):
+    """Render a source-free video, validate platform variants, and prepare review-gated upload bundles."""
+
+    name = "idea_to_video"
+    skippable = False
+    retryable = True
+    max_retries = 1
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        if ctx.production_mode != "idea_to_video":
+            return ctx
+        if not ctx.package_dir:
+            raise RuntimeError("Idea-to-Video requires a package directory")
+        from .idea_to_video import create_idea_video
+
+        result = create_idea_video(ctx)
+        package_root = Path(ctx.package_dir).resolve()
+        rights_path = package_root / "rights_manifest.json"
+        rights_manifest = json.loads(rights_path.read_text(encoding="utf-8"))
+        source_credits: List[Dict[str, Any]] = []
+        for asset in list(rights_manifest.get("assets") or []) + list(rights_manifest.get("audio_assets") or []):
+            if not isinstance(asset, dict):
+                continue
+            source_credits.append({
+                "source": "wikimedia",
+                "title": str(asset.get("title") or ""),
+                "creator": str(asset.get("artist") or ""),
+                "url": str(asset.get("url") or ""),
+                "license": str(asset.get("license") or ""),
+                "license_url": str(asset.get("license_url") or ""),
+                "evidence_url": str(asset.get("evidence_url") or asset.get("url") or ""),
+                "rights_basis": str(asset.get("rights_basis") or ""),
+                "rights_status": str(asset.get("rights_status") or "review_required"),
+                "attribution_required": bool(asset.get("attribution_required", str(asset.get("rights_basis") or "") == "cc_license")),
+                "declared_by": str(asset.get("declared_by") or "wikimedia-commons-metadata"),
+                "declared_at": str(asset.get("declared_at") or ""),
+                "asset_origin": "licensed",
+                # Metadata classification is not user confirmation of the actual terms.
+                "commercial_use": "review_required",
+                "permitted_uses": "Review the license and asset-specific restrictions before publication.",
+                "attribution": (
+                    f"{asset.get('artist') or ''}; {asset.get('title') or ''}; "
+                    f"{asset.get('license') or ''}; {asset.get('license_url') or ''}; "
+                    f"Source: {asset.get('url') or ''}"
+                ).strip("; "),
+            })
+
+        if not ctx.prepare_upload_packages:
+            ctx.research["idea_to_video"] = {
+                "status": "complete",
+                "asset_count": result["asset_count"],
+                "scene_count": result["scene_count"],
+                "voiceover_included": result["voiceover_included"],
+                "music_included": result.get("music_included", False),
+                "source_credits": source_credits,
+                "platform_upload_packages": "prepared_by_complete_factory",
+                "publish_ready": False,
+                "approval_required": True,
+            }
+            return ctx
+
+        from .complete_factory import render_all_platforms
+        from .upload_package import finalize_upload_package
+
+        platforms = ("youtube_shorts", "tiktok", "instagram_reels")
+        platform_renders = render_all_platforms(
+            str(ctx.final_video), str(package_root), platforms
+        )
+        script = str(ctx.script or "")
+        summary = {
+            **dict(ctx.research or {}),
+            "source_credits": source_credits,
+            "strongest_angle": str(ctx.plan.get("strongest_angle") or ctx.topic),
+            "emotion": str(ctx.plan.get("emotion") or ""),
+            "requires_rights_declaration": False,
+            "human_review": {
+                "status": "review_required",
+                "approved": False,
+                "notes": "Review every sourced asset, factual claim, caption, audio track, and platform package before any upload.",
+            },
+            "final_metadata": {
+                "description": (
+                    f"{ctx.topic}\n\nCreated with Edit Factory's Idea-to-Video workflow. "
+                    "Source credits and license evidence are listed in rights_manifest.json. "
+                    "Verify commercial-use terms and platform rules before publishing."
+                ),
+            },
+        }
+        upload_packages: Dict[str, Any] = {}
+        package_details: Dict[str, Any] = {}
+        captions_path = result.get("captions_srt")
+        for platform, video_path in platform_renders.items():
+            manifest = finalize_upload_package(
+                str(package_root),
+                topic=ctx.topic,
+                summary=summary,
+                script=script,
+                platform=platform,
+                final_video=video_path,
+                thumbnail=ctx.thumbnail,
+                caption_path=str(captions_path) if captions_path else None,
+            )
+            # A successful render or metadata bundle is not permission to publish.
+            manifest["publish_ready"] = False
+            manifest["human_review"] = {
+                **dict(manifest.get("human_review") or {}),
+                "required": True,
+                "status": "review_required",
+                "approved": False,
+                "reason": "No human has approved this generated video and its asset licenses yet.",
+            }
+            manifest["publication_policy"] = {
+                "status": "review_required",
+                "publish_ready": False,
+                "approval_required": True,
+                "verified_live_destination": False,
+                "reason": "This workflow prepares upload packages; it does not claim a live post succeeded.",
+            }
+            canonical_upload = package_root / "upload" / platform
+            canonical_upload.mkdir(parents=True, exist_ok=True)
+            (canonical_upload / "metadata.json").write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False, default=str) + "\n",
+                encoding="utf-8",
+            )
+            upload_packages[platform] = manifest
+            package_details[platform] = {
+                "video": os.path.relpath(video_path, package_root).replace("\\", "/"),
+                "upload_directory": os.path.relpath(canonical_upload, package_root).replace("\\", "/"),
+                "title": manifest.get("selected_title"),
+                "tags": manifest.get("tags", []),
+                "publish_ready": False,
+                "approval_required": True,
+            }
+
+        upload_index_path = package_root / "upload_package.json"
+        try:
+            upload_index = json.loads(upload_index_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            upload_index = {"platforms": {}}
+        if not isinstance(upload_index, dict):
+            upload_index = {"platforms": {}}
+        upload_index["platforms"] = upload_index.get("platforms") if isinstance(upload_index.get("platforms"), dict) else {}
+        upload_index["platforms"].update(upload_packages)
+        upload_index["publication_policy"] = {
+            "status": "review_required",
+            "publish_ready": False,
+            "approval_required": True,
+            "verified_live_destinations": [],
+        }
+        upload_index_path.write_text(
+            json.dumps(upload_index, indent=2, ensure_ascii=False, default=str) + "\n",
+            encoding="utf-8",
+        )
+        (package_root / "idea_upload_packages.json").write_text(
+            json.dumps({
+                "schema_version": 1,
+                "production_mode": "idea_to_video",
+                "platforms": package_details,
+                "publish_ready": False,
+                "approval_required": True,
+                "status": "review_required",
+            }, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        ctx.research["idea_to_video"] = {
+            "status": "complete",
+            "asset_count": result["asset_count"],
+            "scene_count": result["scene_count"],
+            "voiceover_included": result["voiceover_included"],
+            "music_included": result.get("music_included", False),
+            "platform_renders": {
+                key: os.path.relpath(value, package_root).replace("\\", "/")
+                for key, value in platform_renders.items()
+            },
+            "upload_packages": package_details,
+            "publish_ready": False,
+            "approval_required": True,
+        }
+        ctx.metadata["production_mode"] = "idea_to_video"
+        ctx.metadata["idea_upload_packages"] = "idea_upload_packages.json"
+        ctx.metadata["publication_status"] = "review_required"
+        ctx.metadata["publish_ready"] = False
+        with open(package_root / "metadata.json", "w", encoding="utf-8") as handle:
+            json.dump(ctx.metadata, handle, indent=2, ensure_ascii=False, default=str)
         return ctx
 
 
@@ -555,8 +758,18 @@ class MetadataStage(PipelineStage):
             "generated_at": datetime.now().isoformat(),
             "has_voiceover": ctx.voiceover is not None,
             "has_music": ctx.music_track is not None,
+            "production_mode": ctx.production_mode,
             "thumbnail_variant": ctx.thumbnail_variant,
         }
+        if ctx.production_mode == "idea_to_video":
+            idea_result = ctx.research.get("idea_to_video", {})
+            ctx.metadata.update({
+                "idea_upload_packages": "idea_upload_packages.json",
+                "publication_status": "review_required",
+                "publish_ready": False,
+                "approval_required": True,
+                "idea_to_video": idea_result,
+            })
         if ctx.package_dir:
             with open(os.path.join(ctx.package_dir, "metadata.json"), "w", encoding="utf-8") as handle:
                 json.dump(ctx.metadata, handle, indent=2)
@@ -581,7 +794,9 @@ class MetricsStage(PipelineStage):
                     rendered += 1
                     rendered_duration += max(0.0, float(get_duration_safe(os.path.join(clips_dir, name))))
         actual_cpm = rendered / (rendered_duration / 60.0) if rendered_duration > 0 else 0.0
+        existing_metrics = dict(ctx.metrics or {})
         ctx.metrics = {
+            "production_mode": ctx.production_mode,
             "planned_filter_count": planned_count,
             "planned_avg_shot_duration": planned_total / max(planned_count, 1),
             "planned_cuts_per_minute": planned_cpm,
@@ -596,6 +811,32 @@ class MetricsStage(PipelineStage):
             "render_time_seconds": self._render_time(ctx),
             "thumbnail_variant": ctx.thumbnail_variant,
         }
+        if ctx.production_mode == "idea_to_video":
+            # Director metrics describe clip segments, not storyboard scenes.
+            # Preserve the generated video's measured duration and report scene
+            # counts instead of incorrectly claiming zero rendered segments.
+            for key in (
+                "actual_duration_seconds", "storyboard_scenes", "licensed_visuals_used",
+                "music_added",
+            ):
+                if key in existing_metrics:
+                    ctx.metrics[key] = existing_metrics[key]
+            scene_count = int(existing_metrics.get("storyboard_scenes", 0) or 0)
+            actual_duration = float(existing_metrics.get("actual_duration_seconds", 0.0) or 0.0)
+            ctx.metrics["actual_rendered_segments"] = scene_count
+            ctx.metrics["actual_cuts_per_minute"] = (
+                scene_count / (actual_duration / 60.0) if actual_duration > 0 else 0.0
+            )
+            ctx.metrics["filter_count"] = scene_count
+            ctx.metrics["avg_shot_duration"] = actual_duration / max(scene_count, 1)
+            ctx.metrics["cuts_per_minute"] = ctx.metrics["actual_cuts_per_minute"]
+            ctx.metrics["has_voiceover"] = bool(existing_metrics.get("has_voiceover", ctx.voiceover is not None))
+            ctx.metrics["has_music"] = bool(existing_metrics.get("music_added", ctx.music_track is not None))
+            idea_stage = ctx.stage_results.get("idea_to_video", {})
+            try:
+                ctx.metrics["render_time_seconds"] = float(idea_stage.get("elapsed_seconds", 0.0))
+            except (TypeError, ValueError, OverflowError):
+                ctx.metrics["render_time_seconds"] = 0.0
         if ctx.package_dir:
             with open(os.path.join(ctx.package_dir, "metrics.json"), "w", encoding="utf-8") as handle:
                 json.dump(ctx.metrics, handle, indent=2)
@@ -614,7 +855,7 @@ def build_director_pipeline(
 ) -> Pipeline:
     all_stages = [
         ResearchStage(), VideoThinkingStage(), PlanStage(), ScriptStage(), ThumbnailStage(),
-        AutoEditStage(), VoiceoverStage(), MusicStage(), QCStage(),
+        AutoEditStage(), VoiceoverStage(), MusicStage(), IdeaVideoStage(), QCStage(),
         MetadataStage(), MetricsStage(),
     ]
     skip_set = {s.strip() for s in (skip_stages or []) if s.strip()}

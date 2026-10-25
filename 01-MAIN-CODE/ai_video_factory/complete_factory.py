@@ -48,8 +48,6 @@ def _ffmpeg_available() -> bool:
 
 
 def _probe(path: str) -> Dict[str, Any]:
-    if not shutil.which("ffprobe"):
-        return {"available": False, "warning": "ffprobe unavailable"}
     try:
         result = run_ffprobe([
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -642,9 +640,11 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         ctx = PipelineContext(
             topic=topic,
             package_dir=primary_dir,
+            production_mode="idea_to_video",
             target_seconds=target_seconds,
             model_key=model_key,
             learning_history_path=learning_history_path,
+            prepare_upload_packages=False,
         )
         ctx = provider_retry(lambda: build_director_pipeline(verbose=False).run(ctx), attempts=2)
         primary_result = ProductionResult(package_dir=primary_dir)
@@ -827,6 +827,14 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         "clip_candidates": clip_candidate_report.get("candidates", []),
         "clip_selection_method": clip_candidate_report.get("selection_method", "unknown"),
         "clip_count": len(clips), "research": research, "hook_candidates": hooks,
+        "production_mode": "idea_to_video" if input_video is None else "clip_existing",
+        "publication_policy": {
+            "status": "review_required",
+            "publish_ready": False,
+            "approval_required": True,
+            "reason": "Asset license metadata and local rendering do not replace human rights, factuality, final-media, and destination-account approval.",
+            "verified_live_destinations": [],
+        },
         "pacing": pacing, "shot_scores": scored_shots[:20], "visual_redundancy": redundancy,
         "dead_time": dead_time, "voiceover_cleanup": cleaned_words,
         "fact_check_review": _fact_check_review(script, research), "thumbnail_ranking": thumbnail_rank,
@@ -838,6 +846,51 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
     }
 
     from .upload_package import finalize_upload_package
+    if input_video is None:
+        primary_rights_path = Path(primary_result.package_dir) / "rights_manifest.json"
+        if primary_rights_path.is_file():
+            try:
+                rights_payload = json.loads(primary_rights_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                rights_payload = {}
+            source_credits: list[Dict[str, Any]] = []
+            for asset in list(rights_payload.get("assets") or []) + list(rights_payload.get("audio_assets") or []):
+                if not isinstance(asset, Mapping):
+                    continue
+                source_credits.append({
+                    "source": "wikimedia",
+                    "title": str(asset.get("title") or ""),
+                    "creator": str(asset.get("artist") or ""),
+                    "url": str(asset.get("url") or ""),
+                    "license": str(asset.get("license") or ""),
+                    "license_url": str(asset.get("license_url") or ""),
+                    "evidence_url": str(asset.get("evidence_url") or asset.get("url") or ""),
+                    "rights_basis": str(asset.get("rights_basis") or ""),
+                    "rights_status": str(asset.get("rights_status") or "review_required"),
+                    "attribution_required": bool(asset.get("attribution_required", str(asset.get("rights_basis") or "") == "cc_license")),
+                    "declared_by": str(asset.get("declared_by") or "wikimedia-commons-metadata"),
+                    "declared_at": str(asset.get("declared_at") or ""),
+                    "asset_origin": "licensed",
+                    "commercial_use": "review_required",
+                    "permitted_uses": "Review the actual asset license and restrictions before publication.",
+                    "attribution": (
+                        f"{asset.get('artist') or ''}; {asset.get('title') or ''}; "
+                        f"{asset.get('license') or ''}; {asset.get('license_url') or ''}; "
+                        f"Source: {asset.get('url') or ''}"
+                    ).strip("; "),
+                })
+            research["source_credits"] = source_credits
+            research["human_review"] = {
+                "status": "review_required",
+                "approved": False,
+                "notes": "Topic-generated media, research, captions, and each asset license need human review before publishing.",
+            }
+            research["publication_policy"] = {
+                "status": "review_required",
+                "publish_ready": False,
+                "approval_required": True,
+                "verified_live_destinations": [],
+            }
     upload_packages: Dict[str, Any] = {}
     for platform, video_path in formats.items():
         upload_packages[platform] = finalize_upload_package(
@@ -865,7 +918,57 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             script=script, platform=platform, final_video=video_path, thumbnail=thumbnail_rank.get("selected"),
             caption_path=str(Path(primary_result.package_dir) / "captions.ass") if Path(primary_result.package_dir, "captions.ass").exists() else None,
         )
+    if input_video is None:
+        # Source-free generated content must never become publish-ready merely
+        # because a test environment or metadata-only check relaxes human review.
+        for platform, package_manifest in upload_packages.items():
+            package_manifest["publish_ready"] = False
+            package_manifest["human_review"] = {
+                **dict(package_manifest.get("human_review") or {}),
+                "required": True,
+                "status": "review_required",
+                "approved": False,
+                "reason": "Topic-generated media and all asset licenses require human approval before publishing.",
+            }
+            package_manifest["publication_policy"] = {
+                "status": "review_required",
+                "publish_ready": False,
+                "approval_required": True,
+                "verified_live_destination": False,
+                "reason": "No real account acceptance or human approval has been recorded.",
+            }
+            upload_directory = root / "upload" / platform
+            upload_directory.mkdir(parents=True, exist_ok=True)
+            (upload_directory / "metadata.json").write_text(
+                json.dumps(package_manifest, indent=2, ensure_ascii=False, default=str) + "\n",
+                encoding="utf-8",
+            )
+        _write_json(str(root / "idea_upload_packages.json"), {
+            "schema_version": 1,
+            "production_mode": "idea_to_video",
+            "platforms": {
+                platform: {
+                    "video": os.path.relpath(video_path, root).replace("\\", "/"),
+                    "upload_directory": os.path.relpath(root / "upload" / platform, root).replace("\\", "/"),
+                    "publish_ready": False,
+                    "approval_required": True,
+                }
+                for platform, video_path in formats.items()
+            },
+            "publish_ready": False,
+            "approval_required": True,
+            "status": "review_required",
+        })
     manifest["upload_packages"] = upload_packages
+    if input_video is None:
+        manifest["production_mode"] = "idea_to_video"
+        manifest["publication_policy"] = {
+            "status": "review_required",
+            "publish_ready": False,
+            "approval_required": True,
+            "verified_live_destinations": [],
+        }
+        manifest["publish_ready"] = False
     artifact_readiness: Dict[str, Any] = {}
     for platform, video_path in formats.items():
         width, height = PLATFORM_LAYOUTS[platform]

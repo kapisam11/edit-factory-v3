@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import shutil
 from pathlib import Path
 
 import pytest
@@ -223,6 +224,7 @@ def test_strict_render_contract_blocks_failed_full_decode(monkeypatch):
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg/FFprobe are required for media integration tests")
 def test_render_contract_normalizes_enforces_and_validates_duration(tmp_path):
     source = tmp_path / "source.mp4"; retained = tmp_path / "retained.mp4"; final = tmp_path / "final.mp4"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=1080x1920:rate=30", "-t", "3", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "3", "-shortest", "-c:v", "libx264", "-c:a", "aac", str(source)], check=True)

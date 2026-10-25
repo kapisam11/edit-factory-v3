@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [switch]$RunChecks,
     [switch]$SkipChecks,
     [switch]$NoBrowser,
     [switch]$NoBuild
@@ -140,7 +141,7 @@ if (-not (Test-Path $ComposeFile)) {
     throw "Docker Compose file not found: $ComposeFile"
 }
 
-if (-not $SkipChecks -and -not (Get-Command uv -ErrorAction SilentlyContinue)) {
+if ($RunChecks -and -not $SkipChecks -and -not (Get-Command uv -ErrorAction SilentlyContinue)) {
     throw "uv is required to run startup checks. Install uv before starting, or use -SkipChecks to explicitly skip code checks."
 }
 
@@ -224,11 +225,11 @@ function Start-StartupSplash {
 
     $splashPath = Join-Path $env:TEMP ("EditFactoryStartup-" + [guid]::NewGuid().ToString("N") + ".html")
     $welcomePath = Join-Path $env:TEMP ("EditFactoryWelcome-" + [guid]::NewGuid().ToString("N") + ".html")
-    $welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Raw).Replace('href="/login"', ('href="' + $BaseUrl + '/login"'))
+    $welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Encoding UTF8 -Raw).Replace('href="/login"', ('href="' + $BaseUrl + '/login"'))
     Set-Content -LiteralPath $welcomePath -Value $welcomeHtml -Encoding UTF8
     $welcomeUri = ([System.Uri]::new($welcomePath)).AbsoluteUri
 
-    $splashHtml = (Get-Content -LiteralPath $splashSource -Raw).Replace("__AIVF_BASE_URL__", $BaseUrl).Replace("__AIVF_WELCOME_URI__", $welcomeUri)
+    $splashHtml = (Get-Content -LiteralPath $splashSource -Encoding UTF8 -Raw).Replace("__AIVF_BASE_URL__", $BaseUrl).Replace("__AIVF_WELCOME_URI__", $welcomeUri)
     Set-Content -LiteralPath $splashPath -Value $splashHtml -Encoding UTF8
     $splashUri = ([System.Uri]::new($splashPath)).AbsoluteUri
 
@@ -252,10 +253,11 @@ function Start-StartupSplash {
     }
 
     if ($browser) {
-        $profileDir = Join-Path $env:LOCALAPPDATA "EditFactoryV3\StartupKioskProfile"
+        $profileDir = Join-Path $env:TEMP ("EditFactoryV3-Kiosk-" + [guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
         $browserArguments = @(
             "--kiosk",
+            "--start-fullscreen",
             "--app=$splashUri",
             ('--user-data-dir="{0}"' -f $profileDir),
             "--no-first-run",
@@ -268,6 +270,26 @@ function Start-StartupSplash {
         Start-Process $splashUri
         Write-Warn "Chrome/Edge was not found; opened the startup screen in the default browser (fullscreen cannot be guaranteed)."
     }
+}
+
+# Do not let a healthy container from a previous run satisfy the new splash's
+# health poll. Only stop the web service when Compose reports it as running;
+# dependent database/state services and volumes remain intact.
+Write-Step "Checking for a previous dashboard instance"
+$runningServices = & docker compose --env-file $EnvFile -f $ComposeFile ps --services --status running
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not inspect existing Docker Compose services."
+}
+if (@($runningServices) -contains "web") {
+    Invoke-Native "docker" @(
+        "compose",
+        "--env-file", $EnvFile,
+        "-f", $ComposeFile,
+        "stop", "web"
+    )
+    Write-Ok "Previous dashboard instance stopped."
+} else {
+    Write-Ok "No previous running dashboard instance needs to be stopped."
 }
 
 Start-StartupSplash
@@ -337,11 +359,12 @@ if (-not $NoBrowser) {
 }
 
 $stopCommand = "docker compose --env-file `"$EnvFile`" -f `"$ComposeFile`" down"
-if ($SkipChecks) {
-    Write-Warn "Code checks were skipped with -SkipChecks."
+if (-not $RunChecks -or $SkipChecks) {
+    Write-Ok "Dashboard startup completed; the developer test suite was not run."
     Write-Host ""
     Write-Host "Edit Factory is running." -ForegroundColor Cyan
     Write-Host "Stop it with: $stopCommand" -ForegroundColor White
+    Write-Host "Run START-ALL.bat -RunChecks when you deliberately want to run lint, type checks, and tests." -ForegroundColor DarkGray
     exit 0
 }
 

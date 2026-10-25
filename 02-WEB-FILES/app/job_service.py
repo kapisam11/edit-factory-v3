@@ -14,14 +14,28 @@ def _flag(value: Any) -> bool:
 
 
 def build_job_params(data: Mapping[str, Any], settings: Mapping[str, Any], *, allow_skip_qc: bool) -> dict[str, Any]:
+    production_mode = str(data.get("production_mode", "clip_existing") or "clip_existing").strip().lower()
+    if production_mode not in {"clip_existing", "idea_to_video"}:
+        raise ValueError("Unsupported production mode")
     topic = str(data.get("topic", "")).strip()
+    auto_generated_topic = False
+    workflow = normalize_workflow(data.get("workflow", settings["default_workflow"]))
+    if production_mode == "idea_to_video":
+        # Source-free jobs run the Director pipeline even if the browser's old
+        # default selected strict V3 clip editing.
+        workflow = "default"
+        if not topic:
+            from ai_video_factory.idea_to_video import choose_surprise_topic
+            topic = choose_surprise_topic(str(data.get("content_profile", "general")))
+            auto_generated_topic = True
     if not 2 <= len(topic) <= 500:
         raise ValueError("Topic must be between 2 and 500 characters")
-    workflow = normalize_workflow(data.get("workflow", settings["default_workflow"]))
     raw_target = data.get("target_seconds", settings.get("default_target_seconds", 45.0))
     target_seconds = validate_v3_target_seconds(raw_target) if workflow == "v3" else validate_target_seconds(raw_target)
     params: dict[str, Any] = {
         "topic": topic,
+        "production_mode": production_mode,
+        "auto_generated_topic": auto_generated_topic,
         "target_seconds": target_seconds,
         "workflow": workflow,
         "use_groq": _flag(data.get("use_groq")),

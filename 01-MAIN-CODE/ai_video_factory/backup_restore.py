@@ -66,9 +66,22 @@ def backup_database(source: str | Path, destination: str | Path) -> Path:
     temporary = destination_path.with_suffix(destination_path.suffix + ".partial")
     temporary.unlink(missing_ok=True)
 
-    with sqlite3.connect(str(source_path)) as source_conn, sqlite3.connect(str(temporary)) as target_conn:
+    source_conn = sqlite3.connect(str(source_path))
+    target_conn = None
+    try:
+        target_conn = sqlite3.connect(str(temporary))
         source_conn.backup(target_conn)
-    os.replace(temporary, destination_path)
+        target_conn.commit()
+    finally:
+        if target_conn is not None:
+            target_conn.close()
+        source_conn.close()
+
+    try:
+        os.replace(temporary, destination_path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
     return destination_path
 
 

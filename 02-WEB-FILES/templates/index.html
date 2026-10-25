@@ -120,11 +120,21 @@
 
                         <form id="runForm" enctype="multipart/form-data">
                             <div class="form-group">
-                                <label for="topic">Topic / Title</label>
-                                <input type="text" id="topic" name="topic" maxlength="500" placeholder="e.g. Minecraft betrayal on SMP" required>
+                                <label for="production_mode">Production Mode</label>
+                                <select id="production_mode" name="production_mode">
+                                    <option value="clip_existing" selected>Clip Existing Footage</option>
+                                    <option value="idea_to_video">Create a Video from an Idea</option>
+                                </select>
+                                <small>Clip Factory finds moments in your source video. Idea-to-Video researches a topic, writes a script, finds license-filtered visuals, builds a captioned vertical video, and keeps publishing approval separate.</small>
                             </div>
 
                             <div class="form-group">
+                                <label for="topic" id="topicLabel">Topic / Title</label>
+                                <input type="text" id="topic" name="topic" maxlength="500" placeholder="e.g. Minecraft betrayal on SMP" required>
+                                <button type="button" class="btn-sm" id="surpriseIdeaBtn" hidden>Surprise me — choose the topic</button>
+                            </div>
+
+                            <div class="form-group" id="rawVideoGroup">
                                 <label for="raw_video" id="rawVideoLabel">Raw Video (required for V3)</label>
                                 <div class="file-dropzone" id="dropzone">
                                     <input type="file" id="raw_video" name="raw_video" accept="video/*">
@@ -533,8 +543,11 @@
 
             const formData = new FormData(runForm);
             const topic = String(formData.get('topic') || '').trim();
-            if (topic.length < 2 || topic.length > 500) {
-                setPanelMessage('Topic must be between 2 and 500 characters', 'error');
+            const productionMode = String(formData.get('production_mode') || 'clip_existing');
+            if ((productionMode !== 'idea_to_video' && topic.length < 2) || topic.length > 500) {
+                setPanelMessage(productionMode === 'idea_to_video'
+                    ? 'Topic must be at most 500 characters. Leave it blank for a surprise idea.'
+                    : 'Topic must be between 2 and 500 characters', 'error');
                 return;
             }
 
@@ -1036,12 +1049,47 @@
         }
 
         function toggleV3Controls() {
-            const isV3 = document.getElementById('workflow').value === 'v3';
+            const ideaMode = document.getElementById('production_mode').value === 'idea_to_video';
+            const isV3 = document.getElementById('workflow').value === 'v3' && !ideaMode;
             const panel = document.getElementById('v3Controls');
             panel.style.display = isV3 ? 'block' : 'none';
             updateV3DurationRange();
-            document.getElementById('rawVideoLabel').textContent = isV3 ? 'Raw Video (required for V3)' : 'Raw Video (optional)';
+            const rawVideo = document.getElementById('raw_video');
+            rawVideo.required = !ideaMode;
+            document.getElementById('rawVideoLabel').textContent = ideaMode
+                ? 'No source video required in Idea-to-Video mode'
+                : (isV3 ? 'Raw Video (required for V3)' : 'Raw Video (required for Clip Factory)');
             panel.querySelectorAll('input, select, textarea').forEach((el) => { el.disabled = !isV3; });
+        }
+
+        let lastClipWorkflow = document.getElementById('workflow').value;
+        function toggleProductionMode() {
+            const ideaMode = document.getElementById('production_mode').value === 'idea_to_video';
+            const workflow = document.getElementById('workflow');
+            const topic = document.getElementById('topic');
+            const rawVideo = document.getElementById('raw_video');
+            const rawVideoGroup = document.getElementById('rawVideoGroup');
+            const surpriseButton = document.getElementById('surpriseIdeaBtn');
+            if (ideaMode) {
+                if (!workflow.disabled && workflow.value !== 'default') lastClipWorkflow = workflow.value;
+                workflow.value = 'default';
+                workflow.disabled = true;
+                rawVideo.value = '';
+                rawVideoGroup.hidden = true;
+                topic.required = false;
+                topic.placeholder = 'Leave blank for a surprise idea, or enter a topic';
+                document.getElementById('topicLabel').textContent = 'Topic / Title (optional)';
+                surpriseButton.hidden = false;
+            } else {
+                workflow.disabled = false;
+                workflow.value = lastClipWorkflow || 'v3';
+                rawVideoGroup.hidden = false;
+                topic.required = true;
+                topic.placeholder = 'e.g. Minecraft betrayal on SMP';
+                document.getElementById('topicLabel').textContent = 'Topic / Title';
+                surpriseButton.hidden = true;
+            }
+            toggleV3Controls();
         }
 
         function updateV3DurationRange() {
@@ -1099,10 +1147,24 @@
             Notification.requestPermission().catch(() => {});
         }
 
-        document.getElementById('workflow').addEventListener('change', toggleV3Controls);
+        document.getElementById('workflow').addEventListener('change', () => {
+            if (!document.getElementById('production_mode').value.includes('idea_to_video')) {
+                lastClipWorkflow = document.getElementById('workflow').value;
+            }
+            toggleV3Controls();
+        });
+        document.getElementById('production_mode').addEventListener('change', toggleProductionMode);
+        document.getElementById('surpriseIdeaBtn').addEventListener('click', () => {
+            document.getElementById('topic').value = '';
+            document.getElementById('production_mode').value = 'idea_to_video';
+            toggleProductionMode();
+            document.getElementById('topic').focus();
+        });
         document.getElementById('platform').addEventListener('change', updateV3DurationRange);
         applyDefaultsToForm();
+        lastClipWorkflow = document.getElementById('workflow').value;
         toggleV3Controls();
+        toggleProductionMode();
     </script>
     <script src="/static/js/dashboard_enhancements.js"></script>
 </body>

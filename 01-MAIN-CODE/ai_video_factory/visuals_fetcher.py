@@ -13,7 +13,7 @@ import subprocess
 import json
 import tempfile
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .render_engine import run_ffmpeg, validate_media_output
 from .model_adapter import call_model
@@ -50,10 +50,18 @@ def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
                     and "nd" not in license_text
                     and "sa" not in license_text
                 )
-                cleared_public_domain = "public domain" in license_text or license_text in {"cc0", "cc zero"}
+                cleared_public_domain = (
+                    "public domain" in license_text
+                    or license_text.startswith("cc0")
+                    or "cc zero" in license_text
+                )
                 rights_status = "cleared" if (cleared_cc or cleared_public_domain) else ("license_identified" if license else "review_required")
                 rights_basis = "cc_license" if cleared_cc else ("public_domain" if cleared_public_domain else "")
                 declaration_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                source_page = (
+                    "https://commons.wikimedia.org/wiki/"
+                    + quote(str(title or "").replace(" ", "_"), safe=":/()")
+                )
                 results.append({
                     "url": src,
                     "source": "wikimedia",
@@ -61,13 +69,84 @@ def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
                     "license": license,
                     "artist": artist,
                     "license_url": license_url,
-                    "evidence_url": license_url or src or "",
+                    "evidence_url": license_url or source_page,
+                    "attribution_required": bool(cleared_cc),
                     "declared_by": "wikimedia-commons-metadata",
                     "declared_at": declaration_time,
                     "rights_status": rights_status,
                     "rights_basis": rights_basis,
                 })
     except Exception:
+        return results
+    return results
+
+
+def _search_wikimedia_videos(topic: str, limit: int = 6) -> List[Dict]:
+    """Discover Commons video files, preserving license metadata for rights gating."""
+    results: List[Dict] = []
+    try:
+        response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "format": "json",
+                "generator": "search",
+                "gsrsearch": f"{topic} filetype:video",
+                "gsrnamespace": 6,
+                "gsrlimit": max(1, min(int(limit), 12)),
+                "prop": "imageinfo|info",
+                "iiprop": "url|extmetadata|mime|size",
+            },
+            timeout=10,
+            headers={"User-Agent": "ai-video-factory/1.0"},
+        )
+        if not response.ok:
+            return results
+        pages = response.json().get("query", {}).get("pages", {})
+        for page in pages.values():
+            info_rows = page.get("imageinfo") or []
+            if not info_rows:
+                continue
+            info = info_rows[0]
+            mime = str(info.get("mime") or "").lower()
+            url = str(info.get("url") or "")
+            suffix = os.path.splitext(urlparse(url).path)[1].lower()
+            if not mime.startswith("video/") or suffix not in {".webm", ".mp4", ".ogv", ".ogg", ".mov"}:
+                continue
+            meta = info.get("extmetadata") or {}
+            license_name = str((meta.get("LicenseShortName") or {}).get("value") or "")
+            license_url = str((meta.get("LicenseUrl") or {}).get("value") or "")
+            artist = str((meta.get("Artist") or {}).get("value") or (meta.get("Credit") or {}).get("value") or "")
+            lower_license = license_name.lower()
+            cc_by = "cc by" in lower_license and not any(
+                token in lower_license for token in ("nc", "nd", "sa", "noncommercial", "non-commercial")
+            )
+            public_domain = (
+                "public domain" in lower_license
+                or lower_license.startswith("cc0")
+                or "cc zero" in lower_license
+            )
+            source_page = (
+                "https://commons.wikimedia.org/wiki/"
+                + quote(str(page.get("title") or "").replace(" ", "_"), safe=":/()")
+            )
+            results.append({
+                "url": url,
+                "source": "wikimedia_video",
+                "title": page.get("title"),
+                "license": license_name,
+                "license_url": license_url,
+                "evidence_url": license_url or source_page,
+                "artist": artist,
+                "mime": mime,
+                "size_bytes": info.get("size"),
+                "attribution_required": bool(cc_by),
+                "declared_by": "wikimedia-commons-metadata",
+                "declared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "rights_status": "cleared" if (cc_by or public_domain) else ("license_identified" if license_name else "review_required"),
+                "rights_basis": "cc_license" if cc_by else ("public_domain" if public_domain else ""),
+            })
+    except (requests.RequestException, ValueError, TypeError, KeyError):
         return results
     return results
 
@@ -278,8 +357,10 @@ def fetch_visuals(topic: str, max_items: int = 12) -> List[Dict]:
     Each dict contains: url, source, title, license (optional), score, purpose
     """
     items = []
-    # Wikimedia
+    # Wikimedia image and video search. Videos are independently license-filtered
+    # by Idea-to-Video before they can be downloaded or used.
     items.extend(_search_wikimedia(topic, limit=6))
+    items.extend(_search_wikimedia_videos(topic, limit=6))
     # Reddit
     items.extend(_search_reddit(topic, limit=8))
     # YouTube (thumbnails / video links)
@@ -482,6 +563,43 @@ def download_youtube_clip(youtube_url: str, out_dir: str, max_duration: int = 20
         if thumb_path and os.path.exists(thumb_path) and (not out_clip or not os.path.isfile(out_clip)):
             try: os.unlink(thumb_path)
             except OSError: pass
+
+
+def download_wikimedia_video(item: Dict, out_dir: str, *, max_bytes: int = 128 * 1024 * 1024) -> Dict:
+    """Download one explicitly eligible Commons video within a strict byte cap."""
+    if not isinstance(item, dict) or item.get("source") != "wikimedia_video":
+        return {}
+    if item.get("rights_status") != "cleared" or item.get("rights_basis") not in {"cc_license", "public_domain"}:
+        return {}
+    parsed = urlparse(str(item.get("url") or ""))
+    suffix = os.path.splitext(parsed.path)[1].lower()
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "upload.wikimedia.org":
+        return {}
+    if suffix not in {".webm", ".mp4", ".ogv", ".ogg", ".mov"}:
+        return {}
+    os.makedirs(out_dir, exist_ok=True)
+    safe_id = __import__("hashlib").sha256(str(item["url"]).encode("utf-8")).hexdigest()[:16]
+    destination = os.path.join(out_dir, f"video_{safe_id}{suffix}")
+    try:
+        bounded_limit = max(1, min(int(max_bytes), 128 * 1024 * 1024))
+        if not _download_http_bounded(str(item["url"]), destination, max_bytes=bounded_limit, require_image=False):
+            return {}
+        media = validate_media_output(destination, require_video=True, require_audio=False)
+        duration = float((media.get("format") or {}).get("duration") or 0.0)
+        if duration <= 0 or duration > 3600:
+            raise RuntimeError("Commons video duration is outside the accepted range")
+        return {
+            **item,
+            "local_path": destination,
+            "duration_seconds": duration,
+            "downloaded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+    except (OSError, RuntimeError, TypeError, ValueError):
+        try:
+            os.unlink(destination)
+        except OSError:
+            pass
+        return {}
 
 
 def download_visuals(visuals: List[Dict], out_dir: str, download_clips: bool = True, clip_max_duration: int = 20) -> List[Dict]:
