@@ -272,6 +272,17 @@ function Start-StartupSplash {
     }
 }
 
+# Do not let a healthy container from a previous run satisfy the new splash's
+# health poll. Stop only the web service; dependent state/database volumes remain intact.
+Write-Step "Stopping any previous dashboard instance"
+Invoke-Native "docker" @(
+    "compose",
+    "--env-file", $EnvFile,
+    "-f", $ComposeFile,
+    "stop", "web"
+)
+Write-Ok "Previous dashboard instance stopped."
+
 Start-StartupSplash
 
 Write-Step "Starting the local development dashboard stack"
