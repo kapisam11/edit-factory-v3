@@ -13,6 +13,8 @@ import math
 import os
 import re
 from pathlib import Path
+
+import requests
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
@@ -249,8 +251,107 @@ def _render_slides(
         raise RuntimeError("FFmpeg did not produce the storyboard master")
 
 
+def _licensed_music_candidates(limit: int = 8) -> list[dict[str, Any]]:
+    """Search Commons for audio with metadata that can plausibly support commercial use."""
+    results: list[dict[str, Any]] = []
+    try:
+        response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "format": "json",
+                "generator": "search",
+                "gsrsearch": "instrumental background music",
+                "gsrnamespace": 6,
+                "gsrlimit": max(1, min(int(limit), 12)),
+                "prop": "imageinfo|info",
+                "iiprop": "url|extmetadata|mime|size",
+            },
+            timeout=8,
+            headers={"User-Agent": "ai-video-factory/1.0"},
+        )
+        if not response.ok:
+            return results
+        pages = response.json().get("query", {}).get("pages", {})
+        for page in pages.values():
+            rows = page.get("imageinfo") or []
+            if not rows:
+                continue
+            info = rows[0]
+            mime = str(info.get("mime") or "").lower()
+            url = str(info.get("url") or "")
+            parsed = urlparse(url)
+            suffix = Path(parsed.path).suffix.lower()
+            if not mime.startswith("audio/") or suffix not in {
+                ".mp3", ".ogg", ".oga", ".wav", ".flac", ".opus", ".aac", ".m4a"
+            }:
+                continue
+            if parsed.scheme != "https" or (parsed.hostname or "").lower() != "upload.wikimedia.org":
+                continue
+            metadata = info.get("extmetadata") or {}
+            license_name = _plain_text((metadata.get("LicenseShortName") or {}).get("value") or "", 120)
+            license_url = _plain_text((metadata.get("LicenseUrl") or {}).get("value") or "", 500)
+            lower = license_name.lower()
+            cc_by = "cc by" in lower and not any(
+                token in lower for token in (
+                    "nc", "nd", "sa", "noncommercial", "non-commercial",
+                    "no derivatives", "no-derivatives",
+                )
+            )
+            public_domain = "public domain" in lower or lower in {"cc0", "cc zero"}
+            if not (cc_by or public_domain) or not license_url:
+                continue
+            size = info.get("size")
+            try:
+                if size is not None and int(size) > 32 * 1024 * 1024:
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                continue
+            results.append({
+                "url": url,
+                "title": _plain_text(page.get("title") or "", 300),
+                "mime": mime,
+                "size_bytes": size,
+                "license": license_name,
+                "license_url": license_url,
+                "evidence_url": license_url or url,
+                "artist": _plain_text((metadata.get("Artist") or {}).get("value") or "", 300),
+                "rights_basis": "cc_license" if cc_by else "public_domain",
+            })
+    except (requests.RequestException, ValueError, TypeError, KeyError):
+        return results
+    return results
+
+
+def _download_licensed_music(asset_dir: Path) -> dict[str, Any] | None:
+    """Download and validate one small Commons audio track, otherwise return None."""
+    from .visuals_fetcher import _download_http_bounded
+
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    for item in _licensed_music_candidates():
+        url = str(item.get("url") or "")
+        suffix = Path(urlparse(url).path).suffix.lower()
+        if suffix not in {".mp3", ".ogg", ".oga", ".wav", ".flac", ".opus", ".aac", ".m4a"}:
+            continue
+        destination = asset_dir / ("music_" + __import__("hashlib").sha256(url.encode("utf-8")).hexdigest()[:16] + suffix)
+        if not _download_http_bounded(url, str(destination), max_bytes=32 * 1024 * 1024):
+            continue
+        try:
+            media = validate_media_output(str(destination), require_video=False, require_audio=True)
+            duration = float((media.get("format") or {}).get("duration") or 0.0)
+            if not math.isfinite(duration) or duration <= 0:
+                raise RuntimeError("Commons music asset has an invalid duration")
+            return {**item, "local_path": str(destination), "duration_seconds": duration}
+        except (OSError, RuntimeError, TypeError, ValueError):
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return None
+
+
 def create_idea_video(ctx: Any) -> dict[str, Any]:
-    """Create a vertical narrated/ captioned slideshow from license-filtered visuals."""
+    """Create a vertical topic video from license-filtered visuals, narration, and optional cleared music."""
     package = Path(str(ctx.package_dir or "")).resolve()
     if not package.is_dir():
         raise ValueError("Idea-to-Video requires a valid package directory")
@@ -354,20 +455,44 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
     silent_video = work_dir / "storyboard_silent.mp4"
     _render_slides(slides, work_dir, silent_video)
     final_video = package / "final_idea_video.mp4"
+    has_voiceover = voiceover.is_file() and voice_duration is not None
+    music = _download_licensed_music(asset_dir)
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(silent_video),
     ]
-    has_voiceover = voiceover.is_file() and voice_duration is not None
+    next_input = 1
+    voice_index: int | None = None
+    music_index: int | None = None
     if has_voiceover:
+        voice_index = next_input
         command.extend(["-i", str(voiceover)])
-        audio_input = "1:a:0"
+        next_input += 1
+    if music:
+        music_index = next_input
+        command.extend(["-stream_loop", "-1", "-i", str(music["local_path"])])
+        next_input += 1
+
+    if voice_index is not None and music_index is not None:
+        command.extend([
+            "-filter_complex",
+            f"[{voice_index}:a]volume=1.0[voice];"
+            f"[{music_index}:a]volume=0.12[music];"
+            "[voice][music]amix=inputs=2:duration=longest:dropout_transition=2,"
+            "alimiter=limit=0.95[aout]",
+            "-map", "0:v:0", "-map", "[aout]",
+        ])
+    elif voice_index is not None:
+        command.extend(["-map", "0:v:0", "-map", f"{voice_index}:a:0", "-af", "apad"])
+    elif music_index is not None:
+        command.extend(["-map", "0:v:0", "-map", f"{music_index}:a:0"])
     else:
-        command.extend(["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"])
-        audio_input = "1:a:0"
+        command.extend([
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-map", "0:v:0", "-map", f"{next_input}:a:0",
+        ])
     command.extend([
-        "-map", "0:v:0", "-map", audio_input, "-t", f"{duration:.3f}",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-t", f"{duration:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(final_video),
     ])
     run_ffmpeg(command, timeout=240)
@@ -399,6 +524,21 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
             }
             for index, asset in enumerate(assets)
         ],
+        "audio_assets": [
+            {
+                "asset_id": "commons-background-music",
+                "source": "wikimedia_commons",
+                "url": str(music.get("url") or ""),
+                "title": _plain_text(music.get("title") or "", 300),
+                "artist": _plain_text(music.get("artist") or "", 300),
+                "license": _plain_text(music.get("license") or "", 120),
+                "license_url": str(music.get("license_url") or ""),
+                "evidence_url": str(music.get("evidence_url") or music.get("url") or ""),
+                "rights_basis": str(music.get("rights_basis") or ""),
+                "human_review": "required_before_publishing",
+                "commercial_rights_guarantee": False,
+            }
+        ] if music else [],
         "publication": {
             "status": "review_required",
             "publish_ready": False,
@@ -423,14 +563,24 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
             "final_video": final_video.name,
             "voiceover": str(voiceover) if has_voiceover else None,
             "voiceover_status": "included" if has_voiceover else "unavailable_captioned_video_with_silent_audio",
-            "music_status": "omitted_until_commercial_use_license_is_verifiable",
+            "music_status": "included_from_eligible_Commons_audio" if music else "no_eligible_Commons_music_found",
+            "music_asset": {
+                "url": music.get("url"),
+                "license": music.get("license"),
+                "license_url": music.get("license_url"),
+                "evidence_url": music.get("evidence_url"),
+            } if music else None,
             "quality_validation": "passed",
             "publication": rights_manifest["publication"],
         }, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
     if not has_voiceover:
-        ctx.warnings.append("Voiceover was unavailable; generated captions with a silent audio track. Review before publishing.")
+        ctx.warnings.append("Voiceover was unavailable; generated captions with a silent or music-only audio bed. Review before publishing.")
+    if not music:
+        ctx.warnings.append("No eligible Commons music track was found; the final video was rendered without background music.")
+    else:
+        ctx.music_track = str(music["local_path"])
     ctx.final_video = str(final_video)
     ctx.metrics.update({
         "production_mode": "idea_to_video",
@@ -438,13 +588,14 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
         "storyboard_scenes": len(scene_rows),
         "licensed_visuals_used": len(assets),
         "has_voiceover": has_voiceover,
-        "music_added": False,
+        "music_added": bool(music),
     })
     return {
         "final_video": str(final_video),
         "asset_count": len(assets),
         "scene_count": len(scene_rows),
         "voiceover_included": has_voiceover,
+        "music_included": bool(music),
         "publish_ready": False,
     }
 
