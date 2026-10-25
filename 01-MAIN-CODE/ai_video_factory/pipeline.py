@@ -114,6 +114,7 @@ class PipelineManifest:
 class PipelineContext:
     topic: str
     package_dir: Optional[str] = None
+    production_mode: str = "clip_existing"
     raw_video: Optional[str] = None
     target_seconds: float = 45.0
     skip_qc: bool = False
@@ -140,6 +141,9 @@ class PipelineContext:
     learning_history_path: Optional[str] = None
 
     def __post_init__(self) -> None:
+        self.production_mode = str(self.production_mode or "clip_existing").strip().lower()
+        if self.production_mode not in {"clip_existing", "idea_to_video"}:
+            raise ValueError("production_mode must be clip_existing or idea_to_video")
         self.target_seconds = validate_target_seconds(self.target_seconds)
         self.thumbnail_variant = int(self.thumbnail_variant)
         if self.thumbnail_variant not in {1, 2, 3}:
@@ -465,7 +469,10 @@ class AutoEditStage(PipelineStage):
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if not ctx.raw_video:
-            ctx.warnings.append("No raw video provided; auto-edit stage intentionally skipped")
+            if ctx.production_mode == "idea_to_video":
+                ctx.warnings.append("No source footage was supplied; rendering the topic-based storyboard next.")
+            else:
+                ctx.warnings.append("No raw video provided; auto-edit stage intentionally skipped")
             return ctx
         if not ctx.package_dir:
             raise RuntimeError("Auto-edit requires package_dir")
@@ -513,6 +520,12 @@ class MusicStage(PipelineStage):
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if not ctx.package_dir:
             return ctx
+        if ctx.production_mode == "idea_to_video":
+            ctx.warnings.append(
+                "Music was not added to the topic-generated video because the current music provider "
+                "does not attach independently verified commercial-use license evidence."
+            )
+            return ctx
         from .capability_registry import build_default_registry
         path = os.path.join(ctx.package_dir, "music_track.mp3")
         creative = ctx.plan.get("creative_directives")
@@ -523,6 +536,30 @@ class MusicStage(PipelineStage):
             ctx.music_track = result.data
         else:
             ctx.warnings.append(f"Music fetch failed: {result.error}")
+        return ctx
+
+
+class IdeaVideoStage(PipelineStage):
+    """Render a source-free storyboard after script, voice, and rights-safe asset discovery."""
+
+    name = "idea_to_video"
+    skippable = False
+    retryable = True
+    max_retries = 1
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        if ctx.production_mode != "idea_to_video":
+            return ctx
+        from .idea_to_video import create_idea_video
+
+        result = create_idea_video(ctx)
+        ctx.research["idea_to_video"] = {
+            "status": "complete",
+            "asset_count": result["asset_count"],
+            "scene_count": result["scene_count"],
+            "voiceover_included": result["voiceover_included"],
+            "publish_ready": False,
+        }
         return ctx
 
 
@@ -555,6 +592,7 @@ class MetadataStage(PipelineStage):
             "generated_at": datetime.now().isoformat(),
             "has_voiceover": ctx.voiceover is not None,
             "has_music": ctx.music_track is not None,
+            "production_mode": ctx.production_mode,
             "thumbnail_variant": ctx.thumbnail_variant,
         }
         if ctx.package_dir:
@@ -614,7 +652,7 @@ def build_director_pipeline(
 ) -> Pipeline:
     all_stages = [
         ResearchStage(), VideoThinkingStage(), PlanStage(), ScriptStage(), ThumbnailStage(),
-        AutoEditStage(), VoiceoverStage(), MusicStage(), QCStage(),
+        AutoEditStage(), VoiceoverStage(), MusicStage(), IdeaVideoStage(), QCStage(),
         MetadataStage(), MetricsStage(),
     ]
     skip_set = {s.strip() for s in (skip_stages or []) if s.strip()}
