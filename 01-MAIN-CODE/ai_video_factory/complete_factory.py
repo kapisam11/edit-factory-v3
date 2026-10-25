@@ -867,6 +867,7 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
                     "evidence_url": str(asset.get("evidence_url") or asset.get("url") or ""),
                     "rights_basis": str(asset.get("rights_basis") or ""),
                     "rights_status": str(asset.get("rights_status") or "review_required"),
+                    "attribution_required": bool(asset.get("attribution_required", str(asset.get("rights_basis") or "") == "cc_license")),
                     "declared_by": str(asset.get("declared_by") or "wikimedia-commons-metadata"),
                     "declared_at": str(asset.get("declared_at") or ""),
                     "asset_origin": "licensed",
