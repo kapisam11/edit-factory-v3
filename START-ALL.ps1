@@ -215,14 +215,22 @@ function Start-StartupSplash {
     }
 
     $splashSource = Join-Path $Root "02-WEB-FILES\static\startup-splash.html"
-    if (-not (Test-Path -LiteralPath $splashSource -PathType Leaf)) {
-        Write-Warn "Startup splash file is missing; the dashboard will still open after health checks."
+    $welcomeSource = Join-Path $Root "02-WEB-FILES\templates\welcome.html"
+    if (-not (Test-Path -LiteralPath $splashSource -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $welcomeSource -PathType Leaf)) {
+        Write-Warn "Startup splash or welcome page is missing; continuing without the pre-login intro."
         return
     }
 
     $splashPath = Join-Path $env:TEMP ("EditFactoryStartup-" + [guid]::NewGuid().ToString("N") + ".html")
-    $splashHtml = Get-Content -LiteralPath $splashSource -Raw
-    $splashHtml = $splashHtml.Replace("__AIVF_BASE_URL__", $BaseUrl)
+    $welcomePath = Join-Path $env:TEMP ("EditFactoryWelcome-" + [guid]::NewGuid().ToString("N") + ".html")
+    $welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Raw).Replace('href="/login"', ('href="' + $BaseUrl + '/login"'))
+    Set-Content -LiteralPath $welcomePath -Value $welcomeHtml -Encoding UTF8
+    $welcomeUri = ([System.Uri]::new($welcomePath)).AbsoluteUri
+
+    $splashHtml = (Get-Content -LiteralPath $splashSource -Raw).
+        Replace("__AIVF_BASE_URL__", $BaseUrl).
+        Replace("__AIVF_WELCOME_URI__", $welcomeUri)
     Set-Content -LiteralPath $splashPath -Value $splashHtml -Encoding UTF8
     $splashUri = ([System.Uri]::new($splashPath)).AbsoluteUri
 
@@ -235,21 +243,32 @@ function Start-StartupSplash {
         }
     }
     if (-not $browser) {
+        $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
         $candidates = @(
             (Join-Path $env:ProgramFiles "Microsoft\Edge\Application\msedge.exe"),
             (Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe"),
-            (Join-Path ${env:ProgramFiles(x86)} "Microsoft\Edge\Application\msedge.exe"),
-            (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe")
-        )
-        $browser = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+            (Join-Path $programFilesX86 "Microsoft\Edge\Application\msedge.exe"),
+            (Join-Path $programFilesX86 "Google\Chrome\Application\chrome.exe")
+        ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+        $browser = $candidates | Select-Object -First 1
     }
 
     if ($browser) {
-        Start-Process -FilePath $browser -ArgumentList @("--app=$splashUri", "--start-fullscreen")
-        Write-Ok "Fullscreen startup screen opened in browser app mode."
+        $profileDir = Join-Path $env:LOCALAPPDATA "EditFactoryV3\StartupKioskProfile"
+        New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+        $browserArguments = @(
+            "--kiosk",
+            "--app=$splashUri",
+            ('--user-data-dir="{0}"' -f $profileDir),
+            "--no-first-run",
+            "--disable-background-mode",
+            "--disable-session-crashed-bubble"
+        )
+        Start-Process -FilePath $browser -ArgumentList $browserArguments
+        Write-Ok "Fullscreen kiosk startup screen opened in an isolated browser profile."
     } else {
         Start-Process $splashUri
-        Write-Warn "Chrome/Edge was not found; opened the startup screen in the default browser (browser chrome may remain visible)."
+        Write-Warn "Chrome/Edge was not found; opened the startup screen in the default browser (fullscreen cannot be guaranteed)."
     }
 }
 
