@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import time
 import tempfile
+from pathlib import Path
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -540,7 +541,7 @@ class MusicStage(PipelineStage):
 
 
 class IdeaVideoStage(PipelineStage):
-    """Render a source-free storyboard after script, voice, and rights-safe asset discovery."""
+    """Render a source-free video, validate platform variants, and prepare review-gated upload bundles."""
 
     name = "idea_to_video"
     skippable = False
@@ -550,16 +551,165 @@ class IdeaVideoStage(PipelineStage):
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if ctx.production_mode != "idea_to_video":
             return ctx
+        if not ctx.package_dir:
+            raise RuntimeError("Idea-to-Video requires a package directory")
         from .idea_to_video import create_idea_video
 
         result = create_idea_video(ctx)
+        package_root = Path(ctx.package_dir).resolve()
+        rights_path = package_root / "rights_manifest.json"
+        rights_manifest = json.loads(rights_path.read_text(encoding="utf-8"))
+        source_credits: List[Dict[str, Any]] = []
+        for asset in list(rights_manifest.get("assets") or []) + list(rights_manifest.get("audio_assets") or []):
+            if not isinstance(asset, dict):
+                continue
+            source_credits.append({
+                "source": "wikimedia",
+                "title": str(asset.get("title") or ""),
+                "creator": str(asset.get("artist") or ""),
+                "url": str(asset.get("url") or ""),
+                "license": str(asset.get("license") or ""),
+                "license_url": str(asset.get("license_url") or ""),
+                "evidence_url": str(asset.get("evidence_url") or asset.get("url") or ""),
+                "rights_basis": str(asset.get("rights_basis") or ""),
+                "rights_status": str(asset.get("rights_status") or "review_required"),
+                "declared_by": str(asset.get("declared_by") or "wikimedia-commons-metadata"),
+                "declared_at": str(asset.get("declared_at") or ""),
+                "asset_origin": "licensed",
+                # Metadata classification is not user confirmation of the actual terms.
+                "commercial_use": "review_required",
+                "permitted_uses": "Review the license and asset-specific restrictions before publication.",
+                "attribution": (
+                    f"{asset.get('artist') or ''}; {asset.get('title') or ''}; "
+                    f"{asset.get('license') or ''}; {asset.get('license_url') or ''}; "
+                    f"Source: {asset.get('url') or ''}"
+                ).strip("; "),
+            })
+
+        from .complete_factory import render_all_platforms
+        from .upload_package import finalize_upload_package
+
+        platforms = ("youtube_shorts", "tiktok", "instagram_reels")
+        platform_renders = render_all_platforms(
+            str(ctx.final_video), str(package_root), platforms
+        )
+        script = str(ctx.script or "")
+        summary = {
+            **dict(ctx.research or {}),
+            "source_credits": source_credits,
+            "strongest_angle": str(ctx.plan.get("strongest_angle") or ctx.topic),
+            "emotion": str(ctx.plan.get("emotion") or ""),
+            "requires_rights_declaration": False,
+            "human_review": {
+                "status": "review_required",
+                "approved": False,
+                "notes": "Review every sourced asset, factual claim, caption, audio track, and platform package before any upload.",
+            },
+            "final_metadata": {
+                "description": (
+                    f"{ctx.topic}\n\nCreated with Edit Factory's Idea-to-Video workflow. "
+                    "Source credits and license evidence are listed in rights_manifest.json. "
+                    "Verify commercial-use terms and platform rules before publishing."
+                ),
+            },
+        }
+        upload_packages: Dict[str, Any] = {}
+        package_details: Dict[str, Any] = {}
+        captions_path = result.get("captions_srt")
+        for platform, video_path in platform_renders.items():
+            manifest = finalize_upload_package(
+                str(package_root),
+                topic=ctx.topic,
+                summary=summary,
+                script=script,
+                platform=platform,
+                final_video=video_path,
+                thumbnail=ctx.thumbnail,
+                caption_path=str(captions_path) if captions_path else None,
+            )
+            # A successful render or metadata bundle is not permission to publish.
+            manifest["publish_ready"] = False
+            manifest["human_review"] = {
+                **dict(manifest.get("human_review") or {}),
+                "required": True,
+                "status": "review_required",
+                "approved": False,
+                "reason": "No human has approved this generated video and its asset licenses yet.",
+            }
+            manifest["publication_policy"] = {
+                "status": "review_required",
+                "publish_ready": False,
+                "approval_required": True,
+                "verified_live_destination": False,
+                "reason": "This workflow prepares upload packages; it does not claim a live post succeeded.",
+            }
+            canonical_upload = package_root / "upload" / platform
+            canonical_upload.mkdir(parents=True, exist_ok=True)
+            (canonical_upload / "metadata.json").write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False, default=str) + "\n",
+                encoding="utf-8",
+            )
+            upload_packages[platform] = manifest
+            package_details[platform] = {
+                "video": os.path.relpath(video_path, package_root).replace("\\", "/"),
+                "upload_directory": os.path.relpath(canonical_upload, package_root).replace("\\", "/"),
+                "title": manifest.get("selected_title"),
+                "tags": manifest.get("tags", []),
+                "publish_ready": False,
+                "approval_required": True,
+            }
+
+        upload_index_path = package_root / "upload_package.json"
+        try:
+            upload_index = json.loads(upload_index_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            upload_index = {"platforms": {}}
+        if not isinstance(upload_index, dict):
+            upload_index = {"platforms": {}}
+        upload_index["platforms"] = upload_index.get("platforms") if isinstance(upload_index.get("platforms"), dict) else {}
+        upload_index["platforms"].update(upload_packages)
+        upload_index["publication_policy"] = {
+            "status": "review_required",
+            "publish_ready": False,
+            "approval_required": True,
+            "verified_live_destinations": [],
+        }
+        upload_index_path.write_text(
+            json.dumps(upload_index, indent=2, ensure_ascii=False, default=str) + "\n",
+            encoding="utf-8",
+        )
+        (package_root / "idea_upload_packages.json").write_text(
+            json.dumps({
+                "schema_version": 1,
+                "production_mode": "idea_to_video",
+                "platforms": package_details,
+                "publish_ready": False,
+                "approval_required": True,
+                "status": "review_required",
+            }, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
         ctx.research["idea_to_video"] = {
             "status": "complete",
             "asset_count": result["asset_count"],
             "scene_count": result["scene_count"],
             "voiceover_included": result["voiceover_included"],
+            "music_included": result.get("music_included", False),
+            "platform_renders": {
+                key: os.path.relpath(value, package_root).replace("\\", "/")
+                for key, value in platform_renders.items()
+            },
+            "upload_packages": package_details,
             "publish_ready": False,
+            "approval_required": True,
         }
+        ctx.metadata["production_mode"] = "idea_to_video"
+        ctx.metadata["idea_upload_packages"] = "idea_upload_packages.json"
+        ctx.metadata["publication_status"] = "review_required"
+        ctx.metadata["publish_ready"] = False
+        with open(package_root / "metadata.json", "w", encoding="utf-8") as handle:
+            json.dump(ctx.metadata, handle, indent=2, ensure_ascii=False, default=str)
         return ctx
 
 
