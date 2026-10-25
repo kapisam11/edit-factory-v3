@@ -273,15 +273,24 @@ function Start-StartupSplash {
 }
 
 # Do not let a healthy container from a previous run satisfy the new splash's
-# health poll. Stop only the web service; dependent state/database volumes remain intact.
-Write-Step "Stopping any previous dashboard instance"
-Invoke-Native "docker" @(
-    "compose",
-    "--env-file", $EnvFile,
-    "-f", $ComposeFile,
-    "stop", "web"
-)
-Write-Ok "Previous dashboard instance stopped."
+# health poll. Only stop the web service when Compose reports it as running;
+# dependent database/state services and volumes remain intact.
+Write-Step "Checking for a previous dashboard instance"
+$runningServices = & docker compose --env-file $EnvFile -f $ComposeFile ps --services --status running
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not inspect existing Docker Compose services."
+}
+if (@($runningServices) -contains "web") {
+    Invoke-Native "docker" @(
+        "compose",
+        "--env-file", $EnvFile,
+        "-f", $ComposeFile,
+        "stop", "web"
+    )
+    Write-Ok "Previous dashboard instance stopped."
+} else {
+    Write-Ok "No previous running dashboard instance needs to be stopped."
+}
 
 Start-StartupSplash
 
