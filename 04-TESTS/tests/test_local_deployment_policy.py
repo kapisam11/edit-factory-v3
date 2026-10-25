@@ -297,4 +297,4 @@ def test_windows_startup_uses_fullscreen_splash_and_keeps_failure_console_open()
     assert "Start-StartupSplash" in production_launcher
     assert '"--app=$splashUri", "--start-fullscreen"' in production_launcher
     assert 'Start-Process "$baseUrl/login"' not in production_launcher
-    assert 'if not "%EXIT_CODE%"=="0 (' in production_batch
+    assert 'if not "%EXIT_CODE%"=="0" (' in production_batch
