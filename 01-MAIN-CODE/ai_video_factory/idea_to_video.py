@@ -230,17 +230,17 @@ def _build_video_overlay(destination: Path, *, topic: str, caption: str, attribu
 
 
 def _render_slides(
-    slides: list[tuple[Path, float, Path | None, bool]],
+    slides: list[tuple[Path, float, Path | None, bool, float]],
     work_dir: Path,
     silent_video: Path,
 ) -> None:
     rendered: list[Path] = []
-    for index, (slide, duration, overlay, is_video) in enumerate(slides, start=1):
+    for index, (slide, duration, overlay, is_video, start_offset) in enumerate(slides, start=1):
         segment = work_dir / f"scene_{index:02d}.mp4"
         if is_video and overlay is not None:
             run_ffmpeg([
                 "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                "-stream_loop", "-1", "-i", str(slide),
+                "-stream_loop", "-1", "-ss", f"{max(0.0, start_offset):.3f}", "-i", str(slide),
                 "-loop", "1", "-framerate", str(FPS), "-i", str(overlay),
                 "-t", f"{duration:.3f}",
                 "-filter_complex",
@@ -424,10 +424,12 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
         if len(assets) >= 3:
             break
 
-    # Avoid wasting disk/network on stills when motion footage is already available.
+    # Prefer up to three distinct source assets. If only one or two moving
+    # clips are eligible, use a small still-image fallback for visual variety.
+    image_fallback_count = max(0, 3 - len(assets))
     downloaded = (
-        download_visuals(eligible_images[:8], str(asset_dir), download_clips=False)
-        if not assets else []
+        download_visuals(eligible_images[:image_fallback_count], str(asset_dir), download_clips=False)
+        if image_fallback_count else []
     )
     for item in downloaded:
         local = Path(str(item.get("local_path") or "")).resolve()
@@ -463,7 +465,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
 
     work_dir = package / "_idea_video_work"
     work_dir.mkdir(parents=True, exist_ok=True)
-    slides: list[tuple[Path, float, Path | None, bool]] = []
+    slides: list[tuple[Path, float, Path | None, bool, float]] = []
     scene_rows: list[dict[str, Any]] = []
     for index, caption in enumerate(captions):
         asset = assets[index % len(assets)]
@@ -474,12 +476,18 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
         if asset.get("media_type") == "video":
             overlay_path = work_dir / f"overlay_{index + 1:02d}.png"
             _build_video_overlay(overlay_path, topic=topic, caption=caption, attribution=attribution)
-            slides.append((original_path, scene_duration, overlay_path, True))
+            try:
+                source_duration = max(0.0, float(asset.get("duration_seconds") or 0.0))
+            except (TypeError, ValueError, OverflowError):
+                source_duration = 0.0
+            maximum_start = max(0.0, source_duration - scene_duration)
+            start_offset = (index * scene_duration) % maximum_start if maximum_start > 0 else 0.0
+            slides.append((original_path, scene_duration, overlay_path, True, start_offset))
             frame_name = str(overlay_path.relative_to(package)).replace("\\", "/")
         else:
             frame_path = work_dir / f"slide_{index + 1:02d}.png"
             _build_slide(original_path, frame_path, topic=topic, caption=caption, attribution=attribution)
-            slides.append((frame_path, scene_duration, None, False))
+            slides.append((frame_path, scene_duration, None, False, 0.0))
             frame_name = str(frame_path.relative_to(package)).replace("\\", "/")
         scene_rows.append({
             "scene": index + 1,
