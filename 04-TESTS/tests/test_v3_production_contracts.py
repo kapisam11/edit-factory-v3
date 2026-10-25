@@ -521,7 +521,10 @@ def test_v3_package_reset_protects_symlinked_external_source(tmp_path):
     external = package.parent / "external-source.mp4"
     external.write_bytes(b"source-media")
     source = package / "final.mp4"
-    source.symlink_to(external)
+    try:
+        source.symlink_to(external)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"Symlink creation is not permitted on this host: {exc}")
     (package / "final.v3.mp4").write_bytes(b"stale-output")
     (package / "v3_readiness.json").write_text(
         json.dumps({"state": "UPLOAD_PACKAGE_VALID"}),
