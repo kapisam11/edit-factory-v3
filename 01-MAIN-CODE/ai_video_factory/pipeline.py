@@ -745,6 +745,15 @@ class MetadataStage(PipelineStage):
             "production_mode": ctx.production_mode,
             "thumbnail_variant": ctx.thumbnail_variant,
         }
+        if ctx.production_mode == "idea_to_video":
+            idea_result = ctx.research.get("idea_to_video", {})
+            ctx.metadata.update({
+                "idea_upload_packages": "idea_upload_packages.json",
+                "publication_status": "review_required",
+                "publish_ready": False,
+                "approval_required": True,
+                "idea_to_video": idea_result,
+            })
         if ctx.package_dir:
             with open(os.path.join(ctx.package_dir, "metadata.json"), "w", encoding="utf-8") as handle:
                 json.dump(ctx.metadata, handle, indent=2)
@@ -769,7 +778,9 @@ class MetricsStage(PipelineStage):
                     rendered += 1
                     rendered_duration += max(0.0, float(get_duration_safe(os.path.join(clips_dir, name))))
         actual_cpm = rendered / (rendered_duration / 60.0) if rendered_duration > 0 else 0.0
+        existing_metrics = dict(ctx.metrics or {})
         ctx.metrics = {
+            "production_mode": ctx.production_mode,
             "planned_filter_count": planned_count,
             "planned_avg_shot_duration": planned_total / max(planned_count, 1),
             "planned_cuts_per_minute": planned_cpm,
@@ -784,6 +795,17 @@ class MetricsStage(PipelineStage):
             "render_time_seconds": self._render_time(ctx),
             "thumbnail_variant": ctx.thumbnail_variant,
         }
+        if ctx.production_mode == "idea_to_video":
+            # Director metrics describe clip segments, not the generated storyboard;
+            # retain the measured video duration and source-free render counters.
+            for key in (
+                "actual_duration_seconds", "storyboard_scenes", "licensed_visuals_used",
+                "music_added",
+            ):
+                if key in existing_metrics:
+                    ctx.metrics[key] = existing_metrics[key]
+            ctx.metrics["has_voiceover"] = bool(existing_metrics.get("has_voiceover", ctx.voiceover is not None))
+            ctx.metrics["has_music"] = bool(existing_metrics.get("music_added", ctx.music_track is not None))
         if ctx.package_dir:
             with open(os.path.join(ctx.package_dir, "metrics.json"), "w", encoding="utf-8") as handle:
                 json.dump(ctx.metrics, handle, indent=2)
