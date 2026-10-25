@@ -812,16 +812,31 @@ class MetricsStage(PipelineStage):
             "thumbnail_variant": ctx.thumbnail_variant,
         }
         if ctx.production_mode == "idea_to_video":
-            # Director metrics describe clip segments, not the generated storyboard;
-            # retain the measured video duration and source-free render counters.
+            # Director metrics describe clip segments, not storyboard scenes.
+            # Preserve the generated video's measured duration and report scene
+            # counts instead of incorrectly claiming zero rendered segments.
             for key in (
                 "actual_duration_seconds", "storyboard_scenes", "licensed_visuals_used",
                 "music_added",
             ):
                 if key in existing_metrics:
                     ctx.metrics[key] = existing_metrics[key]
+            scene_count = int(existing_metrics.get("storyboard_scenes", 0) or 0)
+            actual_duration = float(existing_metrics.get("actual_duration_seconds", 0.0) or 0.0)
+            ctx.metrics["actual_rendered_segments"] = scene_count
+            ctx.metrics["actual_cuts_per_minute"] = (
+                scene_count / (actual_duration / 60.0) if actual_duration > 0 else 0.0
+            )
+            ctx.metrics["filter_count"] = scene_count
+            ctx.metrics["avg_shot_duration"] = actual_duration / max(scene_count, 1)
+            ctx.metrics["cuts_per_minute"] = ctx.metrics["actual_cuts_per_minute"]
             ctx.metrics["has_voiceover"] = bool(existing_metrics.get("has_voiceover", ctx.voiceover is not None))
             ctx.metrics["has_music"] = bool(existing_metrics.get("music_added", ctx.music_track is not None))
+            idea_stage = ctx.stage_results.get("idea_to_video", {})
+            try:
+                ctx.metrics["render_time_seconds"] = float(idea_stage.get("elapsed_seconds", 0.0))
+            except (TypeError, ValueError, OverflowError):
+                ctx.metrics["render_time_seconds"] = 0.0
         if ctx.package_dir:
             with open(os.path.join(ctx.package_dir, "metrics.json"), "w", encoding="utf-8") as handle:
                 json.dump(ctx.metrics, handle, indent=2)
