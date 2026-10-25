@@ -160,11 +160,11 @@ By default it uses a least-privilege password-based task principal, ignores dupl
 Run PowerShell from the repository folder as the ordinary Windows user who owns the app state:
 
 ```powershell
-.\INSTALL-PUBLISHER-TASK.ps1 -StartNow
+.\03-SIDE-CODE\scripts\windows\publisher\INSTALL-PUBLISHER-TASK.ps1 -StartNow
 Get-ScheduledTask -TaskName EditFactoryV3-PlatformPublisher
 Get-Content .\state\logs\platform-publisher.log -Tail 80
 # Remove it when needed:
-.\REMOVE-PUBLISHER-TASK.ps1
+.\03-SIDE-CODE\scripts\windows\publisher\REMOVE-PUBLISHER-TASK.ps1
 ```
 
 The task **does not enable public/network uploads by installation**. Unless `AIVF_MULTI_PUBLISH=1` is present in the task environment or local configuration, it only scans, validates, and queues approved content. Stop/restart the task after changing local environment configuration so it reloads those values. Keep the `.env` file, OAuth credentials, platform-token vault and database in user-restricted local storage, never commit them, and configure an explicit persistent `YOUTUBE_TOKEN_PATH` for the scheduled identity.
