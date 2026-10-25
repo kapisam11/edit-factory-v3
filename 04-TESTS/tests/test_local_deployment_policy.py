@@ -68,8 +68,7 @@ def test_windows_launcher_uses_buildable_development_compose() -> None:
     assert launcher.count("function Set-EnvValue([string]$Name, [string]$Value)") == 1
     assert '$temporaryEnvFile = "$EnvFile.tmp"' in launcher
     assert "Move-Item -Path $temporaryEnvFile -Destination $EnvFile -Force" in launcher
-    assert '"config",
-    "--quiet"' in launcher
+    assert '"config",' in launcher and '"--quiet"' in launcher
     assert "Write-Host $token" not in launcher
     assert "Private admin-console unlock code (save it somewhere safe): $adminPanelCode" not in launcher
 
@@ -263,8 +262,7 @@ def test_admin_unlock_code_is_environment_only_and_compose_passes_it() -> None:
 
 def test_windows_launcher_never_prints_secrets_and_validates_compose_quietly() -> None:
     launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
-    assert '"config",
-    "--quiet"' in launcher
+    assert '"config",' in launcher and '"--quiet"' in launcher
     assert "Write-Host $token" not in launcher
     assert "Private admin-console unlock code (save it somewhere safe): $adminPanelCode" not in launcher
     assert "Named dashboard accounts are configured; shared dashboard token login is disabled." in launcher
