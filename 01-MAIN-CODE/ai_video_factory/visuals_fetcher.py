@@ -121,7 +121,11 @@ def _search_wikimedia_videos(topic: str, limit: int = 6) -> List[Dict]:
             cc_by = "cc by" in lower_license and not any(
                 token in lower_license for token in ("nc", "nd", "sa", "noncommercial", "non-commercial")
             )
-            public_domain = "public domain" in lower_license or lower_license in {"cc0", "cc zero"}
+            public_domain = (
+                "public domain" in lower_license
+                or lower_license.startswith("cc0")
+                or "cc zero" in lower_license
+            )
             source_page = (
                 "https://commons.wikimedia.org/wiki/"
                 + quote(str(page.get("title") or "").replace(" ", "_"), safe=":/()")
