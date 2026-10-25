@@ -12,7 +12,7 @@ from flask import abort, g, redirect, render_template, request, session, url_for
 from ai_video_factory.authorization import Role, normalize_role, role_allows
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-PUBLIC_PATHS = {"/login", "/logout", "/api/health", "/readyz"}
+PUBLIC_PATHS = {"/login", "/logout", "/welcome", "/api/health", "/readyz"}
 _LOGIN_LIMIT = 10
 _LOGIN_WINDOW_SECONDS = 60.0
 _login_attempts: dict[str, list[float]] = {}
@@ -175,6 +175,13 @@ def configure_dashboard_auth(app):
         if path == "/":
             return redirect(url_for("dashboard_login"))
         return ("Authentication required", 401)
+
+    @app.get("/welcome")
+    def dashboard_welcome():
+        """Public product introduction shown before the user chooses to sign in."""
+        if session.get("aivf_authenticated"):
+            return redirect("/")
+        return render_template("welcome.html")
 
     @app.route("/login", methods=["GET", "POST"])
     def dashboard_login():
