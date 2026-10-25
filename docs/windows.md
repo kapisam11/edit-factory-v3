@@ -10,11 +10,11 @@ It will:
 3. Validate the Docker Compose configuration.
 4. Build and start the local development dashboard stack using `docker-compose.dev.yml` (the launcher does not require a pre-published immutable production image).
 5. Wait for `/api/health` to become healthy.
-6. Open the dashboard login page in your browser. For safety, the launcher validates Compose quietly and does not print tokens or unlock codes; read them directly from the ignored local `06-CONFIG-AND-DEPLOYMENT/.env` file when needed.
-7. When `uv` is installed, run dependency, Python compilation, Ruff, mypy, and the full pytest suite.
-8. Run a final dashboard health check and report failures with a non-zero exit code.
+6. Open the cinematic loading screen in a fullscreen Edge/Chrome kiosk window, then show the Edit Factory welcome page with a sign-in button when the dashboard is reachable. The animated splash remains visible for at least four seconds, including when the dashboard is already running.
+7. Finish startup after the dashboard health check. Normal startup does not run the full developer test suite, so unrelated local test/tool failures do not make the app appear to have failed to launch.
+8. When you deliberately want to run lint, type checks, and tests, use `START-ALL.bat -RunChecks`. FFmpeg/FFprobe-dependent integration tests require those tools on the Windows host; missing host tools should be reported as environment skips.
 
-The local Compose profile publishes the dashboard only on `127.0.0.1` by default and limits admission to one concurrent job by default. On the intended 32 GB Windows PC, the development container currently defaults to a 4-CPU limit and 8 GB memory; keep those conservative settings and concurrency of one until a representative 60-second render has been measured. Set `AIVF_DASHBOARD_PORT` in `06-CONFIG-AND-DEPLOYMENT/.env` to choose another host port; the launcher follows the same setting. The stack stays running after the launcher finishes. Use `START-ALL.bat -SkipChecks` only for later faster starts, not the initial verification, or use Docker Compose to stop the stack. These defaults protect a single-PC setup; they do not configure unattended multi-platform uploads.
+The local Compose profile publishes the dashboard only on `127.0.0.1` by default and limits admission to one concurrent job by default. On the intended 32 GB Windows PC, the development container currently defaults to a 4-CPU limit and 8 GB memory; keep those conservative settings and concurrency of one until a representative 60-second render has been measured. Set `AIVF_DASHBOARD_PORT` in `06-CONFIG-AND-DEPLOYMENT/.env` to choose another host port; the launcher follows the same setting. The stack stays running after the launcher finishes. Use `START-ALL.bat -RunChecks` when you deliberately want the full developer checks. Use Docker Compose to stop the stack. These defaults protect a single-PC setup; they do not configure unattended multi-platform uploads.
 
 The PowerShell implementation is **[START-ALL.ps1](../START-ALL.ps1)**.
 
