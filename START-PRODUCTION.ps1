@@ -188,9 +188,7 @@ function Start-StartupSplash {
     Set-Content -LiteralPath $welcomePath -Value $welcomeHtml -Encoding UTF8
     $welcomeUri = ([System.Uri]::new($welcomePath)).AbsoluteUri
 
-    $splashHtml = (Get-Content -LiteralPath $splashSource -Raw).
-        Replace("__AIVF_BASE_URL__", $baseUrl).
-        Replace("__AIVF_WELCOME_URI__", $welcomeUri)
+    $splashHtml = (Get-Content -LiteralPath $splashSource -Raw).Replace("__AIVF_BASE_URL__", $baseUrl).Replace("__AIVF_WELCOME_URI__", $welcomeUri)
     Set-Content -LiteralPath $splashPath -Value $splashHtml -Encoding UTF8
     $splashUri = ([System.Uri]::new($splashPath)).AbsoluteUri
 
