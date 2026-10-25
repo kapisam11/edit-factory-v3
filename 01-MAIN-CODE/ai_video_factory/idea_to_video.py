@@ -328,7 +328,11 @@ def _licensed_music_candidates(limit: int = 8) -> list[dict[str, Any]]:
                     "no derivatives", "no-derivatives",
                 )
             )
-            public_domain = "public domain" in lower or lower in {"cc0", "cc zero"}
+            public_domain = (
+                "public domain" in lower
+                or lower.startswith("cc0")
+                or "cc zero" in lower
+            )
             if not (cc_by or public_domain) or not license_url:
                 continue
             size = info.get("size")
