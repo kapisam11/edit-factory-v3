@@ -918,7 +918,57 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             script=script, platform=platform, final_video=video_path, thumbnail=thumbnail_rank.get("selected"),
             caption_path=str(Path(primary_result.package_dir) / "captions.ass") if Path(primary_result.package_dir, "captions.ass").exists() else None,
         )
+    if input_video is None:
+        # Source-free generated content must never become publish-ready merely
+        # because a test environment or metadata-only check relaxes human review.
+        for platform, package_manifest in upload_packages.items():
+            package_manifest["publish_ready"] = False
+            package_manifest["human_review"] = {
+                **dict(package_manifest.get("human_review") or {}),
+                "required": True,
+                "status": "review_required",
+                "approved": False,
+                "reason": "Topic-generated media and all asset licenses require human approval before publishing.",
+            }
+            package_manifest["publication_policy"] = {
+                "status": "review_required",
+                "publish_ready": False,
+                "approval_required": True,
+                "verified_live_destination": False,
+                "reason": "No real account acceptance or human approval has been recorded.",
+            }
+            upload_directory = root / "upload" / platform
+            upload_directory.mkdir(parents=True, exist_ok=True)
+            (upload_directory / "metadata.json").write_text(
+                json.dumps(package_manifest, indent=2, ensure_ascii=False, default=str) + "\\n",
+                encoding="utf-8",
+            )
+        _write_json(str(root / "idea_upload_packages.json"), {
+            "schema_version": 1,
+            "production_mode": "idea_to_video",
+            "platforms": {
+                platform: {
+                    "video": os.path.relpath(video_path, root).replace("\\\\", "/"),
+                    "upload_directory": os.path.relpath(root / "upload" / platform, root).replace("\\\\", "/"),
+                    "publish_ready": False,
+                    "approval_required": True,
+                }
+                for platform, video_path in formats.items()
+            },
+            "publish_ready": False,
+            "approval_required": True,
+            "status": "review_required",
+        })
     manifest["upload_packages"] = upload_packages
+    if input_video is None:
+        manifest["production_mode"] = "idea_to_video"
+        manifest["publication_policy"] = {
+            "status": "review_required",
+            "publish_ready": False,
+            "approval_required": True,
+            "verified_live_destinations": [],
+        }
+        manifest["publish_ready"] = False
     artifact_readiness: Dict[str, Any] = {}
     for platform, video_path in formats.items():
         width, height = PLATFORM_LAYOUTS[platform]
