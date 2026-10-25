@@ -833,6 +833,7 @@ def _run_job_worker_impl(job_id: str, params: dict, secrets: dict, output_root: 
         from ai_video_factory.pipeline import PipelineContext, build_director_pipeline
         ctx = PipelineContext(
             topic=params["topic"],
+            production_mode=params.get("production_mode", "clip_existing"),
             raw_video=params.get("raw_video"),
             target_seconds=params.get("target_seconds", 45.0),
             skip_qc=params.get("skip_qc", False),
@@ -1616,10 +1617,12 @@ def create_job():
                 return jsonify({"error": f"{display_name} is not available in this production environment"}), 400
         if params.get("enable_diarization") and not secrets.get("diarization_token"):
             return jsonify({"error": "Speaker diarization is enabled but no diarization token is configured"}), 400
-    if workflow == "v3" and not (request.files.get("raw_video") and request.files.get("raw_video").filename):
-        return jsonify({"error": "V3 production requires a raw video upload"}), 400
-
     upload = request.files.get("raw_video")
+    has_uploaded_video = bool(upload and upload.filename)
+    if workflow == "v3" and not has_uploaded_video:
+        return jsonify({"error": "Clip Existing Footage in V3 mode requires a raw video upload"}), 400
+    if params.get("production_mode") == "idea_to_video" and has_uploaded_video:
+        return jsonify({"error": "Create from an Idea does not accept source footage. Select Clip Existing Footage for uploaded video."}), 400
     upload_path: Optional[Path] = None
     resource_reserved = False
     try:
