@@ -301,7 +301,7 @@ def test_windows_startup_uses_fullscreen_splash_and_keeps_failure_console_open()
     assert 'minimumSplashMs = 4200' in splash
     assert 'fetch(baseUrl + "/api/health"' in splash
     assert 'window.location.replace(welcomeUri)' in splash
-    assert "$welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Raw)" in launcher
+    assert "$welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Encoding UTF8 -Raw)" in launcher
     assert 'href="/login"' in welcome
 
     production_launcher = (REPOSITORY_ROOT / "START-PRODUCTION.ps1").read_text(encoding="utf-8")
