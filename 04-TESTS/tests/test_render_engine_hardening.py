@@ -92,6 +92,8 @@ def test_run_ffmpeg_streams_stderr_and_keeps_bounded_tail(monkeypatch):
 
 
 def test_ffprobe_timeout_is_bounded(monkeypatch):
+    monkeypatch.setattr(render_engine, "_ffprobe_binary", lambda: "ffprobe.exe")
+
     def fake_tool(*_args, **kwargs):
         raise GuardrailError(f"tool timed out after {kwargs['timeout']}s: ffprobe")
 
