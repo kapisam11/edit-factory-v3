@@ -72,7 +72,7 @@ Use the separate development definition so source builds never become an acciden
 docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.dev.yml up --build -d
 ```
 
-On Windows, `START-ALL.ps1` now creates a private `AIVF_ADMIN_PANEL_CODE` in the ignored `06-CONFIG-AND-DEPLOYMENT/.env` file if it is not already configured, then displays the generated value once in the launcher window. Save it privately. Existing configured values are preserved. If you start Compose manually, set the variable in that private `.env` yourself. The source repository does not contain a default unlock code; if the variable is empty, the hidden admin console stays locked.
+On Windows, `START-ALL.ps1` creates a private `AIVF_ADMIN_PANEL_CODE` in the ignored `06-CONFIG-AND-DEPLOYMENT/.env` file if needed. It deliberately does not print the unlock code, dashboard token, or resolved Compose environment; read the values from that private file locally when needed. Existing configured values are preserved. If you start Compose manually, set the variable in that private `.env` yourself. The source repository does not contain a default unlock code; if the variable is empty, the hidden admin console stays locked.
 
 Never use the development Compose file on the production host.
 
