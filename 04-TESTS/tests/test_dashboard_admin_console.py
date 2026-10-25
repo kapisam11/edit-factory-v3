@@ -72,6 +72,20 @@ def test_admin_console_stays_hidden_until_server_unlock(monkeypatch, tmp_path):
     assert "test-session-secret-that-is-long-enough" not in serialized
 
 
+def test_admin_unlock_fails_closed_when_private_code_is_unset(monkeypatch, tmp_path):
+    client, _app_module = _make_client(monkeypatch, tmp_path, role="admin")
+    monkeypatch.delenv("AIVF_ADMIN_PANEL_CODE")
+
+    response = client.post(
+        "/api/admin/unlock",
+        json={"code": "2026"},
+        headers={"Origin": "http://localhost"},
+    )
+    assert response.status_code == 503
+    assert "AIVF_ADMIN_PANEL_CODE" in response.get_json()["error"]
+    assert client.get("/api/admin/diagnostics").status_code == 403
+
+
 def test_admin_unlock_code_does_not_grant_viewer_role_admin_access(monkeypatch, tmp_path):
     client, _app_module = _make_client(monkeypatch, tmp_path, role="viewer")
 
