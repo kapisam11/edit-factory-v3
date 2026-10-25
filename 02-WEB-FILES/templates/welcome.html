@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Edit Factory V3 — Your creative studio</title>
+  <style>
+    :root { color-scheme:dark; --bg:#080a10; --panel:#111722; --line:#293244; --text:#f4f6fa; --muted:#a0acbd; --accent:#ff654f; }
+    * { box-sizing:border-box; }
+    body { min-height:100vh; margin:0; display:grid; place-items:center; padding:28px 18px; color:var(--text); background:radial-gradient(ellipse at 12% 0%,rgba(67,95,151,.23),transparent 40rem),radial-gradient(ellipse at 95% 100%,rgba(255,101,79,.13),transparent 38rem),var(--bg); font:16px/1.6 "Segoe UI",system-ui,sans-serif; }
+    .shell { position:relative; width:min(980px,100%); overflow:hidden; border:1px solid var(--line); border-radius:28px; background:rgba(17,23,34,.92); box-shadow:0 35px 110px rgba(0,0,0,.42); }
+    .shell:before { content:""; position:absolute; inset:0 0 auto; height:2px; background:linear-gradient(90deg,transparent,#ff654f,#ffb5a9,transparent); }
+    .top { display:flex; align-items:center; gap:13px; padding:28px 34px; border-bottom:1px solid var(--line); }
+    .mark { display:grid; place-items:center; width:48px; height:48px; border:1px solid rgba(255,125,105,.5); border-radius:15px; background:rgba(255,101,79,.1); color:#ffab9e; font-weight:900; letter-spacing:-.1em; }
+    .brand { font-weight:800; letter-spacing:-.025em; } .version { color:#ff9a8b; }
+    .local { margin-left:auto; display:flex; align-items:center; gap:8px; color:#92a0b3; font-size:.76rem; }
+    .local:before { content:""; width:7px; height:7px; border-radius:50%; background:#5dd6a0; box-shadow:0 0 12px rgba(93,214,160,.55); }
+    .hero { padding:clamp(34px,7vw,76px) clamp(24px,7vw,76px) 52px; text-align:center; }
+    .eyebrow { color:#ff9a8b; text-transform:uppercase; letter-spacing:.2em; font-size:.7rem; font-weight:850; }
+    h1 { margin:15px 0 20px; font-size:clamp(2.5rem,7vw,5.3rem); letter-spacing:-.08em; line-height:.98; }
+    h1 span { display:block; background:linear-gradient(100deg,#fff 15%,#ff9a8b 85%); color:transparent; background-clip:text; }
+    .lead { max-width:650px; margin:0 auto; color:var(--muted); font-size:1.04rem; }
+    .features { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:13px; margin:34px 0 36px; text-align:left; }
+    .feature { padding:18px; border:1px solid var(--line); border-radius:15px; background:rgba(255,255,255,.025); }
+    .icon { display:grid; place-items:center; width:36px; height:36px; margin-bottom:14px; border-radius:11px; background:rgba(255,101,79,.1); color:#ff9a8b; font-size:1.1rem; }
+    .feature h2 { margin:0 0 7px; font-size:.95rem; } .feature p { margin:0; color:var(--muted); font-size:.84rem; }
+    .cta-wrap { display:flex; flex-direction:column; align-items:center; gap:12px; }
+    .cta { display:inline-flex; justify-content:center; align-items:center; gap:12px; min-width:min(330px,100%); min-height:58px; padding:15px 25px; border-radius:14px; background:linear-gradient(135deg,#ff806b,#ed513d); color:#fff; text-decoration:none; font-weight:850; box-shadow:0 12px 34px rgba(255,101,79,.22); transition:transform .18s ease,filter .18s ease; }
+    .cta:hover { transform:translateY(-2px); filter:brightness(1.06); } .cta:focus-visible { outline:3px solid #ffc1b7; outline-offset:4px; }
+    .hint { margin:0; color:#78869b; font-size:.77rem; }
+    .bottom { padding:18px 28px; border-top:1px solid var(--line); color:#738095; text-align:center; font-size:.75rem; }
+    @media(max-width:700px) { .top { padding:20px; } .hero { padding:38px 22px 34px; } .features { grid-template-columns:1fr; margin:27px 0; } .feature { display:grid; grid-template-columns:36px 1fr; column-gap:13px; } .icon { grid-row:span 2; margin:0; } .local { font-size:0; } .bottom { padding:16px; } }
+    @media(prefers-reduced-motion:reduce) { .cta { transition:none; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="top">
+      <div class="mark" aria-hidden="true">EF</div>
+      <div class="brand">EDIT FACTORY <span class="version">V3</span></div>
+      <div class="local">Private local workspace</div>
+    </header>
+    <section class="hero">
+      <div class="eyebrow">Your creative production studio</div>
+      <h1>Meet your new <span>clip factory.</span></h1>
+      <p class="lead">Edit Factory turns existing footage into short-form videos with a clear story, a strong opening, purposeful pacing, captions, quality checks, and review-ready publishing assets. You stay in control of what gets approved and posted.</p>
+      <div class="features">
+        <article class="feature"><div class="icon" aria-hidden="true">✦</div><h2>Find the moment</h2><p>Analyze footage and surface promising clips using scene, motion, audio, and available text signals.</p></article>
+        <article class="feature"><div class="icon" aria-hidden="true">◈</div><h2>Shape the story</h2><p>Plan hooks, captions, pacing, music timing, and vertical-safe framing for Shorts and Reels.</p></article>
+        <article class="feature"><div class="icon" aria-hidden="true">✓</div><h2>Review before publishing</h2><p>Render and validate outputs, then review the results before enabling account-specific publishing.</p></article>
+      </div>
+      <div class="cta-wrap">
+        <a class="cta" href="/login">Sign in to your studio <span aria-hidden="true">→</span></a>
+        <p class="hint">Use your private dashboard access token to continue.</p>
+      </div>
+    </section>
+    <footer class="bottom">Built for a local-first workflow · Your footage stays under your control</footer>
+  </main>
+</body>
+</html>
