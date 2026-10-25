@@ -640,6 +640,7 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         ctx = PipelineContext(
             topic=topic,
             package_dir=primary_dir,
+            production_mode="idea_to_video",
             target_seconds=target_seconds,
             model_key=model_key,
             learning_history_path=learning_history_path,
@@ -825,6 +826,14 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
         "clip_candidates": clip_candidate_report.get("candidates", []),
         "clip_selection_method": clip_candidate_report.get("selection_method", "unknown"),
         "clip_count": len(clips), "research": research, "hook_candidates": hooks,
+        "production_mode": "idea_to_video" if input_video is None else "clip_existing",
+        "publication_policy": {
+            "status": "review_required",
+            "publish_ready": False,
+            "approval_required": True,
+            "reason": "Asset license metadata and local rendering do not replace human rights, factuality, final-media, and destination-account approval.",
+            "verified_live_destinations": [],
+        },
         "pacing": pacing, "shot_scores": scored_shots[:20], "visual_redundancy": redundancy,
         "dead_time": dead_time, "voiceover_cleanup": cleaned_words,
         "fact_check_review": _fact_check_review(script, research), "thumbnail_ranking": thumbnail_rank,
