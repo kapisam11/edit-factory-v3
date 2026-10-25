@@ -59,10 +59,15 @@ def _eligible_visual(item: Mapping[str, Any]) -> bool:
     license_text = str(item.get("license") or "").lower()
     if not license_text:
         return False
-    if any(term in license_text for term in (
-        "noncommercial", "non-commercial", "no derivatives", "no-derivatives",
-        "cc by-sa", "cc-by-sa", "cc by-nc", "cc-by-nc", "cc by-nd", "cc-by-nd",
-    )):
+    # Commons exposes license names with inconsistent whitespace, punctuation,
+    # and short/long labels. Normalize punctuation so ND/NC/SA restrictions
+    # cannot slip through just because a source spells "CC BY-ND" differently.
+    compact_license = re.sub(r"[^a-z0-9]+", "", license_text)
+    restricted_license_tokens = (
+        "noncommercial", "noncommercialuse", "ccbyn", "ccbynd", "ccbync",
+        "ccbysa", "noderivatives", "noderivative", "sharealike",
+    )
+    if any(token in compact_license for token in restricted_license_tokens):
         return False
     if str(item.get("rights_basis")).lower() == "cc_license" and "cc by" not in license_text:
         return False
@@ -632,7 +637,10 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
             "scenes": scene_rows,
             "final_video": final_video.name,
             "voiceover": str(voiceover) if has_voiceover else None,
-            "voiceover_status": "included" if has_voiceover else "unavailable_captioned_video_with_silent_audio",
+            "voiceover_status": (
+                "included" if has_voiceover
+                else ("unavailable_music_only" if music else "unavailable_silent_audio_with_burned_in_captions")
+            ),
             "captions_srt": captions_path.name,
             "music_status": "included_from_eligible_Commons_audio" if music else "no_eligible_Commons_music_found",
             "music_asset": {
