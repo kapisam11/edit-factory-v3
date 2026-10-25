@@ -238,3 +238,19 @@ def test_docker_build_verifies_model_assets_against_locked_hashes() -> None:
     assert verify in dockerfile
     assert dockerfile.index(verify) < dockerfile.index(generated_sums)
     assert dockerfile.index(generated_sums) < dockerfile.index(generated_manifest)
+
+
+
+def test_admin_unlock_code_is_environment_only_and_compose_passes_it() -> None:
+    application = (REPOSITORY_ROOT / "02-WEB-FILES" / "app" / "web_app_v3.py").read_text(encoding="utf-8")
+    launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
+
+    assert 'os.environ.get("AIVF_ADMIN_PANEL_CODE", "").strip()' in application
+    assert 'os.environ.get("AIVF_ADMIN_PANEL_CODE", "2026")' not in application
+    assert 'if ([string]::IsNullOrWhiteSpace((Get-EnvValue "AIVF_ADMIN_PANEL_CODE")))' in launcher
+    assert 'Set-EnvValue "AIVF_ADMIN_PANEL_CODE" $adminPanelCode' in launcher
+    assert "Private admin-console unlock code" in launcher
+
+    for compose_name in ("docker-compose.yml", "docker-compose.dev.yml"):
+        compose = (DEPLOYMENT_ROOT / compose_name).read_text(encoding="utf-8")
+        assert "AIVF_ADMIN_PANEL_CODE: ${AIVF_ADMIN_PANEL_CODE:-}" in compose
