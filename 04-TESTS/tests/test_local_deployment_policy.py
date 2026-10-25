@@ -254,3 +254,10 @@ def test_admin_unlock_code_is_environment_only_and_compose_passes_it() -> None:
     for compose_name in ("docker-compose.yml", "docker-compose.dev.yml"):
         compose = (DEPLOYMENT_ROOT / compose_name).read_text(encoding="utf-8")
         assert "AIVF_ADMIN_PANEL_CODE: ${AIVF_ADMIN_PANEL_CODE:-}" in compose
+
+
+def test_windows_launcher_does_not_print_shared_token_in_multi_user_mode() -> None:
+    launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
+    assert '$usersConfig = Get-EnvValue "AIVF_DASHBOARD_USERS"' in launcher
+    assert 'if (-not [string]::IsNullOrWhiteSpace($usersConfig)) {' in launcher
+    assert "Named dashboard accounts are configured; shared dashboard token login is disabled." in launcher
