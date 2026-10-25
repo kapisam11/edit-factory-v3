@@ -13,7 +13,7 @@ import subprocess
 import json
 import tempfile
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .render_engine import run_ffmpeg, validate_media_output
 from .model_adapter import call_model
@@ -54,6 +54,10 @@ def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
                 rights_status = "cleared" if (cleared_cc or cleared_public_domain) else ("license_identified" if license else "review_required")
                 rights_basis = "cc_license" if cleared_cc else ("public_domain" if cleared_public_domain else "")
                 declaration_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                source_page = (
+                    "https://commons.wikimedia.org/wiki/"
+                    + quote(str(title or "").replace(" ", "_"), safe=":/()")
+                )
                 results.append({
                     "url": src,
                     "source": "wikimedia",
@@ -61,7 +65,8 @@ def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
                     "license": license,
                     "artist": artist,
                     "license_url": license_url,
-                    "evidence_url": license_url or src or "",
+                    "evidence_url": license_url or source_page,
+                    "attribution_required": bool(cleared_cc),
                     "declared_by": "wikimedia-commons-metadata",
                     "declared_at": declaration_time,
                     "rights_status": rights_status,
@@ -113,16 +118,21 @@ def _search_wikimedia_videos(topic: str, limit: int = 6) -> List[Dict]:
                 token in lower_license for token in ("nc", "nd", "sa", "noncommercial", "non-commercial")
             )
             public_domain = "public domain" in lower_license or lower_license in {"cc0", "cc zero"}
+            source_page = (
+                "https://commons.wikimedia.org/wiki/"
+                + quote(str(page.get("title") or "").replace(" ", "_"), safe=":/()")
+            )
             results.append({
                 "url": url,
                 "source": "wikimedia_video",
                 "title": page.get("title"),
                 "license": license_name,
                 "license_url": license_url,
-                "evidence_url": license_url or url,
+                "evidence_url": license_url or source_page,
                 "artist": artist,
                 "mime": mime,
                 "size_bytes": info.get("size"),
+                "attribution_required": bool(cc_by),
                 "declared_by": "wikimedia-commons-metadata",
                 "declared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "rights_status": "cleared" if (cc_by or public_domain) else ("license_identified" if license_name else "review_required"),
