@@ -176,6 +176,15 @@ if (-not (Test-UsableSecret (Get-EnvValue "AIVF_DASHBOARD_TOKEN"))) {
     Set-EnvValue "AIVF_DASHBOARD_TOKEN" $dashboardToken
     Write-Ok "Generated a valid AIVF_DASHBOARD_TOKEN in the local .env."
 }
+if ([string]::IsNullOrWhiteSpace((Get-EnvValue "AIVF_ADMIN_PANEL_CODE"))) {
+    # Generate a private per-install code. The application has no source-code fallback.
+    $adminPanelCode = (([guid]::NewGuid().ToString("N")) + ([guid]::NewGuid().ToString("N")))
+    Set-EnvValue "AIVF_ADMIN_PANEL_CODE" $adminPanelCode
+    Write-Ok "Generated AIVF_ADMIN_PANEL_CODE in the ignored local .env."
+    Write-Host ""
+    Write-Host "Private admin-console unlock code (save it somewhere safe): $adminPanelCode" -ForegroundColor Yellow
+    Write-Host "This code is stored only in 06-CONFIG-AND-DEPLOYMENT/.env and is not committed to Git."
+}
 Write-Ok "Local dashboard configuration is ready."
 
 # Preserve valid secrets across restarts, but repair absent or known placeholder

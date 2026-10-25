@@ -1126,13 +1126,21 @@ def admin_panel_page():
 @app.post("/api/admin/unlock")
 def admin_panel_unlock():
     _require_admin_panel_role()
+    expected_code = os.environ.get("AIVF_ADMIN_PANEL_CODE", "").strip()
+    if not expected_code:
+        # Never ship a known fallback unlock code in a public repository.
+        # The owner must explicitly configure this second factor in the private
+        # deployment environment; without it the hidden console stays locked.
+        return jsonify({
+            "error": "Admin unlock is not configured. Set AIVF_ADMIN_PANEL_CODE in the private .env file."
+        }), 503
+
     client_ip = request.remote_addr or "unknown"
     if _admin_unlock_is_rate_limited(client_ip):
         return jsonify({"error": "Too many unlock attempts. Wait five minutes and try again."}), 429
     payload = request.get_json(silent=True)
     supplied_code = str(payload.get("code") or "") if isinstance(payload, dict) else ""
-    expected_code = os.environ.get("AIVF_ADMIN_PANEL_CODE", "2026").strip()
-    if not expected_code or not secrets.compare_digest(supplied_code, expected_code):
+    if not secrets.compare_digest(supplied_code, expected_code):
         _record_admin_unlock_failure(client_ip)
         return jsonify({"error": "Invalid unlock code"}), 401
     with _admin_unlock_attempts_lock:

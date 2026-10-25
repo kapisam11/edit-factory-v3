@@ -122,7 +122,7 @@ A successful Python import, Docker build, or unit test run alone is not proof th
 
 ## Advanced operations console
 
-The owner/admin-only advanced console is an operational troubleshooting view, not a publishing or deletion backdoor. From any authenticated dashboard page, an admin can open the unlock dialog by clicking the small **V3** brand badge five times quickly, then enter the configured extra unlock code. Access expires after 15 minutes; normal dashboard authentication and the admin-role check still apply.
+The owner/admin-only advanced console is an operational troubleshooting view, not a publishing or deletion backdoor. From any authenticated dashboard page, an admin can open the unlock dialog by clicking the small **V3** brand badge five times quickly, then enter `AIVF_ADMIN_PANEL_CODE` from the ignored `06-CONFIG-AND-DEPLOYMENT/.env` file. On Windows, the development launcher generates a private value if missing and displays it once in PowerShell. The code is not embedded in the public source tree and there is no built-in fallback; if the variable is missing, unlock is disabled. Access expires after 15 minutes; normal dashboard authentication and the admin-role check still apply. Do not treat obscurity or a four-digit code as the primary protection, and don't share an admin login token with guests. The default global dashboard role is admin for a single-owner local install; if you share access with friends, configure distinct `AIVF_DASHBOARD_USERS` entries and give guests non-admin roles instead of sharing the owner's token.
 
 The console includes:
 - Runtime health checks for SQLite integrity, FFmpeg/FFprobe, process uptime and memory.

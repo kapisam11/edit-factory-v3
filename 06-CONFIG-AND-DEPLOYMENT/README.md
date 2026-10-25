@@ -41,9 +41,10 @@ Before starting production, configure `06-CONFIG-AND-DEPLOYMENT/.env` with:
 AIVF_IMAGE=ghcr.io/kapisam11/edit-factory-v3@sha256:<64-hex-digest>
 FLASK_SECRET_KEY=<generated secret of at least 32 characters>
 AIVF_DASHBOARD_TOKEN=<generated token of at least 32 characters>
+AIVF_ADMIN_PANEL_CODE=<private extra unlock code, not committed to Git>
 ```
 
-The production launcher refuses mutable image tags, missing/placeholder secrets, invalid Compose configuration, and a different image from the one already configured in the production Compose project. It does not build source. Production Compose forces `AIVF_ENV=production`, secure cookies, and `AIVF_ALLOW_RUNTIME_MIGRATIONS=0`, even if those variables in the shared `.env` contain development values.
+The production launcher refuses mutable image tags, missing/placeholder secrets, invalid Compose configuration, and a different image from the one already configured in the production Compose project. The hidden admin console has no source-code fallback code: configure `AIVF_ADMIN_PANEL_CODE` in this ignored `.env` file. Use a private code; a longer code is safer than a four-digit PIN. If unset, the admin console stays locked and returns a configuration error. It does not build source. Production Compose forces `AIVF_ENV=production`, secure cookies, and `AIVF_ALLOW_RUNTIME_MIGRATIONS=0`, even if those variables in the shared `.env` contain development values.
 
 On first setup, explicitly initialize and migrate the database, then start the pinned production image:
 
@@ -70,6 +71,8 @@ Use the separate development definition so source builds never become an acciden
 ```bash
 docker compose -f 06-CONFIG-AND-DEPLOYMENT/docker-compose.dev.yml up --build -d
 ```
+
+On Windows, `START-ALL.ps1` now creates a private `AIVF_ADMIN_PANEL_CODE` in the ignored `06-CONFIG-AND-DEPLOYMENT/.env` file if it is not already configured, then displays the generated value once in the launcher window. Save it privately. Existing configured values are preserved. If you start Compose manually, set the variable in that private `.env` yourself. The source repository does not contain a default unlock code; if the variable is empty, the hidden admin console stays locked.
 
 Never use the development Compose file on the production host.
 
