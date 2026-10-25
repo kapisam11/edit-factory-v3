@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -164,6 +165,7 @@ def test_batch_factory_refuses_nonempty_output_directory(
     assert (output / "keep.txt").read_text(encoding="utf-8") == "do not touch"
 
 @pytest.mark.integration
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg/FFprobe are required for media integration tests")
 def test_extract_segment_creates_valid_media_without_touching_source(tmp_path: Path) -> None:
     from ai_video_factory.production_guardrails import sha256_file
     from ai_video_factory.render_engine import run_ffmpeg, validate_media_output
