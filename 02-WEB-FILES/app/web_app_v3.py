@@ -1623,6 +1623,8 @@ def create_job():
         return jsonify({"error": "Clip Existing Footage in V3 mode requires a raw video upload"}), 400
     if params.get("production_mode") == "idea_to_video" and has_uploaded_video:
         return jsonify({"error": "Create from an Idea does not accept source footage. Select Clip Existing Footage for uploaded video."}), 400
+    if params.get("production_mode") == "clip_existing" and not has_uploaded_video:
+        return jsonify({"error": "Clip Existing Footage requires a source video. Choose Create a Video from an Idea if you do not have footage."}), 400
     upload_path: Optional[Path] = None
     resource_reserved = False
     try:
