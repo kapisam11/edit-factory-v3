@@ -52,6 +52,11 @@ def test_windows_launcher_fails_closed_without_uv_unless_checks_are_explicitly_s
     assert "[switch]$RunChecks" in launcher
     assert "if (-not $RunChecks -or $SkipChecks)" in launcher
     assert "Run START-ALL.bat -RunChecks" in launcher
+    assert "ps --services --status running" in launcher
+    assert "Stop only an existing web service before showing splash" in launcher
+    assert launcher.index("Stopping any previous dashboard instance") < launcher.index("Start-StartupSplash")
+    assert "Get-Content -LiteralPath $welcomeSource -Encoding UTF8 -Raw" in launcher
+    assert "Get-Content -LiteralPath $splashSource -Encoding UTF8 -Raw" in launcher
     assert "uv is not installed, so the full Python check suite was skipped." not in launcher
 
 
