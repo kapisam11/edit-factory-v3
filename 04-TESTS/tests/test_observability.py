@@ -53,6 +53,12 @@ def test_readyz_reports_tool_and_directory_readiness(monkeypatch, tmp_path):
     from app.observability import install_observability
 
     install_observability(app)
+    import app.observability as observability
+    monkeypatch.setattr(
+        observability,
+        "diagnostics_report",
+        lambda **_kwargs: {"ok": True, "directories": [{"free_bytes": 10**12}], "checks": []},
+    )
     monkeypatch.setenv("AIVF_STATE_DIR", str(tmp_path / "state"))
     response = app.test_client().get("/readyz")
     assert response.status_code == 200
