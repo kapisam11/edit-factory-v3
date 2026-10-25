@@ -940,7 +940,7 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             upload_directory = root / "upload" / platform
             upload_directory.mkdir(parents=True, exist_ok=True)
             (upload_directory / "metadata.json").write_text(
-                json.dumps(package_manifest, indent=2, ensure_ascii=False, default=str) + "\\n",
+                json.dumps(package_manifest, indent=2, ensure_ascii=False, default=str) + "\n",
                 encoding="utf-8",
             )
         _write_json(str(root / "idea_upload_packages.json"), {
@@ -948,8 +948,8 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             "production_mode": "idea_to_video",
             "platforms": {
                 platform: {
-                    "video": os.path.relpath(video_path, root).replace("\\\\", "/"),
-                    "upload_directory": os.path.relpath(root / "upload" / platform, root).replace("\\\\", "/"),
+                    "video": os.path.relpath(video_path, root).replace("\\", "/"),
+                    "upload_directory": os.path.relpath(root / "upload" / platform, root).replace("\\", "/"),
                     "publish_ready": False,
                     "approval_required": True,
                 }
