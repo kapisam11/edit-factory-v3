@@ -16,7 +16,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -334,15 +334,21 @@ def _licensed_music_candidates(limit: int = 8) -> list[dict[str, Any]]:
                     continue
             except (TypeError, ValueError, OverflowError):
                 continue
+            title = _plain_text(page.get("title") or "", 300)
+            source_page = (
+                "https://commons.wikimedia.org/wiki/"
+                + quote(title.replace(" ", "_"), safe=":/()")
+            )
             results.append({
                 "url": url,
-                "title": _plain_text(page.get("title") or "", 300),
+                "title": title,
                 "mime": mime,
                 "size_bytes": size,
                 "license": license_name,
                 "license_url": license_url,
-                "evidence_url": license_url or url,
+                "evidence_url": license_url or source_page,
                 "artist": _plain_text((metadata.get("Artist") or {}).get("value") or "", 300),
+                "attribution_required": bool(cc_by),
                 "rights_basis": "cc_license" if cc_by else "public_domain",
                 "rights_status": "cleared",
                 "declared_by": "wikimedia-commons-metadata",
@@ -556,6 +562,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
                 "artist": _plain_text(asset.get("artist") or "", 300),
                 "license": _plain_text(asset.get("license") or "", 120),
                 "rights_status": str(asset.get("rights_status") or "cleared"),
+                "attribution_required": bool(asset.get("attribution_required", str(asset.get("rights_basis") or "") == "cc_license")),
                 "declared_by": str(asset.get("declared_by") or "wikimedia-commons-metadata"),
                 "declared_at": str(asset.get("declared_at") or ""),
                 "license_url": str(asset.get("license_url") or ""),
@@ -576,6 +583,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
                 "artist": _plain_text(music.get("artist") or "", 300),
                 "license": _plain_text(music.get("license") or "", 120),
                 "rights_status": str(music.get("rights_status") or "cleared"),
+                "attribution_required": bool(music.get("attribution_required", str(music.get("rights_basis") or "") == "cc_license")),
                 "declared_by": str(music.get("declared_by") or "wikimedia-commons-metadata"),
                 "declared_at": str(music.get("declared_at") or ""),
                 "license_url": str(music.get("license_url") or ""),
