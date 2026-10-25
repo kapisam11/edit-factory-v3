@@ -68,6 +68,10 @@ def test_windows_launcher_uses_buildable_development_compose() -> None:
     assert launcher.count("function Set-EnvValue([string]$Name, [string]$Value)") == 1
     assert '$temporaryEnvFile = "$EnvFile.tmp"' in launcher
     assert "Move-Item -Path $temporaryEnvFile -Destination $EnvFile -Force" in launcher
+    assert '"config",
+    "--quiet"' in launcher
+    assert "Write-Host $token" not in launcher
+    assert "Private admin-console unlock code (save it somewhere safe): $adminPanelCode" not in launcher
 
 
 def test_documentation_distinguishes_profiles_from_direct_publishers() -> None:
@@ -249,15 +253,18 @@ def test_admin_unlock_code_is_environment_only_and_compose_passes_it() -> None:
     assert 'os.environ.get("AIVF_ADMIN_PANEL_CODE", "2026")' not in application
     assert 'if ([string]::IsNullOrWhiteSpace((Get-EnvValue "AIVF_ADMIN_PANEL_CODE")))' in launcher
     assert 'Set-EnvValue "AIVF_ADMIN_PANEL_CODE" $adminPanelCode' in launcher
-    assert "Private admin-console unlock code" in launcher
+    assert "Admin unlock code saved in the private .env file; it is deliberately not printed." in launcher
+    assert "Private admin-console unlock code (save it somewhere safe): $adminPanelCode" not in launcher
 
     for compose_name in ("docker-compose.yml", "docker-compose.dev.yml"):
         compose = (DEPLOYMENT_ROOT / compose_name).read_text(encoding="utf-8")
         assert "AIVF_ADMIN_PANEL_CODE: ${AIVF_ADMIN_PANEL_CODE:-}" in compose
 
 
-def test_windows_launcher_does_not_print_shared_token_in_multi_user_mode() -> None:
+def test_windows_launcher_never_prints_secrets_and_validates_compose_quietly() -> None:
     launcher = (REPOSITORY_ROOT / "START-ALL.ps1").read_text(encoding="utf-8")
-    assert '$usersConfig = Get-EnvValue "AIVF_DASHBOARD_USERS"' in launcher
-    assert 'if (-not [string]::IsNullOrWhiteSpace($usersConfig)) {' in launcher
+    assert '"config",
+    "--quiet"' in launcher
+    assert "Write-Host $token" not in launcher
+    assert "Private admin-console unlock code (save it somewhere safe): $adminPanelCode" not in launcher
     assert "Named dashboard accounts are configured; shared dashboard token login is disabled." in launcher
