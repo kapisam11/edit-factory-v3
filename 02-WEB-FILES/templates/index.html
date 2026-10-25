@@ -1055,10 +1055,10 @@
             panel.style.display = isV3 ? 'block' : 'none';
             updateV3DurationRange();
             const rawVideo = document.getElementById('raw_video');
-            rawVideo.required = isV3;
+            rawVideo.required = !ideaMode;
             document.getElementById('rawVideoLabel').textContent = ideaMode
                 ? 'No source video required in Idea-to-Video mode'
-                : (isV3 ? 'Raw Video (required for V3)' : 'Raw Video (optional)');
+                : (isV3 ? 'Raw Video (required for V3)' : 'Raw Video (required for Clip Factory)');
             panel.querySelectorAll('input, select, textarea').forEach((el) => { el.disabled = !isV3; });
         }
 
