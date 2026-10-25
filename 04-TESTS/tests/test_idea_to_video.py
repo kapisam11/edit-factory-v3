@@ -194,3 +194,119 @@ def test_idea_mode_renders_package_and_never_approves_publishing(tmp_path: Path,
     assert storyboard["production_mode"] == "idea_to_video"
     assert storyboard["music_status"] == "no_eligible_Commons_music_found"
     assert storyboard["quality_validation"] == "passed"
+
+
+def test_idea_mode_director_stage_packages_all_vertical_destinations_as_review_required(tmp_path: Path, monkeypatch):
+    import ai_video_factory.complete_factory as complete_factory
+    import ai_video_factory.idea_to_video as idea_module
+    import ai_video_factory.upload_package as upload_package
+    from ai_video_factory.pipeline import IdeaVideoStage, PipelineContext
+
+    final_video = tmp_path / "final_idea_video.mp4"
+    final_video.write_bytes(b"synthetic-final")
+    captions = tmp_path / "captions.srt"
+    captions.write_text("1\n00:00:00,000 --> 00:00:02,000\nA test caption.\n", encoding="utf-8")
+    rights = {
+        "schema_version": 1,
+        "assets": [{
+            "title": "Example image",
+            "artist": "Example Author",
+            "url": "https://upload.wikimedia.org/wikipedia/commons/a/a1/example.jpg",
+            "license": "Public domain",
+            "license_url": "https://commons.wikimedia.org/wiki/License",
+            "evidence_url": "https://commons.wikimedia.org/wiki/File:Example.jpg",
+            "rights_basis": "public_domain",
+            "rights_status": "cleared",
+            "declared_by": "wikimedia-commons-metadata",
+            "declared_at": "2026-10-25T00:00:00Z",
+        }],
+        "audio_assets": [],
+        "publication": {"status": "review_required", "publish_ready": False, "approval_required": True},
+    }
+    (tmp_path / "rights_manifest.json").write_text(json.dumps(rights), encoding="utf-8")
+
+    def fake_create(ctx):
+        ctx.final_video = str(final_video)
+        return {
+            "final_video": str(final_video),
+            "asset_count": 1,
+            "scene_count": 3,
+            "voiceover_included": False,
+            "music_included": False,
+            "captions_srt": str(captions),
+            "publish_ready": False,
+        }
+
+    def fake_render(source, package_dir, platforms):
+        output = {}
+        for platform in platforms:
+            render = Path(package_dir) / "renders" / f"{platform}.mp4"
+            render.parent.mkdir(parents=True, exist_ok=True)
+            render.write_bytes(b"synthetic-platform-media")
+            output[platform] = str(render)
+        return output
+
+    def fake_finalize(package_dir, **kwargs):
+        return {
+            "selected_title": "An example topic",
+            "tags": ["example", "idea"],
+            "publish_ready": True,
+            "human_review": {"status": "approved", "approved": True},
+        }
+
+    monkeypatch.setattr(idea_module, "create_idea_video", fake_create)
+    monkeypatch.setattr(complete_factory, "render_all_platforms", fake_render)
+    monkeypatch.setattr(upload_package, "finalize_upload_package", fake_finalize)
+
+    ctx = PipelineContext(
+        topic="An example topic",
+        package_dir=str(tmp_path),
+        production_mode="idea_to_video",
+    )
+    ctx.final_video = str(final_video)
+    ctx.script = "An example topic turns into a short video."
+    ctx.thumbnail = None
+    ctx.plan = {"title": "An example topic"}
+    ctx.metadata = {}
+    ctx.research = {}
+
+    IdeaVideoStage().run(ctx)
+
+    expected = {"youtube_shorts", "tiktok", "instagram_reels"}
+    assert set(ctx.research["idea_to_video"]["upload_packages"]) == expected
+    assert ctx.research["idea_to_video"]["publish_ready"] is False
+    assert ctx.metadata["publication_status"] == "review_required"
+    assert ctx.metadata["publish_ready"] is False
+    for platform in expected:
+        manifest = json.loads(
+            (tmp_path / "upload" / platform / "metadata.json").read_text(encoding="utf-8")
+        )
+        assert manifest["publish_ready"] is False
+        assert manifest["human_review"]["status"] == "review_required"
+        assert manifest["publication_policy"]["approval_required"] is True
+    upload_index = json.loads((tmp_path / "upload_package.json").read_text(encoding="utf-8"))
+    assert set(upload_index["platforms"]) == expected
+    assert upload_index["publication_policy"]["publish_ready"] is False
+
+
+def test_director_auto_edit_stage_does_not_fail_before_idea_renderer(tmp_path: Path):
+    from ai_video_factory.pipeline import AutoEditStage, PipelineContext
+
+    ctx = PipelineContext(
+        topic="A topic without source media",
+        package_dir=str(tmp_path),
+        production_mode="idea_to_video",
+    )
+
+    result = AutoEditStage().run(ctx)
+
+    assert result is ctx
+    assert ctx.final_video is None
+    assert any("storyboard next" in warning for warning in ctx.warnings)
+
+
+def test_pipeline_context_rejects_unknown_production_modes():
+    from ai_video_factory.pipeline import PipelineContext
+
+    with pytest.raises(ValueError, match="production_mode must be"):
+        PipelineContext(topic="A test topic", production_mode="magic")
