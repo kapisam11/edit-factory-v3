@@ -128,7 +128,9 @@ def configure_dashboard_auth(app):
         local_only = bool(allow_insecure_local)
     app.secret_key = session_key
     app.config["_AIVF_LOCAL_ONLY"] = local_only
-    configured_users = _configured_users(configured_role)
+    # Missing roles in a named-user configuration must never inherit the
+    # single-user default admin role. Use least privilege unless explicitly set.
+    configured_users = _configured_users(Role.VIEWER if users_configured else configured_role)
     if users_configured and not configured_users:
         app.logger.error(
             "AIVF_DASHBOARD_USERS is set but contains no valid users; dashboard login will fail closed"
