@@ -181,9 +181,7 @@ if ([string]::IsNullOrWhiteSpace((Get-EnvValue "AIVF_ADMIN_PANEL_CODE"))) {
     $adminPanelCode = (([guid]::NewGuid().ToString("N")) + ([guid]::NewGuid().ToString("N")))
     Set-EnvValue "AIVF_ADMIN_PANEL_CODE" $adminPanelCode
     Write-Ok "Generated AIVF_ADMIN_PANEL_CODE in the ignored local .env."
-    Write-Host ""
-    Write-Host "Private admin-console unlock code (save it somewhere safe): $adminPanelCode" -ForegroundColor Yellow
-    Write-Host "This code is stored only in 06-CONFIG-AND-DEPLOYMENT/.env and is not committed to Git."
+    Write-Host "Admin unlock code saved in the private .env file; it is deliberately not printed." -ForegroundColor DarkGray
 }
 Write-Ok "Local dashboard configuration is ready."
 
@@ -206,9 +204,10 @@ Invoke-Native "docker" @(
     "compose",
     "--env-file", $EnvFile,
     "-f", $ComposeFile,
-    "config"
+    "config",
+    "--quiet"
 )
-Write-Ok "Docker Compose configuration is valid."
+Write-Ok "Docker Compose configuration is valid; secret values were not printed."
 
 Write-Step "Starting the local development dashboard stack"
 
@@ -266,13 +265,8 @@ if (-not [string]::IsNullOrWhiteSpace($usersConfig)) {
     Write-Host ""
     Write-Host "Named dashboard accounts are configured; shared dashboard token login is disabled." -ForegroundColor Cyan
 } else {
-    $token = Get-EnvValue "AIVF_DASHBOARD_TOKEN"
-    if ($token) {
-        Write-Host ""
-        Write-Host "Dashboard login token:" -ForegroundColor Yellow
-        Write-Host $token -ForegroundColor White
-        Write-Host "Keep this token private. It is only shown here because this is a local launcher." -ForegroundColor DarkGray
-    }
+    Write-Host ""
+    Write-Host "Dashboard token is stored in 06-CONFIG-AND-DEPLOYMENT/.env; it is deliberately not printed." -ForegroundColor DarkGray
 }
 
 if (-not $NoBrowser) {
