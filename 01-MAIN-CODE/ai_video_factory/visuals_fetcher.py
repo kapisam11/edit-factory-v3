@@ -50,7 +50,11 @@ def _search_wikimedia(topic: str, limit: int = 6) -> List[Dict]:
                     and "nd" not in license_text
                     and "sa" not in license_text
                 )
-                cleared_public_domain = "public domain" in license_text or license_text in {"cc0", "cc zero"}
+                cleared_public_domain = (
+                    "public domain" in license_text
+                    or license_text.startswith("cc0")
+                    or "cc zero" in license_text
+                )
                 rights_status = "cleared" if (cleared_cc or cleared_public_domain) else ("license_identified" if license else "review_required")
                 rights_basis = "cc_license" if cleared_cc else ("public_domain" if cleared_public_domain else "")
                 declaration_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
