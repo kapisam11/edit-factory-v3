@@ -34,7 +34,8 @@ def _plain_text(value: Any, limit: int = 300) -> str:
 
 def _eligible_visual(item: Mapping[str, Any]) -> bool:
     """Require a source URL, known eligible license, and Commons metadata."""
-    if str(item.get("source") or "").lower() != "wikimedia":
+    source = str(item.get("source") or "").lower()
+    if source not in {"wikimedia", "wikimedia_video"}:
         return False
     if str(item.get("rights_status") or "").lower() != "cleared":
         return False
@@ -42,6 +43,14 @@ def _eligible_visual(item: Mapping[str, Any]) -> bool:
         return False
     parsed = urlparse(str(item.get("url") or ""))
     if parsed.scheme != "https" or (parsed.hostname or "").lower() != "upload.wikimedia.org":
+        return False
+    suffix = Path(parsed.path).suffix.lower()
+    if source == "wikimedia_video":
+        if not str(item.get("mime") or "").lower().startswith("video/"):
+            return False
+        if suffix not in {".webm", ".mp4", ".ogv", ".ogg", ".mov"}:
+            return False
+    elif suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".tif", ".tiff"}:
         return False
     license_text = str(item.get("license") or "").lower()
     if not license_text:
@@ -170,18 +179,58 @@ def _ffconcat_quote(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace("'", "'\\''")
 
 
-def _render_slides(slides: list[tuple[Path, float]], work_dir: Path, silent_video: Path) -> None:
+def _build_video_overlay(destination: Path, *, topic: str, caption: str, attribution: str) -> None:
+    frame = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(frame)
+    label_font = _font(20)
+    title_font = _font(26)
+    caption_font = _font(37)
+    credit_font = _font(14)
+    draw.rectangle((0, 0, WIDTH, 160), fill=(4, 7, 13, 185))
+    draw.rectangle((0, HEIGHT - 410, WIDTH, HEIGHT), fill=(4, 7, 13, 210))
+    draw.text((42, 28), "EDIT FACTORY  /  IDEA TO VIDEO", font=label_font, fill=(255, 161, 145, 255))
+    for number, line in enumerate(_wrap_text(draw, _plain_text(topic, 72), title_font, WIDTH - 84)[:2]):
+        draw.text((42, 62 + 31 * number), line, font=title_font, fill=(255, 255, 255, 255))
+    for number, line in enumerate(_wrap_text(draw, _plain_text(caption, 900), caption_font, WIDTH - 84)[:5]):
+        draw.text((42, HEIGHT - 365 + number * 49), line, font=caption_font, fill=(255, 255, 255, 255), stroke_width=1, stroke_fill=(0, 0, 0, 150))
+    credit = _plain_text(attribution, 125)
+    if credit:
+        draw.text((42, HEIGHT - 44), credit, font=credit_font, fill=(238, 241, 248, 255))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    frame.save(destination, format="PNG", optimize=True)
+
+
+def _render_slides(
+    slides: list[tuple[Path, float, Path | None, bool]],
+    work_dir: Path,
+    silent_video: Path,
+) -> None:
     rendered: list[Path] = []
-    for index, (slide, duration) in enumerate(slides, start=1):
+    for index, (slide, duration, overlay, is_video) in enumerate(slides, start=1):
         segment = work_dir / f"scene_{index:02d}.mp4"
-        run_ffmpeg([
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-loop", "1", "-framerate", str(FPS), "-i", str(slide),
-            "-t", f"{duration:.3f}",
-            "-vf", "zoompan=z='min(zoom+0.0012,1.08)':d=1:s=720x1280:fps=30,format=yuv420p",
-            "-an", "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
-            "-crf", "23", "-movflags", "+faststart", str(segment),
-        ], timeout=180)
+        if is_video and overlay is not None:
+            run_ffmpeg([
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-stream_loop", "-1", "-i", str(slide),
+                "-loop", "1", "-framerate", str(FPS), "-i", str(overlay),
+                "-t", f"{duration:.3f}",
+                "-filter_complex",
+                "[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,"
+                "zoompan=z='min(zoom+0.0006,1.05)':d=1:s=720x1280:fps=30,format=yuv420p[bg];"
+                "[1:v]format=rgba[caption];[bg][caption]overlay=0:0:shortest=1,format=yuv420p[outv]",
+                "-map", "[outv]", "-an", "-r", str(FPS), "-c:v", "libx264",
+                "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart",
+                str(segment),
+            ], timeout=180)
+        else:
+            run_ffmpeg([
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-loop", "1", "-framerate", str(FPS), "-i", str(slide),
+                "-t", f"{duration:.3f}",
+                "-vf", "zoompan=z='min(zoom+0.0012,1.08)':d=1:s=720x1280:fps=30,format=yuv420p",
+                "-an", "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "23", "-movflags", "+faststart", str(segment),
+            ], timeout=180)
         if not segment.is_file() or segment.stat().st_size <= 0:
             raise RuntimeError(f"FFmpeg did not produce storyboard scene {index}")
         rendered.append(segment)
@@ -212,24 +261,44 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
 
     asset_dir = package / "idea_assets"
     asset_dir.mkdir(parents=True, exist_ok=True)
-    from .visuals_fetcher import download_visuals, fetch_visuals
+    from .visuals_fetcher import download_visuals, download_wikimedia_video, fetch_visuals
 
     candidates = fetch_visuals(topic, max_items=24)
     eligible = [dict(item) for item in candidates if isinstance(item, Mapping) and _eligible_visual(item)]
-    downloaded = download_visuals(eligible, str(asset_dir), download_clips=False)
+    eligible_videos = [item for item in eligible if item.get("source") == "wikimedia_video"]
+    eligible_images = [item for item in eligible if item.get("source") == "wikimedia"]
     assets: list[dict[str, Any]] = []
+    # Prefer moving footage, but bound the number of remote downloads and bytes.
+    for candidate in eligible_videos[:3]:
+        try:
+            announced_size = int(candidate.get("size_bytes") or 0)
+        except (TypeError, ValueError, OverflowError):
+            announced_size = 0
+        if announced_size > 128 * 1024 * 1024:
+            continue
+        downloaded_video = download_wikimedia_video(candidate, str(asset_dir), max_bytes=128 * 1024 * 1024)
+        local = Path(str(downloaded_video.get("local_path") or "")).resolve() if downloaded_video else Path(".")
+        try:
+            local.relative_to(asset_dir.resolve())
+        except ValueError:
+            continue
+        if downloaded_video and local.is_file() and local.stat().st_size > 0:
+            assets.append(dict(downloaded_video, local_path=str(local), media_type="video"))
+        if len(assets) >= 3:
+            break
+
+    downloaded = download_visuals(eligible_images[:12], str(asset_dir), download_clips=False)
     for item in downloaded:
         local = Path(str(item.get("local_path") or "")).resolve()
         try:
             local.relative_to(asset_dir.resolve())
         except ValueError:
             continue
-        if not _safe_image(local):
-            continue
-        assets.append(dict(item, local_path=str(local)))
+        if _safe_image(local):
+            assets.append(dict(item, local_path=str(local), media_type="image"))
     if not assets:
         raise RuntimeError(
-            "Idea-to-Video could not find a downloadable image with an eligible Commons license. "
+            "Idea-to-Video could not find a downloadable Commons video or image with an eligible license. "
             "No unverified Reddit or YouTube media was used. Try a more specific topic or provide source footage in Clip Factory."
         )
 
@@ -248,7 +317,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
 
     work_dir = package / "_idea_video_work"
     work_dir.mkdir(parents=True, exist_ok=True)
-    slides: list[tuple[Path, float]] = []
+    slides: list[tuple[Path, float, Path | None, bool]] = []
     scene_rows: list[dict[str, Any]] = []
     for index, caption in enumerate(captions):
         asset = assets[index % len(assets)]
@@ -256,14 +325,22 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
         license_name = _plain_text(asset.get("license") or "Public domain", 100)
         artist = _plain_text(asset.get("artist") or asset.get("title") or "Wikimedia Commons", 100)
         attribution = f"{artist} · {license_name}"
-        frame_path = work_dir / f"slide_{index + 1:02d}.png"
-        _build_slide(original_path, frame_path, topic=topic, caption=caption, attribution=attribution)
-        slides.append((frame_path, scene_duration))
+        if asset.get("media_type") == "video":
+            overlay_path = work_dir / f"overlay_{index + 1:02d}.png"
+            _build_video_overlay(overlay_path, topic=topic, caption=caption, attribution=attribution)
+            slides.append((original_path, scene_duration, overlay_path, True))
+            frame_name = str(overlay_path.relative_to(package)).replace("\\", "/")
+        else:
+            frame_path = work_dir / f"slide_{index + 1:02d}.png"
+            _build_slide(original_path, frame_path, topic=topic, caption=caption, attribution=attribution)
+            slides.append((frame_path, scene_duration, None, False))
+            frame_name = str(frame_path.relative_to(package)).replace("\\", "/")
         scene_rows.append({
             "scene": index + 1,
             "caption": caption,
             "duration_seconds": round(scene_duration, 3),
-            "frame": str(frame_path.relative_to(package)).replace("\\", "/"),
+            "frame_or_overlay": frame_name,
+            "asset_type": str(asset.get("media_type") or "image"),
             "asset_url": asset.get("url"),
             "asset_title": _plain_text(asset.get("title") or "", 300),
             "artist": artist,
@@ -271,7 +348,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
             "license_url": str(asset.get("license_url") or ""),
             "evidence_url": str(asset.get("evidence_url") or asset.get("url") or ""),
             "rights_basis": str(asset.get("rights_basis") or ""),
-            "transformation": "cropped to 9:16 and captioned for a vertical video",
+            "transformation": "source video excerpt or image cropped to 9:16 and captioned",
         })
 
     silent_video = work_dir / "storyboard_silent.mp4"
@@ -308,6 +385,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
             {
                 "asset_id": f"commons-{index + 1}",
                 "source": "wikimedia_commons",
+                "asset_type": str(asset.get("media_type") or ("video" if asset.get("source") == "wikimedia_video" else "image")),
                 "url": str(asset.get("url") or ""),
                 "title": _plain_text(asset.get("title") or "", 300),
                 "artist": _plain_text(asset.get("artist") or "", 300),
