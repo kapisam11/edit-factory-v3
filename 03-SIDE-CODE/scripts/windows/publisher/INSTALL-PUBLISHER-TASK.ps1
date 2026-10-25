@@ -8,8 +8,22 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Runner = Join-Path $Root "RUN-PUBLISHER.ps1"
+function Get-EditFactoryRepositoryRoot([string]$StartPath) {
+    $candidate = [System.IO.DirectoryInfo]::new((Resolve-Path -LiteralPath $StartPath).Path)
+    while ($null -ne $candidate) {
+        $projectFile = Join-Path $candidate.FullName "pyproject.toml"
+        $mainCodeDir = Join-Path $candidate.FullName "01-MAIN-CODE"
+        if ((Test-Path -LiteralPath $projectFile -PathType Leaf) -and
+            (Test-Path -LiteralPath $mainCodeDir -PathType Container)) {
+            return $candidate.FullName
+        }
+        $candidate = $candidate.Parent
+    }
+    throw "Could not locate the Edit Factory repository root from '$StartPath'."
+}
+
+$Root = Get-EditFactoryRepositoryRoot -StartPath $PSScriptRoot
+$Runner = Join-Path $PSScriptRoot "RUN-PUBLISHER.ps1"
 if (-not (Test-Path -LiteralPath $Runner -PathType Leaf)) { throw "Publisher runner not found: $Runner" }
 
 $uvCommand = Get-Command uv -ErrorAction SilentlyContinue

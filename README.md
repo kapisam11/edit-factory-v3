@@ -22,6 +22,7 @@ The repository also retains the previously implemented production features: scen
 - [Architecture and V3 contract](docs/architecture.md)
 - [Windows setup and production checklist](docs/windows.md)
 - [Developer guide and repository map](docs/development.md)
+- [Windows maintenance scripts](03-SIDE-CODE/scripts/windows/README.md)
 - [Security policy](SECURITY.md)
 - [Deployment and publishing operations](06-CONFIG-AND-DEPLOYMENT/README.md)
 - [Engineering and operations notes](00-INFO/11-ENGINEERING-AND-OPERATIONS.md)

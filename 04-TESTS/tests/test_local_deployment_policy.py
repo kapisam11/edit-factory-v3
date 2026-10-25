@@ -120,7 +120,15 @@ def test_wsgi_runtime_rejects_missing_or_placeholder_secrets_outside_tests(monke
 
 
 def test_external_drive_backup_performs_archive_verification_and_restore_drill() -> None:
-    script = (REPOSITORY_ROOT / "BACKUP-EDIT-FACTORY.ps1").read_text(encoding="utf-8")
+    script = (
+        REPOSITORY_ROOT
+        / "03-SIDE-CODE"
+        / "scripts"
+        / "windows"
+        / "backup"
+        / "BACKUP-EDIT-FACTORY.ps1"
+    ).read_text(encoding="utf-8")
+    assert "function Get-EditFactoryRepositoryRoot" in script
     assert "[System.IO.Path]::GetPathRoot" in script
     assert '"--entrypoint", "aivf-backup", "web"' in script
     assert '"backup",' in script

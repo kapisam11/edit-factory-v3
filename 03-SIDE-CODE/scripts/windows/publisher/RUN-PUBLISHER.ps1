@@ -5,7 +5,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+function Get-EditFactoryRepositoryRoot([string]$StartPath) {
+    $candidate = [System.IO.DirectoryInfo]::new((Resolve-Path -LiteralPath $StartPath).Path)
+    while ($null -ne $candidate) {
+        $projectFile = Join-Path $candidate.FullName "pyproject.toml"
+        $mainCodeDir = Join-Path $candidate.FullName "01-MAIN-CODE"
+        if ((Test-Path -LiteralPath $projectFile -PathType Leaf) -and
+            (Test-Path -LiteralPath $mainCodeDir -PathType Container)) {
+            return $candidate.FullName
+        }
+        $candidate = $candidate.Parent
+    }
+    throw "Could not locate the Edit Factory repository root from '$StartPath'."
+}
+
+$Root = Get-EditFactoryRepositoryRoot -StartPath $PSScriptRoot
 Set-Location -LiteralPath $Root
 
 function Import-LocalEnvironment([string]$Path) {

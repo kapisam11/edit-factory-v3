@@ -319,10 +319,10 @@ jobs:
         $scripts = @(
           "START-ALL.ps1",
           "START-PRODUCTION.ps1",
-          "RUN-PUBLISHER.ps1",
-          "INSTALL-PUBLISHER-TASK.ps1",
-          "REMOVE-PUBLISHER-TASK.ps1",
-          "BACKUP-EDIT-FACTORY.ps1",
+          "03-SIDE-CODE/scripts/windows/publisher/RUN-PUBLISHER.ps1",
+          "03-SIDE-CODE/scripts/windows/publisher/INSTALL-PUBLISHER-TASK.ps1",
+          "03-SIDE-CODE/scripts/windows/publisher/REMOVE-PUBLISHER-TASK.ps1",
+          "03-SIDE-CODE/scripts/windows/backup/BACKUP-EDIT-FACTORY.ps1",
           "06-CONFIG-AND-DEPLOYMENT/install_ffmpeg_windows.ps1"
         )
         foreach ($script in $scripts) {

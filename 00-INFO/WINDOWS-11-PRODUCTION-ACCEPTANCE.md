@@ -43,7 +43,7 @@ Confirm the completed job remains visible, the final video is still playable, an
 Create a verified backup on a different trusted NTFS drive:
 
 ```powershell
-.\BACKUP-EDIT-FACTORY.ps1 -Destination "E:\EditFactoryBackups"
+.\03-SIDE-CODE\scripts\windows\backup\BACKUP-EDIT-FACTORY.ps1 -Destination "E:\EditFactoryBackups"
 ```
 
 Use an actual destination drive different from the repository drive; change `E:\EditFactoryBackups` to match your PC. The script restricts ACLs, copies the completed archive to that drive, and verifies the copied archive. The local archive is **not encrypted**; do not store it on a shared drive. Provider token/secret files are deliberately excluded, so accounts must be reauthorized after a disaster restore.

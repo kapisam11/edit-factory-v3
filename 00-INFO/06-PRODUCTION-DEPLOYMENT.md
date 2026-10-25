@@ -102,7 +102,7 @@ For the concise operational reference, see `OPERATIONS.md` and the release check
 Run this from the repository root after `START-ALL.bat` has created the local configuration and Docker Desktop is running:
 
 ```powershell
-.\BACKUP-EDIT-FACTORY.ps1 -Destination D:\EditFactoryBackups -RetentionDays 14
+.\03-SIDE-CODE\scripts\windows\backup\BACKUP-EDIT-FACTORY.ps1 -Destination D:\EditFactoryBackups -RetentionDays 14
 ```
 
 Choose a destination on a **different drive** from the repository, and replace `D:` with the drive you actually have. The script makes a timestamped archive from the running development Compose volumes, including the SQLite job database, non-secret publisher state, knowledge base, generated outputs and uploads. It then verifies archived SHA-256 hashes and SQLite integrity, performs an isolated restore into a temporary location, checks the restored files against the backup manifest, and only then removes archives older than the retention period. It never overwrites the live data volumes during the restore drill.
