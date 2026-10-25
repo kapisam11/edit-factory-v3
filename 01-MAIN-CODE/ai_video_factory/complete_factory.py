@@ -48,8 +48,6 @@ def _ffmpeg_available() -> bool:
 
 
 def _probe(path: str) -> Dict[str, Any]:
-    if not shutil.which("ffprobe"):
-        return {"available": False, "warning": "ffprobe unavailable"}
     try:
         result = run_ffprobe([
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
