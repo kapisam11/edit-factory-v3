@@ -644,6 +644,7 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
             target_seconds=target_seconds,
             model_key=model_key,
             learning_history_path=learning_history_path,
+            prepare_upload_packages=False,
         )
         ctx = provider_retry(lambda: build_director_pipeline(verbose=False).run(ctx), attempts=2)
         primary_result = ProductionResult(package_dir=primary_dir)
@@ -845,6 +846,50 @@ def run_complete_factory(input_video: Optional[str], topic: str, package_dir: st
     }
 
     from .upload_package import finalize_upload_package
+    if input_video is None:
+        primary_rights_path = Path(primary_result.package_dir) / "rights_manifest.json"
+        if primary_rights_path.is_file():
+            try:
+                rights_payload = json.loads(primary_rights_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                rights_payload = {}
+            source_credits: list[Dict[str, Any]] = []
+            for asset in list(rights_payload.get("assets") or []) + list(rights_payload.get("audio_assets") or []):
+                if not isinstance(asset, Mapping):
+                    continue
+                source_credits.append({
+                    "source": "wikimedia",
+                    "title": str(asset.get("title") or ""),
+                    "creator": str(asset.get("artist") or ""),
+                    "url": str(asset.get("url") or ""),
+                    "license": str(asset.get("license") or ""),
+                    "license_url": str(asset.get("license_url") or ""),
+                    "evidence_url": str(asset.get("evidence_url") or asset.get("url") or ""),
+                    "rights_basis": str(asset.get("rights_basis") or ""),
+                    "rights_status": str(asset.get("rights_status") or "review_required"),
+                    "declared_by": str(asset.get("declared_by") or "wikimedia-commons-metadata"),
+                    "declared_at": str(asset.get("declared_at") or ""),
+                    "asset_origin": "licensed",
+                    "commercial_use": "review_required",
+                    "permitted_uses": "Review the actual asset license and restrictions before publication.",
+                    "attribution": (
+                        f"{asset.get('artist') or ''}; {asset.get('title') or ''}; "
+                        f"{asset.get('license') or ''}; {asset.get('license_url') or ''}; "
+                        f"Source: {asset.get('url') or ''}"
+                    ).strip("; "),
+                })
+            research["source_credits"] = source_credits
+            research["human_review"] = {
+                "status": "review_required",
+                "approved": False,
+                "notes": "Topic-generated media, research, captions, and each asset license need human review before publishing.",
+            }
+            research["publication_policy"] = {
+                "status": "review_required",
+                "publish_ready": False,
+                "approval_required": True,
+                "verified_live_destinations": [],
+            }
     upload_packages: Dict[str, Any] = {}
     for platform, video_path in formats.items():
         upload_packages[platform] = finalize_upload_package(
