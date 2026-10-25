@@ -7,16 +7,18 @@ Automated license classification is not human publishing approval.
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import math
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
-
-import requests
 from typing import Any, Mapping
 from urllib.parse import urlparse
+
+import requests
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -344,7 +346,7 @@ def _licensed_music_candidates(limit: int = 8) -> list[dict[str, Any]]:
                 "rights_basis": "cc_license" if cc_by else "public_domain",
                 "rights_status": "cleared",
                 "declared_by": "wikimedia-commons-metadata",
-                "declared_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat().replace("+00:00", "Z"),
+                "declared_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             })
     except (requests.RequestException, ValueError, TypeError, KeyError):
         return results
@@ -361,7 +363,7 @@ def _download_licensed_music(asset_dir: Path) -> dict[str, Any] | None:
         suffix = Path(urlparse(url).path).suffix.lower()
         if suffix not in {".mp3", ".ogg", ".oga", ".wav", ".flac", ".opus", ".aac", ".m4a"}:
             continue
-        destination = asset_dir / ("music_" + __import__("hashlib").sha256(url.encode("utf-8")).hexdigest()[:16] + suffix)
+        destination = asset_dir / ("music_" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:16] + suffix)
         if not _download_http_bounded(url, str(destination), max_bytes=32 * 1024 * 1024):
             continue
         try:
@@ -416,7 +418,11 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
         if len(assets) >= 3:
             break
 
-    downloaded = download_visuals(eligible_images[:12], str(asset_dir), download_clips=False)
+    # Avoid wasting disk/network on stills when motion footage is already available.
+    downloaded = (
+        download_visuals(eligible_images[:8], str(asset_dir), download_clips=False)
+        if not assets else []
+    )
     for item in downloaded:
         local = Path(str(item.get("local_path") or "")).resolve()
         try:
@@ -432,7 +438,12 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
         )
 
     target = float(ctx.target_seconds)
-    voiceover = Path(str(ctx.voiceover or "")).expanduser() if ctx.voiceover else package / "voiceover.mp3"
+    if ctx.voiceover:
+        voiceover = Path(str(ctx.voiceover)).expanduser()
+        if not voiceover.is_absolute():
+            voiceover = package / voiceover
+    else:
+        voiceover = package / "voiceover.mp3"
     if not voiceover.is_file():
         voiceover = Path("")
     voice_duration = _duration(voiceover) if str(voiceover) not in {"", "."} and voiceover.is_file() else None
@@ -480,6 +491,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
             "transformation": "source video excerpt or image cropped to 9:16 and captioned",
         })
 
+    used_assets = assets[:min(len(assets), len(captions))]
     silent_video = work_dir / "storyboard_silent.mp4"
     _render_slides(slides, work_dir, silent_video)
     final_video = package / "final_idea_video.mp4"
@@ -553,7 +565,7 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
                 "human_review": "required_before_publishing",
                 "commercial_rights_guarantee": False,
             }
-            for index, asset in enumerate(assets)
+            for index, asset in enumerate(used_assets)
         ],
         "audio_assets": [
             {
@@ -622,13 +634,13 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
         "production_mode": "idea_to_video",
         "actual_duration_seconds": round(duration, 3),
         "storyboard_scenes": len(scene_rows),
-        "licensed_visuals_used": len(assets),
+        "licensed_visuals_used": len(used_assets),
         "has_voiceover": has_voiceover,
         "music_added": bool(music),
     })
     return {
         "final_video": str(final_video),
-        "asset_count": len(assets),
+        "asset_count": len(used_assets),
         "scene_count": len(scene_rows),
         "captions_srt": str(captions_path),
         "voiceover_included": has_voiceover,
