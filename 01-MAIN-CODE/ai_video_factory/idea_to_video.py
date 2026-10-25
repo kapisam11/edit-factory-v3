@@ -371,4 +371,34 @@ def create_idea_video(ctx: Any) -> dict[str, Any]:
     }
 
 
-__all__ = ["create_idea_video"]
+def choose_surprise_topic(content_profile: str = "general") -> str:
+    """Pick a safe evergreen idea when the creator asks the system to choose."""
+    import secrets
+
+    normalized = str(content_profile or "general").strip().lower()
+    gaming_topics = [
+        "Why clutch moments feel so intense in competitive games",
+        "How game sound design changes player decisions",
+        "The psychology behind comeback victories in games",
+        "Why limited resources make survival games tense",
+        "How game maps teach players without words",
+        "Why teamwork can fail even when every player is skilled",
+        "What makes a fair challenge feel almost impossible",
+    ]
+    general_topics = [
+        "Why we get goosebumps",
+        "How noise-cancelling headphones actually work",
+        "Why the Moon can look larger near the horizon",
+        "The surprising science of why popcorn pops",
+        "How octopuses solve problems",
+        "Why your brain remembers some songs",
+        "How bees communicate through movement",
+        "Why airplane windows have rounded corners",
+        "What science knows about why we dream",
+        "Why time can seem to move faster as we get older",
+    ]
+    topics = gaming_topics if normalized == "gaming" else general_topics
+    return secrets.choice(topics)
+
+
+__all__ = ["create_idea_video", "choose_surprise_topic"]
