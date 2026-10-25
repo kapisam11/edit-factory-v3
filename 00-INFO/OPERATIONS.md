@@ -63,7 +63,7 @@ The restore command validates the archive before writing a separate restored cop
 
 ## Windows backup and restore
 
-For the Windows Docker Compose development stack, run `.\\BACKUP-EDIT-FACTORY.ps1 -Destination "E:\\EditFactoryBackups"` after choosing a destination on a different trusted NTFS drive. The script builds the backup utility without restarting the running dashboard, backs up the main job database, auxiliary non-secret state databases, knowledge, output and uploads, copies the archive to the destination drive, and verifies the copy. Provider token/secret files are deliberately excluded and must be reauthorized after recovery. The local archive is **not encrypted**; it is ACL-restricted, so do not store it on a shared or untrusted drive. Use the encrypted off-host helper for off-host copies.
+For the Windows Docker Compose development stack, run `.\03-SIDE-CODE\scripts\windows\backup\BACKUP-EDIT-FACTORY.ps1 -Destination "E:\\EditFactoryBackups"` after choosing a destination on a different trusted NTFS drive. The script builds the backup utility without restarting the running dashboard, backs up the main job database, auxiliary non-secret state databases, knowledge, output and uploads, copies the archive to the destination drive, and verifies the copy. Provider token/secret files are deliberately excluded and must be reauthorized after recovery. The local archive is **not encrypted**; it is ACL-restricted, so do not store it on a shared or untrusted drive. Use the encrypted off-host helper for off-host copies.
 
 Test restoration into a new, empty directory and never over the live application data:
 
