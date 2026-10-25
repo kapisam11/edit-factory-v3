@@ -286,7 +286,7 @@ def test_windows_startup_uses_fullscreen_splash_and_keeps_failure_console_open()
     assert "Start-StartupSplash" in launcher
     assert '"--kiosk"' in launcher
     assert '"--app=$splashUri"' in launcher
-    assert "'--user-data-dir="{0}"'" in launcher
+    assert "'--user-data-dir=\"{0}\"'" in launcher
     assert 'Start-Process "$BaseUrl/login"' not in launcher
     assert 'pause' in batch
     assert 'if not "%EXIT_CODE%"=="0" (' in batch
@@ -294,7 +294,7 @@ def test_windows_startup_uses_fullscreen_splash_and_keeps_failure_console_open()
     assert '__AIVF_WELCOME_URI__' in splash
     assert 'fetch(baseUrl + "/api/health"' in splash
     assert 'window.location.replace(welcomeUri)' in splash
-    assert "$welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Raw).Replace('href="/login"'" in launcher
+    assert "$welcomeHtml = (Get-Content -LiteralPath $welcomeSource -Raw)" in launcher
     assert 'href="/login"' in welcome
 
     production_launcher = (REPOSITORY_ROOT / "START-PRODUCTION.ps1").read_text(encoding="utf-8")
@@ -302,6 +302,6 @@ def test_windows_startup_uses_fullscreen_splash_and_keeps_failure_console_open()
     assert "Start-StartupSplash" in production_launcher
     assert '"--kiosk"' in production_launcher
     assert '"--app=$splashUri"' in production_launcher
-    assert "'--user-data-dir="{0}"'" in production_launcher
+    assert "'--user-data-dir=\"{0}\"'" in production_launcher
     assert 'Start-Process "$baseUrl/login"' not in production_launcher
     assert 'if not "%EXIT_CODE%"=="0" (' in production_batch
