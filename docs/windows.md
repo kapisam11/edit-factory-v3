@@ -10,7 +10,7 @@ It will:
 3. Validate the Docker Compose configuration.
 4. Build and start the local development dashboard stack using `docker-compose.dev.yml` (the launcher does not require a pre-published immutable production image).
 5. Wait for `/api/health` to become healthy.
-6. Open the dashboard login page in your browser and show the local dashboard token in the launcher window.
+6. Open the dashboard login page in your browser. For safety, the launcher validates Compose quietly and does not print tokens or unlock codes; read them directly from the ignored local `06-CONFIG-AND-DEPLOYMENT/.env` file when needed.
 7. When `uv` is installed, run dependency, Python compilation, Ruff, mypy, and the full pytest suite.
 8. Run a final dashboard health check and report failures with a non-zero exit code.
 
@@ -33,7 +33,7 @@ This guidance is for supervised use on one trusted Windows 10/11 PC by a few tru
 - Keep the dashboard bound to `127.0.0.1`. Do not expose it to a LAN, reverse proxy, or public internet without a separate authentication, session/CSRF, TLS, and file-access review.
 - Keep render concurrency conservative (start at `AIVF_MAX_CONCURRENT_JOBS=1`); increase it only after representative renders show acceptable peak RAM, VRAM, disk, thermal, and recovery behavior.
 - Keep publishing disabled during installation and testing. Enable a platform only after reviewing its rights/approval checklist and completing a controlled private or unlisted account acceptance test.
-- Keep generated tokens, client secrets, and the deployment `.env` file out of Git, ordinary support bundles, and backups. After restoring a backup, reauthorize provider accounts because credential files are intentionally excluded.
+- Keep generated tokens, client secrets, and the deployment `.env` file out of Git, ordinary support bundles, and backups. The development launcher also avoids printing secret values during Compose validation or normal startup. After restoring a backup, reauthorize provider accounts because credential files are intentionally excluded.
 
 ### File-size and disk-space safeguards
 
