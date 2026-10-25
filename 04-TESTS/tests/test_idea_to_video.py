@@ -151,6 +151,7 @@ def test_idea_mode_renders_package_and_never_approves_publishing(tmp_path: Path,
         lambda visuals, out_dir, **kwargs: [{**visuals[0], "local_path": str(source_image)}],
     )
     monkeypatch.setattr(idea_to_video, "_duration", lambda path: None)
+    monkeypatch.setattr(idea_to_video, "_download_licensed_music", lambda asset_dir: None)
     monkeypatch.setattr(
         idea_to_video,
         "run_ffmpeg",
@@ -191,5 +192,5 @@ def test_idea_mode_renders_package_and_never_approves_publishing(tmp_path: Path,
     assert rights["assets"][0]["evidence_url"] == item["evidence_url"]
     storyboard = json.loads((tmp_path / "storyboard.json").read_text(encoding="utf-8"))
     assert storyboard["production_mode"] == "idea_to_video"
-    assert storyboard["music_status"].startswith("omitted_until")
+    assert storyboard["music_status"] == "no_eligible_Commons_music_found"
     assert storyboard["quality_validation"] == "passed"
