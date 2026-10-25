@@ -104,24 +104,37 @@ def configure_dashboard_auth(app):
         return
     app.config["_AIVF_AUTH_CONFIGURED"] = True
     token = os.environ.get("AIVF_DASHBOARD_TOKEN", "").strip()
+    raw_users = os.environ.get("AIVF_DASHBOARD_USERS", "").strip()
+    # A non-empty per-user configuration switches authentication into strict
+    # multi-user mode. Do not retain a fallback path through the shared token.
+    users_configured = bool(raw_users)
     allow_insecure_local = os.environ.get("AIVF_ALLOW_INSECURE_LOCAL", "0") == "1"
     configured_role = normalize_role(os.environ.get("AIVF_DASHBOARD_ROLE", "admin"))
     session_key = os.environ.get("AIVF_DASHBOARD_SECRET_KEY", "").strip()
     if not session_key:
         session_key = os.environ.get("FLASK_SECRET_KEY", "").strip()
-    if not session_key and token:
+    if not session_key and token and not users_configured:
         session_key = hashlib.sha256(("AIVF-DASHBOARD-SESSION:" + token).encode("utf-8")).hexdigest()
-    if not session_key:
-        raw_users = os.environ.get("AIVF_DASHBOARD_USERS", "").strip()
-        if raw_users:
-            session_key = hashlib.sha256(("AIVF-DASHBOARD-USERS-SESSION:" + raw_users).encode("utf-8")).hexdigest()
     local_only = False
+    if not session_key and users_configured:
+        # Never derive a session-signing secret from a login credential in
+        # multi-user mode. If no independent key is configured, keep this
+        # fallback process-local and loopback-only; production validation
+        # separately requires FLASK_SECRET_KEY.
+        session_key = secrets.token_hex(32)
+        local_only = True
     if not session_key:
         session_key = secrets.token_hex(32)
         local_only = bool(allow_insecure_local)
     app.secret_key = session_key
     app.config["_AIVF_LOCAL_ONLY"] = local_only
-    configured_users = _configured_users(configured_role)
+    # Missing roles in a named-user configuration must never inherit the
+    # single-user default admin role. Use least privilege unless explicitly set.
+    configured_users = _configured_users(Role.VIEWER if users_configured else configured_role)
+    if users_configured and not configured_users:
+        app.logger.error(
+            "AIVF_DASHBOARD_USERS is set but contains no valid users; dashboard login will fail closed"
+        )
     default_user = os.environ.get("AIVF_DASHBOARD_USER", "local-user").strip() or "local-user"
     if not token and not allow_insecure_local:
         app.logger.warning("AIVF_DASHBOARD_TOKEN is unset; dashboard access will fail closed")
@@ -173,15 +186,24 @@ def configure_dashboard_auth(app):
         supplied = request.form.get("token", "")
         matched_user = None
         matched_role = configured_role
-        if configured_users:
+        if users_configured:
             for user_id, user_config in configured_users.items():
                 candidate = user_config["token"]
                 if hmac.compare_digest(hashlib.sha256(supplied.encode()).digest(), hashlib.sha256(candidate.encode()).digest()):
                     matched_user = user_id
                     matched_role = normalize_role(user_config["role"])
                     break
-        valid = bool(token) and hmac.compare_digest(hashlib.sha256(supplied.encode()).digest(), hashlib.sha256(token.encode()).digest())
-        local_dev_valid = allow_insecure_local and supplied == "local-development" and _loopback_request()
+        # The shared credential and development shortcut are deliberately
+        # disabled whenever per-user mode is enabled, even if the JSON is bad.
+        valid = (not users_configured) and bool(token) and hmac.compare_digest(
+            hashlib.sha256(supplied.encode()).digest(), hashlib.sha256(token.encode()).digest()
+        )
+        local_dev_valid = (
+            (not users_configured)
+            and allow_insecure_local
+            and supplied == "local-development"
+            and _loopback_request()
+        )
         if valid or local_dev_valid or matched_user:
             session.clear()
             session["aivf_authenticated"] = True

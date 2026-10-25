@@ -7,10 +7,20 @@ import time
 from pathlib import Path
 
 
-def _make_client(monkeypatch, tmp_path: Path, *, role: str = "admin"):
+def _make_client(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    role: str = "admin",
+    users_json: str | None = None,
+    login_token: str | None = "dashboard-test-token",
+):
     monkeypatch.setenv("AIVF_ENV", "test")
     monkeypatch.setenv("AIVF_DASHBOARD_TOKEN", "dashboard-test-token")
     monkeypatch.setenv("AIVF_DASHBOARD_ROLE", role)
+    monkeypatch.delenv("AIVF_DASHBOARD_USERS", raising=False)
+    if users_json is not None:
+        monkeypatch.setenv("AIVF_DASHBOARD_USERS", users_json)
     monkeypatch.setenv("AIVF_ADMIN_PANEL_CODE", "unit-test-admin-code-6bf041")
     monkeypatch.setenv("AIVF_COOKIE_SECURE", "0")
     monkeypatch.setenv("FLASK_SECRET_KEY", "test-session-secret-that-is-long-enough-123456")
@@ -30,12 +40,13 @@ def _make_client(monkeypatch, tmp_path: Path, *, role: str = "admin"):
     dashboard_compat.register_dashboard_compat(web_app_v3.app)
     web_app_v3.app.config["TESTING"] = True
     client = web_app_v3.app.test_client()
-    response = client.post(
-        "/login",
-        data={"token": "dashboard-test-token"},
-        headers={"Origin": "http://localhost"},
-    )
-    assert response.status_code == 302
+    if login_token is not None:
+        response = client.post(
+            "/login",
+            data={"token": login_token},
+            headers={"Origin": "http://localhost"},
+        )
+        assert response.status_code == 302
     return client, web_app_v3
 
 
@@ -232,3 +243,73 @@ def test_admin_diagnostics_include_telemetry_without_secrets(monkeypatch, tmp_pa
     assert "http_5xx_total" in payload["telemetry"]
     assert "request_p95_ms" in payload["telemetry"]
     assert "dashboard-test-token" not in json.dumps(payload)
+
+
+def test_multi_user_mode_disables_shared_token_and_preserves_role_checks(monkeypatch, tmp_path):
+    users = json.dumps({
+        "owner": {"token": "owner-user-token-distinct", "role": "admin"},
+        "friend": {"token": "friend-user-token-distinct", "role": "viewer"},
+        "unclassified": {"token": "unclassified-user-token"},
+    })
+    owner, app_module = _make_client(
+        monkeypatch,
+        tmp_path,
+        users_json=users,
+        login_token="owner-user-token-distinct",
+    )
+
+    # The configured owner can still sign in by their named account.
+    assert owner.get("/").status_code == 200
+
+    # The legacy shared admin token must no longer work once named users exist.
+    shared = app_module.app.test_client()
+    denied = shared.post(
+        "/login",
+        data={"token": "dashboard-test-token"},
+        headers={"Origin": "http://localhost"},
+    )
+    assert denied.status_code == 401
+
+    # A friend with a viewer token still cannot unlock or reach the admin panel.
+    friend = app_module.app.test_client()
+    assert friend.post(
+        "/login",
+        data={"token": "friend-user-token-distinct"},
+        headers={"Origin": "http://localhost"},
+    ).status_code == 302
+    assert friend.post(
+        "/api/admin/unlock",
+        json={"code": "unit-test-admin-code-6bf041"},
+        headers={"Origin": "http://localhost"},
+    ).status_code == 403
+    assert friend.get("/api/admin/diagnostics").status_code == 403
+
+    # An omitted role is least-privilege in multi-user mode, not admin by default.
+    unclassified = app_module.app.test_client()
+    assert unclassified.post(
+        "/login",
+        data={"token": "unclassified-user-token"},
+        headers={"Origin": "http://localhost"},
+    ).status_code == 302
+    with unclassified.session_transaction() as state:
+        assert state["aivf_role"] == "viewer"
+    assert unclassified.post(
+        "/api/admin/unlock",
+        json={"code": "unit-test-admin-code-6bf041"},
+        headers={"Origin": "http://localhost"},
+    ).status_code == 403
+
+
+def test_invalid_multi_user_configuration_fails_closed(monkeypatch, tmp_path):
+    client, _app_module = _make_client(
+        monkeypatch,
+        tmp_path,
+        users_json="{not-valid-json",
+        login_token=None,
+    )
+    response = client.post(
+        "/login",
+        data={"token": "dashboard-test-token"},
+        headers={"Origin": "http://localhost"},
+    )
+    assert response.status_code == 401
