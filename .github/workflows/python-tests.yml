@@ -319,6 +319,7 @@ jobs:
         $scripts = @(
           "START-ALL.ps1",
           "START-PRODUCTION.ps1",
+          "SHOW-LOCAL-CREDENTIALS.ps1",
           "03-SIDE-CODE/scripts/windows/publisher/RUN-PUBLISHER.ps1",
           "03-SIDE-CODE/scripts/windows/publisher/INSTALL-PUBLISHER-TASK.ps1",
           "03-SIDE-CODE/scripts/windows/publisher/REMOVE-PUBLISHER-TASK.ps1",
