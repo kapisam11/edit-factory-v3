@@ -47,6 +47,9 @@ function New-AccessLabel(
     [bool]$Bold = $false,
     [System.Drawing.Color]$Color
 ) {
+    if (-not $PSBoundParameters.ContainsKey("Color")) {
+        $Color = [System.Drawing.Color]::FromArgb(222, 229, 240)
+    }
     $label = New-Object System.Windows.Forms.Label
     $label.Text = $Text
     $label.Location = New-Object System.Drawing.Point($X, $Y)
