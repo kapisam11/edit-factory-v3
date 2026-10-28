@@ -198,6 +198,41 @@ function Start-StartupSplash {
     }
 }
 
+function Start-LocalAccessDetails {
+    if ($NoBrowser) {
+        return
+    }
+
+    $accessDetailsScript = Join-Path $Root "SHOW-LOCAL-CREDENTIALS.ps1"
+    if (-not (Test-Path -LiteralPath $accessDetailsScript -PathType Leaf)) {
+        Write-Host "Access Details helper is missing; use the local .env file to recover your token."
+        return
+    }
+
+    $powershellCommand = Get-Command powershell.exe -ErrorAction SilentlyContinue
+    if (-not $powershellCommand) {
+        Write-Host "Could not launch the Access Details window. Double-click SHOW-LOCAL-CREDENTIALS.bat after startup."
+        return
+    }
+
+    try {
+        Start-Process -FilePath $powershellCommand.Source -ArgumentList @(
+            "-NoLogo",
+            "-NoProfile",
+            "-STA",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            ('"{0}"' -f $accessDetailsScript)
+        ) -WindowStyle Hidden | Out-Null
+        Write-Host "Access Details opened separately. Reopen it any time with SHOW-LOCAL-CREDENTIALS.bat."
+    } catch {
+        Write-Host "Could not open the Access Details window; double-click SHOW-LOCAL-CREDENTIALS.bat after startup."
+    }
+}
+
 Start-StartupSplash
 
 Write-Host "Pulling the pinned production image..."
@@ -265,4 +300,5 @@ Write-Host "Autonomous publishing is not started by default. The automation prof
 
 if (-not $NoBrowser) {
     Write-Host "Startup screen will transition to the welcome page when the dashboard is healthy."
+    Start-LocalAccessDetails
 }
