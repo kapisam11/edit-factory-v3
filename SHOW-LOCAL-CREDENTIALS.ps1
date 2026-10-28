@@ -45,7 +45,7 @@ function New-AccessLabel(
     [int]$Height,
     [int]$FontSize = 10,
     [bool]$Bold = $false,
-    [System.Drawing.Color]$Color = [System.Drawing.Color]::FromArgb(222, 229, 240)
+    [System.Drawing.Color]$Color
 ) {
     $label = New-Object System.Windows.Forms.Label
     $label.Text = $Text
@@ -76,7 +76,7 @@ function New-AccessButton(
     $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(61, 73, 94)
     $button.BackColor = [System.Drawing.Color]::FromArgb(31, 40, 56)
     $button.ForeColor = [System.Drawing.Color]::FromArgb(244, 246, 250)
-    $button.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Semibold)
+    $button.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
     $button.Add_Click($OnClick)
     $form.Controls.Add($button)
     return $button
@@ -138,18 +138,20 @@ if ($sharedTokenEnabled -and -not [string]::IsNullOrWhiteSpace($dashboardToken))
 $form.Controls.Add($tokenBox)
 
 $showTokenButton = New-AccessButton "Show" 530 141 70 {
+    param($sender, $eventArgs)
     if ($tokenBox.UseSystemPasswordChar) {
         $tokenBox.UseSystemPasswordChar = $false
-        $this.Text = "Hide"
+        $sender.Text = "Hide"
     } else {
         $tokenBox.UseSystemPasswordChar = $true
-        $this.Text = "Show"
+        $sender.Text = "Show"
     }
 }
 $copyTokenButton = New-AccessButton "Copy" 608 141 62 {
+    param($sender, $eventArgs)
     if (-not [string]::IsNullOrWhiteSpace($tokenBox.Text)) {
         [System.Windows.Forms.Clipboard]::SetText($tokenBox.Text)
-        $this.Text = "Copied"
+        $sender.Text = "Copied"
     }
 }
 
@@ -183,18 +185,20 @@ if (-not [string]::IsNullOrWhiteSpace($adminPanelCode)) {
 $form.Controls.Add($adminBox)
 
 $showAdminButton = New-AccessButton "Show" 530 284 70 {
+    param($sender, $eventArgs)
     if ($adminBox.UseSystemPasswordChar) {
         $adminBox.UseSystemPasswordChar = $false
-        $this.Text = "Hide"
+        $sender.Text = "Hide"
     } else {
         $adminBox.UseSystemPasswordChar = $true
-        $this.Text = "Show"
+        $sender.Text = "Show"
     }
 }
 $copyAdminButton = New-AccessButton "Copy" 608 284 62 {
+    param($sender, $eventArgs)
     if (-not [string]::IsNullOrWhiteSpace($adminBox.Text)) {
         [System.Windows.Forms.Clipboard]::SetText($adminBox.Text)
-        $this.Text = "Copied"
+        $sender.Text = "Copied"
     }
 }
 
@@ -210,9 +214,11 @@ if ([string]::IsNullOrWhiteSpace($adminPanelCode)) {
 $null = New-AccessLabel "This window reads the local .env file only. It does not send credentials to an online service." 30 400 640 25 9 $false ([System.Drawing.Color]::FromArgb(117, 132, 154))
 
 $openLoginButton = New-AccessButton "Open sign-in page" 30 477 180 {
+    param($sender, $eventArgs)
     Start-Process -FilePath "$BaseUrl/login"
 }
 $closeButton = New-AccessButton "Close" 590 477 80 {
+    param($sender, $eventArgs)
     $form.Close()
 }
 $openLoginButton.BackColor = [System.Drawing.Color]::FromArgb(237, 81, 61)
