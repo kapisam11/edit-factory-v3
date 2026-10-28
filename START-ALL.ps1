@@ -272,6 +272,41 @@ function Start-StartupSplash {
     }
 }
 
+function Start-LocalAccessDetails {
+    if ($NoBrowser) {
+        return
+    }
+
+    $accessDetailsScript = Join-Path $Root "SHOW-LOCAL-CREDENTIALS.ps1"
+    if (-not (Test-Path -LiteralPath $accessDetailsScript -PathType Leaf)) {
+        Write-Warn "Access Details helper is missing; use the local .env file to recover your token."
+        return
+    }
+
+    $powershellCommand = Get-Command powershell.exe -ErrorAction SilentlyContinue
+    if (-not $powershellCommand) {
+        Write-Warn "Could not launch the Access Details window. Double-click SHOW-LOCAL-CREDENTIALS.bat after startup."
+        return
+    }
+
+    try {
+        Start-Process -FilePath $powershellCommand.Source -ArgumentList @(
+            "-NoLogo",
+            "-NoProfile",
+            "-STA",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            ('"{0}"' -f $accessDetailsScript)
+        ) -WindowStyle Hidden | Out-Null
+        Write-Ok "Access Details opened separately. Reopen it any time with SHOW-LOCAL-CREDENTIALS.bat."
+    } catch {
+        Write-Warn "Could not open the Access Details window; double-click SHOW-LOCAL-CREDENTIALS.bat after startup."
+    }
+}
+
 # Do not let a healthy container from a previous run satisfy the new splash's
 # health poll. Only stop the web service when Compose reports it as running;
 # dependent database/state services and volumes remain intact.
@@ -356,6 +391,7 @@ if (-not [string]::IsNullOrWhiteSpace($usersConfig)) {
 
 if (-not $NoBrowser) {
     Write-Ok "Startup screen will transition to the welcome page now that the dashboard is healthy."
+    Start-LocalAccessDetails
 }
 
 $stopCommand = "docker compose --env-file `"$EnvFile`" -f `"$ComposeFile`" down"
