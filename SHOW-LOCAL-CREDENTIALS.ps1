@@ -117,6 +117,7 @@ $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
 $form.MinimizeBox = $false
 $form.ShowInTaskbar = $true
+$form.TopMost = $true
 $form.BackColor = [System.Drawing.Color]::FromArgb(12, 16, 24)
 $form.ForeColor = [System.Drawing.Color]::FromArgb(244, 246, 250)
 $form.Font = New-Object System.Drawing.Font("Segoe UI", 10)
